@@ -106,7 +106,7 @@ extension AgentWindowD1Tests {
         st.controlDch = bin([1, 38, 0])
         let row = AgentSidebar.row(a, details: .all, now: Self.now)
         let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/api", open: {}, store: st,
-                                        mode: .transcript, setMode: { _ in })
+                                        mode: .transcript)
         func groupsOf(_ t: [SymbolsAX]) -> [SymbolsAX] { t.filter { $0.label.hasSuffix(" agents") || $0.label.hasSuffix(" pull requests") } }
         // The help attributes can arrive a pass after the labels: the poll waits for them, with the ceiling.
         let tree = symbolsTree(header.frame(width: 900, height: 80, alignment: .top), CGSize(width: 900, height: 80)) { t in

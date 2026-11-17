@@ -1760,6 +1760,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island > Row details now has a toggle for every part of a session row: model, effort, state,
   agents, merged, open PRs, age and the Command 1-9 shortcut chip; model and effort show only where
   they differ from your Default model and effort. (#1455)
+- Agent Sessions panes are terminals only: the Transcript mode and its Terminal | Transcript toggle
+  (and Command-T) are gone, and X-ray reads every tab from dch, so a Prompts or Responses row opens
+  its card. (#1471)
 
 ## v2.174.0
 

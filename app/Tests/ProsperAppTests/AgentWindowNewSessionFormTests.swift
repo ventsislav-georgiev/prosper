@@ -272,7 +272,8 @@ extension AgentWindowD1Tests {
     // MARK: Rider (R1369): the unsent first message seeded at the failure
 
     /// The failure lands while the session is selected: its empty draft holds the text with no reselect, once; a
-    /// typed draft is never overwritten; a session not selected keeps the text for its selection (follow()).
+    /// filled draft is never overwritten; a session not selected keeps the text for its selection (follow()).
+    /// #1471: no input box to type in: the seeded draft is the filled one (was: "typed by hand").
     @MainActor
     func testAgentWindowNewSessionUnsentFirstSeedsTheSelectedSessionAtTheFailure() {
         withNewSessionPrefs {
@@ -293,10 +294,8 @@ extension AgentWindowD1Tests {
             say(b.key, "Example task for web")
             XCTAssertEqual(m.interaction.draft(for: b.key), "", "web is not selected: not yet")
             XCTAssertEqual(island.unsentFirst[b.key], "Example task for web", "kept for its selection")
-            m.setMode(.transcript, for: a)
-            m.interaction.draft = "typed by hand"
             say(a.key, "Example task again")
-            XCTAssertEqual(m.interaction.draft(for: a.key), "typed by hand", "a typed draft is never overwritten")
+            XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "a filled draft is never overwritten")
             XCTAssertEqual(island.unsentFirst[a.key], "Example task again", "kept until the draft is gone")
             XCTAssertTrue(spawns.calls.isEmpty)
         }

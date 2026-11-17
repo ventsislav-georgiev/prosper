@@ -270,7 +270,6 @@ final class AgentWindowD1Tests: XCTestCase {
         var opened: [String] = []
         let st = store([session("one", .working, ago: 1), session("two", .idle, ago: 2)], history: [record("h")])
         let m = windowModel(st, opened: { opened.append($0.name) })
-        showTranscript(m)   // #845: Return moves into the input box in Transcript mode (no longer opens the app)
         m.setVisible(true)
         defer { m.close() }
         let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
@@ -285,11 +284,11 @@ final class AgentWindowD1Tests: XCTestCase {
         win.sendEvent(key(125))   // down
         XCTAssertEqual(m.selection, .live(AgentSessionKey(dir: "/tmp/dch-test", name: "two")))
         win.sendEvent(key(36))    // Return
-        XCTAssertTrue(m.interaction.composerFocusPending, "#845: into the input box (built by the pane)")
+        XCTAssertTrue(m.terminal.focusPending, "#845, #1471: into the terminal (pending: its client is not live)")
         win.sendEvent(key(126))   // up
-        XCTAssertFalse(m.interaction.composerFocusPending, "another session: the pending focus is dropped")
+        XCTAssertFalse(m.terminal.focusPending, "another session: the pending focus is dropped")
         win.sendEvent(key(76))    // keypad Enter
-        XCTAssertTrue(m.interaction.composerFocusPending)
+        XCTAssertTrue(m.terminal.focusPending)
         XCTAssertEqual(opened, [], "#845: Return opens no terminal app (the header's Open in terminal does)")
         // Review round 1 (g): any modifier passes through, each one on its own.
         let at = m.selection
@@ -829,7 +828,6 @@ final class AgentWindowD1Tests: XCTestCase {
                 let shown = try XCTUnwrap(m.selectedRow?.session)
                 let chips = NSHostingView(rootView: HStack(spacing: sz(12)) {
                     AgentStateChip(state: .blocked)
-                    AgentPaneModeToggle(mode: .terminal, style: .icons, set: { _ in })
                     AgentSessionMenuButton(store: nil, session: shown, ask: { _ in })
                 }.fixedSize())
                 XCTAssertLessThan(chips.fittingSize.width + sz(32) + sz(60), room,

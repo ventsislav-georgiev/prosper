@@ -234,18 +234,17 @@ extension AgentWindowD1Tests {
     /// R1477b-m1 (7.6) through the window's sendEvent, built events handed to it (never posted; the window is never shown):
     /// a right or middle down on the unfocused pane takes the left first-click rule: the pane is focused, the down, its
     /// drag and its up are swallowed (so no view and no program sees them), no key and front is asked, and the window's
-    /// first responder then is the clicked pane's own input box (Transcript panes: the only view a row can find that
-    /// follows the focused pane; the terminal half is AgentTerminalTests' row below). The middle click runs first and the row
+    /// keys then follow the clicked pane's own terminal (#1471: every pane is a terminal, each on a fake client, so the keys
+    /// land in its view once live; adopt() attaches before it asks for the keys). The middle click runs first and the row
     /// stops at the first down that is not swallowed, so a passing right down never opens AppKit's context menu.
     @MainActor
     func testAgentWindowSplitTerminalRightAndMiddleClickOnAnUnfocusedPaneOnlyFocus() throws {
-        let restoreModes = transcriptMode(["api", "web"])
-        defer { restoreModes() }
         try withPaneMenu(true) {
             let buttons: [(NSEvent.EventType, NSEvent.EventType, NSEvent.EventType)] = [
                 (.otherMouseDown, .otherMouseDragged, .otherMouseUp), (.rightMouseDown, .rightMouseDragged, .rightMouseUp)]
             for (down, drag, up) in buttons {
                 let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+                _ = splitTerminals(m)   // fake clients: a pane's terminal goes live, so its view can take the keys
                 m.setVisible(true)
                 defer { m.close() }
                 m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
@@ -255,9 +254,14 @@ extension AgentWindowD1Tests {
                 var raised = 0
                 win.raise = { _ in raised += 1 }   // before any down: the real call never runs
                 XCTAssertTrue(m.focusSelection())
-                paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
-                let old = try XCTUnwrap(paneFocusBox(host), "\(down)")
-                XCTAssertTrue(win.firstResponder === old, "\(down): the keys in api's box")
+                // #1471: the keys go to the focused pane's terminal (its view when live, else pending on it).
+                @MainActor func keysIn(_ t: AgentTerminalController) -> Bool {
+                    if let v = t.view { return win.firstResponder === v }
+                    return t.focusPending
+                }
+                let old = try XCTUnwrap(m.focusedRuntime?.terminal, "\(down)")
+                paneFocusSettle(host) { keysIn(old) }
+                XCTAssertTrue(keysIn(old), "\(down): the keys in api's terminal")
                 let p = try paneFocusCentre(m, second, in: win.contentLayoutRect.size)
                 func event(_ type: NSEvent.EventType) throws -> NSEvent {
                     let r = win.contentLayoutRect
@@ -276,10 +280,10 @@ extension AgentWindowD1Tests {
                 win.sendEvent(try event(up))
                 XCTAssertFalse(win.focusClick.swallowing, "\(down): its up ends the swallow")
                 XCTAssertEqual(raised, 0, "\(down): no key and front for a right or middle click")
-                paneFocusSettle(host) { paneFocusBox(host).map { $0 !== old && win.firstResponder === $0 } ?? false }
-                let box = try XCTUnwrap(paneFocusBox(host), "\(down)")
-                XCTAssertFalse(box === old, "\(down): the focused pane's box is a new view")
-                XCTAssertTrue(win.firstResponder === box, "\(down): the keys followed the clicked pane")
+                let clicked = try XCTUnwrap(m.focusedRuntime?.terminal, "\(down)")
+                XCTAssertFalse(clicked === old, "\(down): the focused pane's terminal is the clicked pane's")
+                paneFocusSettle(host) { keysIn(clicked) }
+                XCTAssertTrue(keysIn(clicked), "\(down): the keys followed the clicked pane's terminal")
                 XCTAssertFalse(win.isVisible, "never shown")
             }
         }

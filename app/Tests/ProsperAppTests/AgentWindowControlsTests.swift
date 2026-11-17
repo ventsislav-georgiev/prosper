@@ -282,7 +282,6 @@ extension AgentWindowD1Tests {
         Preferences.defaults.set(["Sessions", "Sidekicks", "History"], forKey: pref)
         var opened: [String] = []
         let m = windowModel(foldStore(), opened: { opened.append($0.name) })
-        showTranscript(m)   // #845: Return moves the keys into the input box in Transcript mode
         m.setVisible(true)
         defer { m.close() }
         XCTAssertNil(m.selection)
@@ -323,7 +322,7 @@ extension AgentWindowD1Tests {
         m.select(live("a"))
         XCTAssertTrue(m.isCollapsed("Sessions"))
         XCTAssertTrue(AgentsNSWindow.handle(key(36), m))
-        XCTAssertTrue(m.interaction.composerFocusPending, "Return acts on a selection inside a folded section")
+        XCTAssertTrue(m.terminal.focusPending, "Return acts on a selection inside a folded section (#1471: its terminal)")
         XCTAssertEqual(opened, [])
         // Note 5: with a text view first responder, left and right go to it, not to the sidebar.
         let tv = NSTextView(frame: .init(x: 0, y: 0, width: 100, height: 20))
@@ -947,7 +946,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.selectedRow?.detail, AgentIsland.stoppingText, "the row as last seen, not as at the Stop")
         XCTAssertFalse(m.openSelected())
         XCTAssertFalse(m.focusSelection())
-        XCTAssertFalse(m.toggleMode())
         XCTAssertTrue(m.interaction.session == nil)
         st.history = [record("a", ago: 0)]
         XCTAssertEqual(m.selection, .history(a.key))
@@ -1170,7 +1168,7 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(m.focusedEnded)
         XCTAssertTrue(m.openSelected(), "live: Open in terminal opens it")
         XCTAssertEqual(opened, [a.key])
-        XCTAssertEqual(m.interaction.session?.key, a.key, "live: the input box is its")
+        XCTAssertEqual(m.selectedRow?.session?.key, a.key, "live: the pane is a's (#1471: no input box follows it in Terminal)")
         let detail = AgentDetailView(model: m, transcript: m.transcript, scrolls: false)
         XCTAssertTrue(detail.inputStore === st, "live: the locked input (Restart/Stop text)")
         m.ask(.stop, a)

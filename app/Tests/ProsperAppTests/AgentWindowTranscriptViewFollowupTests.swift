@@ -281,7 +281,7 @@ extension AgentWindowD1Tests {
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
                 let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: st,
-                                                mode: .transcript, setMode: { _ in })
+                                                mode: .transcript)
                 XCTAssertGreaterThan(NSHostingView(rootView: header.frame(width: 900 * scale)).fittingSize.height, 0)
             }
         }

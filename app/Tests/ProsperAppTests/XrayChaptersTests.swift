@@ -174,9 +174,8 @@ final class XrayChaptersTests: XCTestCase {
         XCTAssertFalse(win.isVisible, "never shown")
     }
 
-    /// Through the window: a local Terminal-mode pane runs the chapters read; the same pane in Transcript mode never does,
-    /// on open or on a poll (its tabs come from its own transcript). Red at TIP: no chaptersRead seam, no chapters read.
-    func testATranscriptModePaneNeverRunsTheChaptersRead() async throws {
+    /// Through the window: a local pane runs the chapters read on every open (#1471: no Transcript mode keeps its own).
+    func testALocalPaneAlwaysRunsTheChaptersRead() async throws {
         let fake = XrayPanelTasksTests.FakeRun()
         let (dch, prun, model, read) = (XrayPanels.dch, XrayPanels.run, XrayPanels.model, XrayPanels.chaptersRead)
         defer { (XrayPanels.dch, XrayPanels.run, XrayPanels.model, XrayPanels.chaptersRead) = (dch, prun, model, read)
@@ -194,21 +193,13 @@ final class XrayChaptersTests: XCTestCase {
             XCTAssertEqual(fake.calls.filter { $0 == chaptersArgv }.count, 1, "Terminal mode: the chapters read")
             XCTAssertTrue(win.toggleXray(), "closes")
 
-            let s = try XCTUnwrap(m.selectedRow?.session)
-            m.setMode(.transcript, for: s)
-            defer { m.setMode(.terminal, for: s) }   // the mode is remembered per session: later rows expect Terminal
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertFalse(XrayPanels.fromDch(pane, Self.local))
+            // #1471: no Transcript mode: the local pane and a remote row both read dch.
+            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(XrayPanels.fromDch(pane, Self.local), "a local row reads dch")
             XCTAssertTrue(XrayPanels.fromDch(pane, XrayTarget(name: "example-host:api", dir: nil)), "a remote row reads dch")
-            XCTAssertTrue(win.toggleXray())
-            let p = try XCTUnwrap(XrayPanels.shared.open[pane])
-            await p.reading?.value
-            let clock = Clock()
-            p.now = { clock.t }
-            p.select(.prompts)
-            for s in [5.0, 15, 60] { await tick(p, clock, at: s) }
-            XCTAssertEqual(fake.calls.filter { $0 == chaptersArgv }.count, 1, "Transcript mode: never")
-            XCTAssertTrue(p.dchChapters == nil)
+            XCTAssertTrue(win.toggleXray(), "opens again")
+            await XrayPanels.shared.open[pane]?.reading?.value
+            XCTAssertEqual(fake.calls.filter { $0 == chaptersArgv }.count, 2, "reopened: read again")
         }
     }
 

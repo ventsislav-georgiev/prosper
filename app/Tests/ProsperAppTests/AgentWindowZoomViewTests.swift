@@ -191,16 +191,17 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// R1196-a: the focused pane's content keeps its identity across 1, 2, 1 panes and a zoom: the composer's text view
-    /// (made by AgentComposerField.makeNSView) is the same object throughout, so nothing in the pane was remade.
+    /// R1196-a: the focused pane's content keeps its identity across 1, 2, 1 panes and a zoom: its terminal's host view
+    /// (made by AgentTerminalRepresentable.makeNSView) is the same object throughout, so nothing in the pane was remade.
+    /// #1471: was the Transcript composer's text view (AgentComposerField.makeNSView); every pane is a terminal now.
     @MainActor
     func testZoomViewPaneKeepsItsIdentityAcrossOneTwoOne() throws {
         let saved = ThemeRuntime.scale
-        let restoreModes = transcriptMode(["api", "web"])
-        defer { ThemeRuntime.scale = saved; restoreModes() }
+        defer { ThemeRuntime.scale = saved }
         ThemeRuntime.scale = 1.0
         try withTreeGate(true) {
             let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            _ = fakeTerminal(m)
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(paneKey("api")))
@@ -212,9 +213,9 @@ extension AgentWindowD1Tests {
             host.frame = CGRect(origin: .zero, size: size)
             win.contentView = host
             settle(host)
-            @MainActor func composer(_ why: String) throws -> AgentComposerTextView {
-                let fields = focusViews(host, AgentComposerTextView.self)
-                XCTAssertEqual(fields.count, 1, "one composer: the focused pane's (\(why))")
+            @MainActor func composer(_ why: String) throws -> AgentTerminalHostView {
+                let fields = focusViews(host, AgentTerminalHostView.self).filter { $0.owner === m.terminal }
+                XCTAssertEqual(fields.count, 1, "one terminal view: the focused pane's (\(why))")
                 return try XCTUnwrap(fields.first, why)
             }
             let first = try composer("one pane")

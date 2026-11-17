@@ -6,7 +6,7 @@ import XCTest
 /// #900 (#831 B2 step 6b2b): the focusing mouse-down and the first responder, gate-on only, each with a gate-off row.
 /// R1196-1: the swallowed focusing down asks for key and front through the window's `raise` seam; every row that hands
 /// the window a mouse-down installs a recorder there FIRST, so the real makeKeyAndOrderFront never runs. 7.2: after a
-/// pane focus action the window's first responder is the focused pane's input box. Events are BUILT (NSEvent.mouseEvent)
+/// pane focus action the window's first responder is the focused pane's terminal (#1471: was its input box). Events are BUILT (NSEvent.mouseEvent)
 /// and handed to the window's own sendEvent as values: never posted, never sent to the application. Windows are never
 /// shown, ordered in or made key; makeFirstResponder runs only on them. Sessions are fakes; layouts save to a private
 /// XCTestDefaults suite; the split gate and the UI scale are saved, set and restored in a defer (withPaneMenu). Every row
@@ -36,11 +36,10 @@ extension AgentWindowD1Tests {
         repeat { settle(host); n += 1 } while !done() && n < 40
     }
 
-    /// The window's only real input box (unfocused panes draw an inert one), or nil.
+    /// #1471: the focused pane's terminal view once its (fake) client is live, or nil (was: the window's only input box).
     @MainActor
-    func paneFocusBox(_ host: NSView) -> AgentComposerTextView? {
-        let boxes = focusViews(host, AgentComposerTextView.self)
-        return boxes.count == 1 ? boxes.first : nil
+    func paneFocusBox(_ m: AgentWindowModel) -> AgentTerminalHostView? {
+        m.terminal.phase == .live ? m.terminal.view : nil
     }
 
     // MARK: Item 1, R1196-1
@@ -140,18 +139,17 @@ extension AgentWindowD1Tests {
 
     // MARK: Item 2, the first responder follows the focused pane
 
-    /// Gate on, two panes in Transcript mode hosted in a never-shown window, the keys in the focused pane's box or in the
+    /// Gate on, two terminal panes (fake clients) hosted in a never-shown window, the keys in the focused pane's box or in the
     /// sidebar (7.2: a pane focus action gives the panes the keys): after each pane focus action (the focusing click, a
     /// pane key, the pane menu, close pane) the focused pane moved and the window's first responder is ITS box (a new
-    /// view, kind .text), never the old pane's, the sidebar or the window.
+    /// view, kind .terminal; #1471: was the input box, kind .text), never the old pane's, the sidebar or the window.
     @MainActor
     func testPaneFocusResponderFollowsEveryPaneFocusAction() throws {
-        let restoreModes = transcriptMode(["api", "web", "db"])
-        defer { restoreModes() }
         try withPaneMenu(true) {
             for start in ["box", "sidebar"] { for action in ["click", "key", "menu", "close"] {
                 let m = windowModel(store([session("api", .idle), session("web", .idle), session("db", .idle)]),
                                     layouts: layoutSuite())
+                _ = splitTerminals(m)   // #1471: every pane terminal on a fake client, so it goes live and takes the keys
                 m.setVisible(true)
                 defer { m.close() }
                 m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
@@ -161,8 +159,8 @@ extension AgentWindowD1Tests {
                 var raised = 0
                 win.raise = { _ in raised += 1 }   // before any down: the real call never runs
                 XCTAssertTrue(m.focusSelection())
-                paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
-                let old = try XCTUnwrap(paneFocusBox(host), action)
+                paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
+                let old = try XCTUnwrap(paneFocusBox(m), action)
                 XCTAssertTrue(win.firstResponder === old, "\(action): the keys in api's box")
                 if start == "sidebar" { sidebarKeys(win) }   // the sidebar's keys: nothing that types is first responder
                 switch action {
@@ -180,12 +178,12 @@ extension AgentWindowD1Tests {
                 }
                 XCTAssertEqual(m.layout.focused, second, "\(action): the second pane is focused")
                 XCTAssertEqual(m.keyFocus, .pane)
-                paneFocusSettle(host) { paneFocusBox(host).map { $0 !== old && win.firstResponder === $0 } ?? false }
-                let box = try XCTUnwrap(paneFocusBox(host), action)
+                paneFocusSettle(host) { paneFocusBox(m).map { $0 !== old && win.firstResponder === $0 } ?? false }
+                let box = try XCTUnwrap(paneFocusBox(m), action)
                 XCTAssertFalse(box === old, "\(action): the focused pane's box is a new view")
                 XCTAssertTrue(win.firstResponder === box, "\(action): the keys followed the focused pane")
-                XCTAssertEqual(win.responderKind, .text, "\(action): PaneKeys.Context sees the box")
-                XCTAssertFalse(m.interaction.composerFocusPending, "\(action): landed")
+                XCTAssertEqual(win.responderKind, .terminal, "\(action): PaneKeys.Context sees the box")
+                XCTAssertFalse(m.terminal.focusPending, "\(action): landed")
                 XCTAssertFalse(win.isVisible, "never shown")
             } }
         }
@@ -195,11 +193,10 @@ extension AgentWindowD1Tests {
     /// has the keys. Open to the side focuses the NEW pane: its box takes them, not the old pane's (which goes inert).
     @MainActor
     func testPaneFocusOpenToTheSideGivesTheNewPaneTheKeys() throws {
-        let restoreModes = transcriptMode(["api", "web", "db"])
-        defer { restoreModes() }
         try withPaneMenu(true) {
             let m = windowModel(store([session("api", .idle), session("web", .idle), session("db", .idle)]),
                                 layouts: layoutSuite())
+            _ = splitTerminals(m)   // #1471: every pane terminal on a fake client
             m.setVisible(true)
             defer { m.close() }
             m.adopt(paneLayout([paneTarget("api")]))
@@ -208,24 +205,24 @@ extension AgentWindowD1Tests {
             var raised = 0
             win.raise = { _ in raised += 1 }
             XCTAssertTrue(m.focusSelection())
-            paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
-            let old = try XCTUnwrap(paneFocusBox(host))
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
+            let old = try XCTUnwrap(paneFocusBox(m))
             XCTAssertTrue(win.firstResponder === old)
             let before = m.layout.focused
             m.openToTheSide(live("web"))
             XCTAssertEqual(m.layout.panes.count, 2, "opened to the side: \(String(describing: m.paneRefusal))")
             XCTAssertNotEqual(m.layout.focused, before, "the new pane is focused")
-            paneFocusSettle(host) { paneFocusBox(host).map { $0 !== old && win.firstResponder === $0 } ?? false }
-            let box = try XCTUnwrap(paneFocusBox(host))
+            paneFocusSettle(host) { paneFocusBox(m).map { $0 !== old && win.firstResponder === $0 } ?? false }
+            let box = try XCTUnwrap(paneFocusBox(m))
             XCTAssertFalse(box === old)
             XCTAssertTrue(win.firstResponder === box, "the new pane's box has the keys")
-            XCTAssertEqual(win.responderKind, .text)
+            XCTAssertEqual(win.responderKind, .terminal)
             XCTAssertEqual(m.selection, live("web"))
             // A plain click on db's row: into the focused (new) pane, the keys stay in its box (the same rule).
             m.click(live("db"))
-            paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
             XCTAssertEqual(m.selection, live("db"))
-            XCTAssertEqual(win.responderKind, .text, "a plain click: the focused pane's box")
+            XCTAssertEqual(win.responderKind, .terminal, "a plain click: the focused pane's box")
             XCTAssertEqual(raised, 0, "no down was handed to the window")
             XCTAssertFalse(win.isVisible, "never shown")
         }
@@ -236,11 +233,10 @@ extension AgentWindowD1Tests {
     /// pending, and no focus move asks anything (the pane-area down with the gate off is the item 1 gate-off row's).
     @MainActor
     func testPaneFocusGateOffResponderAsToday() throws {
-        let restoreModes = transcriptMode(["api", "web", "db"])
-        defer { restoreModes() }
         try withPaneMenu(false) {
             let m = windowModel(store([session("api", .idle), session("web", .idle), session("db", .idle)]),
                                 layouts: layoutSuite())
+            _ = fakeTerminal(m)   // #1471: gate off, the window's terminal on a fake client
             m.setVisible(true)
             defer { m.close() }
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
@@ -250,25 +246,25 @@ extension AgentWindowD1Tests {
             var raised = 0
             win.raise = { _ in raised += 1 }
             XCTAssertTrue(m.focusSelection())
-            paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
-            let box = try XCTUnwrap(paneFocusBox(host))
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
+            let box = try XCTUnwrap(paneFocusBox(m))
             XCTAssertTrue(win.firstResponder === box)
             m.click(live("db"))
-            paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
             XCTAssertEqual(m.layout.focused, first, "the plain click fills the focused pane")
-            XCTAssertEqual(win.responderKind, .text, "today's: the box has the keys")
+            XCTAssertEqual(win.responderKind, .terminal, "today's: the box has the keys")
             m.click(live("api"), flags: .option)
-            paneFocusSettle(host) { paneFocusBox(host).map { win.firstResponder === $0 } ?? false }
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
             XCTAssertEqual(m.layout.focused, first, "gate off: Option-click is the plain click")
             XCTAssertEqual(m.layout.panes.count, 2)
             XCTAssertEqual(m.selection, live("api"))
-            XCTAssertEqual(win.responderKind, .text)
-            XCTAssertFalse(m.interaction.composerFocusPending)
+            XCTAssertEqual(win.responderKind, .terminal)
+            XCTAssertFalse(m.terminal.focusPending)
             // A focus move the model writes with the gate off (a layout switch's adopt) asks no responder change.
             let second = try XCTUnwrap(m.layout.order.last), asks = win.responderAsks
             m.adopt(try m.layout.focus(second).get())
             XCTAssertEqual(win.responderAsks, asks, "gate off: the keys are not moved by a focus change")
-            XCTAssertFalse(m.interaction.composerFocusPending)
+            XCTAssertFalse(m.terminal.focusPending)
             XCTAssertEqual(raised, 0, "gate off: never asked")
             XCTAssertFalse(win.isVisible, "never shown")
         }

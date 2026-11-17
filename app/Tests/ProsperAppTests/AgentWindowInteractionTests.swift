@@ -1492,62 +1492,6 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(f.reads, 3)
     }
 
-    @MainActor
-    func testAgentWindowModelFeedsTheInteractionAndStopsItWhenHidden() throws {
-        let url = tempDir().appendingPathComponent("ask.jsonl")
-        let input: [String: Any] = ["questions": [["question": "Which colors?", "header": "Colors", "multiSelect": true,
-                                                   "options": [["label": "Red", "description": "Red"],
-                                                               ["label": "Green", "description": "Green"],
-                                                               ["label": "Blue", "description": "Blue"]]]]]
-        let entry: [String: Any] = ["type": "assistant", "sessionId": "s-1", "version": "2.1.300",
-                                    "message": ["role": "assistant",
-                                                "content": [["type": "tool_use", "id": "toolu_9", "name": "AskUserQuestion",
-                                                             "input": input]]]]
-        try (JSONSerialization.data(withJSONObject: entry) + Data("\n".utf8)).write(to: url)
-        let f = FormSim(.multi)
-        let c = controller(f.io, autoAllow: false)
-        let st = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
-        st.sessions = [AgentSession(key: Self.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.30.0",
-                                    claudeSessionID: "0b7c2f3e-1111-2222-3333-444455556666", transcriptPath: url.path)]
-        let m = AgentWindowModel()
-        m.now = { 1_800_000_000 }
-        m.openSession = { _ in }
-        m.onVisible = { _ in }
-        m.ageInterval = 3600
-        m.transcript.offMain = { $0() }
-        m.transcript.makeWatch = { _, _ in NSObject() }
-        m.transcript.tickInterval = 3600
-        m.interaction.controller = c
-        m.interaction.readQueue = { $0() }
-        m.bind(st)
-        showTranscript(m)   // #822: the prompt panel is Transcript mode's
-        XCTAssertEqual(f.reads, 0, "hidden: nothing read")
-        m.setVisible(true)
-        XCTAssertEqual(m.transcript.pendingAsk?.id, "toolu_9")
-        XCTAssertEqual(m.interaction.ask, m.transcript.pendingAsk)
-        guard case .prompt(let w) = m.interaction.panel else { return XCTFail("\(m.interaction.panel)") }
-        XCTAssertEqual(w.kind, .multi, "cross-checked against the transcript's input")
-        // Review round 1 I2: another session with no transcript is never checked against A's question.
-        let bKey = AgentSessionKey(dir: "/tmp/dch-test", name: "b")
-        let a = st.sessions[0]
-        st.sessions = [a, AgentSession(key: bKey, alias: "", activity: 0, state: .blocked, agents: 0, version: "1.30.0")]
-        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == bKey }?.id))
-        XCTAssertNil(m.transcript.pendingAsk)
-        XCTAssertNil(m.interaction.ask, "B has no transcript: no ask")
-        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == Self.key }?.id))
-        XCTAssertEqual(m.interaction.ask?.id, "toolu_9", "back on A: its own ask")
-        // The same session losing its mapping (the tail is kept for the grace period): no ask either.
-        st.sessions = [AgentSession(key: Self.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.30.0"),
-                       st.sessions[1]]
-        XCTAssertNil(m.interaction.ask, "no mapping: no ask")
-        m.setVisible(false)
-        XCTAssertEqual(m.interaction.panel, .none)
-        let reads = f.reads
-        st.sessions = st.sessions
-        XCTAssertEqual(f.reads, reads, "hidden: a list change reads nothing")
-        m.close()
-    }
-
     // MARK: - Keys: the text field gets Return and the arrows (QA #626 INFO-2)
 
     func keyEvent(_ code: UInt16, _ chars: String, _ flags: NSEvent.ModifierFlags = [], window: NSWindow) -> NSEvent {
@@ -1558,76 +1502,6 @@ final class AgentWindowInteractionTests: XCTestCase {
     func click(_ x: CGFloat, window: NSWindow) -> NSEvent {
         NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: x, y: 10), modifierFlags: [], timestamp: 0,
                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
-    }
-
-    @MainActor
-    func testAgentWindowTheInputBoxGetsReturnAndArrowsAndTheSidebarOnlyItsOwn() throws {
-        let st = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
-        st.sessions = [session(.idle), AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "t"), alias: "",
-                                                    activity: 0, state: .working, agents: 0)]
-        var opened = 0
-        let m = AgentWindowModel()
-        m.onVisible = { _ in }
-        m.openSession = { _ in opened += 1 }
-        m.ageInterval = 3600
-        m.transcript.offMain = { $0() }
-        m.bind(st)
-        showTranscript(m)   // #822: the input box and the sidebar's Return are Transcript mode's
-        m.setVisible(true)
-        defer { m.close() }
-        let first = m.selection
-        XCTAssertNotNil(first)
-
-        let win = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 400), styleMask: [.titled],
-                                 backing: .buffered, defer: true)
-        win.isReleasedWhenClosed = false
-        win.model = m
-        let tv = AgentComposerTextView(frame: NSRect(x: 400, y: 0, width: 300, height: 80))
-        var submits = 0
-        tv.onSubmit = { submits += 1 }
-        win.contentView?.addSubview(tv)
-        XCTAssertTrue(win.makeFirstResponder(tv))
-        tv.string = "ab\ncd"
-        tv.setSelectedRange(NSRange(location: 5, length: 0))
-
-        win.sendEvent(keyEvent(36, "\r", window: win))
-        XCTAssertEqual(submits, 1, "Return sends")
-        XCTAssertEqual(opened, 0, "Return in the input box opens nothing")
-        win.sendEvent(keyEvent(126, "\u{F700}", window: win))
-        XCTAssertEqual(m.selection, first, "up stays in the input box")
-        XCTAssertEqual(tv.selectedRange().location, 2, "the caret moved up a line")
-        win.sendEvent(keyEvent(125, "\u{F701}", window: win))
-        XCTAssertEqual(m.selection, first)
-        XCTAssertEqual(tv.selectedRange().location, 5)
-        win.sendEvent(keyEvent(36, "\r", .shift, window: win))
-        XCTAssertEqual(tv.string, "ab\ncd\n", "Shift-Return adds a line")
-        XCTAssertEqual(submits, 1)
-        win.sendEvent(keyEvent(76, "\u{3}", window: win))
-        XCTAssertEqual(submits, 2, "keypad Enter sends too")
-
-        // Focus out of any text view: a click in the detail pane, then the sidebar.
-        win.makeFirstResponder(nil)
-        win.sendEvent(click(500, window: win))
-        XCTAssertFalse(win.sidebarFocused)
-        win.sendEvent(keyEvent(125, "\u{F701}", window: win))
-        XCTAssertEqual(m.selection, first, "arrows outside the sidebar pass on")
-        win.sendEvent(keyEvent(36, "\r", window: win))
-        XCTAssertEqual(opened, 0, "Return outside the sidebar passes on")
-        win.sendEvent(click(100, window: win))
-        XCTAssertTrue(win.sidebarFocused)
-        win.sendEvent(keyEvent(125, "\u{F701}", window: win))
-        XCTAssertNotEqual(m.selection, first, "the sidebar's down")
-        m.interaction.composer = tv   // #845: the input box the pane registers
-        win.sendEvent(keyEvent(36, "\r", window: win))
-        XCTAssertTrue(win.firstResponder === tv, "#845: the sidebar's Return moves into the input box")
-        XCTAssertFalse(win.sidebarFocused)
-        XCTAssertEqual(opened, 0, "and opens no terminal app")
-        win.sendEvent(click(100, window: win))
-        XCTAssertFalse(win.firstResponder === tv, "#845: a sidebar click takes the keys back from the input box")
-        XCTAssertTrue(win.sidebarFocused)
-        win.sendEvent(keyEvent(48, "\t", window: win))
-        XCTAssertFalse(win.sidebarFocused, "Tab moves the focus on")
-        XCTAssertFalse(win.isVisible, "never shown")
     }
 
     // MARK: - QA #626 INFO-1: per-session view state, late full text dropped

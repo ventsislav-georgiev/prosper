@@ -877,12 +877,6 @@ final class AgentWindowModel: ObservableObject {
         else { return nil }
         return t
     }
-    /// #822: a live session opens in Terminal (operator, 2026-11-10). These are the ones the human
-    /// switched to Transcript ("<dir>\t<name>"), newest first, per Mac; a later session that reuses
-    /// a name inherits the choice.
-    @Published private(set) var transcriptKeys = Preferences.agentWindowTranscriptSessions {
-        didSet { if transcriptKeys != oldValue { Preferences.agentWindowTranscriptSessions = transcriptKeys } }
-    }
 
     // Seams.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -1727,8 +1721,8 @@ final class AgentWindowModel: ObservableObject {
         sections.first { $0.rows.contains { $0.id == selection } }.map { isCollapsed($0.title) } ?? false
     }
 
-    /// #845: a row click, Return, Right, ⌘T and the header toggle: the keyboard into the selected live session,
-    /// its terminal (Terminal mode, once its client is live) or its input box (Transcript). False, and the focus
+    /// #845: a row click, Return or Right: the keyboard into the selected live session's terminal (once its client
+    /// is live; #1471: Terminal is the only mode). False, and the focus
     /// stays where it is: nothing there takes input (History, an ended session's held row, none), or the rename
     /// field is editing. Only the human's actions call it, never a selection the model makes itself.
     @discardableResult
@@ -1736,7 +1730,7 @@ final class AgentWindowModel: ObservableObject {
         // #887 (QA #747 INFO-4): the New session form covers the pane, so its session takes no input meanwhile.
         guard renaming == nil, newSession == nil, !focusedEnded,
               selectedRow?.session != nil || selectedRow?.remote != nil else { return false }
-        if paneMode == .terminal { terminal.focus() } else { interaction.focusComposer() }
+        terminal.focus()   // #1471: Terminal is the only mode
         return true
     }
 
@@ -1832,39 +1826,12 @@ final class AgentWindowModel: ObservableObject {
 
     nonisolated static func terminalKey(_ k: AgentSessionKey) -> String { "\(k.dir)\t\(k.name)" }
 
-    func mode(_ s: AgentSession) -> AgentPaneMode {
-        transcriptKeys.contains(Self.terminalKey(s.key)) ? .transcript : .terminal
-    }
-
-    /// The detail pane's mode: a row with nothing to attach (History, an ended session's held row,
-    /// none) is Transcript and remembers nothing, so no terminal card shows where no terminal can be.
+    /// #1471: Terminal is the only mode (no toggle, no per-session choice; a stored one is never read). `.terminal`:
+    /// a live local or remote row; `.transcript` now only means nothing can attach (History, an ended session's held
+    /// row, none), so no terminal card shows where no terminal can be.
     var paneMode: AgentPaneMode {
-        // #836 (b): a remote row is Terminal only.
-        guard !focusedEnded, let s = selectedRow?.session else { return selectedRow?.remote != nil ? .terminal : .transcript }
-        return mode(s)
-    }
-
-    func setMode(_ m: AgentPaneMode, for s: AgentSession) {
-        guard ended?.row.id != .live(s.key) else { return }   // ended: nothing to remember
-        let k = Self.terminalKey(s.key)
-        var keys = transcriptKeys.filter { $0 != k }
-        if m == .transcript { keys.insert(k, at: 0) }
-        transcriptKeys = Array(keys.prefix(64))
-        follow()
-    }
-
-    /// #845: the header's Transcript | Terminal toggle: the mode, then the keyboard into the shown mode's input.
-    func switchMode(_ m: AgentPaneMode, for s: AgentSession) {
-        setMode(m, for: s)
-        focusSelection()
-    }
-
-    /// ⌘T and the header toggle: the selected live session's other mode. False: nothing to toggle.
-    @discardableResult
-    func toggleMode() -> Bool {
-        guard !focusedEnded, let s = selectedRow?.session else { return false }
-        setMode(mode(s) == .terminal ? .transcript : .terminal, for: s)
-        return true
+        guard !focusedEnded, selectedRow?.session != nil || selectedRow?.remote != nil else { return .transcript }
+        return .terminal
     }
 
     // MARK: #847 New session
@@ -2465,7 +2432,6 @@ final class AgentWindowModel: ObservableObject {
                 var form = newSession
                 form?.status = lateForm?.status
                 if form == lateForm {
-                    setMode(.terminal, for: s)
                     select(.live(s.key))   // a manual pick: the form closes
                     focusSelection()
                 } else {
@@ -2510,7 +2476,6 @@ final class AgentWindowModel: ObservableObject {
             return
         }
         pendingSpawn = nil
-        setMode(.terminal, for: s)
         select(.live(s.key))
         focusSelection()
     }
@@ -2770,12 +2735,11 @@ final class AgentWindowModel: ObservableObject {
         let transcript = f.transcript
         interaction.ask = transcript.pendingAsk   // this session's, never the last one's
         interaction.plan = withConfigDir(transcript.pendingPlan)
-        let terminalMode = paneMode == .terminal
         seedUnsentFirst(s.key, selectedOnly: false)
-        // #822: Terminal mode has no input box (the terminal is the input).
-        interaction.follow(terminalMode ? nil : s)
+        // #822: no input box (the terminal is the input); #1471: Terminal is the only mode.
+        interaction.follow(nil)
         // #847: the New session form covers the pane, so no terminal under it.
-        terminal.attach(terminalMode && newSession == nil ? s.key : nil)
+        terminal.attach(newSession == nil ? s.key : nil)
     }
 
     /// #1477 (11.2, spec 15 C): gate on, each unfocused pane's own terminal. A shown, live local session in Terminal mode
@@ -2825,7 +2789,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     private func unfocusedTerminalKey(_ r: AgentPaneRuntime, _ shown: Set<UUID>) -> AgentSessionKey? {
-        guard shown.contains(r.pane), case .live(let s)? = r.content, mode(s) == .terminal else { return nil }
+        guard shown.contains(r.pane), case .live(let s)? = r.content else { return nil }
         return s.key
     }
 
@@ -2838,5 +2802,5 @@ final class AgentWindowModel: ObservableObject {
     }
 }
 
-/// #822: the detail pane's two views of a live session.
+/// #822, #1471: whether the focused pane can show a terminal (`.transcript`: nothing to attach; no longer a mode).
 enum AgentPaneMode: Equatable { case transcript, terminal }

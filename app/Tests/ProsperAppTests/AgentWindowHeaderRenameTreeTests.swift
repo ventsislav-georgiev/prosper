@@ -31,7 +31,7 @@ final class AgentWindowHeaderRenameTreeTests: XCTestCase {
 
     @MainActor
     func header(_ s: AgentSession, rename: AgentRenameEdit?, mode: AgentPaneMode = .terminal) -> AgentSessionHeader {
-        AgentSessionHeader(row: row(s), session: s, cwd: Self.path, open: {}, rename: rename, mode: mode, setMode: { _ in })
+        AgentSessionHeader(row: row(s), session: s, cwd: Self.path, open: {}, rename: rename, mode: mode)
     }
 
     /// Every word a part of the slot is read by when not renaming (Terminal mode).

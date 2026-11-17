@@ -142,7 +142,6 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         m.click(id)
         XCTAssertEqual(m.selection, id)
         XCTAssertEqual(m.paneMode, .terminal)
-        XCTAssertFalse(m.toggleMode(), "no Transcript to switch to")
         XCTAssertEqual(m.paneMode, .terminal)
         XCTAssertEqual(log.spawns.last?.args, ["-E", "--host", "host-a", "-a", "api", "--scrollback", "2000"],
                        "the remote attach, --host form, with the scrollback every 1.40+ client asks for")
@@ -153,7 +152,7 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         XCTAssertTrue(m.focusedLive == nil, "no island session behind it: no answers, no hooks")
         XCTAssertFalse(m.openSelected(), "no local Open in terminal")
         // The header's disabled controls each say why.
-        for reason in [AgentRemoteHeader.modeReason, AgentRemoteHeader.levelReason, AgentRemoteHeader.todosReason] {
+        for reason in [AgentRemoteHeader.levelReason, AgentRemoteHeader.todosReason] {
             XCTAssertFalse(reason.isEmpty)
         }
     }

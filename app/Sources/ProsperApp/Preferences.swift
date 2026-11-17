@@ -459,7 +459,6 @@ enum Preferences {
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // #822: sessions the Agent Sessions window shows as Transcript, not the default Terminal ("<dir>\t<name>"); per Mac, not in SyncedKeys.
-        static let agentWindowTranscriptSessions = "agentWindowTranscriptSessions"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
         // #895: the Agent Sessions terminal's text size in points (Command-plus, Command-minus, Command-0); per Mac, not in SyncedKeys.
@@ -1197,11 +1196,6 @@ enum Preferences {
         set { defaults.set(newValue.sorted(), forKey: Keys.agentWindowCollapsedSections) }
     }
 
-    /// #822: the sessions the human switched to Transcript, newest first, at most 64; unset reads as none.
-    static var agentWindowTranscriptSessions: [String] {
-        get { defaults.stringArray(forKey: Keys.agentWindowTranscriptSessions) ?? [] }
-        set { defaults.set(newValue, forKey: Keys.agentWindowTranscriptSessions) }
-    }
 
     /// #847: the folder the window's last new session or shell started in; unset reads as nil.
     static var agentWindowNewSessionFolder: String? {

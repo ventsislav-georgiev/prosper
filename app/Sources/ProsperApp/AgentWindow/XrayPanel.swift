@@ -68,15 +68,7 @@ final class XrayPanels: ObservableObject {
     /// #1352: the window that draws `pane` (its presenter shows the memory card); rows put theirs here.
     static var window: @MainActor (UUID) -> AgentsNSWindow? = { AgentsNSWindow.window(of: $0) }
 
-    /// #1352, design 3.3: the transcript a jump lands in: the pane's own, in Transcript mode, for a local session; nil
-    /// (Terminal mode, a remote row, another pane focused) means the card.
-    static func transcript(_ pane: UUID, _ target: XrayTarget) -> AgentTranscriptModel? {
-        guard target.dir != nil, let m = model(pane), m.layout.focused == pane, m.paneMode == .transcript else { return nil }
-        return m.focusedRuntime?.transcript
-    }
-
-    /// #1389: the pane reads its Prompts and Responses from dch: a remote row, or a local one in Terminal mode (a
-    /// Transcript-mode pane keeps its own chapters, never both). Off under XCTest as `run` is: rows put `fromDch` here.
+    /// #1389, #1471: the pane reads its Prompts and Responses from dch, a local row as a remote one. Off under XCTest as `run` is: rows put `fromDch` here.
     static var chaptersRead: @MainActor (UUID, XrayTarget) -> Bool = { NSClassFromString("XCTestCase") == nil && fromDch($0, $1) }
 
     /// #1463: a tab chosen in the strip is remembered (Preferences.xrayLastTab). Off under XCTest so no row leaks its
@@ -92,11 +84,8 @@ final class XrayPanels: ObservableObject {
     static let refsTabShips = true
     static var refsTab: @MainActor () -> Bool = { refsTabShips && NSClassFromString("XCTestCase") == nil }
 
-    /// The focused pane's mode through the window model (no model or another pane focused: no read).
-    static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool {
-        guard let m = model(pane), m.layout.focused == pane else { return false }
-        return target.dir == nil || m.paneMode != .transcript
-    }
+    /// #1471: every pane reads dch (Terminal is the only mode); no window model for `pane`: no read.
+    static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool { model(pane) != nil }
 
     /// #1352: the window's presenter, the transcript, the link opener and the cwd, for the panel that came to `pane`.
     func wire(_ m: XrayPanelModel, _ pane: UUID) {   // #1418: and XrayRefLink.panel, for a transcript link's card
@@ -110,7 +99,6 @@ final class XrayPanels: ObservableObject {
         m.presentRef = { show($0, $1, $2) }
         m.panels = self
         m.dismiss = { Self.window(pane)?.cards.close() }
-        m.transcript = { Self.transcript(pane, target) }
         m.fromDch = { Self.chaptersRead(pane, target) }
         m.openURL = { Self.model(pane)?.openURL($0) }
         m.cwd = { Self.cwd(pane, target) }
@@ -119,13 +107,13 @@ final class XrayPanels: ObservableObject {
     /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
     let follows = XrayFollows()
 
-    /// The transcript model's cwd; #1472: without one (Terminal mode, a remote row) dch's, from the row that shows
-    /// `target` (AgentSession.cwd from dch's list, a remote row's cwd); "" (dch did not say) is none.
+    /// #1471: the session's cwd, from the row that shows `target` (AgentSession.cwd from dch's list, a remote row's
+    /// cwd); "" (dch did not say) is none, and then the cwd the session's transcript file names, as before #1471.
     static func cwd(_ pane: UUID, _ target: XrayTarget) -> String? {
         guard let m = model(pane) else { return nil }
-        if let c = m.focusedRuntime?.transcript.cwd { return c }
-        guard let r = m.selectedRow, XrayTarget.of(r) == target else { return nil }
-        return [r.session?.cwd, r.remote?.cwd ?? nil].compactMap { $0 }.first { !$0.isEmpty }
+        if let r = m.selectedRow, XrayTarget.of(r) == target,
+           let c = [r.session?.cwd, r.remote?.cwd ?? nil].compactMap({ $0 }).first(where: { !$0.isEmpty }) { return c }
+        return m.focusedRuntime?.transcript.cwd
     }
 
     /// One dch run: (path, argv, env) -> (exit status, stdout); -1 when it never ran or timed out.
@@ -259,13 +247,12 @@ final class XrayPanelModel: ObservableObject {
     var now: () -> Date = Date.init
     var close: () -> Void = {}
     var presentCard: (XrayTasks.Task) -> Void = { _ in }
-    /// #1352 seams, wired by XrayPanels.open: any card through the window's presenter, its close, the pane's transcript
-    /// (nil: no jump, the card), the link opener, the session's cwd (instruction paths are shown relative to it).
+    /// #1352 seams, wired by XrayPanels.open: any card through the window's presenter, its close, the link opener, the
+    /// session's cwd (instruction paths are shown relative to it). #1471: no transcript jump; a row opens its card.
     var present: (AnyView, CGSize) -> Void = { _, _ in }
     /// #1417: as present, with the presenter's `closed` (the ref card's --ref cancel).
     var presentRef: (AnyView, CGSize, @escaping @MainActor () -> Void) -> Void = { _, _, _ in }
     var dismiss: () -> Void = {}
-    var transcript: () -> AgentTranscriptModel? = { nil }
     var openURL: (URL) -> Void = { _ in }
     var cwd: () -> String? = { nil }
     var home = NSHomeDirectory()
@@ -274,8 +261,6 @@ final class XrayPanelModel: ObservableObject {
     /// #1354: Prompts and Responses show the automatic rows (dch `n`, off at open) / hide other sessions' messages (`a`).
     @Published var showAuto = false
     @Published var hidePeer = false
-    private weak var watched: AgentTranscriptModel?
-    private var watch: AnyCancellable?
     /// R1351-i1: true while this panel is still the pane's open one and the pane still shows `target`; the fallback runs
     /// only then (chosen over cancelling the read: a panel hidden by a selection change stays open, so close never fires).
     var isCurrent: () -> Bool = { true }
@@ -413,10 +398,9 @@ final class XrayPanelModel: ObservableObject {
     /// #1475 c: the same rule for a parse in hand (a follow's tasks block).
     static func tasksTab(_ t: XrayTasks) -> XrayTasks? { t.schema == 1 && !t.tasks.isEmpty ? t : nil }
 
-    /// #1354: Prompts and Responses while the pane's transcript is there (Transcript mode, a local session); #1389: or
-    /// while dch's chapters read answered (Terminal mode, remote).
+    /// #1354, #1389: Prompts and Responses while dch's chapters read answered.
     var tabs: [XrayTab] {
-        let prose = transcript() != nil || dchChapters != nil
+        let prose = dchChapters != nil
         return XrayTab.allCases.filter {
             switch $0 {
             case .prompts, .responses: prose
@@ -512,16 +496,8 @@ final class XrayPanelModel: ObservableObject {
     /// #1472: Read the prompt with no transcript, for a prompt dch's chapters read does not hold (not read, newer, gone).
     static let notReadNote = "The prompt is not among the chapters read."
 
-    /// Return or a click on a task row: the prompt that last changed it (`chapter`, never `created_chapter`); no
-    /// chapter, no transcript (Terminal mode, remote) or a refused anchor: the card; too old: the card with the note.
-    func activate(_ t: XrayTasks.Task) {
-        go(t.chapter) { [weak self] older in
-            guard let self else { return }
-            guard older else { return self.openCard(t) }
-            self.card = t
-            self.present(AnyView(XrayTaskCard(task: t, now: self.now(), open: self.openURL, note: Self.olderNote)), XrayTaskCard.size)
-        }
-    }
+    /// Return or a click on a task row: its card (#1471: no transcript jump).
+    func activate(_ t: XrayTasks.Task) { openCard(t) }
 
     /// Return or a click on a memory row: its card.
     func openMemoryCard(_ m: XrayMemory.Item, note: String? = nil) {
@@ -530,42 +506,22 @@ final class XrayPanelModel: ObservableObject {
         present(AnyView(XrayMemoryCard(item: m, now: now(), note: note, readPrompt: read)), XrayMemoryCard.size)
     }
 
-    /// The card's "Read the prompt": the card goes and the transcript jumps; else the card stays (with the note when old).
-    /// #1472: without a transcript (Terminal mode, remote) the prompt's chapter card; a prompt not among the chapters
-    /// read: the memory card again with the note, never nothing.
+    /// The card's "Read the prompt" (#1472, #1471: every pane): the prompt's chapter card; a prompt not among the
+    /// chapters read: the memory card again with the note, never nothing.
     func readPrompt(_ m: XrayMemory.Item) {
         guard XrayMemoryCard.canRead(m) else { return }
-        guard transcript() != nil else {
-            let i = m.chapter.flatMap { chapterAnchors[$0] }
-            guard let c = dchChapters?.last(where: { $0.ordinal == i }) else { return openMemoryCard(m, note: Self.notReadNote) }
-            return openChapterCard(c)
-        }
-        go(m.chapter) { [weak self] older in if older { self?.openMemoryCard(m, note: Self.olderNote) } }
-    }
-
-    /// The jump; `card(older)` runs when it did not land.
-    func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) {
-        guard let anchor, let tm = transcript() else { return card(false) }
-        TranscriptJumper.of(tm).jump(anchor: anchor, in: tm) { [weak self] r in
-            switch r {
-            case .jumped: self?.dismiss()
-            case .older: card(true)
-            case .refused: card(false)
-            }
-        }
+        let i = m.chapter.flatMap { chapterAnchors[$0] }
+        guard let c = dchChapters?.last(where: { $0.ordinal == i }) else { return openMemoryCard(m, note: Self.notReadNote) }
+        openChapterCard(c)
     }
 
     // MARK: #1354 Prompts and Responses
 
-    /// The pane's chapters (#1389: without its transcript, dch's); a new poll or page redraws the panel.
-    var chapters: [TranscriptOutline.Chapter] {
-        guard let tm = transcript() else { return dchChapters ?? [] }
-        if watched !== tm {
-            watched = tm
-            watch = tm.$chapters.dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
-        }
-        return tm.chapters
-    }
+    /// The pane's chapters: dch's (#1389, #1471); a new poll or page redraws the panel.
+    var chapters: [TranscriptOutline.Chapter] { dchChapters ?? [] }
+
+    /// #1471: no transcript to jump in, so a jump never lands: `card(false)` at once (XrayRefCard.jumpRef still calls it).
+    func go(_ anchor: String?, card: @escaping @MainActor (Bool) -> Void) { card(false) }
 
     /// dch xv_vis1 (xview.c:2283-2297): the filter (title, and the answer on Responses), then auto rows unless shown,
     /// then peer rows when hidden; newest first. Responses lists the chapters with an answer. `auto` / `peer`: true shows
@@ -605,12 +561,8 @@ final class XrayPanelModel: ObservableObject {
         return out
     }
 
-    /// Return or a click on a Prompts or Responses row: the pane's transcript jumps to that chapter (#1319's seam);
-    /// #1472: no transcript (Terminal mode, remote): the chapter's card.
-    func activate(_ c: TranscriptOutline.Chapter) {
-        guard let tm = transcript() else { return openChapterCard(c) }
-        TranscriptJumper.of(tm).jump(to: c)
-    }
+    /// Return or a click on a Prompts or Responses row: the chapter's card (#1472; #1471: every pane).
+    func activate(_ c: TranscriptOutline.Chapter) { openChapterCard(c) }
 
     /// #1472: the prompt and its response through the window's presenter, as the memory card. #1472 b: it opens with
     /// what dch's chapters gave and runs one --chapter read for the chapter's anchor (none known, or one that is not

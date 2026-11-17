@@ -59,72 +59,6 @@ extension AgentWindowD1Tests {
 
     // MARK: Terminal by default, Transcript remembered by session name
 
-    @MainActor
-    func testAgentWindowTerminalModeIsTheDefaultAndTranscriptIsRememberedPerSessionName() throws {
-        try withModePref {
-            let one = mapped("one"), two = mapped("two")
-            let m = windowModel(store([one, two]))
-            m.setVisible(true)
-            defer { m.close() }
-            XCTAssertEqual(m.mode(one), .terminal, "a live session opens in Terminal (operator, 2026-11-10)")
-            m.select(.live(one.key))
-            XCTAssertEqual(m.paneMode, .terminal)
-            XCTAssertNil(Preferences.defaults.stringArray(forKey: Self.modePref), "nothing written for the default")
-            m.setMode(.transcript, for: one)
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\tone"],
-                           "written through Preferences.defaults as <dir>\\t<name>")
-            XCTAssertEqual(m.mode(two), .terminal, "per session")
-            XCTAssertFalse(SyncedKeys.isSynced(Self.modePref), "per Mac, not synced")
-            // A new window, and a later session reusing the name, inherit the choice.
-            let again = windowModel(store([mapped("one", .working, ago: 5)]))
-            XCTAssertEqual(again.mode(mapped("one", .working, ago: 5)), .transcript)
-            XCTAssertEqual(again.mode(session("one", .idle, dir: "/tmp/other-dir")), .terminal, "the dir is part of the key")
-            m.setMode(.transcript, for: two)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ttwo", "/tmp/dch-test\tone"],
-                           "newest first")
-            m.setMode(.transcript, for: two)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ttwo", "/tmp/dch-test\tone"],
-                           "set again: still once")
-            m.setMode(.terminal, for: one)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ttwo"], "Terminal removes it")
-            XCTAssertEqual(m.paneMode, .terminal)
-            // The 65th evicts the oldest.
-            Preferences.defaults.set((0..<64).map { "/tmp/dch-test\tk\($0)" }, forKey: Self.modePref)
-            let full = windowModel(store([one]))
-            full.setMode(.transcript, for: one)
-            let keys = try XCTUnwrap(Preferences.defaults.stringArray(forKey: Self.modePref))
-            XCTAssertEqual(keys.count, 64)
-            XCTAssertEqual(keys.first, "/tmp/dch-test\tone")
-            XCTAssertEqual(keys.last, "/tmp/dch-test\tk62", "k63, the oldest, went")
-            full.close()
-            again.close()
-        }
-    }
-
-    @MainActor
-    func testAgentWindowTerminalModeIsTheDefaultForSessionsWithNoTranscriptToo() throws {
-        try withModePref {
-            let raw = session("raw", .idle)   // no claude_session_id: nothing to show as a transcript
-            let old = AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "old"), alias: "", activity: 1, state: .idle,
-                                   agents: 0, version: "1.29.9", claudeSessionID: "0b7c2f3e-1111-2222-3333-444455556666",
-                                   transcriptPath: "/Users/example/.claude/projects/p/0b7c2f3e-1111-2222-3333-444455556666.jsonl")
-            let m = windowModel(store([raw, old, mapped("ok")]))
-            defer { m.close() }
-            XCTAssertEqual(m.mode(raw), .terminal)
-            XCTAssertEqual(m.mode(old), .terminal)
-            XCTAssertEqual(m.mode(mapped("ok")), .terminal, "mapped or not")
-            XCTAssertNil(Preferences.defaults.stringArray(forKey: Self.modePref), "nothing written for the default")
-            m.setMode(.transcript, for: raw)
-            XCTAssertEqual(m.mode(raw), .transcript, "Transcript anyway (the terminal-first card), remembered like any other")
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\traw"])
-            XCTAssertEqual(windowModel(store([raw])).mode(raw), .transcript)
-            m.setMode(.terminal, for: raw)
-            XCTAssertEqual(m.mode(raw), .terminal)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), [])
-        }
-    }
-
     /// History, an ended session's held row, a session gone, nothing selected: Transcript, nothing remembered,
     /// no client, and the toggle off (⌘T passes).
     @MainActor
@@ -143,10 +77,8 @@ extension AgentWindowD1Tests {
             m.select(nil)
             XCTAssertEqual(t.children().map(\.terminated), [1], "nothing selected: detached")
             XCTAssertEqual(m.paneMode, .transcript, "nothing selected")
-            XCTAssertFalse(m.toggleMode())
             m.select(.history(AgentSessionKey(dir: "/tmp/dch-test", name: "h")))
             XCTAssertEqual(m.paneMode, .transcript, "a History row")
-            XCTAssertFalse(m.toggleMode(), "a History row: nothing to toggle")
             XCTAssertEqual(t.spawned().count, 1, "a History row: nothing attached")
             m.select(.live(a.key))
             XCTAssertEqual(m.paneMode, .terminal)
@@ -158,40 +90,21 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.focusedEnded)
             XCTAssertNil(m.selection)
             XCTAssertEqual(m.paneMode, .transcript, "ended: Transcript, no terminal card")
-            XCTAssertEqual(m.mode(a), .terminal, "the session's own choice is untouched")
             XCTAssertEqual(t.children().last?.terminated, 1, "Ended: the client goes")
-            XCTAssertFalse(m.toggleMode(), "ended: nothing to toggle")
-            m.setMode(.transcript, for: a)
-            XCTAssertNil(Preferences.defaults.stringArray(forKey: Self.modePref), "ended: nothing remembered")
-            m.setMode(.terminal, for: a)
             XCTAssertEqual(m.paneMode, .transcript)
             XCTAssertEqual(t.spawned().count, 2, "and nothing attaches to an ended session")
             XCTAssertNil(m.interaction.session, "nor takes input")
-            // The header toggle on the held row: off, with the reason as its help (offscreen render for review).
+            // The held row's reason (the notice's "..." help reads it; offscreen render for review).
             XCTAssertEqual(AgentPaneModeToggle.endedReason, "This session ended: there is no terminal to attach to")
             try save(render(AgentWindowRootView(model: m, scrolls: false), size: CGSize(width: 1000, height: 680), dark: true),
                      "822-ended-1.0")
-            // QA #681 INFO-7: the held row's header hands the toggle the reason, its tooltip in every style; a live
-            // row's toggle has none (the view's dump: no accessibility tree is built offscreen).
-            let reason = "\"\(AgentPaneModeToggle.endedReason)\""
-            for style in [AgentVerbosityPicker.Style.labels, .icons, .menu] {
-                for ended in [true, false] {
-                    var out = ""
-                    let h = AgentSessionHeader(row: try XCTUnwrap(m.selectedRow), session: a, cwd: nil, open: {},
-                                               ended: ended, mode: .transcript, setMode: { _ in })
-                    dump(h.shownLine(picker: style), to: &out)
-                    XCTAssertTrue(out.contains("AgentPaneModeToggle"), "\(style)")
-                    XCTAssertEqual(out.contains(reason), ended, "\(style) ended: \(ended)")
-                }
-            }
             XCTAssertFalse(m.terminal.isSelected(a.key), "OQ-66: a held (ended) row is no selection a write can use")
             // Any session that ends in the pane: Ended (no highlight), Transcript, nothing attached.
             m.select(.live(b.key))
             st.sessions = []
             XCTAssertNil(m.selection)
             XCTAssertTrue(m.focusedEnded)
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertFalse(m.toggleMode())
+            XCTAssertEqual(m.paneMode, .transcript, "nothing to attach (#1471: the answer XrayRefLink reads)")
         }
     }
 
@@ -206,14 +119,13 @@ extension AgentWindowD1Tests {
             let m = windowModel(st)
             let t = fakeTerminal(m)
             func terminated() -> [Int] { t.children().map(\.terminated) }
-            m.setMode(.transcript, for: two)   // two in Transcript, one in the default Terminal
             m.setVisible(true)
             m.select(.live(one.key))
-            XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one", "--scrollback", "2000"]], "the default Terminal attaches")
+            XCTAssertEqual(t.spawned().map(\.args), [["-E", "-a", "one", "--scrollback", "2000"]], "a live session attaches")
             XCTAssertTrue(m.terminal.isSelected(one.key), "OQ-66: the selection is the session a write may come from")
             XCTAssertFalse(m.terminal.isSelected(two.key))
             XCTAssertEqual(m.terminal.phase, .live)
-            XCTAssertNil(m.interaction.session, "Terminal mode: no input box, no prompt reads")
+            XCTAssertNil(m.interaction.session, "no input box, no prompt reads")
             XCTAssertTrue(m.transcript.running, "the transcript keeps the header's cwd and todos")
             m.setVisible(false)
             XCTAssertEqual(terminated(), [1], "hidden: detached")
@@ -221,13 +133,11 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             XCTAssertEqual(t.spawned().count, 2, "shown again: attached again")
             m.select(.live(two.key))
-            XCTAssertEqual(m.interaction.session?.key, two.key, "Transcript mode: the input box is its")
-            XCTAssertEqual(terminated(), [1, 1], "another session in Transcript mode: detached")
-            XCTAssertEqual(t.spawned().count, 2)
-            m.select(.live(one.key))
-            XCTAssertEqual(t.spawned().count, 3)
+            XCTAssertNil(m.interaction.session, "#1471: every live pane is a terminal: no input box")
+            XCTAssertEqual(t.spawned().last?.args, ["-E", "-a", "two", "--scrollback", "2000"], "#1471: another live session attaches too")
+            XCTAssertEqual(Array(terminated().prefix(2)), [1, 1], "one's client went")
             m.select(.history(AgentSessionKey(dir: "/tmp/dch-test", name: "h")))
-            XCTAssertEqual(terminated(), [1, 1, 1], "a History row: nothing attached")
+            XCTAssertEqual(terminated().last, 1, "a History row: nothing attached")
             XCTAssertEqual(t.spawned().count, 3)
             m.select(.live(one.key))
             m.refresh()
@@ -237,22 +147,15 @@ extension AgentWindowD1Tests {
             XCTAssertNil(m.selection)
             XCTAssertTrue(m.focusedEnded, "#831 B1, rewrite 15: Ended, transcript suspended, nothing attached")
             XCTAssertFalse(m.transcript.running)
-            XCTAssertEqual(terminated(), [1, 1, 1, 1], "the session ended: detached")
+            XCTAssertEqual(terminated().last, 1, "the session ended: detached")
             m.select(.live(two.key))
-            XCTAssertEqual(m.toggleMode(), true, "two: Transcript to Terminal")
             XCTAssertEqual(t.spawned().last?.args, ["-E", "-a", "two", "--scrollback", "2000"])
-            m.toggleMode()
-            XCTAssertEqual(terminated().last, 1, "back to Transcript: detached")
-            XCTAssertEqual(m.interaction.session?.key, two.key)
-            m.toggleMode()
-            Self.drainMain()   // the app's turn between the toggle and the close: the screen's report lands, the 6th client starts
+            Self.drainMain()   // the app's turn before the close: the screen's report lands, the 5th client starts
             m.close()
             XCTAssertEqual(terminated().last, 1, "closed: detached")
             XCTAssertEqual(m.terminal.phase, .idle)
-            XCTAssertEqual(t.spawned().count, 6)
-            m.select(nil)
-            XCTAssertFalse(m.toggleMode(), "nothing selected: nothing to toggle")
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref) ?? [], [], "toggled back: none remembered")
+            XCTAssertEqual(t.spawned().count, 5)
+            XCTAssertNil(Preferences.defaults.stringArray(forKey: Self.modePref), "#1471: no mode is ever written")
             // The held row (an ended session): testAgentWindowTerminalModeNeverShowsWhereNothingCanAttach.
         }
     }
@@ -277,8 +180,8 @@ extension AgentWindowD1Tests {
         let down = key(125, "\u{F701}", [.command, .numericPad, .function])
         for r in all {
             XCTAssertEqual(route(key(13, "w", .command), r), .close)
-            XCTAssertEqual(route(key(17, "t", .command), r), .toggleMode, "⌘T from anywhere (\(r))")
-            XCTAssertEqual(route(key(17, "t", .command), r, terminal: false), .toggleMode)
+            XCTAssertEqual(route(key(17, "t", .command), r), .pass, "#1471: Command-T is no window key (\(r))")
+            XCTAssertEqual(route(key(17, "t", .command), r, terminal: false), .pass)
             XCTAssertEqual(route(key(3, "f", .command), r), .find)
             XCTAssertEqual(route(key(3, "f", .command), r, terminal: false), .pass, "no find bar over the transcript")
             XCTAssertEqual(route(key(5, "g", .command), r), .findNext(true))
@@ -318,7 +221,6 @@ extension AgentWindowD1Tests {
             var opened: [String] = []
             let m = windowModel(store([mapped("a", ago: 1), mapped("b", ago: 2), mapped("c", ago: 3)]), opened: { opened.append($0.name) })
             _ = fakeTerminal(m)
-            m.setMode(.transcript, for: mapped("b", ago: 2))
             m.setVisible(true)
             defer { m.close() }
             let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
@@ -345,15 +247,12 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("b"))
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
             XCTAssertEqual(m.selection, live("a"))
-            // ⌘T: Transcript, remembered; ⌘T again: Terminal, and the focus goes to the terminal once its
+            // #1471: Command-T is no window key (no Transcript mode); focusing the pane sends the keys to the terminal once its
             // view is in the window.
-            XCTAssertEqual(m.paneMode, .terminal, "the default")
-            XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)))
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ta", "/tmp/dch-test\tb"])
-            XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)))
+            XCTAssertEqual(m.paneMode, .terminal, "the only mode")
+            XCTAssertFalse(win.performKeyEquivalent(with: key(17, "t", .command)), "#1471: Command-T is not the window's")
             XCTAssertEqual(m.paneMode, .terminal)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\tb"])
+            XCTAssertTrue(m.focusSelection())
             XCTAssertTrue(m.terminal.focusPending)
             // The app's turn before SwiftUI builds the view: the screen's report lands and the client goes live (#845: only
             // a live client takes the keys), the focus still pending on the view.
@@ -373,7 +272,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(win.sidebarFocused, "Tab is the program's (mode cycle): the focus did not move on")
             XCTAssertTrue(win.performKeyEquivalent(with: cmdDown))
             XCTAssertEqual(m.selection, live("b"), "⌘↓ from the terminal")
-            XCTAssertEqual(m.paneMode, .transcript, "b was set to Transcript")
+            XCTAssertEqual(m.paneMode, .terminal, "#1471: b is a terminal too")
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
             XCTAssertEqual(m.paneMode, .terminal)
             Self.drainMain()   // the app's turn before the next key: a's fresh client is live
@@ -403,72 +302,11 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("b"), "the sidebar's down again")
             win.sendEvent(key(126, "\u{F700}", [.numericPad, .function]))
             XCTAssertEqual(m.selection, live("a"))
-            // Transcript mode: #845 Return moves into the input box (pending: no pane builds it here), no app opens.
-            XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)))
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.modePref), ["/tmp/dch-test\ta", "/tmp/dch-test\tb"])
-            XCTAssertTrue(win.makeFirstResponder(nil))
-            win.sendEvent(key(36, "\r"))
-            XCTAssertTrue(m.interaction.composerFocusPending)
-            XCTAssertEqual(opened, [])
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
 
     // MARK: Offscreen: a toggle moves nothing (spec 5.5)
-
-    @MainActor
-    func testAgentWindowToggleMovesNeitherHeaderNorSidebar() throws {
-        splitsOff()   // #1477: this row pins the gate-off (one pane) behaviour
-        let savedScale = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = savedScale }
-        try withModePref {
-            let convo = Self.corpus.appendingPathComponent("2.1.318/b-compaction-agents-more-tools.jsonl")
-            let (m, st) = demoModel(convo)
-            _ = fakeTerminal(m)
-            defer { m.close() }
-            let s = try XCTUnwrap(st.sessions.first { $0.name == "prosper" })
-            for scale: CGFloat in [1.0, 0.85, 0.7] {
-                ThemeRuntime.scale = scale
-                for (label, size) in [("min", CGSize(width: 640 * scale, height: 420 * scale)),
-                                      ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
-                    m.setMode(.transcript, for: s)
-                    let a = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
-                    m.setMode(.terminal, for: s)
-                    let b = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
-                    let tag = "\(label)-\(scale)"
-                    try save(a, "822-transcript-\(tag)")
-                    try save(b, "822-terminal-\(tag)")
-                    let px = CGFloat(a.pixelsWide) / (size.width + 24)
-                    let side = Int((AgentWindowModel.fullSidebarWidth * px).rounded(.down))
-                    let headerBottom = { (rep: NSBitmapImageRep) in self.headerBottom(rep, x: side + Int(sz(8) * px)) }
-                    let hb = try XCTUnwrap(headerBottom(a))
-                    // #1103: one header height per mode: Terminal mode's one line, Transcript mode's title and folder lines.
-                    XCTAssertLessThan(try XCTUnwrap(headerBottom(b)), hb, "Terminal mode's header is the lower one (\(tag))")
-                    let line = 0..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)   // the title line
-                    XCTAssertEqual(differing(a, b, x: 0..<side, y: 0..<Int(size.height * px)), 0, "sidebar unchanged (\(tag))")
-                    // The title (left) and the "⋯" (right) did not move on the title line. #1103: the title's first 60 pt (a
-                    // cut title shows a different length of itself per mode: the picker in one, the folder and the todo
-                    // chip in the other); the toggle's place: AgentWindowHeaderTests. At the minimum window below 1.0 the
-                    // title keeps only its first letters, so that pair is not compared (report: a supervisor decision).
-                    let detail = side + Int(sz(4) * px)   // past the sidebar's divider at every scale
-                    let width = Int(size.width * px)
-                    if label == "default" || scale == 1.0 {
-                        XCTAssertEqual(differing(a, b, x: detail..<(detail + Int(sz(16 + 60) * px)), y: line), 0, "title unmoved (\(tag))")
-                    }
-                    let menuLeft = width - Int(sz(16 + 18 + 2) * px)   // the "⋯" Menu: 18 pt, 16 pt from the edge
-                    // The "⋯" is an AppKit Menu (20 pt minimum, framed to 18): at 0.85 its glyph lands one device
-                    // pixel apart depending on the pane below (Color.black there does it too), so ±1 px only.
-                    XCTAssertEqual([-1, 0, 1].map { differing(a, b, x: menuLeft..<width, y: line, dx: $0, tolerance: 0.06) }.min(), 0,
-                                   "\"⋯\" unmoved (\(tag))")
-                    // Terminal mode: the terminal runs to the window's bottom (no input box under it).
-                    let bottom = (Int(size.height * px) - Int(sz(30) * px))..<Int(size.height * px)
-                    XCTAssertEqual(unlike(b, x: detail..<width, y: bottom), 0, "only the terminal background at the bottom (\(tag))")
-                    XCTAssertGreaterThan(unlike(a, x: detail..<width, y: bottom), 0, "Transcript mode has its input box there (\(tag))")
-                }
-            }
-        }
-    }
 
     /// The first row under the header's top where the colour steps (the header's bottom edge).
     /// #860: the header sits on the window's backdrop gradient, so each row is compared with the
@@ -568,7 +406,7 @@ extension XCTestCase {
         let key = "agentWindowTranscriptSessions"
         let saved = Preferences.defaults.stringArray(forKey: key)
         addTeardownBlock { Preferences.defaults.set(saved, forKey: key) }
-        for s in sessions ?? m.store?.sessions ?? [] { m.setMode(.transcript, for: s) }
+        _ = sessions   // #1471: no Transcript mode to show: every pane is a terminal (part b drops the callers' halves)
     }
 }
 

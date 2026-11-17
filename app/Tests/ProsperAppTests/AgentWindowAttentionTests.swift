@@ -154,7 +154,7 @@ extension AgentWindowD1Tests {
             let plain = paneSnapshot(m, size)
             m.close()
             XCTAssertFalse(plain.keys.contains { $0.hasPrefix("attention") }, "\(scale)")
-            for part in ["pane", "header", "composer"] {
+            for part in ["pane", "header"] {   // #1471: no composer slot under a terminal pane
                 for i in 1...2 { assertSame(marked["\(part) \(i)"], plain["\(part) \(i)"], "\(part) \(i) at \(scale)") }
             }
             assertSame(marked["pane 0"], plain["pane 0"], "the focused pane at \(scale)")

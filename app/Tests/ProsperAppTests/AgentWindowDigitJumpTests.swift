@@ -122,7 +122,6 @@ extension AgentWindowD1Tests {
             let a = mapped("a", .idle, ago: 1), b = mapped("b", .done, ago: 5), c = mapped("c", .idle, ago: 9)
             let m = windowModel(store([c, a, b]))
             _ = fakeTerminal(m)
-            m.setMode(.transcript, for: c)
             m.setVisible(true)
             defer { m.close() }
             let (win, host) = focusWindow(m)
@@ -145,20 +144,20 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("b"))
             XCTAssertEqual(m.terminal.key?.name, "b")
             XCTAssertTrue(win.firstResponder === m.terminal.view, "the keys are in b's terminal")
-            // ⌘3: c, in Transcript: its input box takes the keys.
+            // Command-3: c; #1471: its terminal takes the keys (every pane is a terminal).
             XCTAssertTrue(win.performKeyEquivalent(with: digitKey(20, "3", window: win.windowNumber)))
             settle(host)
             XCTAssertEqual(m.selection, live("c"))
-            XCTAssertEqual(m.paneMode, .transcript)
-            let tv = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first)
-            XCTAssertTrue(win.firstResponder === tv, "the input box built for c took the keys")
-            // From the input box (a text view): ⌘2 is still the window's; a's terminal takes the keys.
+            XCTAssertEqual(m.paneMode, .terminal, "#1471: Terminal is the only pane mode")
+            let tc = try XCTUnwrap(m.terminal.view, "c's terminal")
+            XCTAssertTrue(win.firstResponder === tc, "c's terminal took the keys")
+            // From c's terminal: Command-2 is still the window's; a's terminal takes the keys.
             XCTAssertTrue(win.performKeyEquivalent(with: digitKey(19, "2", window: win.windowNumber)))
             settle(host)
             settle(host)
             XCTAssertEqual(m.selection, live("a"))
             let back = try XCTUnwrap(m.terminal.view)
-            XCTAssertTrue(win.firstResponder === back, "from the input box into a's terminal")
+            XCTAssertTrue(win.firstResponder === back, "from c's terminal into a's")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
@@ -447,8 +446,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.number(live("s18")), 18)
             XCTAssertTrue(m.number(live("s19")) == nil && m.number(live("s20")) == nil, "row 19 and on: no number")
             XCTAssertFalse(m.selectNumbered(19))
-            for mode in [AgentPaneMode.terminal, .transcript] {
-                for s in sessions { m.setMode(mode, for: s) }
+            for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
                 let level = m.verbosity
                 let keys: [(UInt16, NSEvent.ModifierFlags, String)] = [
                     (18, [.command, .option], "s10"), (25, [.command, .option], "s18"), (23, [.command, .option], "s14"),

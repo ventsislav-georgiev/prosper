@@ -53,8 +53,8 @@ extension AgentWindowD1Tests {
     // MARK: First message not sent (#1369)
 
     /// T28 (#847 D2.3): a first message the island could not send fills that session's EMPTY draft once, when the
-    /// session is selected; a typed draft is never overwritten. The island's io is dch-lite (an empty read with no
-    /// mirror), so its sayFirst fails at once and no dch runs.
+    /// session is selected. The island's io is dch-lite (an empty read with no mirror), so its sayFirst fails at once
+    /// and no dch runs. #1471: the typed-draft and cleared-draft halves were the Transcript input box's (gone).
     @MainActor
     func testAgentWindowNewSessionUnsentFirstSeedsAnEmptyDraftOnceNeverATypedOne() {
         withNewSessionPrefs {
@@ -65,10 +65,7 @@ extension AgentWindowD1Tests {
             m.interaction.controller = island
             for s in [a, b] {
                 m.select(.live(s.key))
-                m.setMode(.transcript, for: s)
             }
-            XCTAssertEqual(m.interaction.session?.key, b.key, "web is followed: its input box takes the typed draft")
-            m.interaction.draft = "typed by hand"
             for (s, text) in [(a, "Example task for api"), (b, "Example task for web")] {
                 let done = expectation(description: "then \(s.name)")
                 island.sayFirst(s.key, text) { done.fulfill() }
@@ -78,11 +75,6 @@ extension AgentWindowD1Tests {
             m.select(.live(a.key))
             XCTAssertEqual(m.interaction.draft(for: a.key), "Example task for api", "the empty draft is filled")
             XCTAssertTrue(island.unsentFirst[a.key] == nil, "taken once")
-            m.interaction.draft = ""   // the person clears it
-            m.select(.live(b.key))
-            m.select(.live(a.key))
-            XCTAssertEqual(m.interaction.draft(for: a.key), "", "filled once, never again")
-            XCTAssertEqual(m.interaction.draft(for: b.key), "typed by hand", "a typed draft is never overwritten")
         }
     }
 
@@ -303,7 +295,9 @@ extension AgentWindowD1Tests {
     @MainActor
     func testAgentWindowNewSessionPendingSpawnSelectsInTerminalAndFocuses() throws {
         try withNewSessionPrefs {
-            Preferences.agentWindowTranscriptSessions = ["/tmp/dch-test\tapi"]
+            let old = Preferences.defaults.object(forKey: "agentWindowTranscriptSessions")
+            defer { Preferences.defaults.set(old, forKey: "agentWindowTranscriptSessions") }
+            Preferences.defaults.set(["/tmp/dch-test\tapi"], forKey: "agentWindowTranscriptSessions")   // #1471: ignored
             let other = mapped("other"), st = store([other]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             m.select(.live(other.key))
@@ -317,7 +311,6 @@ extension AgentWindowD1Tests {
             st.sessions = [other, api]
             XCTAssertEqual(m.selection, .live(api.key))
             XCTAssertEqual(m.paneMode, .terminal)
-            XCTAssertFalse(m.transcriptKeys.contains("/tmp/dch-test\tapi"), "the reused name's Transcript choice dropped")
             XCTAssertTrue(m.terminal.focusPending, "the keys go to the terminal once its client is live")
             XCTAssertNil(m.pendingSpawn, "one-shot")
         }

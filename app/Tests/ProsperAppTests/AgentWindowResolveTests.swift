@@ -431,8 +431,8 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.interaction.notice, AgentWindowText.working, "control: focused A reaches A's state check")
     }
 
-    /// R2.5 (11.2 interaction reads): a blocked session in an unfocused shown pane: 0 screen reads; focusing it:
-    /// exactly 1; publishes while it stays focused and blocked read nothing more.
+    /// R2.5 (11.2 interaction reads): a blocked session in an unfocused shown pane: 0 screen reads. #1471: the
+    /// "focusing it: exactly 1" half was the Transcript input box's read; a focused terminal pane reads none either.
     @MainActor
     func testAgentWindowUnfocusedBlockedPaneReadsNothingUntilFocused() throws {
         splitsOn()
@@ -455,11 +455,11 @@ extension AgentWindowD1Tests {
         st.sessions = st.sessions
         XCTAssertEqual(m.interaction.reads, 0, "B blocked but unfocused: no screen read")
         try focus(m, "b")
-        XCTAssertEqual(m.interaction.reads, 1, "focusing it: exactly one")
+        XCTAssertEqual(m.interaction.reads, 0, "focused, a terminal: no input box, no screen read (#1471)")
         st.sessions = st.sessions
-        XCTAssertEqual(m.interaction.reads, 1)
+        XCTAssertEqual(m.interaction.reads, 0)
         try focus(m, "a")
-        XCTAssertEqual(m.interaction.reads, 1, "back on A (idle): nothing")
+        XCTAssertEqual(m.interaction.reads, 0, "back on A (idle): nothing")
     }
 
     /// Step 1 review (a): an UNFOCUSED pane's runtime tells the view itself: entering Ended and its one swap to the

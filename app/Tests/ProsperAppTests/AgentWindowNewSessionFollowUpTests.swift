@@ -329,8 +329,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(route(formKey(13, "w", .command)), .close, tag)
                 XCTAssertEqual(route(formKey(45, "n", .command)), .newSession, tag)
                 XCTAssertEqual(route(formKey(45, "N", [.command, .shift])), .newShell, tag)
-                XCTAssertEqual(route(formKey(17, "t", .command)), .swallow, "⌘T \(tag)")
-                XCTAssertEqual(route(formKey(17, "t", .command), form: false), .toggleMode, "no form: ⌘T toggles \(tag)")
+                XCTAssertEqual(route(formKey(17, "t", .command)), .pass, "#1471: Command-T is no window key \(tag)")
                 XCTAssertEqual(route(formKey(3, "f", .command)), terminal ? .swallow : .pass, "⌘F \(tag)")
                 XCTAssertEqual(route(formKey(5, "g", .command)), terminal ? .swallow : .pass, "⌘G \(tag)")
                 XCTAssertEqual(route(formKey(5, "G", [.command, .shift])), terminal ? .swallow : .pass, "⇧⌘G \(tag)")
@@ -364,10 +363,8 @@ extension AgentWindowD1Tests {
             settle(host)
             sidebarKeys(win)
             XCTAssertEqual(win.responderKind, .other)
-            let keys = m.transcriptKeys
-            XCTAssertTrue(win.performKeyEquivalent(with: wiringKey(win, 17, "t", .command)), "⌘T handled")
-            XCTAssertEqual(m.transcriptKeys, keys, "no mode written for the hidden session")
-            XCTAssertEqual(m.mode(a), .terminal)
+            XCTAssertFalse(win.performKeyEquivalent(with: wiringKey(win, 17, "t", .command)), "#1471: Command-T is not the window's")
+            XCTAssertEqual(m.paneMode, .terminal)
             XCTAssertTrue(win.performKeyEquivalent(with: wiringKey(win, 125, "\u{F701}", .command)), "⌘↓ handled")
             XCTAssertEqual(m.selection, .live(a.key), "no pick")
             XCTAssertNotNil(m.newSession, "the form stays")
@@ -379,40 +376,29 @@ extension AgentWindowD1Tests {
         }
     }
 
-    // MARK: INFO-5: the keys back where they were, Transcript and pending
+    // MARK: INFO-5: the keys back where they were, sidebar and pending
 
-    /// QA #747 M7: the form took the keys from the Transcript input box: Cancel puts them back in it. A focus still
-    /// pending when the form opened counts as the keys (the terminal's, which the detach drops; the input box's,
-    /// dropped meanwhile by a sidebar mouse-down): Cancel asks again.
+    /// QA #747 M7: opened from the sidebar, Cancel leaves the keys there. A focus still pending when the form opened
+    /// counts as the keys (the terminal's, which the detach drops): Cancel asks again. #1471: the Transcript input
+    /// box's halves (Cancel back into the box; the box's own pending focus) are gone with the box.
     @MainActor
     func testAgentWindowNewSessionKeysComeBackToTheInputBoxOrAPendingFocus() throws {
         try withNewSessionPrefs {
             let a = mapped("a"), st = store([a]), m = wiringModel(st, SpawnCalls())
             defer { m.close() }
-            m.setMode(.transcript, for: a)
             let (win, host) = focusWindow(m)
             defer { win.close() }
             m.select(.live(a.key))
             settle(host)
+            // Opened from the sidebar: Cancel leaves the keys there.
             sidebarKeys(win)
-            clickRow("a", m, win, host)
-            let box = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first)
-            XCTAssertTrue(win.firstResponder === box, "the keys in a's input box")
+            let side = win.firstResponder
             m.openNewSession()
             settle(host)
             XCTAssertEqual(formFields(host).count, 3)
-            XCTAssertTrue(focusViews(host, AgentComposerTextView.self).isEmpty, "the input box left with the pane")
             m.cancelNewSession()
             settle(host)
-            let again = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first)
-            XCTAssertTrue(win.firstResponder === again, "Cancel: the keys back in the input box")
-            // Opened from the sidebar: Cancel leaves the keys there.
-            sidebarKeys(win)
-            m.openNewSession()
-            settle(host)
-            m.cancelNewSession()
-            settle(host)
-            XCTAssertFalse(win.firstResponder is AgentComposerTextView, "the sidebar keeps them")
+            XCTAssertTrue(side != nil && win.firstResponder === side && win.sidebarFocused, "the sidebar keeps them")
             XCTAssertFalse(win.isVisible, "never shown")
 
             // The terminal's pending focus (no view yet): the detach drops it, Cancel asks again.
@@ -426,18 +412,6 @@ extension AgentWindowD1Tests {
             mt.cancelNewSession()
             XCTAssertTrue(mt.terminal.focusPending, "Cancel asks for the keys again")
 
-            // The input box's pending focus, dropped while the form is open (a sidebar mouse-down): Cancel asks again.
-            let c = mapped("c"), mc = newSessionModel(store([c]), SpawnCalls())
-            defer { mc.close() }
-            mc.setMode(.transcript, for: c)
-            mc.select(.live(c.key))
-            XCTAssertTrue(mc.focusSelection())
-            XCTAssertTrue(mc.interaction.composerFocusPending, "pending: no input box in a window")
-            mc.openNewSession()
-            mc.dropPendingFocus()
-            XCTAssertFalse(mc.interaction.composerFocusPending)
-            mc.cancelNewSession()
-            XCTAssertTrue(mc.interaction.composerFocusPending, "Cancel asks for the keys again")
         }
     }
 

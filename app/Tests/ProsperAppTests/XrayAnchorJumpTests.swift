@@ -69,99 +69,6 @@ final class XrayAnchorJumpTests: XCTestCase {
         XCTAssertEqual(jump(s, "f\(s.inode &+ 1):\(s.starts[Self.promptLine(6)])"), .refused, "another file (inode)")
     }
 
-    /// Red with jump-to-created-chapter: the row goes to turn 2 (created) instead of turn 7 (last changed).
-    func testTaskRowUsesChapterNotCreatedChapter() throws {
-        let s = try scene()
-        defer { s.model.stop() }
-        let row = #"{"task":{"id":"12","title":"Fix the login test","status":"pending","label":"pending","chapter":"\#(s.anchor(line: Self.promptLine(7)))","created_chapter":"\#(s.anchor(line: Self.promptLine(2)))","blocked_by":[]}}"#
-        let t = try XCTUnwrap(XrayTasks.parse(XrayPanelTasksTests.ndjson([XrayPanelTasksTests.header, row, XrayPanelTasksTests.done]))
-            .tasks.first)
-        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
-        var cards = 0, dismissed = 0
-        p.presentCard = { _ in cards += 1 }
-        p.present = { _, _ in cards += 1 }
-        p.dismiss = { dismissed += 1 }
-        p.transcript = { s.model }
-        p.activate(t)
-        XCTAssertEqual(prompt(s.model, TranscriptJumper.of(s.model).request?.block), "Prompt 7", "the prompt that last changed it")
-        XCTAssertEqual(cards, 0, "a jump, not the card")
-        XCTAssertEqual(dismissed, 1)
-        // The memory card's "Read the prompt" lands the same way.
-        let mem = XrayMemory.parse(XrayPanelTasksTests.ndjson([XrayPanelMemoryTests.header,
-            #"{"memory":{"id":"m1","title":"t","kind":"feedback","path":"/Users/example/m1.md","session":"wrote","chapter":"\#(s.anchor(line: Self.promptLine(3)))","body":"b"}}"#,
-            XrayPanelMemoryTests.done])).items.first
-        try p.readPrompt(XCTUnwrap(mem))
-        XCTAssertEqual(prompt(s.model, TranscriptJumper.of(s.model).request?.block), "Prompt 3")
-        XCTAssertEqual(dismissed, 2, "the card goes")
-    }
-
-    /// The anchor's line is above the loaded page: earlier pages load until it is in, then the jump. Above the history
-    /// cap: "older than the loaded part" with the card.
-    func testNotLoadedLoadsEarlierElseOlderWithTheCard() throws {
-        let s = try scene(turns: 40, pageBytes: 2_048)
-        defer { s.model.stop() }
-        let first = s.anchor(line: Self.promptLine(0))
-        XCTAssertFalse(s.model.blocks.contains { $0.source?.lowerBound == 0 }, "turn 0 is not loaded at open")
-        let r = jump(s, first)
-        guard case .jumped(let id)? = r else { return XCTFail("jumped after loading: \(String(describing: r))") }
-        XCTAssertEqual(prompt(s.model, id), "Prompt 0")
-
-        let capped = try scene(turns: 40, pageBytes: 2_048, maxBlocks: 3)
-        defer { capped.model.stop() }
-        XCTAssertTrue(capped.model.atHistoryCap)
-        XCTAssertEqual(jump(capped, capped.anchor(line: Self.promptLine(0))), .older)
-        let t = try XCTUnwrap(XrayTasks.parse(XrayPanelTasksTests.ndjson([XrayPanelTasksTests.header,
-            #"{"task":{"id":"1","title":"t","status":"pending","chapter":"\#(capped.anchor(line: 0))"}}"#, XrayPanelTasksTests.done])).tasks.first)
-        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
-        var shown: [CGSize] = [], task = 0
-        p.presentCard = { _ in task += 1 }
-        p.present = { _, size in shown.append(size) }
-        p.transcript = { capped.model }
-        p.activate(t)
-        XCTAssertEqual(shown, [XrayTaskCard.size], "the card, with the note")
-        XCTAssertEqual(task, 0)
-        XCTAssertEqual(p.card, t)
-        XCTAssertEqual(XrayPanelModel.olderNote, "The prompt is older than the loaded part.")
-    }
-
-    /// #1381 (R1352-i2): a bump (stop, or a new transcript file) while a jump waits on loadEarlier runs the waiter, so
-    /// the jump ends: re-entered on the fresh tail it is refused and the row opens the card. Red at TIP: bump() dropped
-    /// the waiters, so done never ran and the click did nothing.
-    func testBumpMidJumpIsRefusedAndTheCardOpens() throws {
-        let s = try scene(turns: 40, pageBytes: 2_048)
-        defer { s.model.stop() }
-        s.model.offMain = { _ in }   // the earlier page never lands: the jump waits on loadEarlier
-        var out: [TranscriptJumper.AnchorJump] = []
-        TranscriptJumper.of(s.model).jump(anchor: s.anchor(line: Self.promptLine(0)), in: s.model) { out.append($0) }
-        XCTAssertEqual(out, [], "waiting on the earlier page")
-        s.model.stop()
-        XCTAssertEqual(out, [.refused], "stop: the waiter ran once, refused on the fresh tail")
-
-        let n = try scene(turns: 40, pageBytes: 2_048)
-        defer { n.model.stop() }
-        n.model.offMain = { _ in }
-        let t = try XCTUnwrap(XrayTasks.parse(XrayPanelTasksTests.ndjson([XrayPanelTasksTests.header,
-            #"{"task":{"id":"1","title":"t","status":"pending","chapter":"\#(n.anchor(line: Self.promptLine(0)))"}}"#,
-            XrayPanelTasksTests.done])).tasks.first)
-        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
-        var cards = 0, shown = 0, dismissed = 0
-        p.presentCard = { _ in cards += 1 }
-        p.present = { _, _ in shown += 1 }
-        p.dismiss = { dismissed += 1 }
-        p.transcript = { n.model }
-        p.activate(t)
-        XCTAssertEqual(cards, 0, "the jump waits")
-        let other = n.url.deletingLastPathComponent().appendingPathComponent("y.jsonl")
-        try JumpFixture.line(JumpFixture.user("Prompt new")).write(to: other)
-        n.model.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"), dchVersion: "1.30.0",
-                                             dchState: "idle", sessionId: "0b7c2f3e-1111-2222-3333-777788889999",
-                                             transcriptPath: other.path))
-        XCTAssertEqual(cards, 1, "a new file mid-jump: the plain card opens")
-        XCTAssertEqual(shown, 0, "no older note")
-        XCTAssertEqual(dismissed, 0)
-        XCTAssertEqual(p.card, t)
-    }
-
     /// Red with no-anchorOK: a 130-digit offset of zeros parses to 0 (turn 0's prompt) and would jump.
     func testBadAnchorIsRefused() throws {
         let s = try scene()
@@ -190,7 +97,6 @@ final class XrayAnchorJumpTests: XCTestCase {
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
         var cards: [String] = []
         p.presentCard = { cards.append($0.id) }
-        p.transcript = { s.model }
         for t in tasks { p.activate(t) }
         XCTAssertEqual(cards, ["OQ-7", "?3", "4"])
         XCTAssertTrue(TranscriptJumper.of(s.model).request == nil, "no jump")
@@ -198,8 +104,6 @@ final class XrayAnchorJumpTests: XCTestCase {
 
     /// Terminal mode, and a remote row: no transcript, so the card (through the window's presenter for a task).
     func testTerminalModeAndRemoteOpenTheCard() async throws {
-        let saved = Preferences.agentWindowTranscriptSessions   // setMode below writes it (the XCTest scratch store)
-        defer { Preferences.agentWindowTranscriptSessions = saved }
         let key = AgentSessionKey(dir: "/tmp/dch-test", name: "api")
         let store = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
         store.sessions = [AgentSession(key: key, alias: "", activity: AgentWindowD1Tests.now - 60, state: .idle, agents: 0,
@@ -244,7 +148,6 @@ final class XrayAnchorJumpTests: XCTestCase {
         XCTAssertTrue(win.toggleXray())
         let p = try XCTUnwrap(XrayPanels.shared.open[pane])
         await p.reading?.value
-        XCTAssertTrue(p.transcript() == nil, "Terminal mode: no transcript")
         let t = try XCTUnwrap(p.shownGroups.flatMap(\.tasks).first)   // a pending task: the first group (In progress) is empty
         p.activate(t)
         XCTAssertEqual(cards.presents, 1, "the task card through the window's presenter")
@@ -253,12 +156,9 @@ final class XrayAnchorJumpTests: XCTestCase {
         p.openMemoryCard(mem)
         XCTAssertEqual(cards.presents, 2, "the memory card through the same presenter (XrayPanels.window)")
         XCTAssertEqual(cards.size, XrayMemoryCard.size)
-        let s = try XCTUnwrap(m.selectedRow?.session)
-        m.setMode(.transcript, for: s)
-        XCTAssertEqual(m.paneMode, .transcript)
-        XCTAssertTrue(XrayPanels.transcript(pane, p.target) === m.focusedRuntime?.transcript, "Transcript mode: the pane's own")
-        XCTAssertTrue(XrayPanels.transcript(pane, XrayTarget(name: "host:api", dir: nil)) == nil, "a remote row: the card")
-        XCTAssertTrue(XrayPanels.transcript(UUID(), p.target) == nil, "another pane")
+        XCTAssertEqual(m.paneMode, .terminal, "#1471: still a terminal (no mode to switch to)")
+        XCTAssertTrue(XrayPanels.fromDch(pane, p.target) && XrayPanels.fromDch(pane, XrayTarget(name: "host:api", dir: nil)),
+                      "#1471: a local and a remote row both read dch")
         XCTAssertEqual(spawns.count, 0, "no terminal spawned")
         XCTAssertFalse(win.isVisible, "never shown")
     }

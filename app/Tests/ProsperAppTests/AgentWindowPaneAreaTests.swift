@@ -39,9 +39,10 @@ extension AgentWindowD1Tests {
 
     /// Transcript mode for these names (a live session opens in Terminal, #822); returns what puts the list back.
     func transcriptMode(_ names: [String]) -> () -> Void {
-        let saved = Preferences.agentWindowTranscriptSessions
-        Preferences.agentWindowTranscriptSessions = names.map { "/tmp/dch-test\t\($0)" }
-        return { Preferences.agentWindowTranscriptSessions = saved }
+        // #1471: the old per-session key, written raw: no pane reads it any more (every pane is a terminal).
+        let key = "agentWindowTranscriptSessions", saved = Preferences.defaults.object(forKey: key)
+        Preferences.defaults.set(names.map { "/tmp/dch-test\t\($0)" }, forKey: key)
+        return { Preferences.defaults.set(saved, forKey: key) }
     }
 
     /// R1193-4: the pane area's size reaches `paneArea` (the detail column: the window less the sidebar and its line);
@@ -113,7 +114,7 @@ extension AgentWindowD1Tests {
             assertSame(one["pane 0"], area, "one pane: the whole area (\(scale))")
             let fullHeader = try XCTUnwrap(one["header 0"], "the header (\(scale))")
             XCTAssertGreaterThan(fullHeader.height, AgentCompactHeader.height + 1, "one pane: the full header (\(scale))")
-            XCTAssertEqual(one["composer 0"]?.height ?? -1, sz(60), accuracy: pixel, "60·s (\(scale))")
+            XCTAssertTrue(one["composer 0"] == nil, "#1471: no composer slot under a terminal (\(scale))")
             // R1.3 (7.6): one pane: no focus border, no dim; the slots above are step 4's, unchanged.
             XCTAssertTrue(one["mark 0"] == nil, "one pane: neither the border nor the dim (\(scale))")
 
@@ -132,7 +133,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(h?.minX ?? -1, p?.minX ?? -2, accuracy: pixel, "header \(i) starts at the pane's edge (\(scale))")
                 XCTAssertEqual(h?.width ?? -1, p?.width ?? -2, accuracy: pixel, "header \(i) spans the pane (\(scale))")
                 XCTAssertEqual(h?.height ?? -1, AgentCompactHeader.height, accuracy: pixel, "compact 26·s (\(scale))")
-                XCTAssertEqual(base["composer \(i)"]?.height ?? -1, sz(60), accuracy: pixel, "composer \(i), 60·s (\(scale))")
+                XCTAssertTrue(base["composer \(i)"] == nil, "#1471: no composer slot, pane \(i) (\(scale))")
             }
             func same(_ why: String) {
                 let s = paneSnapshot(m, size)
@@ -154,7 +155,7 @@ extension AgentWindowD1Tests {
             m.adopt(paneLayout(names.map { paneTarget($0) }))
             let rows = paneSnapshot(m, size)
             for i in 0..<4 {
-                XCTAssertEqual(rows["composer \(i)"]?.height ?? -1, sz(44), accuracy: pixel, "two rows: 44·s, pane \(i) (\(scale))")
+                XCTAssertTrue(rows["composer \(i)"] == nil, "#1471: two rows, no composer slot, pane \(i) (\(scale))")
             }
             AgentPaneLayout.splitsEnabled = false
         }
@@ -184,11 +185,11 @@ extension AgentWindowD1Tests {
         host.frame = CGRect(origin: .zero, size: size)
         win.contentView = host
         settle(host)
-        let fields = focusViews(host, AgentComposerTextView.self)
-        XCTAssertEqual(fields.count, 1, "one composer takes input: the focused pane's")
-        let field = try XCTUnwrap(fields.first)
+        XCTAssertTrue(focusViews(host, AgentComposerTextView.self).isEmpty, "#1471: no composer under a terminal pane")
+        // #1471: a text view of the window's own holds the keys (the composer and its draft went with Transcript mode).
+        let field = NSTextView(frame: CGRect(x: 0, y: 0, width: 100, height: 20))
+        host.addSubview(field)
         XCTAssertTrue(win.makeFirstResponder(field))
-        m.interaction.draft = "half a thought"
         settle(host)
         let writes = m.layoutWrites
         // R6.9 (7.2): the panes hold the keys; nothing below may change that or ask for a first responder.
@@ -202,7 +203,6 @@ extension AgentWindowD1Tests {
         settle(host)
         XCTAssertGreaterThan(m.layoutWrites, writes, "the autosave ran")
         XCTAssertTrue(win.firstResponder === field, "the same field keeps the keys")
-        XCTAssertEqual(m.interaction.draft, "half a thought")
         XCTAssertEqual(m.selection, selection)
         XCTAssertEqual(m.keyFocus, .pane, "R6.9: no publish, autosave or attention change moves the key focus")
         XCTAssertEqual(win.responderAsks, asks, "R6.9: and none asks for a first responder")

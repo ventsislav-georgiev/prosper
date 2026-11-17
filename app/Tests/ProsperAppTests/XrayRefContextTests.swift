@@ -109,13 +109,9 @@ final class XrayRefContextTests: XCTestCase {
                      Self.mention("api-qa", at: 60, offset: 2, chapter: "f9:10"), Self.mention("api-qa", at: 61, offset: 3), T.done]
         let c = XrayRefContext(T.parse(lines), ref: "#12", tasks: nil, memory: nil)
         let p = XrayPanelModel(target: XrayRefRunTests.local, tab: .search)
-        var asked = 0
-        p.transcript = { asked += 1; return nil }
         let other = c.groups.dropFirst().first?.mentions ?? []
         XCTAssertEqual(other.count, 2)
         for m in other { XCTAssertFalse(p.jumpRef(m, in: c)) }
-        XCTAssertEqual(asked, 0)
         if let mine = c.groups.first?.mentions.first { XCTAssertTrue(p.jumpRef(mine, in: c)) } else { XCTFail("no own mention") }
-        XCTAssertEqual(asked, 1)
     }
 }

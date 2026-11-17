@@ -106,8 +106,8 @@ extension AgentWindowD1Tests {
             // The window's chords.
             (13, "w", cmd, .terminal, true, false, false, .close, "Command-W"),
             (13, "w", cmd, .text, true, true, false, .close, "Command-W while renaming"),
-            (17, "t", cmd, .terminal, true, false, false, .toggleMode, "Command-T"),
-            (17, "t", cmd, .text, false, false, false, .toggleMode, "Command-T in Transcript"),
+            (17, "t", cmd, .terminal, true, false, false, .pass, "Command-T (#1471: no mode toggle)"),
+            (17, "t", cmd, .text, false, false, false, .pass, "Command-T off the terminal (#1471)"),
             (3, "f", cmd, .terminal, true, false, false, .find, "Command-F"),
             (3, "f", cmd, .text, false, false, false, .pass, "Command-F in Transcript"),
             (5, "g", cmd, .terminal, true, false, false, .findNext(true), "Command-G"),

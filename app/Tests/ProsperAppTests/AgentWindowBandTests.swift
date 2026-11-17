@@ -88,7 +88,7 @@ extension AgentWindowD1Tests {
                 if label == "wide" {
                     XCTAssertTrue(["layout", "chip", "all", "picker"].allSatisfy { base[$0] != nil }, "wide: every slot (\(tag)): \(base.keys)")
                 }
-                XCTAssertTrue(AgentWindowBand.transcriptShown(m), "a transcript shown: the picker on (\(tag))")
+                XCTAssertFalse(AgentWindowBand.transcriptShown(m), "#1471: no pane draws a transcript: the picker off (\(tag))")
                 func same(_ s: [String: CGRect], _ why: String) {
                     XCTAssertEqual(Set(s.keys), Set(base.keys), "the same slots (\(why), \(tag))")
                     for k in base.keys { assertSame(s[k], base[k], "\(k) (\(why), \(tag))") }
@@ -228,7 +228,7 @@ extension AgentWindowD1Tests {
     func bandHeaderPickers(_ m: AgentWindowModel, _ a: AgentSession, _ mode: AgentPaneMode) throws -> Int {
         let row = try XCTUnwrap(m.selectedRow)
         let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: m.store,
-                                        mode: mode, setMode: { _ in })
+                                        mode: mode)
         let size = CGSize(width: 900, height: 80)
         let tree = bandTree(header.frame(width: size.width, height: size.height, alignment: .top), size,
                             until: mode == .transcript && !AgentWindowBand.shown ? ["Verbose view", "Session actions"] : ["Session actions"]).tree
@@ -251,7 +251,7 @@ extension AgentWindowD1Tests {
     /// #1224 (the supervisor's decision, 2026-11-14): with the split gate off (the product) the window is the parent's.
     /// No band is laid out (no probe frame at all); the pane area is the whole column (paneAreaFrame and the size the
     /// view writes; a click in the top 30 points is the pane's, as before); the session header draws the picker as
-    /// #1103 did, in Transcript mode and none in Terminal mode, and the window reads each button once (the header's).
+    /// #1103 did in Terminal mode: none (#1471: every pane is a terminal), and the window reads no picker button.
     /// At UI scale 1.0 in a 1600 x 900 content; the column's left edge from measuredSidebarWidth (#1470 a2).
     @MainActor
     func testAgentWindowGateOffHasNoBandAndTheHeaderDrawsThePicker() throws {
@@ -276,11 +276,11 @@ extension AgentWindowD1Tests {
         m.keyFocus = .sidebar
         XCTAssertFalse(m.mouseDown(at: CGPoint(x: 341, y: 15), in: size))
         XCTAssertEqual(m.keyFocus, .pane, "a click in the top 30 points is the pane's, as before")
-        XCTAssertEqual(try bandHeaderPickers(m, a, .transcript), 1, "the header draws the picker in Transcript mode")
         XCTAssertEqual(try bandHeaderPickers(m, a, .terminal), 0, "#1103: none in Terminal mode")
-        let tree = bandTree(AgentWindowRootView(model: m, scrolls: false), size, until: ["Verbose view", "Session actions"]).tree
+        let tree = bandTree(AgentWindowRootView(model: m, scrolls: false), size, until: ["Session actions"]).tree
+        XCTAssertTrue(tree.contains { $0.names.contains("Session actions") }, "the header was read")
         for n in ["Focused view", "Default view", "Verbose view"] {
-            XCTAssertEqual(bandCount(tree, n), 1, "\"\(n)\" read once in the window, the header's")
+            XCTAssertEqual(bandCount(tree, n), 0, "#1471: \"\(n)\" is never read: every pane is a terminal, no picker")
         }
     }
 

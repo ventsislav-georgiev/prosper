@@ -41,7 +41,7 @@ extension AgentWindowD1Tests {
                 let room = 1000 * scale - AgentWindowModel.fullSidebarWidth - 1
                 for mode in [AgentPaneMode.terminal, .transcript] {
                     let h = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, level: .constant(.default), todos: todos,
-                                               store: st, mode: mode, setMode: { _ in })
+                                               store: st, mode: mode)
                     let fit = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
                     let name = "\(mode == .terminal ? "terminal" : "transcript")-\(dark ? "dark" : "light")-\(scale)"
                     if dark { log.append(String(format: "HEIGHT %@ %@ scale %.2f width %.0f h=%.1f", phase, name, scale, room, fit)) }
@@ -59,8 +59,7 @@ extension AgentWindowD1Tests {
             let s = try XCTUnwrap(wst.sessions.first { $0.name == "prosper" })
             for dark in [true, false] {
                 ThemeRuntime.palette = dark ? saved.1 : Self.lightPalette
-                for mode in [AgentPaneMode.terminal, .transcript] {
-                    wm.setMode(mode, for: s)
+                for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
                     try autoreleasepool {
                         try write(try render(AgentWindowRootView(model: wm, scrolls: false), size: CGSize(width: 1000, height: 680),
                                              dark: dark, margin: 0),

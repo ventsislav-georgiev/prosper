@@ -181,7 +181,6 @@ extension AgentWindowD1Tests {
             _ = fakeTerminal(wm)
             defer { wm.close() }
             let s = try XCTUnwrap(wst.sessions.first { $0.name == "prosper" })
-            wm.setMode(.transcript, for: s)
             for a in attrs { app.perform(set, with: NSNumber(value: true), with: a) }
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale

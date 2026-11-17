@@ -42,7 +42,7 @@ final class XrayPromptsTabTests: XCTestCase {
         try F.write(url, entries)
         let m = F.model(url)
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .prompts)
-        p.transcript = { m }
+        p.dchChapters = m.chapters   // #1471: X-ray's chapters are dch's only (the same Chapter rows)
         return (p, m)
     }
 
@@ -219,20 +219,11 @@ final class XrayPromptsTabTests: XCTestCase {
     }
 
     /// Return or a click on a row: the pane's jumper is asked for that chapter's block (#1319's seam).
-    func testClickJumpsToThatChapter() throws {
+    func testNoDchChaptersNoPromptsOrResponsesTab() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
-        let c = try XCTUnwrap(p.shownPrompts.first { $0.from == .peer })
-        p.activate(c)
-        let id = try XCTUnwrap(TranscriptJumper.of(m).request?.block)
-        XCTAssertEqual(id, c.id)
-        let b = try XCTUnwrap(m.blocks.first { $0.id == id }, "a drawn block")
-        guard case .assistant(let clip) = b.body else { return XCTFail("the peer's own block is not drawn: its answer") }
-        XCTAssertEqual(clip.text, "Rerunning")
-        let r = try XCTUnwrap(p.shownResponses.last)
-        p.activate(r)
-        XCTAssertEqual(TranscriptJumper.of(m).request?.block, r.id, "a Responses row too")
-        p.transcript = { nil }
-        XCTAssertEqual(p.tabs, [], "no transcript (Terminal mode, remote): no Prompts or Responses tab")
+        XCTAssertTrue(p.tabs.contains(.prompts) && p.tabs.contains(.responses), "dch's chapters: both tabs")
+        p.dchChapters = nil
+        XCTAssertFalse(p.tabs.contains(.prompts) || p.tabs.contains(.responses), "#1471: no dch chapters read: no Prompts or Responses tab")
     }
 }

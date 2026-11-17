@@ -60,58 +60,39 @@ extension AgentWindowD1Tests {
         let row = try XCTUnwrap(m.selectedRow)
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
-        var tiers: Set<String> = []
         for width: CGFloat in [300, 360, 420, 480, 560, 700, 900] {
-            var toggleAt: [CGRect] = [], menuAt: [CGRect] = []
-            for mode in [AgentPaneMode.terminal, .transcript] {
-                let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st,
-                                                mode: mode, setMode: { _ in })
-                let size = CGSize(width: width, height: 80)
-                let (win, host) = headerHosted(header.frame(width: width, height: 80, alignment: .top), size)
-                defer { win.close() }
-                let tree = AXTreeSupport.poll(host) { $0.contains(where: { $0.named("Session actions") }) }
-                let tag = "\(width) \(mode)"
-                if width == 700 {
-                    print("#1103 a11y tree \(tag):\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title) value=\($0.value) help=\($0.help) frame=\($0.frame)\($0.ignored ? " IGNORED" : "")" }
-                        .joined(separator: "\n"))
-                }
-                let picker = tree.filter { e in Self.pickerLabels.contains { e.named($0) } || e.named(prefix: "View: ") }
-                XCTAssertEqual(picker.isEmpty, mode == .terminal, "the picker only in Transcript mode (\(tag))")
-                let toggle = tree.filter { $0.named("Terminal") || $0.named("Transcript") || $0.named(prefix: "Showing: ") }
-                tiers.insert(toggle.count == 2 ? "segments" : "menu")
-                if toggle.count == 2 { XCTAssertEqual(toggle.map(\.name), ["Terminal", "Transcript"], "the default on the left (\(tag))") }
-                XCTAssertFalse(toggle.isEmpty, "the toggle (\(tag))")
-                let menu = tree.filter { $0.named("Session actions") }
-                XCTAssertEqual(menu.count, 1, "one \"⋯\" (\(tag))")
-                for c in picker + toggle + menu { XCTAssertFalse(c.help.isEmpty, "\(c.name) has a help text (\(tag))") }
-                XCTAssertEqual(menu.first?.help, "Open in terminal, rename, restart, stop or end this session")
-                XCTAssertFalse(tree.contains { $0.named(AgentWindowControls.openLabel) },
-                               "no Open in terminal button in the header (\(tag))")
-                let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }
-                toggleAt.append(t)
-                menuAt.append(menu.first?.frame ?? .null)
-                // #1103 F4, #1120: the folder icon is decoration in both modes (AppKit names the symbol "Move").
-                XCTAssertFalse(tree.contains { $0.reads("Move") }, "no folder icon at all (\(tag)): \(tree.filter { $0.named("Move") })")
-                if mode == .terminal {
-                    XCTAssertEqual(imagesLeft(of: t, tree).count, 0, "no image read left of the switch (\(tag)): \(imagesLeft(of: t, tree))")
-                }
-                // #1191: no path line in either mode: the one element that reads it is the title, on the switch's line.
-                let readers = tree.filter { $0.reads(Self.headerPath) }
-                XCTAssertEqual(readers.count, 1, "only the title carries the path (\(tag)): \(readers)")
-                if let r = readers.first {
-                    XCTAssertTrue(r.named(Self.headerTitle) || r.named("api"), "the reader is the title (\(tag))")
-                    XCTAssertEqual(r.frame.midY, t.midY, accuracy: 2, "the title is on the title line in both modes (\(tag))")
-                }
-                XCTAssertFalse(win.isVisible, "never on screen")
+            let header = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, mode: .terminal)
+            let size = CGSize(width: width, height: 80)
+            let (win, host) = headerHosted(header.frame(width: width, height: 80, alignment: .top), size)
+            defer { win.close() }
+            let tree = AXTreeSupport.poll(host) { $0.contains(where: { $0.named("Session actions") }) }
+            let tag = "\(width)"
+            if width == 700 {
+                print("#1103 a11y tree \(tag):\n" + tree.map { "  \($0.role) label=\($0.label) title=\($0.title) value=\($0.value) help=\($0.help) frame=\($0.frame)\($0.ignored ? " IGNORED" : "")" }
+                    .joined(separator: "\n"))
             }
-            XCTAssertEqual(toggleAt.count, 2)
-            XCTAssertEqual(toggleAt.first?.minX ?? -1, toggleAt.last?.minX ?? -2, accuracy: pixel, "the toggle stays put at \(width)")
-            XCTAssertEqual(toggleAt.first?.maxX ?? -1, toggleAt.last?.maxX ?? -2, accuracy: pixel, "the toggle keeps its width at \(width)")
-            XCTAssertEqual(menuAt.first?.minX ?? -1, menuAt.last?.minX ?? -2, accuracy: pixel, "the \"⋯\" stays put at \(width)")
-            XCTAssertEqual(menuAt.first?.minY ?? -1, menuAt.last?.minY ?? -2, accuracy: pixel, "the \"⋯\" stays on its line at \(width)")
-            print("#1103 \(width): toggle \(toggleAt.map(\.minX)) menu \(menuAt.map(\.minX))")
+            let picker = tree.filter { e in Self.pickerLabels.contains { e.named($0) } || e.named(prefix: "View: ") }
+            XCTAssertTrue(picker.isEmpty, "#1471: no detail picker (\(tag))")
+            let toggle = tree.filter { $0.named("Terminal") || $0.named("Transcript") || $0.named(prefix: "Showing: ") }
+            XCTAssertTrue(toggle.isEmpty, "#1471: no pane mode toggle (\(tag))")
+            let menu = tree.filter { $0.named("Session actions") }
+            XCTAssertEqual(menu.count, 1, "one menu (\(tag))")
+            for c in menu { XCTAssertFalse(c.help.isEmpty, "\(c.name) has a help text (\(tag))") }
+            XCTAssertEqual(menu.first?.help, "Open in terminal, rename, restart, stop or end this session")
+            XCTAssertFalse(tree.contains { $0.named(AgentWindowControls.openLabel) },
+                           "no Open in terminal button in the header (\(tag))")
+            // #1103 F4, #1120: the folder icon is decoration (AppKit names the symbol "Move").
+            XCTAssertFalse(tree.contains { $0.reads("Move") }, "no folder icon at all (\(tag)): \(tree.filter { $0.named("Move") })")
+            // #1191: no path line: the one element that reads it is the title, on the menu's line (#1471: the toggle
+            // it was measured against is gone).
+            let readers = tree.filter { $0.reads(Self.headerPath) }
+            XCTAssertEqual(readers.count, 1, "only the title carries the path (\(tag)): \(readers)")
+            if let r = readers.first, let mf = menu.first?.frame {
+                XCTAssertTrue(r.named(Self.headerTitle) || r.named("api"), "the reader is the title (\(tag))")
+                XCTAssertEqual(r.frame.midY, mf.midY, accuracy: 2, "the title is on the menu's line (\(tag))")
+            }
+            XCTAssertFalse(win.isVisible, "never on screen")
         }
-        XCTAssertEqual(tiers, ["segments", "menu"], "the sweep crosses the tiers")
     }
 
     /// A hosted, never-shown window's accessibility tree once `ready` holds (the app's AX attributes set by the caller).
@@ -150,7 +131,7 @@ extension AgentWindowD1Tests {
             for mode in [AgentPaneMode.terminal, .transcript] {
                 var slots: [[CGRect]] = []
                 for (cwd, text) in cases {
-                    let header = AgentSessionHeader(row: row, session: a, cwd: cwd, open: {}, store: st, mode: mode, setMode: { _ in })
+                    let header = AgentSessionHeader(row: row, session: a, cwd: cwd, open: {}, store: st, mode: mode)
                     XCTAssertEqual(header.project, text, "the text (\(cwd ?? "nil"))")
                     let width = 900 * scale
                     heights.append(NSHostingView(rootView: header.frame(width: width)).fittingSize.height)
@@ -211,7 +192,7 @@ extension AgentWindowD1Tests {
             var h: [String: CGFloat] = [:]
             for (name, r) in rows {
                 let header = AgentSessionHeader(row: r, session: a, cwd: "/Users/example/project", open: {}, store: st,
-                                                mode: .transcript, setMode: { _ in })
+                                                mode: .transcript)
                 h[name] = NSHostingView(rootView: header.frame(width: 900 * scale)).fittingSize.height
             }
             let full = h["counts and age"] ?? -1
@@ -240,7 +221,7 @@ extension AgentWindowD1Tests {
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             let header = AgentSessionHeader(row: row, session: a, cwd: "/Users/example/project", open: {}, store: st,
-                                            mode: .transcript, setMode: { _ in })
+                                            mode: .transcript)
             let (win, tree) = headerAXTree(header, CGSize(width: 900 * scale, height: 90 * scale)) { $0.named("Session actions") }
             defer { win.close() }
             let title = try XCTUnwrap(tree.first { !$0.ignored && $0.label == "api" }, "the title (\(scale))").frame
@@ -255,7 +236,7 @@ extension AgentWindowD1Tests {
     }
 
     /// #1103 F2: the sidebar's "Agent Sessions" and the session header's title share one centre line in the whole
-    /// window, at 0.7, 0.85 and 1.0, in both modes (the real accessibility frames of a never-shown window).
+    /// window, at 0.7, 0.85 and 1.0, in Terminal mode, the only one (#1471) (the real accessibility frames of a never-shown window).
     @MainActor
     func testSidebarTitleSharesTheHeaderTitleLine() throws {
         // The window's backdrop builds ThemeStore.shared, whose init sets ThemeRuntime.scale from the prefs: built
@@ -273,8 +254,7 @@ extension AgentWindowD1Tests {
             var checked = 0
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
-                for mode in [AgentPaneMode.terminal, .transcript] {
-                    wm.setMode(mode, for: s)
+                for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
                     let title = try XCTUnwrap(wm.selectedRow?.title)
                     let tag = "\(scale) \(mode)"
                     let size = CGSize(width: 1000 * scale, height: 680 * scale)
@@ -292,7 +272,7 @@ extension AgentWindowD1Tests {
                     checked += 1
                 }
             }
-            XCTAssertEqual(checked, 6)
+            XCTAssertEqual(checked, 3)
         }
     }
 
@@ -342,26 +322,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(opened, [b.key, a.key])
     }
 
-    /// Point 6: Terminal | Transcript, the default on the left, in every style; ⌘T still toggles (by value, not index).
-    @MainActor
-    func testAgentPaneModeToggleReadsTerminalThenTranscript() {
-        XCTAssertEqual(AgentPaneModeToggle.modes.map(\.mode), [.terminal, .transcript])
-        XCTAssertEqual(AgentPaneModeToggle.modes.map(\.title), ["Terminal", "Transcript"])
-        XCTAssertEqual(AgentPaneModeToggle.modes.map(\.icon), ["terminal", "text.bubble"])
-        withModePref {
-            let a = session("a", .idle)
-            let m = windowModel(store([a]))
-            m.setVisible(true)
-            defer { m.close() }
-            m.select(.live(a.key))
-            XCTAssertEqual(m.paneMode, .terminal, "Terminal is the default")
-            XCTAssertTrue(m.toggleMode())
-            XCTAssertEqual(m.paneMode, .transcript)
-            XCTAssertTrue(m.toggleMode())
-            XCTAssertEqual(m.paneMode, .terminal)
-        }
-    }
-
     /// Point 3: Terminal mode one line, Transcript mode the title line and the folder line; one height per mode at
     /// 0.7, 0.85 and 1.0 (a long title, a long path, the todo chip), lower than before; nothing drawn past the header
     /// at the narrowest pane; the Rename field fits the slot of the one-line form.
@@ -387,7 +347,7 @@ extension AgentWindowD1Tests {
                 let room = w * scale - AgentWindowModel.fullSidebarWidth - 1
                 for mode in [AgentPaneMode.terminal, .transcript] {
                     let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, level: .constant(.default),
-                                               todos: todos, store: st, mode: mode, setMode: { _ in })
+                                               todos: todos, store: st, mode: mode)
                     let fit = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
                     heights[mode, default: []].append(fit)
                     log.append(String(format: "%@ %.2f w%.0f h=%.1f", mode == .terminal ? "terminal" : "transcript", scale, w, fit))
@@ -416,7 +376,7 @@ extension AgentWindowD1Tests {
             let room = 640 * scale - AgentWindowModel.fullSidebarWidth - 1
             let edit = AgentRenameEdit(key: a.key, text: Self.headerTitle)
             let h = AgentSessionHeader(row: row, session: a, cwd: Self.headerPath, open: {}, store: st, rename: edit,
-                                       mode: .terminal, setMode: { _ in })
+                                       mode: .terminal)
             let height = NSHostingView(rootView: h.frame(width: room)).fittingSize.height
             let (win, host) = headerHosted(h.frame(width: room, height: height), CGSize(width: room, height: height))
             defer { win.close() }
@@ -468,8 +428,8 @@ extension AgentWindowD1Tests {
 
     /// #1120 (QA #693 INFO-5): while the Rename field lies over the slot, the title, the state chip and (Terminal mode)
     /// the folder's path and extras are out of the tree under it (the slot's opacity 0 drops them); the field is read.
-    /// Transcript mode's second line is not under the field and stays read. Not renaming, all of them are read. Real
-    /// tree, never-shown window.
+    /// Not renaming, all of them are read. #1471: Terminal is the only mode and has no switch; the line is the menu's.
+    /// Real tree, never-shown window.
     @MainActor
     func testRenameHidesTheTitleChipAndPathUnderTheFieldInTheTree() throws {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
@@ -487,22 +447,19 @@ extension AgentWindowD1Tests {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         let path = "/srv/api"
-        for mode in [AgentPaneMode.terminal, .transcript] {
+        for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
             for renaming in [false, true] {
                 let edit = renaming ? AgentRenameEdit(key: a.key, text: "api-qa") : nil
-                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, rename: edit, mode: mode,
-                                                setMode: { _ in })
+                let header = AgentSessionHeader(row: row, session: a, cwd: path, open: {}, store: st, rename: edit, mode: mode)
                 let (win, tree) = headerAXTree(header, CGSize(width: 900, height: 80)) { e in
                     renaming ? e.role == "AXTextField" : e.named("Session actions")
                 }
                 defer { win.close() }
                 let tag = "\(mode) renaming \(renaming)"
-                let toggle = tree.filter { $0.named("Terminal") || $0.named("Transcript") }
-                let t = toggle.reduce(CGRect.null) { $0.union($1.frame) }
-                XCTAssertFalse(toggle.isEmpty, "the switch (\(tag))")
-                // The slot: left of the line's first control (Transcript mode: the picker; ticket 1 read its three buttons).
-                let controls = tree.filter { e in e.named("Terminal") || e.named("Transcript") || Self.pickerLabels.contains { e.named($0) } }
-                let edge = controls.map(\.frame.minX).min() ?? t.minX
+                XCTAssertTrue(tree.filter { $0.named("Terminal") || $0.named("Transcript") }.isEmpty, "no switch (\(tag))")
+                let t = try XCTUnwrap(tree.first { $0.named("Session actions") }, "the menu (\(tag))").frame
+                // The slot: left of the line's first control, the menu (#1471: the switch and the picker are gone).
+                let edge = t.minX
                 let line = tree.filter { !$0.ignored && !$0.names.isEmpty && $0.frame.width > 0
                     && $0.frame.maxX <= edge + pixel && abs($0.frame.midY - t.midY) < sz(8) }
                 let field = line.filter { $0.role == "AXTextField" }
@@ -536,8 +493,7 @@ extension AgentWindowD1Tests {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         for ended in [false, true] {
-            let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended, mode: .terminal,
-                                            setMode: { _ in })
+            let header = AgentSessionHeader(row: row, session: a, cwd: "/srv/api", open: {}, store: st, ended: ended, mode: .terminal)
             let (win, tree) = headerAXTree(header, CGSize(width: 700, height: 80)) { $0.named("Session actions") }
             defer { win.close() }
             let menu = tree.filter { $0.named("Session actions") }
@@ -640,7 +596,7 @@ extension AgentWindowD1Tests {
                 defer { m.close() }
                 let row = try XCTUnwrap(m.row(.live(s.key)))
                 let header = AgentCompactHeader.of(row, s, cwd: Self.headerPath, ended: ended, store: nil, ask: { _ in },
-                                                   open: {}, mode: .transcript, setMode: { _ in })
+                                                   open: {})
                 XCTAssertEqual(NSHostingView(rootView: header.frame(width: width)).fittingSize.height, (AgentCompactHeader.height - 0.001).rounded(.up),
                                accuracy: 0.01, "one line of 26·s, fittingSize rounds up to a whole point (\(state) \(scale))")
                 let (win, tree) = headerAXTree(header, CGSize(width: width, height: AgentCompactHeader.height)) { $0.named("Session actions") }

@@ -211,7 +211,7 @@ extension AgentWindowD1Tests {
             XCTAssertNotEqual(AgentsNSWindow.route(keys[0], responder: .text, sidebarFocused: false, terminalMode: terminal), .pass,
                               "control: not renaming, Option-Command-1 (#1470: row 10) is the window's")
         }
-        XCTAssertEqual(AgentsNSWindow.route(keys[2], responder: .text, sidebarFocused: false, terminalMode: false), .toggleMode)
+        XCTAssertEqual(AgentsNSWindow.route(keys[2], responder: .text, sidebarFocused: false, terminalMode: false), .pass)   // #1471: no mode toggle
     }
 
     // MARK: The field (hosted in a window that is never shown)
@@ -318,7 +318,7 @@ extension AgentWindowD1Tests {
             _ = win.performKeyEquivalent(with: key(18, "", [.command, .option]))
             XCTAssertEqual(m.verbosity, level, "Option-Command-1 stands down (#1470: row 10's key)")
             _ = win.performKeyEquivalent(with: key(17, "t", .command))
-            XCTAssertEqual(m.paneMode, .transcript, "⌘T stands down")
+            XCTAssertEqual(m.paneMode, .terminal, "Command-T stands down (#1471: no mode to switch)")
             win.sendEvent(key(7, "x"))
             XCTAssertTrue(editor.string.hasSuffix("x"), "typing lands in the field: \(editor.string)")
             XCTAssertEqual(m.interaction.draft, "", "never in the composer")
@@ -398,9 +398,10 @@ extension AgentWindowD1Tests {
 
     // MARK: #853 (QA #693)
 
-    /// INFO-1: a resize mid-edit swaps the header's ViewThatFits variant, which builds a new field. The
-    /// edit and the typed text carry on (the model holds them), the replaced field's end changes nothing,
-    /// and Return renames with the text. Both ways: narrower, then (a second edit, Esc) wider again.
+    /// INFO-1: a resize mid-edit. The edit and the typed text carry on (the model holds them), a late end
+    /// changes nothing, and Return renames with the text. Both ways: narrower, then (a second edit, Esc)
+    /// wider again. #1471: Terminal's header lays the field over the title slot, outside the slot's
+    /// ViewThatFits, so a resize builds no new field (the swap was Transcript's header): no "new field" assert.
     @MainActor
     func testAgentWindowRenameSurvivesAHeaderVariantSwap() throws {
         try withModePref {
@@ -442,7 +443,6 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.renameEdit?.text, "Typed mid-edit", "the model holds the draft")
             resize(420)
             let (f2, e2) = try field()
-            XCTAssertFalse(f2 === f1, "the narrow variant built its own field (the swap happened)")
             XCTAssertEqual(m.renaming, a.key, "the edit survived the swap")
             XCTAssertEqual(f2.stringValue, "Typed mid-edit", "with the typed text")
             XCTAssertTrue(win.firstResponder === e2, "and the keys")
@@ -454,12 +454,11 @@ extension AgentWindowD1Tests {
             XCTAssertNil(m.renaming)
             // Wider again mid-edit, then Esc: nothing runs.
             m.ask(.rename, a)
-            let (f3, e3) = try field()
+            let (_, e3) = try field()
             e3.selectAll(nil)
             e3.insertText("Second", replacementRange: e3.selectedRange())
             resize(1000)
             let (f4, e4) = try field()
-            XCTAssertFalse(f4 === f3, "the wide variant's own field")
             XCTAssertEqual(f4.stringValue, "Second")
             XCTAssertEqual(m.renaming, a.key)
             e4.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
@@ -712,8 +711,8 @@ extension AgentWindowD1Tests {
             m.renameSession = { _, _ in XCTFail("a render renames nothing"); return false }
             st.controlDch = bin([1, 38, 0])
             defer { m.close() }
-            // The whole matrix (24 cases, ~25 s) is a heavy row; a plain run keeps one case per mode at
-            // scale 1.0, default size: the aliased session in Transcript, the unaliased one in Terminal.
+            // The whole matrix (12 cases) is a heavy row; a plain run keeps one case per session at scale 1.0,
+            // default size, both in Terminal (#1471: the only mode; the aliased one ran in Transcript before).
             let heavy = (try? requireHeavyTests()) != nil
             var ran = 0
             // An aliased session (the field shows the alias) and one with none (the placeholder, its name).
@@ -726,14 +725,12 @@ extension AgentWindowD1Tests {
                     // controls' walk read one more ink run than the box holds.
                     for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)),
                                           ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
-                        for mode in [AgentPaneMode.transcript, .terminal] {
-                            guard heavy || (scale == 1.0 && label == "default"
-                                            && mode == (name == "prosper" ? .transcript : .terminal)) else { continue }
+                        for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
+                            guard heavy || (scale == 1.0 && label == "default") else { continue }
                             ran += 1
                             // One pool per case: its three renders (bitmap + hosting view) go before the next.
                             try autoreleasepool {
                                 m.select(.live(s.key))
-                                m.setMode(mode, for: s)
                                 let tag = "\(name)-\(mode == .terminal ? "terminal" : "transcript")-\(label)-\(scale)"
                                 let plain = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                                 m.ask(.rename, s)
@@ -796,7 +793,7 @@ extension AgentWindowD1Tests {
                     }
                 }
             }
-            XCTAssertEqual(ran, heavy ? 24 : 2, "cases run: a gate that skips them all passes nothing")
+            XCTAssertEqual(ran, heavy ? 12 : 2, "cases run: a gate that skips them all passes nothing")
         }
     }
 
@@ -920,60 +917,6 @@ extension AgentWindowD1Tests {
     }
 
     // MARK: QA #672 carry
-
-    /// #1: the held (ended) session's detail pane: the header draws the Ended chip (AgentSessionHeader's
-    /// stateChip) and the transcript gets `ended:` (its Open in terminal dims). Rendered against a live
-    /// pane of the same session: the chip's columns differ, and the transcript's band differs.
-    @MainActor
-    func testAgentWindowHeldDetailPaneWiresEndedIntoTheChipAndTheTranscript() throws {
-        let st = store([session("a", .idle), session("b", .idle)])
-        st.controlDch = bin([1, 38, 0])
-        let held = windowModel(st)
-        Calls().wire(held)
-        held.setVisible(true)
-        defer { held.close() }
-        let a = try XCTUnwrap(st.sessions.first { $0.name == "a" })
-        held.ask(.stop, a)
-        held.confirm(true)
-        let liveStore = store([session("a", .idle), session("b", .idle)])
-        liveStore.controlDch = bin([1, 38, 0])
-        st.sessions = [session("b", .idle)]
-        XCTAssertTrue(held.focusedEnded)   // #831 B1, rewrite 8: the Ended state, by resolve (rewrites-B1)
-        try withModePref {
-            let live = windowModel(liveStore)
-            Calls().wire(live)
-            showTranscript(live)
-            live.setVisible(true)
-            defer { live.close() }
-            live.select(.live(a.key))
-            XCTAssertEqual(live.paneMode, .transcript)
-            XCTAssertEqual(held.paneMode, .transcript, "held: Transcript, as every row with nothing to attach")
-            let size = CGSize(width: 900, height: 560)
-            let h = try render(AgentDetailView(model: held, transcript: held.transcript, scrolls: false), size: size, dark: true)
-            let l = try render(AgentDetailView(model: live, transcript: live.transcript, scrolls: false), size: size, dark: true)
-            try save(h, "829p3-held-detail")
-            try save(l, "829p3-live-detail")
-            let px = CGFloat(h.pixelsWide) / (size.width + 24)
-            let hb = try XCTUnwrap(headerBottom(l, x: Int(sz(8) * px)))
-            XCTAssertEqual(headerBottom(h, x: Int(sz(8) * px)), hb)
-            // The chip sits right after the title "a": its columns, in the title line.
-            let titleW = NSHostingView(rootView: Text("a").font(Neon.font(15, weight: .semibold))).fittingSize.width
-            let chipW = NSHostingView(rootView: AgentStateChip(state: .idle)).fittingSize.width
-            let chipX = Int((sz(16) + titleW + sz(8)) * px)
-            let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
-            if let chip = span(chipX, chipX + Int(chipW * px), "the chip's columns") {
-                XCTAssertGreaterThan(differing(h, l, x: chip, y: line), 0, "the header draws Ended")
-            }
-            if let title = span(0, chipX - 2, "the title's columns") {
-                XCTAssertEqual(differing(h, l, x: title, y: line), 0, "the title itself is the same")
-            }
-            // The transcript's band (between the header and the input box): its Open in terminal dims.
-            let input = Int((size.height - 130) * px)
-            if let band = span(hb + 2, input, "the transcript's band") {
-                XCTAssertGreaterThan(differing(h, l, x: 0..<Int(size.width * px), y: band), 0, "the transcript draws ended")
-            }
-        }
-    }
 
     /// #2-#4: the ended composer's VoiceOver label, Ended's own glyph, and the off Open buttons' help.
     @MainActor

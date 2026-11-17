@@ -206,14 +206,6 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(log.rests.count, 1, "a rest under way is not restarted")
             endRests(log)
             XCTAssertEqual(log.spawned, ["a", "b"])
-            m.setMode(.transcript, for: sb)
-            XCTAssertTrue(try runtime(m, "b").terminal?.key == nil, "Transcript: detached at once")
-            XCTAssertEqual(log.children["b"]?.terminated, 1)
-            m.setMode(.terminal, for: sb)
-            XCTAssertEqual(log.rests.count, 1, "back to Terminal: a new rest")
-            m.setMode(.transcript, for: sb)
-            endRests(log)
-            XCTAssertEqual(log.spawned, ["a", "b"], "a rest whose pane left Terminal mode attaches nothing")
         }
     }
 

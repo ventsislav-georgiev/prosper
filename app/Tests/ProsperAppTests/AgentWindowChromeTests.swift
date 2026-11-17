@@ -94,8 +94,7 @@ extension AgentWindowD1Tests {
                 for (opacity, frost) in [(1.0, false), (0.8, false), (1.0, true), (0.8, true)] as [(CGFloat, Bool)] {
                     ThemeRuntime.opacity = opacity
                     ThemeRuntime.frost = frost
-                    for mode in [AgentPaneMode.terminal, .transcript] {
-                        m.setMode(mode, for: s)
+                    for mode in [AgentPaneMode.terminal] {   // #1471: Terminal is the only pane mode
                         let tag = "\(phase)-\(mode == .terminal ? "term" : "tx")-\(dark ? "dark" : "light")-s\(scale)-o\(opacity)\(frost ? "-frost" : "")"
                         let size = CGSize(width: 1000 * scale, height: 680 * scale)
                         let rep = try renderOver(AgentWindowRootView(model: m, scrolls: false), size: size, canvas: canvas, dark: dark, backing: 2)
@@ -120,7 +119,6 @@ extension AgentWindowD1Tests {
                 }
             }
         }
-        m.setMode(.terminal, for: s)
         if let dir = Self.renderDir {
             try log.joined(separator: "\n").write(to: dir.appendingPathComponent("pixels-\(phase).txt"), atomically: true, encoding: .utf8)
         }
@@ -385,12 +383,12 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         // `m` (sessions, no click) checks the rail; its detail shows the first row's terminal, which stays
         // opaque by design (report section 3).
-        // A selected session in Transcript mode: its header band, input band and transcript sit on the
-        // backdrop too (padding spots: the header's top-left, the input's bottom-left, the transcript's right edge).
+        // A selected session: its header band sits on the backdrop too (the header's top-left padding). #1471: the
+        // input band and transcript spots were Transcript mode's body; a terminal body stays opaque by design, so
+        // there is no terminal form of them.
         let (demo, _) = demoModel(Self.corpus.appendingPathComponent("2.1.318/b-compaction-agents-more-tools.jsonl"))
         defer { demo.close() }
-        demo.setMode(.transcript, for: try XCTUnwrap(demo.selectedRow?.session))
-        XCTAssertEqual(demo.paneMode, .transcript)
+        XCTAssertEqual(demo.paneMode, .terminal, "#1471: Terminal is the only pane mode")
         let grey = NSColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1)
         let magenta = NSColor(srgbRed: 1, green: 0, blue: 1, alpha: 1)
         // Warm-up: the process's first offscreen gradient snapshot can come back part-drawn (seen at opacity
@@ -430,8 +428,7 @@ extension AgentWindowD1Tests {
                             assertClose(pixel(rep, corner, in: size), pixel(r, corner, in: rail), "rail = NeonSidebarSurface \(tag)")
                             let tx = try renderOver(AgentWindowRootView(model: demo, scrolls: false), size: size, canvas: canvas, dark: dark, backing: backing)
                             if canvas == grey { try saveTo860(tx, "after-transcript-\(tag)") }
-                            for (name, p) in [("header", CGPoint(x: 4 * scale, y: 4 * scale)), ("input", corner),
-                                              ("transcript", CGPoint(x: detail.width - 4 * scale, y: size.height * 0.5))] {
+                            for (name, p) in [("header", CGPoint(x: 4 * scale, y: 4 * scale))] {
                                 assertClose(pixel(tx, CGPoint(x: side + p.x, y: p.y), in: size), pixel(s, p, in: detail),
                                             "\(name) on SettingsBackground \(tag)")
                             }

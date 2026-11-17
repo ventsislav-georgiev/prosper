@@ -373,8 +373,7 @@ extension AgentWindowD1Tests {
             let icons = width(AgentVerbosityPicker(level: .constant(.default), style: .icons))
             let menu = width(AgentVerbosityPicker(level: .constant(.default), style: .menu))
             // #1120 (QA 845 INFO-5): the line's controls since #1103: the picker, the mode switch and the "⋯" (sz(18)).
-            let toggle = width(AgentPaneModeToggle(mode: .terminal, style: .icons, set: { _ in }))
-            let toggleMenu = width(AgentPaneModeToggle(mode: .terminal, style: .menu, set: { _ in }))
+            let (toggle, toggleMenu): (CGFloat, CGFloat) = (0, 0)   // #1471: no mode switch in the line
             let chip = width(AgentStateChip(state: .working)), todo = width(AgentTodosChip(todos: todos, open: .constant(false)))
             for w: CGFloat in [640, 800, 1000] {
                 let room = w * scale - AgentWindowModel.fullSidebarWidth - 1

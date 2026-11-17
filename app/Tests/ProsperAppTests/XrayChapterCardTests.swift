@@ -20,8 +20,6 @@ final class XrayChapterCardTests: XCTestCase {
     /// A Terminal-mode pane on a local session whose dch row says `cwd`, its X-ray panel opened through the window
     /// (wired: presenter, transcript, cwd), then dch's chapters applied; `body` runs with the panel and the presenter.
     func withTerminalPanel(_ body: (XrayPanelModel, FakeCardPresenter) async throws -> Void) async throws {
-        let saved = Preferences.agentWindowTranscriptSessions
-        defer { Preferences.agentWindowTranscriptSessions = saved }
         let key = AgentSessionKey(dir: "/tmp/dch-test", name: "api")
         let store = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
         var s = AgentSession(key: key, alias: "", activity: AgentWindowD1Tests.now - 60, state: .idle, agents: 0, version: "1.78.0")
@@ -64,7 +62,6 @@ final class XrayChapterCardTests: XCTestCase {
         XCTAssertTrue(win.toggleXray())
         let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
         await p.reading?.value
-        XCTAssertTrue(p.transcript() == nil, "Terminal mode: no transcript")
         p.apply(tasks: XrayChaptersTests.ok, memory: (0, Self.memory), chapters: XrayChaptersTests.chapters)
         XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory], "dch's chapters")
         try await body(p, cards)
@@ -151,7 +148,6 @@ final class XrayChapterCardTests: XCTestCase {
         (p.dch, p.run, p.refs, p.panels) = ("/fake/dch", run.run, refs, XrayPanels())
         p.presentRef = { cards.present($0, $1, $2) }
         p.dismiss = { cards.close() }
-        XCTAssertTrue(p.transcript() == nil)
         var c = TranscriptOutline.Chapter(id: 0, ordinal: 1, title: "Look at the login bug", kind: .prompt, hasError: false)
         c.response = "Fixed in #12, see the notes"
         let answer = try XCTUnwrap(XrayChapterCard.response(c))
@@ -233,7 +229,6 @@ final class XrayChapterCardTests: XCTestCase {
         (p.dch, p.run, p.chapterAnchors) = ("/fake/dch", run.run, anchors)
         p.presentRef = { cards.present($0, $1, $2) }
         p.dismiss = { cards.close() }
-        XCTAssertTrue(p.transcript() == nil)
         return (p, cards)
     }
 

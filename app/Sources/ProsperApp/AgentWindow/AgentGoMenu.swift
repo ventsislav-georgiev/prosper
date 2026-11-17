@@ -37,7 +37,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         e += (1...9).map { Entry("Jump to Session \($0 + 9)", "\($0)", oc, .key(.jump($0 + 9))) }   // #1470
         e += [
             nil,
-            Entry("Terminal or Transcript", "t", c, .key(.toggleMode)),
             Entry("Jump to Chapter\u{2026}", "l", c, .key(.chapters)),
             Entry("X-Ray\u{2026}", "x", sc, .key(.xray)),
             nil,

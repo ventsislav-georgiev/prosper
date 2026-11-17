@@ -809,56 +809,6 @@ final class AgentWindowPlanTests: XCTestCase {
         XCTAssertEqual(AgentPromptPanel.planDisplay("# Plan\n\n1. Step"), "# Plan\n\n1. Step", "newlines stay lines")
     }
 
-    @MainActor
-    func testAgentWindowModelFeedsThePendingPlanFromTheTranscript() throws {
-        let url = tempDir().appendingPathComponent("plan.jsonl")
-        let entry: [String: Any] = ["type": "assistant", "sessionId": "s-1", "version": "2.1.318",
-                                    "message": ["role": "assistant",
-                                                "content": [["type": "tool_use", "id": "toolu_p", "name": "ExitPlanMode",
-                                                             "input": ["plan": T.planMarkdown,
-                                                                       "planFilePath": "/tmp/example-plan.md"]]]]]
-        try (JSONSerialization.data(withJSONObject: entry) + Data("\n".utf8)).write(to: url)
-        let f = FormSim(.plan)
-        let c = t.controller(f.io, autoAllow: false)
-        let st = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
-        st.sessions = [AgentSession(key: T.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.30.0",
-                                    claudeSessionID: "0b7c2f3e-1111-2222-3333-444455556666", transcriptPath: url.path)]
-        let m = AgentWindowModel()
-        m.now = { 1_800_000_000 }
-        m.openSession = { _ in }
-        m.onVisible = { _ in }
-        m.ageInterval = 3600
-        m.transcript.offMain = { $0() }
-        m.transcript.makeWatch = { _, _ in NSObject() }
-        m.transcript.tickInterval = 3600
-        m.interaction.controller = c
-        m.interaction.readQueue = { $0() }
-        m.bind(st)
-        showTranscript(m)   // #822: the prompt panel is Transcript mode's
-        m.setVisible(true)
-        XCTAssertEqual(m.transcript.pendingPlan, T.planInput)
-        XCTAssertEqual(m.interaction.plan, T.planInput)
-        guard case .prompt(let w) = m.interaction.panel else { return XCTFail("\(m.interaction.panel)") }
-        XCTAssertEqual(w.approve, [1, 2], "checked against the transcript's plan")
-        // Another session with no transcript: no plan, no approve row.
-        let bKey = AgentSessionKey(dir: "/tmp/dch-test", name: "b")
-        st.sessions = [st.sessions[0], AgentSession(key: bKey, alias: "", activity: 0, state: .blocked, agents: 0, version: "1.30.0")]
-        showTranscript(m, [st.sessions[1]])
-        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == bKey }?.id))
-        XCTAssertNil(m.interaction.plan)
-        m.select(try XCTUnwrap(m.rows.first { $0.session?.key == T.key }?.id))
-        XCTAssertEqual(m.interaction.plan?.id, "toolu_p", "back on A: its own plan")
-        // Round 2: the same session losing its mapping (the tail is kept for the grace period): no plan.
-        st.sessions = [AgentSession(key: T.key, alias: "", activity: 1, state: .blocked, agents: 0, version: "1.30.0"),
-                       st.sessions[1]]
-        XCTAssertNil(m.transcript.pendingPlan, "no mapping: no plan")
-        XCTAssertNil(m.interaction.plan)
-        guard case .prompt(let unmapped) = m.interaction.panel else { return XCTFail("\(m.interaction.panel)") }
-        XCTAssertEqual(unmapped.approve, [])
-        XCTAssertEqual(unmapped.why, AgentWindowText.planUnchecked)
-        m.close()
-    }
-
     /// #1092: the window gives a plan kept in a file the focused session's config_dir from dch's live record (the
     /// controller's seam), and only that session's; no record: "" (the home's plans).
     @MainActor
