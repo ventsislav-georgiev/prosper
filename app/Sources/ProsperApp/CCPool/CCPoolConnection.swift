@@ -640,6 +640,7 @@ final class CCPoolConnection: @unchecked Sendable {
             exchange = nil
             // #1263 (R1262-a): the destination of the one move never answered: the conversation goes back where its cache is.
             if let first = movedFrom { pinBack(first, answer: nil) }
+            recordAnswer(502, acct: ex.accountID)
             fail(502, "upstream unreachable", type: "api_error")
         case .snippet:
             finishSnippet(ex)
@@ -672,17 +673,28 @@ final class CCPoolConnection: @unchecked Sendable {
     /// #1482: the one usage row of this request, handed to the writer's own queue. Ids from the pin key's headers
     /// only when the whole key is valid; the account by its Keychain id, never its label.
     private func recordRow(_ ex: CCPoolExchange, done: Bool) {
+        addRow(acct: ex.accountID, st: ex.status, done: done, usage: ex.tap?.result(), lim: ex.limits)
+    }
+
+    /// #1482 step b: the row of an answer the pool made itself after a relay began (its 429s, its 502): the status
+    /// sent, no usage, done. `acct` is "" when no account was reached (all benched). Called once per request: each
+    /// caller has just cleared `exchange`, so close() adds no second row.
+    private func recordAnswer(_ st: Int, acct: String) {
+        addRow(acct: acct, st: st, done: true, usage: nil, lim: [:])
+    }
+
+    private func addRow(acct: String, st: Int, done: Bool, usage: CCPoolTokenUsage?, lim: [String: CCPoolLimit]) {
         guard let record else { return }
         let end = store.now
         let keyed = head.flatMap(Self.pinKey) != nil
         let ms = (end - startedAt) * 1000
-        record.add(CCPoolUsageRow(t: end, acct: ex.accountID, model: CCPoolUsageRow.modelWord(model),
+        record.add(CCPoolUsageRow(t: end, acct: acct, model: CCPoolUsageRow.modelWord(model),
                                   sess: keyed ? head?.header("x-claude-code-session-id") : nil,
                                   agent: keyed ? head?.header("x-claude-code-agent-id") ?? "" : nil,
-                                  path: CCPoolUsageRow.pathWord(head?.path ?? ""), st: ex.status,
+                                  path: CCPoolUsageRow.pathWord(head?.path ?? ""), st: st,
                                   ms: ms.isFinite && ms >= 0 && ms < 1e12 ? Int(ms) : 0, done: done, qc: quotaCheck,
                                   att: attempts, thr: throttleRetries, mv: movedFrom != nil, routed: routed,
-                                  usage: ex.tap?.result(), lim: ex.limits))
+                                  usage: usage, lim: lim))
     }
 
     /// Log the pass-through 429 with at most 200 bytes of the upstream body, then answer it.
@@ -751,6 +763,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func answerThrottle(_ ex: CCPoolExchange) {
         let extra: [(String, String)] = ex.retryAfter.map { $0.isEmpty ? [] : [("retry-after", $0)] } ?? []
+        recordAnswer(429, acct: ex.accountID)
         fail(429, "upstream rate limit (not account quota)", type: "rate_limit_error", headers: extra)
     }
 
@@ -764,6 +777,7 @@ final class CCPoolConnection: @unchecked Sendable {
             hint = " Earliest reset \(f.string(from: Date(timeIntervalSince1970: Double(when))))."
         }
         log.note(nil, "every account is benched.\(hint)")
+        recordAnswer(429, acct: "")
         fail(429, "all pooled accounts are rate limited.\(hint)", type: "rate_limit_error")
     }
 

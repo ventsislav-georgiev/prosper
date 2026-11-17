@@ -51,7 +51,8 @@ struct CCPoolUsageRow: Equatable, Sendable {
 
     /// The row as one line (no newline), keys in the schema's order; nil when `t` is not a sane epoch.
     func line() -> Data? {
-        guard t.isFinite, (0..<1e12).contains(t) else { return nil }
+        // Below year 9999, so the day file name always has four digits and matches isOwnName.
+        guard t.isFinite, (0..<253402300800).contains(t) else { return nil }
         var s = "{\"v\":1,\"t\":\(String(format: "%.3f", t)),\"acct\":\(Self.quote(acct)),\"model\":\(Self.quote(Self.modelWord(model)))"
         if let sess { s += ",\"sess\":\(Self.quote(sess)),\"agent\":\(Self.quote(agent ?? ""))" }
         s += ",\"path\":\(Self.quote(path)),\"st\":\(st),\"ms\":\(max(0, ms)),\"done\":\(done),\"qc\":\(qc)"
@@ -102,9 +103,13 @@ final class CCPoolUsageRecord: @unchecked Sendable {
         return f
     }()
 
-    init(directory: URL, logger: CCPoolLogger) {
+    private let flushDelay: Double
+
+    /// `flushDelay` is a test seam for the 5 s flush.
+    init(directory: URL, logger: CCPoolLogger, flushDelay: Double = CCPoolUsageRecord.flushSeconds) {
         self.directory = directory
         self.log = logger
+        self.flushDelay = flushDelay
     }
 
     /// The only names this writer ever creates, lists or removes: exactly `usage-NNNN-NN-NN.jsonl`.
@@ -122,6 +127,9 @@ final class CCPoolUsageRecord: @unchecked Sendable {
     /// Write what is held now (tests, and stop).
     func flush() { queue.sync { write() } }
 
+    /// Waits until every row handed over so far is taken, without writing (tests).
+    func settle() { queue.sync {} }
+
     /// Stop/quit: write what is held and say how many rows each full day dropped.
     func stop() {
         queue.sync {
@@ -137,7 +145,7 @@ final class CCPoolUsageRecord: @unchecked Sendable {
         if pending.count >= Self.flushRows { return write() }
         if !timerArmed {
             timerArmed = true
-            queue.asyncAfter(deadline: .now() + Self.flushSeconds) { self.write() }
+            queue.asyncAfter(deadline: .now() + flushDelay) { self.write() }
         }
     }
 
@@ -205,9 +213,14 @@ final class CCPoolUsageRecord: @unchecked Sendable {
             }
             total -= old.size
         }
-        let fd = open(directory.appendingPathComponent(name).path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let fd = open(directory.appendingPathComponent(name).path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard fd >= 0 else { return log.note(nil, "usage record could not be opened; \(kept) row(s) dropped") }
         defer { Darwin.close(fd) }
+        // A FIFO or device under an own name is never written (O_NONBLOCK keeps the open from waiting for a reader).
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            return log.note(nil, "usage record could not be opened; \(kept) row(s) dropped")
+        }
         _ = fchmod(fd, 0o600)
         let n = out.withUnsafeBytes { raw in Darwin.write(fd, raw.baseAddress, raw.count) }
         if n != out.count { log.note(nil, "usage record write failed; \(kept) row(s) dropped") }

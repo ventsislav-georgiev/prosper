@@ -70,10 +70,11 @@ final class CCPoolUsageRecordTests: XCTestCase {
     }
 
     private func row(_ acct: String, sess: String = "", qc: Bool = false, done: Bool = true, att: Int = 1, thr: Int = 0,
-                     mv: Bool = false, routed: String = "pick", counts: Bool = true) -> String {
-        "{\"v\":1,\"t\":1800000000.250,\"acct\":\"\(acct)\",\"model\":\"claude-opus-5\"\(sess),\"path\":\"messages\",\"st\":200,\"ms\":0,"
+                     mv: Bool = false, routed: String = "pick", counts: Bool = true, st: Int = 200,
+                     answered: Bool = false) -> String {
+        "{\"v\":1,\"t\":1800000000.250,\"acct\":\"\(acct)\",\"model\":\"claude-opus-5\"\(sess),\"path\":\"messages\",\"st\":\(st),\"ms\":0,"
             + "\"done\":\(done),\"qc\":\(qc),\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\"\(routed)\""
-            + (counts ? "," + recCounts : "") + "," + recLim + "}"
+            + (counts && !answered ? "," + recCounts : "") + (answered ? "" : "," + recLim) + "}"
     }
 
     // MARK: Through the proxy
@@ -148,7 +149,140 @@ final class CCPoolUsageRecordTests: XCTestCase {
         }
     }
 
+    // MARK: Answers the pool makes itself (step b): one row each, no usage, done, the status sent
+
+    private let busy = Data(#"{"type":"error","error":{"type":"overloaded_error","message":"body-byte-example"}}"#.utf8)
+
+    /// The pass-through 429 (finishSnippet -> answerThrottle): a quota check is never retried.
+    func testPassThrough429HasOneRow() throws {
+        let r = try rig()
+        r.stub.push(UsageTapReply(status: 429, body: busy))
+        let resp = try XCTUnwrap(r.post(throttleQuotaCheck))
+        XCTAssertEqual(resp.status, 429)
+        XCTAssertEqual(r.rows(), [row(r.ids.first ?? "", qc: true, done: true, st: 429, answered: true)])
+    }
+
+    /// The 429 the pool sends after the three same-account retries: att 4, thr 3.
+    func testThrottle429AfterRetriesHasOneRow() throws {
+        let r = try rig()
+        for _ in 0..<4 { r.stub.push(UsageTapReply(status: 429, body: busy)) }
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 429)
+        XCTAssertEqual(r.rows(), [row(r.ids.first ?? "", att: 4, thr: 3, st: 429, answered: true)])
+    }
+
+    /// Every account benched: no account was reached, so acct is empty.
+    func testAllBenched429HasOneRow() throws {
+        let r = try rig()
+        r.store.mutate { $0.bench("Example Org A", claim: CCPoolCore.fiveHour, until: Int(recNow) + 3600, now: recNow) }
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 429)
+        XCTAssertEqual(r.rows(), [row("", st: 429, answered: true)])
+    }
+
+    /// The upstream is gone: connection refused, the pool's 502.
+    func testUnreachable502HasOneRow() throws {
+        let r = try rig()
+        r.stub.stop()
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 502)
+        XCTAssertEqual(r.rows(), [row(r.ids.first ?? "", st: 502, answered: true)])
+    }
+
+    /// An answer before any relay (a page's Origin header: 403) leaves no row, and no folder.
+    func testAnswerBeforeARelayHasNoRow() throws {
+        let r = try rig()
+        let resp = try XCTUnwrap(r.post(headers: [("content-type", "application/json"), ("origin", "http://example.com")]))
+        XCTAssertEqual(resp.status, 403)
+        XCTAssertEqual(r.rows(), [])
+    }
+
+    // MARK: The buffered flushes and a write failure
+
+    func testSixtyFourthRowFlushesWithoutTheTimer() throws {
+        let dir = tempDir().appendingPathComponent("usage")
+        let w = CCPoolUsageRecord(directory: dir, logger: ThrottleLog())
+        let file = dir.appendingPathComponent("usage-\(recDay).jsonl")
+        for _ in 0..<(CCPoolUsageRecord.flushRows - 1) { w.add(writerRow()) }
+        w.settle()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "63 rows are still held")
+        w.add(writerRow())
+        w.settle()
+        let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        XCTAssertEqual(text.split(separator: "\n").count, CCPoolUsageRecord.flushRows)
+    }
+
+    func testTimerFlushesAHeldRow() throws {
+        let dir = tempDir().appendingPathComponent("usage")
+        let w = CCPoolUsageRecord(directory: dir, logger: ThrottleLog(), flushDelay: 0.05)
+        let file = dir.appendingPathComponent("usage-\(recDay).jsonl")
+        w.add(writerRow())
+        // A bounded wait on the file; it ends at once when the timer has written.
+        let end = Date().addingTimeInterval(3)
+        while !FileManager.default.fileExists(atPath: file.path), Date() < end { Thread.sleep(forTimeInterval: 0.01) }
+        w.settle()
+        let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        XCTAssertEqual(text.split(separator: "\n").count, 1, "written by the timer, no flush() and no stop()")
+    }
+
+    /// A folder that cannot be written drops the row with one log line; the request still gets its reply.
+    func testWriteFailureDropsTheRowWithOneLineAndFailsNoRequest() throws {
+        let r = try rig()
+        let dir = r.store.usageDirectory
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o500])
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+        r.stub.push(UsageTapReply(body: recJSON))
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 200)
+        XCTAssertEqual(resp.body, recJSON)
+        XCTAssertEqual(r.rows(), [])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("usage record") }, ["-: usage record could not be opened; 1 row(s) dropped"])
+    }
+
+    /// R1482-r1: a session id with a space, or a key over pinKeyMax, is no pin key: no sess and no agent in the row.
+    func testInvalidPinKeyLeavesNoSessionOrAgentInTheRow() throws {
+        let bad = ["s 0001", String(repeating: "k", count: CCPoolState.pinKeyMax + 1)]
+        for sid in bad {
+            let r = try rig()
+            r.stub.push(UsageTapReply(body: recJSON))
+            let resp = try XCTUnwrap(r.post(headers: [("content-type", "application/json"), ("x-claude-code-session-id", sid),
+                                                      ("x-claude-code-agent-id", "agent-0001")]))
+            XCTAssertEqual(resp.status, 200, "\(sid.count)")
+            XCTAssertEqual(r.rows(), [row(r.ids.first ?? "")], "\(sid.count)")
+        }
+    }
+
     // MARK: The writer alone
+
+    /// R1482-s1: a FIFO under today's name must not block the writer's queue (and with it stop()).
+    func testFifoUnderADayNameDoesNotBlockTheWriter() throws {
+        let dir = tempDir().appendingPathComponent("usage")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fifo = dir.appendingPathComponent("usage-\(recDay).jsonl").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let log = ThrottleLog()
+        let w = CCPoolUsageRecord(directory: dir, logger: log)
+        w.add(writerRow())
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { w.flush(); done.signal() }
+        let finished = done.wait(timeout: .now() + 2) == .success
+        // Nothing stays blocked if the writer did wait for a reader.
+        let reader = open(fifo, O_RDONLY | O_NONBLOCK)
+        defer { if reader >= 0 { Darwin.close(reader) } }
+        XCTAssertTrue(finished, "flush() returned within 2 s")
+        XCTAssertEqual(log.lines.filter { $0.contains("usage record") }, ["-: usage record could not be opened; 1 row(s) dropped"])
+    }
+
+    /// i2: the time stays below year 9999, so a day file name always matches isOwnName.
+    func testRowTimeIsBelowYear9999() {
+        var row = writerRow()
+        row.t = 253402300799
+        XCTAssertNotNil(row.line())
+        row.t = 253402300800
+        XCTAssertTrue(row.line() == nil)
+        row.t = 1e12
+        XCTAssertTrue(row.line() == nil)
+    }
 
     private func writerRow(_ acct: String = "acct-example-1") -> CCPoolUsageRow {
         CCPoolUsageRow(t: recNow, acct: acct, model: "claude-opus-5", sess: nil, agent: nil, path: "messages", st: 200, ms: 7,
