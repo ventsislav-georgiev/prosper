@@ -266,6 +266,10 @@ final class AgentTerminalController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) }
     }
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// #1480: a file link opens in the Text Viewer (the intake), relative to the session's folder.
+    var cwd: (AgentSessionKey) -> String? = { _ in nil }
+    var homeDirectory: () -> String = { NSHomeDirectory() }
+    var showFile: @MainActor (URL) -> Void = { TextViewerIntake.shared.receive($0) }
     /// The client binary's version, probed off main (cached per path and mtime). Nil under XCTest: the
     /// probe runs before the spawn now, and a row never runs a real `dch --version`.
     var clientVersion: @Sendable (String) -> [Int]? = {
@@ -575,11 +579,16 @@ final class AgentTerminalController: ObservableObject {
 
     // MARK: Links and find
 
-    /// ⌘-click on a URL or an OSC 8 link: web and mail links only, never a file or an app.
+    /// ⌘-click on a URL or an OSC 8 link: web and mail links to openURL; a text file to the Text Viewer;
+    /// never any other file or an app.
     func open(_ link: String) {
-        guard let url = URL(string: link), let scheme = url.scheme?.lowercased(),
-              ["http", "https", "mailto"].contains(scheme) else { return }
-        openURL(url)
+        if let url = URL(string: link), let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
+            openURL(url)
+            return
+        }
+        guard let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()),
+              AgentTerminalFileLink.isViewable(file) else { return }
+        showFile(file)
     }
 
     func openFind() {

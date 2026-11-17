@@ -1720,6 +1720,8 @@ tag from the now-released section and put it on the new top draft.
   nothing. (#1472)
 - The New session form sits in the middle of the pane (it still starts at the top and scrolls when
   the window is short). (#1479)
+- Cmd-click a file path (absolute, ~/ or file://) in an agent session opens it in Prosper's Text
+  Viewer; other files and apps never open. (#1480)
 
 ## v2.174.0
 

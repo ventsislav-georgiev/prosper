@@ -80,6 +80,8 @@ final class AgentTerminalTests: XCTestCase {
         var screens: [FakeScreen] = []
         var live = true
         var opened: [URL] = []
+        /// #1480: a file link handed to the Text Viewer (never the real intake).
+        var shown: [URL] = []
         var refuse: Error?
         /// A new screen reports the view's grid as its own at once, as libghostty's surface does from
         /// its IO thread once it runs at that grid. Off for the tests of that hand-off.
@@ -116,6 +118,8 @@ final class AgentTerminalTests: XCTestCase {
             c.after = { [clock] in clock.schedule($0, $1) }
             c.isLive = { [unowned self] _ in live }
             c.openURL = { [unowned self] in opened.append($0) }
+            c.showFile = { [unowned self] in shown.append($0) }
+            c.homeDirectory = { "/Users/example" }
             c.clientVersion = { _ in version }
             c.socketExists = { [unowned self] _ in socket }
             c.isSelected = { [unowned self] _ in selected }
@@ -651,6 +655,7 @@ final class AgentTerminalTests: XCTestCase {
         }
         XCTAssertEqual(rig.opened.map(\.absoluteString),
                        ["https://example.com/a?b=1", "http://example.com", "mailto:someone@example.com", "HTTPS://EXAMPLE.COM"])
+        XCTAssertTrue(rig.shown.isEmpty, "none of those is a file the viewer can show (#1480)")
     }
 
     // MARK: The real view (libghostty), offscreen
