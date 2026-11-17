@@ -54,21 +54,21 @@ final class XrayRefRunTests: XCTestCase {
         XCTAssertEqual(p.refContext?.heading, "Definition")
     }
 
-    /// #1410: dch 1.83.0 reads no stdin for a local name with ":": such a session keeps the text in argv, for a ref and
-    /// for a search (red with the colon test gone).
-    func testALocalNameWithAColonKeepsArgv() async {
+    /// #1442: dch 1.84.0 reads stdin for every local name: one with ":" sends "-" in argv and the text plus a newline on
+    /// stdin, for a ref and for a search (red with the colon test back).
+    func testALocalNameWithAColonTakesStdin() async {
         let run = Run(), panels = XrayPanels()
         let p = XrayPanelModel(target: XrayTarget(name: "api:2", dir: "/tmp/dch-test"), tab: .search)
         (p.dch, p.run) = ("/fake/dch", run.run)
         XCTAssertTrue(panels.runRef("#12", for: p))
         await panels.refReading?.value
-        XCTAssertEqual(run.calls, [["--xray", "api:2", "--ref", "#12", "--scope", "project", "--full", "--json"]])
-        XCTAssertTrue(run.stdins.last == .some(nil), "no stdin bound")
+        XCTAssertEqual(run.calls, [["--xray", "api:2", "--ref", "-", "--scope", "project", "--full", "--json"]])
+        XCTAssertEqual(run.stdins.last, "#12\n")
         p.query = "login"
         p.runSearch()
         await p.reading?.value
-        XCTAssertEqual(run.calls.last, ["--xray", "api:2", "--search", "login", "--json"])
-        XCTAssertTrue(run.stdins.last == .some(nil), "no stdin bound")
+        XCTAssertEqual(run.calls.last, ["--xray", "api:2", "--search", "-", "--json"])
+        XCTAssertEqual(run.stdins.last, "login\n")
     }
 
     /// #1410: dch reads at most 256 stdin bytes, newline included. A local 255-byte text runs, 256 runs nothing (red with

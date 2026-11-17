@@ -1659,6 +1659,8 @@ tag from the now-released section and put it on the new top draft.
 - An extension that declares a Settings section with the id "kit" no longer gets a second tab with
   the same id as its kit pane: that section is ignored (logged), and the rest of the extension
   loads. (#1440)
+- X-ray: with dch 1.84.0, a session name containing a colon now also sends search and reference text
+  on stdin, so it stays out of the process list. (#1442)
 
 ## v2.174.0
 

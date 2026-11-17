@@ -35,11 +35,11 @@ struct XrayTarget: Equatable {
     var chaptersArgs: [String] { ["--xray", name, "--json"] }
     /// #1355: dch README "dch --xray <n> --search <text> --json"; the text is checked by DchCtl.searchOK first.
     func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
-    /// #1410: a local name takes the text on stdin ("-" in argv, dch 1.83.0), so it never shows in ps; a remote one keeps
-    /// it in argv (dch reads "-" there as the text itself; the serve path hides it). shortcut: dch 1.83.0 reads no stdin for
-    /// a local name with ":", so that one keeps argv too; drop the colon test once the pin reaches dch 1.84.0.
+    /// #1410: a local name takes the text on stdin ("-" in argv), so it never shows in ps; a remote one keeps
+    /// it in argv (dch reads "-" there as the text itself; the serve path hides it). #1442: dch 1.84.0 reads stdin for
+    /// every local name, one with ":" included.
     func viaStdin(_ text: String) -> (arg: String, stdin: Data?) {
-        dir == nil || name.contains(":") ? (text, nil) : ("-", Data((text + "\n").utf8))
+        dir == nil ? (text, nil) : ("-", Data((text + "\n").utf8))
     }
     var env: [String: String] { AgentIsland.listEnv(dir: dir ?? DchCommand.defaultSocketDir) }
 }
