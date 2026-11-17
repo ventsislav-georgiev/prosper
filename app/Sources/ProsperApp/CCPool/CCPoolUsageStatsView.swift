@@ -28,6 +28,14 @@ final class CCPoolUsageStatsModel: ObservableObject {
     }
 
     /// The five token kinds, in the order of every `kinds` array below.
+    /// Marks per chart stay bounded (Swift Charts draws every mark on main): a line is thinned to `pointsMax` buckets (fewer
+    /// when there are many lines, so a chart stays near `marksMax` points), hit rate keeps `sessionsMax` sessions, bars
+    /// `barsMax` plus "other", utilisation `seriesMax` lines plus "other", time to finish `finishModelsMax` models plus
+    /// "other" (two series each; one point per UTC day of the range).
+    nonisolated static let pointsMax = 300, marksMax = 900, sessionsMax = 10, barsMax = 20, seriesMax = 24, finishModelsMax = 11
+    /// The model key the left-out models are folded under (never a real model id; sorts after them).
+    nonisolated static let otherModel = "\u{10FFFF}other"
+
     nonisolated static let kinds = ["Input", "Cache write 5 min", "Cache write 1 h", "Cache read", "Output (incl. thinking)"]
 
     struct Line: Equatable, Sendable {
@@ -63,6 +71,11 @@ final class CCPoolUsageStatsModel: ObservableObject {
     struct Shown: Equatable, Sendable {
         var rows = 0
         var skipped = 0
+        /// The read's own marks: the row cap was reached, and day files that could not be read.
+        var truncated = false
+        var filesNotRead = 0
+        /// Sessions left out of the hit-rate chart (only the busiest few are drawn).
+        var moreSessions = 0
         /// Percent.
         var utilization: [Line] = []
         var tokens: [Grouping: [Bar]] = [:]
@@ -82,7 +95,8 @@ final class CCPoolUsageStatsModel: ObservableObject {
                     + Self.count(l.markers.count, "reset")
             }
             let bars = (tokens[grouping] ?? []).map { "\($0.name): \(Self.count($0.total, "token"))" }
-            let cacheText = cache.map { "\($0.name): latest \(pct($0.points.last?.value ?? 0)), \(Self.count($0.markers.count, "move"))" }
+            var cacheText = cache.map { "\($0.name): latest \(pct($0.points.last?.value ?? 0)), \(Self.count($0.markers.count, "move"))" }
+            if moreSessions > 0 && !cacheText.isEmpty { cacheText.append("and \(moreSessions) more") }
             let topText = top.first.map { "\(Self.count(top.count, "session")); most tokens: \($0.name), \(Self.count($0.total, "token"))" }
             let finishText = finish.map {
                 "\($0.model) on \($0.day): median \(Self.seconds($0.median)), 90th percentile \(Self.seconds($0.p90)), "
@@ -160,18 +174,34 @@ final class CCPoolUsageStatsModel: ObservableObject {
         func kinds(_ t: CCPoolUsageTotals) -> [Int] { [t.input, t.cacheWrite5m, t.cacheWrite1h, t.cacheRead, t.output] }
         func percent(_ p: [CCPoolUsageStats.Point]) -> [CCPoolUsageStats.Point] { p.map { .init(t: $0.t, value: $0.value * 100) } }
 
-        var s = Shown(rows: rows.count, skipped: r.skippedTotal)
-        s.utilization = CCPoolUsageStats.utilization(rows).map {
-            Line(name: "\(accts[$0.acct] ?? "") \u{00B7} \($0.window == "five_hour" ? "5 h" : "7 d")", points: percent($0.points),
-                 markers: $0.resets.map(\.t))
+        var s = Shown(rows: rows.count, skipped: r.skippedTotal, truncated: r.truncated, filesNotRead: r.filesNotRead)
+        // The busiest `seriesMax` lines (most points), kept in the reader's order; the rest are one "other" line of their peaks.
+        let util = CCPoolUsageStats.utilization(rows)
+        let lineKeep = Set(util.indices.sorted { (util[$1].points.count, $0) < (util[$0].points.count, $1) }.prefix(seriesMax))
+        let cap = lineCap(min(util.count, seriesMax + 1))
+        s.utilization = util.indices.filter(lineKeep.contains).map { i in
+            let u = util[i]
+            let (p, m) = thin(percent(u.points), u.resets.map(\.t), cap: cap, mean: false)
+            return Line(name: "\(accts[u.acct] ?? "") \u{00B7} \(u.window == "five_hour" ? "5 h" : "7 d")", points: p, markers: m)
+        }
+        let rest = util.indices.filter { !lineKeep.contains($0) }.map { util[$0] }
+        if !rest.isEmpty {
+            let (p, m) = thin(percent(rest.flatMap(\.points).sorted { $0.t < $1.t }), rest.flatMap { $0.resets.map(\.t) }.sorted(),
+                              cap: cap, mean: false)
+            s.utilization.append(Line(name: "other (\(rest.count))", points: p, markers: m))
         }
         for (g, group, map) in [(Grouping.account, CCPoolUsageGroup.account, accts), (Grouping.model, CCPoolUsageGroup.model, models),
                                     (Grouping.session, CCPoolUsageGroup.session, sessions)] {
-            s.tokens[g] = CCPoolUsageStats.tokens(rows, by: group).map { Bar(name: map[$0.key] ?? "", kinds: kinds($0.totals), total: $0.totals.total) }
+            s.tokens[g] = capBars(CCPoolUsageStats.tokens(rows, by: group).map { Bar(name: map[$0.key] ?? "", kinds: kinds($0.totals), total: $0.totals.total) })
         }
-        s.cache = CCPoolUsageStats.cacheHitRate(rows).map { c in
-            Line(name: sessions[c.sess] ?? "", points: c.points.map { .init(t: $0.t, value: $0.rate * 100) },
-                 markers: c.points.filter(\.moved).map(\.t))
+        let hits = CCPoolUsageStats.cacheHitRate(rows)
+        let busiest = Set(hits.sorted { ($1.points.count, $0.sess) < ($0.points.count, $1.sess) }.prefix(sessionsMax).map(\.sess))
+        let kept = hits.filter { busiest.contains($0.sess) }
+        s.moreSessions = hits.count - kept.count
+        s.cache = kept.map { c in
+            let (p, m) = thin(c.points.map { .init(t: $0.t, value: $0.rate * 100) }, c.points.filter(\.moved).map(\.t),
+                              cap: lineCap(kept.count), mean: true)
+            return Line(name: sessions[c.sess] ?? "", points: p, markers: m)
         }
         s.top = CCPoolUsageStats.topSessions(rows).map { t in
             SessionRow(name: sessions[t.sess] ?? "", kinds: kinds(t.totals), total: t.totals.total, requests: t.totals.requests,
@@ -181,10 +211,52 @@ final class CCPoolUsageStatsModel: ObservableObject {
                                       total: a.totals.total, requests: a.totals.requests, accounts: "", agents: [])
                        })
         }
-        s.finish = CCPoolUsageStats.finishTimes(rows).map {
-            Finish(model: models[$0.model] ?? "", day: $0.day, median: $0.median, p90: $0.p90, count: $0.count)
+        // The `finishModelsMax` models with most finished requests; the others' rows are timed together as "other".
+        var fin = CCPoolUsageStats.finishTimes(rows)
+        let use = Dictionary(fin.map { ($0.model, $0.count) }, uniquingKeysWith: +)
+        if use.count > finishModelsMax {
+            let keep = Set(use.sorted { ($1.value, $0.key) < ($0.value, $1.key) }.prefix(finishModelsMax).map(\.key))
+            var folded = rows
+            for i in folded.indices where !keep.contains(folded[i].model) { folded[i].model = otherModel }
+            fin = CCPoolUsageStats.finishTimes(folded)
+        }
+        s.finish = fin.map {
+            Finish(model: $0.model == otherModel ? "other (\(use.count - finishModelsMax))" : models[$0.model] ?? "", day: $0.day,
+                   median: $0.median, p90: $0.p90, count: $0.count)
         }
         return s
+    }
+
+    nonisolated static func lineCap(_ lines: Int) -> Int { max(10, min(pointsMax, marksMax / max(1, lines))) }
+
+    /// A line of oldest-first points cut to at most `cap` time buckets (the largest value, or the mean, in each), and its
+    /// markers to one per bucket. Fewer points than `cap`: unchanged.
+    nonisolated static func thin(_ p: [CCPoolUsageStats.Point], _ markers: [Double], cap: Int, mean: Bool) -> ([CCPoolUsageStats.Point], [Double]) {
+        guard p.count > cap, let lo = p.first?.t, let hi = p.last?.t else { return (p, markers) }
+        let width = (hi - lo) / Double(cap)
+        func slot(_ t: Double) -> Int {
+            let x = width > 0 ? (t - lo) / width : 0
+            return x.isFinite ? Int(min(Double(cap - 1), max(0, x))) : 0
+        }
+        var groups: [Int: (t: Double, sum: Double, n: Double, top: Double)] = [:]
+        for q in p {
+            let k = slot(q.t)
+            let g = groups[k] ?? (q.t, 0, 0, -Double.infinity)
+            groups[k] = (g.t, g.sum + q.value, g.n + 1, max(g.top, q.value))
+        }
+        var seen = Set<Int>()
+        return (groups.keys.sorted().compactMap { k in groups[k].map { CCPoolUsageStats.Point(t: $0.t, value: mean ? $0.sum / $0.n : $0.top) } },
+                markers.filter { seen.insert(slot($0)).inserted })
+    }
+
+    /// At most `barsMax` bars (the biggest, kept in their order) and one "other" with the rest summed.
+    nonisolated static func capBars(_ bars: [Bar]) -> [Bar] {
+        guard bars.count > barsMax else { return bars }
+        let top = Set(bars.sorted { ($1.total, $0.name) < ($0.total, $1.name) }.prefix(barsMax).map(\.name))
+        var kinds = [0, 0, 0, 0, 0]
+        let rest = bars.filter { !top.contains($0.name) }
+        for b in rest { for (i, k) in b.kinds.enumerated() where i < kinds.count { kinds[i] += k } }
+        return bars.filter { top.contains($0.name) } + [Bar(name: "other (\(rest.count))", kinds: kinds, total: kinds.reduce(0, +))]
     }
 
     /// Spec 3.6: never the whole id, anywhere: at most its first 8 characters and always fewer than it has, then an ellipsis.
@@ -245,6 +317,12 @@ struct CCPoolUsageStatsSection: View {
         if s.skipped > 0 {
             caption("\(CCPoolUsageStatsModel.Shown.count(s.skipped, "unreadable row")) skipped.", color: Neon.magenta)
         }
+        if s.truncated {
+            caption("Only the first \(CCPoolUsageReader.rowsMax) rows of this range were read; later ones are not drawn.", color: Neon.magenta)
+        }
+        if s.filesNotRead > 0 {
+            caption("\(CCPoolUsageStatsModel.Shown.count(s.filesNotRead, "usage file")) could not be read.", color: Neon.magenta)
+        }
         if s.rows == 0 {
             caption("No usage recorded in this range.")
         } else {
@@ -252,10 +330,21 @@ struct CCPoolUsageStatsSection: View {
             ForEach(Array(charts.enumerated()), id: \.offset) { i, c in
                 VStack(alignment: .leading, spacing: sz(6)) {
                     Text(c.title).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary)
+                    // The picker sits above the chart: the chart is one ignored element, which would hide it from VoiceOver.
+                    if i == 1 {
+                        Picker("Group by", selection: $model.grouping) {
+                            ForEach(CCPoolUsageStatsModel.Grouping.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                        .accessibilityLabel("Group by")
+                    }
+                    // An element with no role (AXUnknown, a plain shape's too) is served with its label but no AXValue; as an
+                    // image it keeps both (testAnElementOnAChartKeepsItsValueProbe).
                     chart(i, s)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(c.title)
                         .accessibilityValue(c.summary)
+                        .accessibilityAddTraits(.isImage)
                 }
             }
         }
@@ -265,14 +354,7 @@ struct CCPoolUsageStatsSection: View {
     private func chart(_ i: Int, _ s: CCPoolUsageStatsModel.Shown) -> some View {
         switch i {
         case 0: lines(s.utilization, y: "Percent").frame(height: sz(160))
-        case 1:
-            VStack(alignment: .leading, spacing: sz(6)) {
-                Picker("Group by", selection: $model.grouping) {
-                    ForEach(CCPoolUsageStatsModel.Grouping.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
-                bars(s.tokens[model.grouping] ?? []).frame(height: sz(160))
-            }
+        case 1: bars(s.tokens[model.grouping] ?? []).frame(height: sz(160))
         case 2: lines(s.cache, y: "Percent").chartYScale(domain: 0...100).frame(height: sz(160))
         case 3: table(s.top)
         default: finish(s.finish).frame(height: sz(160))

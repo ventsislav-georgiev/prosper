@@ -1,4 +1,5 @@
 import AppKit
+import Charts
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -230,6 +231,98 @@ final class CCPoolUsageStatsTests: XCTestCase {
         }
     }
 
+    // MARK: bounded marks (QA r1458 R1484a-m1)
+
+    /// 200,000 generated rows (no fixture file): 5 accounts, 400 sessions, 2 models, 14 days, both quota windows with
+    /// resets, a session that moves account every 50 rows.
+    private func busyRows() -> [CCPoolUsageEntry] {
+        let n = 200_000, start = stNow - 14 * stDay
+        return (0..<n).map { i in
+            let t = start + Double(i) * (14 * stDay / Double(n))
+            let r5 = (t / 18_000).rounded(.down) * 18_000 + 18_000, r7 = (t / 604_800).rounded(.down) * 604_800 + 604_800
+            return CCPoolUsageEntry(
+                t: t, acct: "id-\(i / 50 % 40)", model: "claude-model-\(i % 30)", sess: "s-\(i % 400)", agent: "",
+                path: "messages", st: 200, ms: 500 + i % 3000, done: true, qc: false, att: 1, thr: 0, mv: false, routed: "pin",
+                tokens: .init(input: 10 + i % 7, output: 5, cacheRead: i % 1000, cacheWrite5m: 1, cacheWrite1h: 0),
+                lim: ["five_hour": .init(u: 1 - (r5 - t) / 18_000, r: r5, s: "a"), "seven_day": .init(u: 1 - (r7 - t) / 604_800, r: r7, s: "a")])
+        }
+    }
+
+    func testBusyFortnightKeepsEveryChartUnderTheMarkAndSeriesBounds() {
+        let rows = busyRows()
+        XCTAssertEqual(rows.count, 200_000)
+        let t0 = Date()
+        let s = M.shape(CCPoolUsageReadResult(rows: rows), labels: stLabels)
+        print("SHAPE200K seconds=\(Date().timeIntervalSince(t0))")
+        // Item 3 fact: what the reader's per-series aggregations alone cost on the same rows (no assert on time).
+        for (name, run) in [("utilization", { _ = CCPoolUsageStats.utilization(rows) }), ("tokens", { _ = CCPoolUsageStats.tokens(rows, by: .session) }),
+                            ("cacheHitRate", { _ = CCPoolUsageStats.cacheHitRate(rows) }), ("topSessions", { _ = CCPoolUsageStats.topSessions(rows) }),
+                            ("finishTimes", { _ = CCPoolUsageStats.finishTimes(rows) })] as [(String, () -> Void)] {
+            let t = Date()
+            run()
+            print("SHAPE200K \(name) seconds=\(Date().timeIntervalSince(t))")
+        }
+        XCTAssertEqual(s.rows, 200_000)
+        // Marks and series per chart, counted from shape()'s output.
+        let lineMarks = { (l: [M.Line]) in l.reduce(0) { $0 + $1.points.count + $1.markers.count } }
+        XCTAssertLessThanOrEqual(lineMarks(s.utilization), 2000)
+        XCTAssertLessThanOrEqual(s.utilization.count, 25)
+        XCTAssertEqual(s.utilization.count, 25, "24 busiest lines of the 80 (40 accounts, two windows) plus other")
+        XCTAssertEqual(s.utilization.last?.name, "other (56)")
+        XCTAssertLessThanOrEqual(lineMarks(s.cache), 2000)
+        XCTAssertEqual(s.cache.count, 10, "hit rate keeps the busiest 10 sessions")
+        XCTAssertEqual(s.moreSessions, 390)
+        XCTAssertTrue(s.charts(.account)[2].summary.hasSuffix("; and 390 more"), "the summary says how many are left out")
+        for g in M.Grouping.allCases {
+            let bars = s.tokens[g] ?? []
+            XCTAssertLessThanOrEqual(bars.count * M.kinds.count, 2000)
+            XCTAssertLessThanOrEqual(M.kinds.count, 25)
+            XCTAssertEqual(bars.reduce(0) { $0 + $1.total }, s.tokens[.account]?.reduce(0) { $0 + $1.total }, "other keeps the rest, nothing is lost")
+        }
+        XCTAssertEqual(s.tokens[.session]?.count, 21, "top 20 plus other")
+        XCTAssertEqual(s.tokens[.session]?.last?.name, "other (380)")
+        XCTAssertLessThanOrEqual(2 * s.finish.count, 2000)
+        let finishModels = Set(s.finish.map(\.model))
+        XCTAssertLessThanOrEqual(2 * finishModels.count, 25, "two series per model")
+        XCTAssertEqual(finishModels.count, 12, "11 of the 30 models plus other")
+        XCTAssertTrue(finishModels.contains("other (19)"))
+        XCTAssertEqual(s.finish.reduce(0) { $0 + $1.count }, 200_000, "other keeps every finished request")
+        for l in s.utilization + s.cache {
+            XCTAssertLessThanOrEqual(l.points.count, M.pointsMax)
+            XCTAssertLessThanOrEqual(l.markers.count, l.points.count, "a marker per bucket at most")
+        }
+        XCTAssertGreaterThan(s.utilization.reduce(0) { $0 + $1.markers.count }, 0, "resets still marked")
+    }
+
+    func testThinKeepsPeaksMeansAndOneMarkerPerBucket() {
+        let p = (0..<100).map { CCPoolUsageStats.Point(t: Double($0), value: Double($0 % 10)) }
+        let (peak, m) = M.thin(p, [1, 2, 3, 98, 99], cap: 10, mean: false)
+        XCTAssertEqual(peak.map(\.value), Array(repeating: 9, count: 10))
+        XCTAssertEqual(peak.map(\.t), (0..<10).map { Double($0 * 10) }, "a bucket sits at its first point")
+        XCTAssertEqual(m, [1, 98], "markers 1,2,3 share a bucket, 98 and 99 share the last")
+        XCTAssertEqual(M.thin(p, [], cap: 10, mean: true).0.map(\.value), Array(repeating: 4.5, count: 10))
+        XCTAssertEqual(M.thin(Array(p.prefix(10)), [5], cap: 10, mean: false).0, Array(p.prefix(10)), "few points stay as they are")
+        let same = (0..<20).map { _ in CCPoolUsageStats.Point(t: 5, value: 1) }
+        XCTAssertEqual(M.thin(same, [], cap: 10, mean: false).0.count, 1, "one instant is one bucket")
+    }
+
+    // MARK: what a capped read says (R1484a-s1)
+
+    func testCappedReadIsSaidOnTheCard() async throws {
+        let dir = tempDir().appendingPathComponent("usage")
+        let m = M(directory: dir, clock: { stNow }, labels: { stLabels },
+                  read: { _, _, _ in CCPoolUsageReadResult(rows: [], filesNotRead: 2, truncated: true) })
+        await m.reload().value
+        XCTAssertEqual(m.shown?.truncated, true)
+        XCTAssertEqual(m.shown?.filesNotRead, 2)
+        let r = walked(m)
+        XCTAssertTrue(r.contains("Only the first 500000 rows of this range were read; later ones are not drawn."))
+        XCTAssertTrue(r.contains("2 usage files could not be read."))
+        let (m2, _) = try rig([:])
+        await m2.reload().value
+        XCTAssertFalse(walked(m2).contains { $0.contains("Only the first") || $0.contains("could not be read") }, "a complete read says nothing")
+    }
+
     // MARK: hosted
 
     /// The 14-day card lays out offscreen (no window) inside the pane's room at the smallest and largest UI scale.
@@ -245,6 +338,66 @@ final class CCPoolUsageStatsTests: XCTestCase {
             let fit = hc.sizeThatFits(in: CGSize(width: width, height: 100_000))
             XCTAssertLessThanOrEqual(fit.width, width + 1, "card wider than its room at scale \(scale)")
             XCTAssertGreaterThan(fit.height, 4 * sz(160), "the five charts laid out at scale \(scale)")
+        }
+    }
+
+    // R1484a-m2: the "Group by" picker is not under a chart's ignored element; the five charts keep label and value.
+    // The helper tree (AXTreeSupport.walk) shows a label only, so the value is read here from the node's AX attributes.
+    private func axTexts(_ e: Any, _ out: inout [(label: String, texts: [String])], depth: Int = 0) {
+        guard depth < 60, let o = e as? NSObject else { return }
+        let attrs: [NSAccessibility.Attribute] = [.value, .valueDescription, .description, .help, .title]
+        let texts = attrs.compactMap { a in (o.accessibilityAttributeValue(a) as? String) ?? (o.accessibilityAttributeValue(a) as? NSAttributedString)?.string }
+        let label = o.responds(to: Selector(("accessibilityLabel"))) ? (o.value(forKey: "accessibilityLabel") as? String) ?? "" : ""
+        out.append((label, texts + [o.responds(to: Selector(("accessibilityValue"))) ? "\(o.value(forKey: "accessibilityValue") ?? "")" : ""]))
+        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] { axTexts(k, &out, depth: depth + 1) }
+    }
+
+    /// Facts for the chart value (R1484a-m2): the same label and value modifiers on a plain shape, a Chart, a scroll view,
+    /// a stack around a Chart, and a Chart with the image trait, hosted offscreen; what each node serves is printed (AXPROBE
+    /// lines). Without a role (AXUnknown) no AXValue is served, a plain Rectangle's neither; the image trait keeps it.
+    func testAnElementOnAChartKeepsItsValueProbe() {
+        let chart = Chart { BarMark(x: .value("k", "a"), y: .value("v", 1)) }.frame(width: 80, height: 40)
+        let view = VStack {
+            Rectangle().frame(width: 20, height: 20).accessibilityElement(children: .ignore).accessibilityLabel("probe-1").accessibilityValue("value-1")
+            chart.accessibilityElement(children: .ignore).accessibilityLabel("probe-2").accessibilityValue("value-2")
+            ScrollView(.horizontal) { Text("x") }.accessibilityElement(children: .ignore).accessibilityLabel("probe-3").accessibilityValue("value-3")
+            VStack { chart }.accessibilityElement(children: .ignore).accessibilityLabel("probe-4").accessibilityValue("value-4")
+            chart.accessibilityElement(children: .ignore).accessibilityLabel("probe-7").accessibilityValue("value-7").accessibilityAddTraits(.isImage)
+            Rectangle().frame(width: 20, height: 20).accessibilityLabel("probe-8").accessibilityValue("value-8")
+        }.frame(width: 300)
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let (win, host) = AXTreeSupport.hosted(view, CGSize(width: 300, height: 600))
+        defer { win.close() }
+        let probes = [1, 2, 3, 4, 7, 8]
+        let tree = AXTreeSupport.poll(host) { t in probes.allSatisfy { n in t.contains { $0.label == "probe-\(n)" } } }
+        XCTAssertFalse(win.isVisible, "never shown")
+        for n in tree where n.label.hasPrefix("probe-") || n.value.hasPrefix("value-") {
+            print("AXPROBE \(n.role)|\(n.label)|\(n.title)|\(n.value)|\(n.help)|ign \(n.ignored)")
+        }
+        var nodes: [(label: String, texts: [String])] = []
+        axTexts(host, &nodes)
+        for n in nodes where n.label.hasPrefix("probe-") { print("AXPROBE-TEXTS \(n.label) \(n.texts)") }
+        for n in probes { XCTAssertTrue(tree.contains { $0.label == "probe-\(n)" }, "probe-\(n) in the tree") }
+        XCTAssertTrue(nodes.contains { $0.label == "probe-7" && $0.texts.contains("value-7") }, "a chart as an image keeps its value")
+    }
+
+    func testGroupByIsInTheHostedTreeAndTheChartsKeepLabelAndValue() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let want = try XCTUnwrap(m.shown).charts(m.grouping)
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let (win, host) = AXTreeSupport.hosted(CCPoolUsageStatsSection(model: m).content.frame(width: 600), CGSize(width: 600, height: 2400))
+        defer { win.close() }
+        let tree = AXTreeSupport.poll(host) { t in t.contains { $0.named(prefix: "Group by") } && want.allSatisfy { c in t.contains { $0.label == c.title } } }
+        XCTAssertFalse(win.isVisible, "never shown")
+        XCTAssertTrue(tree.contains { !$0.ignored && $0.named(prefix: "Group by") }, "VoiceOver can reach the picker")
+        var nodes: [(label: String, texts: [String])] = []
+        axTexts(host, &nodes)
+        for c in want {
+            let mine = nodes.filter { $0.label == c.title }
+            XCTAssertTrue(mine.contains { $0.texts.contains(c.summary) }, "\(c.title): \(mine.map(\.texts))")
         }
     }
 
