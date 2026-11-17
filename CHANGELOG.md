@@ -1677,6 +1677,9 @@ tag from the now-released section and put it on the new top draft.
   Code: some details may show simplified" note. (#1464)
 - Agent Sessions: the sidebar "..." menu's submenus, such as Row details, now stay open and
   highlighted while the session list updates, instead of closing about every second. (#1466)
+- Agent Sessions controls only use a dch that you or the system own and that other users cannot
+  change, so a dch dropped into a shared folder on your PATH can never drive Restart, Stop or End.
+  (#1460)
 
 ## v2.174.0
 

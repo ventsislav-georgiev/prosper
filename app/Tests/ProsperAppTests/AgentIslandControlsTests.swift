@@ -73,6 +73,38 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(onPath?.path, "/Users/example/bin/dch", "a dch on the login PATH counts too")
     }
 
+    /// #1460 b: candidates are judged on the resolved binary before any probe. A link into dch's working
+    /// tree, a "dir/" PATH entry into it, a dch in a group-writable dir and a group-writable dch are never
+    /// probed, though each would claim the highest version; a 0755 dch in a 0755 dir is probed and wins.
+    func testControlDchIsJudgedByTheResolvedBinaryItsOwnerAndItsMode() throws {
+        let home = tempDir().path, fm = FileManager.default
+        func fake(_ dir: String, dirMode: Int = 0o755, mode: Int = 0o755) throws -> String {
+            try fm.createDirectory(atPath: home + dir, withIntermediateDirectories: true)
+            let p = home + dir + "/dch"
+            try "fake, never run\n".write(toFile: p, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: p)
+            try fm.setAttributes([.posixPermissions: dirMode], ofItemAtPath: home + dir)
+            return p
+        }
+        let tree = try fake("/personal/dch")
+        try fm.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.local/bin/dch", withDestinationPath: tree)
+        let shared = try fake("/shared", dirMode: 0o775), loose = try fake("/loose", mode: 0o775), good = try fake("/good")
+        // Only the tempDir candidates: the fixed /opt/homebrew and /usr/local ones are never touched here.
+        let c = DchCommand.controlCandidates(bundled: nil, home: home,
+                                             loginPath: [home + "/personal/dch/", home + "/shared", home + "/loose", home + "/good"]
+                                                .joined(separator: ":")).filter { $0.hasPrefix(home) }
+        XCTAssertEqual(c, [home + "/.local/bin/dch", home + "/personal/dch//dch", shared, loose, good],
+                       "the string filter lets the link and the trailing-slash entry through")
+        var asked: [String] = []
+        let dch = DchCommand.newest(DchCommand.trusted(c, home: home), version: {
+            asked.append($0)
+            return $0 == good ? [1, 86, 0] : [9, 9, 9]
+        })
+        XCTAssertEqual(asked, [good], "never probed: the tree link, the tree via dir/, a group-writable dir or file")
+        XCTAssertEqual(dch, DchCommand.Binary(path: good, version: [1, 86, 0]))
+    }
+
     func testNewestBinaryWinsAndTheEarlierCandidateWinsATie() {
         func pick(_ v: [String: [Int]]) -> String? {
             DchCommand.newest(["/opt/homebrew/bin/dch", "/app/dch", "/usr/local/bin/dch"], version: { v[$0] })?.path

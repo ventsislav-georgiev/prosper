@@ -2144,7 +2144,26 @@ enum DchCommand {
     /// The binary control verbs run with; probes are cached, so this forks only
     /// for a binary not seen at its current mtime. Off main: a probe is bounded
     /// at `islandTimeout`.
-    static func controlDch() -> Binary? { newest(controlCandidates, version: probedVersion) }
+    static func controlDch() -> Binary? { newest(trusted(controlCandidates, home: NSHomeDirectory()), version: probedVersion) }
+
+    /// #1460 b: the candidates that may be probed, judged on the resolved binary, never the path string:
+    /// not dch's working tree (a link or a "dir/" PATH entry into it included), and a regular executable
+    /// whose file and directory are owned by you or root and not group- or world-writable, so a dch in
+    /// a shared PATH dir claiming a high version never drives Restart, Stop or End. Order kept.
+    static func trusted(_ candidates: [String], home: String) -> [String] {
+        func resolve(_ p: String) -> String { ((p as NSString).resolvingSymlinksInPath as NSString).standardizingPath }
+        func closed(_ p: String, type: mode_t) -> Bool {
+            var st = stat()
+            return stat(p, &st) == 0 && st.st_mode & S_IFMT == type && (st.st_uid == getuid() || st.st_uid == 0)
+                && st.st_mode & 0o022 == 0
+        }
+        let tree = resolve(home + "/personal/dch/dch")
+        return candidates.filter {
+            let real = resolve($0)
+            return real != tree && closed(real, type: S_IFREG) && FileManager.default.isExecutableFile(atPath: real)
+                && closed((real as NSString).deletingLastPathComponent, type: S_IFDIR)
+        }
+    }
 
     private final class VersionCache: @unchecked Sendable {
         let lock = NSLock()
