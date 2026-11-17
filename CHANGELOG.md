@@ -1761,8 +1761,10 @@ tag from the now-released section and put it on the new top draft.
   agents, merged, open PRs, age and the Command 1-9 shortcut chip; model and effort show only where
   they differ from your Default model and effort. (#1455)
 - Agent Sessions panes are terminals only: the Transcript mode and its Terminal | Transcript toggle
-  (and Command-T) are gone, and X-ray reads every tab from dch, so a Prompts or Responses row opens
-  its card. (#1471)
+  are gone, Command-T and Command-L do nothing in a terminal pane, and X-ray reads every tab from
+  dch, so a Prompts or Responses row opens its card. A first message that could not be sent now
+  shows over the session's terminal with Copy, Send (pastes it without pressing Return) and
+  Dismiss. (#1471)
 - Agent Sessions: the Mini sidebar now shows each session's name (its first 8 characters) beside the
   status dot, with the Command number as a small superscript, and hovering a row shows its full name
   after a moment. (#1457)
@@ -1772,10 +1774,6 @@ tag from the now-released section and put it on the new top draft.
 - The small Command number in the Mini sidebar is readable on every theme. (#1505)
 - A session row's detail line (state, counts, age) now follows the UI size: at a smaller size the
   row is no longer held 14 pt tall by an empty age slot. (#1500)
-- Agent Sessions: Transcript mode is gone; every pane is a terminal, X-ray reads its tabs from dch,
-  Command-T and Command-L do nothing in a terminal pane, and a first message that could not be sent
-  now shows over the session's terminal with Copy, Send (pastes it without pressing Return) and
-  Dismiss. (#1471)
 
 ## v2.174.0
 
