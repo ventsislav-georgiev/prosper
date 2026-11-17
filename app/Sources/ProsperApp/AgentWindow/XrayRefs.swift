@@ -4,7 +4,10 @@ import Foundation
 /// Every string is outside data (OutsideText.shown). Gated off (XrayPanels.refsTab) until the ref card ships.
 struct XrayRefs: Equatable {
     /// dch's shapes; a word Prosper does not know stays a row with a generic kind (shape nil).
-    enum Shape: String, Equatable { case issue, pull, ticket, commit, file, url }
+    enum Shape: String, Equatable { case issue, pull, ticket, commit, file, url
+        /// dch 1.93.0 (#458): a backticked span or a CONST_CASE/snake_case identifier; always defined:false, its one definition is the first mention.
+        case term
+    }
 
     struct Entry: Equatable {
         var key: String
@@ -65,9 +68,11 @@ struct XrayRefs: Equatable {
                         sessionID: (o["session_id"] as? String).map { OutsideText.shown($0, max: 64) })
     }
 
-    /// dch's Refs order: latest mention first (last_offset), then count, then later in dch's list first.
+    /// dch's Refs order: latest mention first (last_offset), then count, then later in dch's list first; terms after the
+    /// rest (#1489, dch #459: a term never crowds out an issue, a pull or a ticket).
     var ordered: [Entry] {
         entries.sorted { a, b in
+            if (a.shape == .term) != (b.shape == .term) { return b.shape == .term }
             if (a.lastOffset ?? -1) != (b.lastOffset ?? -1) { return (a.lastOffset ?? -1) > (b.lastOffset ?? -1) }
             if a.count != b.count { return a.count > b.count }
             return a.index > b.index
@@ -94,6 +99,7 @@ struct XrayRefRow: Equatable {
         case .commit: "Commit"
         case .file: "File"
         case .url: "Link"
+        case .term: "Term"
         case nil: "Ref"
         }
     }

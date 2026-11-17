@@ -1752,6 +1752,8 @@ tag from the now-released section and put it on the new top draft.
   newer. (#1487)
 - the sub-agent count shows a robot instead of the people icon, in Agent Sessions and Agent Island.
   (#1453)
+- X-ray Refs list terms, identifiers and backticked words from the conversation, with where they
+  were first mentioned (dch 1.93.0 or newer). (#1489)
 
 ## v2.174.0
 

@@ -154,11 +154,14 @@ struct XrayRefPopover: View {
             field(r.kind, ([r.title, r.subtitle] + r.lines).filter { !$0.isEmpty }.joined(separator: "\n"))
         }
         ForEach(Array(c.definitions.enumerated()), id: \.offset) { _, d in
-            field(d.title + (d.mark.map { " \u{00B7} " + $0 } ?? ""),
+            field(Self.label(d) + (d.mark.map { " \u{00B7} " + $0 } ?? ""),
                   ([d.passage] + [d.url, d.status].compactMap { $0 }).filter { !$0.isEmpty }.joined(separator: "\n"))
         }
         if let m = c.firstMention { field("First mention", m.line) }
     }
+
+    /// A term's one definition is dch's first mention (rule "term"); any other keeps its title.
+    static func label(_ d: XrayRefStream.Definition) -> String { d.rule == "term" ? "First mention" : d.title }
 
     @ViewBuilder func mentions(_ c: XrayRefContext) -> some View {
         ForEach(c.counts, id: \.self) { faint($0) }

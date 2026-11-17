@@ -138,6 +138,16 @@ final class XrayRefsTabTests: XCTestCase {
         XCTAssertEqual(XrayRefRow(f, complete: true, home: "/Users/other", cwd: nil).text, "/Users/example/api/src/main.c:12")
     }
 
+    /// #1489: terms are in the default list, after issues, pulls and tickets, and they never count as hidden. Red on the old ordered.
+    func testTermsAreInTheDefaultListAfterTheOthers() {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let p = applied(XrayRefTermTests.refs)
+        XCTAssertEqual(p.shownRefs.map(\.text), ["#831", "API-12", "E-1", "ERR_LEDGER_SKEW", "test_retry_timeout", "`dryRun`"])
+        XCTAssertTrue(p.refsToggle == nil, "no file, commit or link here: nothing hidden")
+    }
+
     func testRowIsAButtonWithASpokenLabel() throws {
         let r = try XCTUnwrap(XrayRefs.parse(XrayRefsParseTests.object(refs: XrayRefsParseTests.six)))
         let e = try XCTUnwrap(r.entries.first)
