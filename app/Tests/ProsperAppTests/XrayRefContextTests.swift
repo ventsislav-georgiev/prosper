@@ -97,7 +97,8 @@ final class XrayRefContextTests: XCTestCase {
         p.searchRef("#12")
         await p.reading?.value
         XCTAssertEqual(p.query, "#12")
-        XCTAssertEqual(run.calls, [["--xray", "api", "--search", "#12", "--json"]])
+        XCTAssertEqual(run.calls, [["--xray", "api", "--search", "-", "--json"]])
+        XCTAssertEqual(run.stdins, ["#12\n"], "#1410: the query on stdin")
     }
 
     /// Red with M2f (the session check dropped): another session's mention never jumps, even with a chapter.

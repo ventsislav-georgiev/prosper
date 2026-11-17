@@ -275,7 +275,8 @@ enum DchCtl {
                 i += 1
             }
             switch w {
-            case "--ref" where !refOK(value): return (seen, refText)
+            // R1348-i1: a leading "-" as runRef refuses it (dch 1.83.0 reads "--ref -" from stdin, here /dev/null: exit 2)
+            case "--ref" where !refOK(value) || value.hasPrefix("-"): return (seen, refText)
             case "--scope" where !["session", "project", "all"].contains(value):
                 return (seen, "--scope takes session, project or all")
             case "--chapter" where !anchorOK(value): return (seen, anchorShape)

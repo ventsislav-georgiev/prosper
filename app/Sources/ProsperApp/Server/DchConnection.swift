@@ -2551,12 +2551,22 @@ enum DchCommand {
     /// gets each stdout chunk as it comes (a restart reports per session).
     /// #1405: `outputLimit` (nil: none, every caller but X-ray's reads) stops the read at max + 1 bytes of stdout,
     /// ends the child through its `terminate` (its own pid, not once it exited) and returns (no data, stderr, XrayPanels.overCap); the status of every other path is unchanged.
+    /// #1410: `stdin` (nil: none, the child inherits ours as before) is the child's whole stdin, a pipe written and closed
+    /// before the spawn; over PIPE_BUF bytes (the write could block) nothing runs (-1).
     static func runCapturingBoth(args: [String], env: [String: String], path: String = dchPath, merge: Bool = false,
                                  cwd: String? = nil, onPid: (pid_t) -> Void = { _ in },
                                  onOutput: (Data) -> Void = { _ in },
                                  onExit: @escaping @Sendable () -> Void = {},
-                                 outputLimit: (max: Int, terminate: @Sendable (pid_t) -> Void)? = nil) -> (out: Data, err: String, status: Int32) {
+                                 outputLimit: (max: Int, terminate: @Sendable (pid_t) -> Void)? = nil,
+                                 stdin: Data? = nil) -> (out: Data, err: String, status: Int32) {
         let p = Process()
+        if let stdin {
+            guard stdin.count <= Int(PIPE_BUF) else { return (Data(), "", -1) }
+            let input = Pipe()
+            let w = input.fileHandleForWriting
+            do { try w.write(contentsOf: stdin); try w.close() } catch { return (Data(), "", -1) }
+            p.standardInput = input
+        }
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
         p.environment = env

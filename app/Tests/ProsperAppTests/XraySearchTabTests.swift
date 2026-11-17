@@ -30,18 +30,22 @@ final class XraySearchTabTests: XCTestCase {
     final class Run: @unchecked Sendable {
         private let lock = NSLock()
         private var _calls: [[String]] = []
+        private var _stdins: [String?] = []   // #1410: XrayPanels.stdin per call, nil when none was bound
         private var _answers: [String: Answer] = [:]
         private var _cancelled = 0
         var calls: [[String]] { lock.withLock { _calls } }
         var searches: [[String]] { calls.filter { $0.contains("--search") } }
+        var searchStdins: [String?] { lock.withLock { zip(_calls, _stdins).filter { $0.0.contains("--search") }.map { $0.1 } } }
         var cancelled: Int { lock.withLock { _cancelled } }
         func answer(_ text: String, _ a: Answer) { lock.withLock { _answers[text] = a } }
         var run: XrayPanels.Run {
             { [self] _, args, _ in
-                lock.withLock { _calls.append(args) }
+                let input = XrayPanels.stdin.get().map { String(decoding: $0, as: UTF8.self) }
+                lock.withLock { _calls.append(args); _stdins.append(input) }
                 if args.contains("--tasks") { return XraySearchTabTests.ok }
                 if args.contains("--memory") { return XraySearchTabTests.mem }
-                let text = args.firstIndex(of: "--search").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil } ?? ""
+                var text = args.firstIndex(of: "--search").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil } ?? ""
+                if text == "-", let input, input.hasSuffix("\n") { text = String(input.dropLast()) }   // #1410: dch drops one newline
                 if text == "slow" {
                     let end = Date().addingTimeInterval(10)
                     while !Task.isCancelled, Date() < end { try? await Task.sleep(nanoseconds: 1_000_000) }
@@ -76,15 +80,19 @@ final class XraySearchTabTests: XCTestCase {
         await p.reading?.value
     }
 
-    /// Red at TIP: no Search tab, no searchArgs, no runSearch (XrayPanel.swift:15 has four tabs).
+    /// Red at TIP: no Search tab, no searchArgs, no runSearch (XrayPanel.swift:15 has four tabs). #1410: a local query
+    /// goes on stdin with one newline and never in argv (red with the text in argv); a remote one keeps it in argv.
     func testArgvForALocalSessionAndARemoteOne() async {
-        for (target, argv) in [(Self.local, ["--xray", "api", "--search", "login test", "--json"]),
-                               (Self.remote, ["--xray", "example-host:api", "--search", "login test", "--json"])] {
+        let cases: [(XrayTarget, [String], String?)] = [
+            (Self.local, ["--xray", "api", "--search", "-", "--json"], "login test\n"),
+            (Self.remote, ["--xray", "example-host:api", "--search", "login test", "--json"], nil)]
+        for (target, argv, input) in cases {
             let run = Run(), p = await opened(target, Clock(), run)
             XCTAssertEqual(p.tabs, [.search, .tasks, .memory], "\(target.name)")
             XCTAssertEqual(p.title(.search), "Search", "no count before a search")
             await search(p, "login test")
             XCTAssertEqual(run.searches, [argv], "\(target.name): one read")
+            XCTAssertEqual(run.searchStdins, [input], "\(target.name): stdin")
             XCTAssertEqual(p.search?.hits.count, 3)
             XCTAssertEqual(p.title(.search), "Search 3")
         }

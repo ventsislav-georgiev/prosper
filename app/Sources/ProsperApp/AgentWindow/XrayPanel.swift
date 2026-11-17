@@ -35,6 +35,12 @@ struct XrayTarget: Equatable {
     var chaptersArgs: [String] { ["--xray", name, "--json"] }
     /// #1355: dch README "dch --xray <n> --search <text> --json"; the text is checked by DchCtl.searchOK first.
     func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
+    /// #1410: a local name takes the text on stdin ("-" in argv, dch 1.83.0), so it never shows in ps; a remote one keeps
+    /// it in argv (dch reads "-" there as the text itself; the serve path hides it). shortcut: dch 1.83.0 reads no stdin for
+    /// a local name with ":", so that one keeps argv too; drop the colon test once the pin reaches dch 1.84.0.
+    func viaStdin(_ text: String) -> (arg: String, stdin: Data?) {
+        dir == nil || name.contains(":") ? (text, nil) : ("-", Data((text + "\n").utf8))
+    }
     var env: [String: String] { AgentIsland.listEnv(dir: dir ?? DchCommand.defaultSocketDir) }
 }
 
@@ -104,14 +110,19 @@ final class XrayPanels: ObservableObject {
     /// One dch run: (path, argv, env) -> (exit status, stdout); -1 when it never ran or timed out.
     typealias Run = @Sendable (_ path: String, _ args: [String], _ env: [String: String]) async -> (status: Int32, out: Data)
 
+    /// #1410: the bytes `run` writes to the child's stdin, bound around one call (XrayTarget.viaStdin); nil: none.
+    nonisolated static let stdin = TaskLocal<Data?>(wrappedValue: nil)
+
     /// The product's: the shared runCapturingBoth, bounded like a Remote Terminal call. Never under XCTest (rows put a
     /// fake here; no row runs a real dch).
     static var run: Run = { path, args, env in
         guard NSClassFromString("XCTestCase") == nil else { return (-1, Data()) }
-        let child = XrayChild()   // #1368: a cancelled read (panel closed, session switched) SIGTERMs its dch
+        let child = XrayChild(), input = XrayPanels.stdin.get()   // #1368: a cancelled read (panel closed, session switched) SIGTERMs its dch
         return await withTaskCancellationHandler {
             await withCheckedContinuation { c in
-                DispatchQueue.global(qos: .utility).async { c.resume(returning: runBounded(child, path, args, env, outputLimit: maxReadBytes)) }
+                DispatchQueue.global(qos: .utility).async {
+                    c.resume(returning: runBounded(child, path, args, env, outputLimit: maxReadBytes, stdin: input))
+                }
             }
         } onCancel: { child.cancel() }
     }
@@ -128,11 +139,11 @@ final class XrayPanels: ObservableObject {
     /// child (#1380) and on `bounded`, so neither a cancel nor the timeout signals a reaped dch's pid (R1380-s1).
     nonisolated static func runBounded(_ child: XrayChild, _ path: String, _ args: [String], _ env: [String: String],
                            timeout: TimeInterval = DchCommand.remoteTimeout, outputLimit: Int? = nil,
-                           terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill) -> (status: Int32, out: Data) {
+                           terminate: @escaping @Sendable (pid_t) -> Void = DchCommand.sigkill, stdin: Data? = nil) -> (status: Int32, out: Data) {
         let r = DchCommand.bounded(timeout, terminate: terminate) { onPid, onExit in
             DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: { onPid($0); child.started($0) },
                                         onExit: { onExit(); child.reaped() },
-                                        outputLimit: outputLimit.map { ($0, terminate) })
+                                        outputLimit: outputLimit.map { ($0, terminate) }, stdin: stdin)
         }
         return r.map { ($0.status, $0.out) } ?? (-1, Data())
     }

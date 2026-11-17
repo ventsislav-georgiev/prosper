@@ -311,7 +311,6 @@ final class DchCtlTests: XCTestCase {
             ["--xray", "alpha", "--ref", "x", "--scope", "session", "--full", "--json"],
             ["--xray", "alpha", "--scope", "project", "--ref", "x", "--json"], ["--xray", "alpha", "--ref", "x", "--scope", "all", "--json"],
             ["--xray", "alpha", "--ref", "naïve é ✓", "--json"], ["--xray", "alpha", "--ref", long, "--json"],
-            ["--xray", "alpha", "--ref", "-k", "--json"], ["--xray", "alpha", "--ref", "--follow", "--json"],
             ["--xray", "alpha", "--ref", "x", "--budget-ms", "50", "--json"], ["--xray", "alpha", "--budget-ms", "300", "--ref", "x", "--json"],
             ["--xray", "alpha", "--follow", "--json"], ["--xray", "alpha", "--json", "--follow"],
             ["--xray", "alpha", "--chapter", "0", "--json"], ["--xray", "alpha", "--chapter", "c3:turn_12.a-b", "--json"],
@@ -354,6 +353,11 @@ final class DchCtlTests: XCTestCase {
                     "a\u{200e}", "a\u{200f}", "a\u{202a}", "a\u{202e}b", "a\u{2066}", "a\u{2069}"] {
             XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", bad, "--json"], create: true), DchCtl.refText, bad.debugDescription)
         }
+        // R1348-i1: red with the hasPrefix("-") guard gone ("-" and "-x" pass refOK); the phone path's stdin is /dev/null
+        for bad in ["-", "-x", "-k", "--follow", "--json"] {
+            XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", bad, "--json"], create: true), DchCtl.refText, bad.debugDescription)
+        }
+        XCTAssertNil(DchCtl.refusal(["--xray", "alpha", "--ref", "a-b", "--json"], create: true), "a dash inside the text runs")
         for bad in ["49", "301", "0", "", "1e2", "0050", "-50", "100.0", "abc", "\u{FF15}0"] {
             XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", "x", "--budget-ms", bad, "--json"], create: true), DchCtl.budgetRange,
                            bad.debugDescription)

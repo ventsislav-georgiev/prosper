@@ -87,7 +87,8 @@ final class XrayRefPopoverTests: XCTestCase {
             XCTAssertEqual(cards.sizes, [CGSize(width: 380 * scale, height: 360 * scale)], "once, 380x360\u{00B7}s at \(scale)")
             XCTAssertEqual(p.refCard?.text, "#12")
             await panels.refReading?.value
-            XCTAssertEqual(run.calls, [["--xray", "api", "--ref", "#12", "--scope", "project", "--full", "--json"]])
+            XCTAssertEqual(run.calls, [["--xray", "api", "--ref", "-", "--scope", "project", "--full", "--json"]])
+            XCTAssertEqual(run.stdins, ["#12\n"], "#1410: the ref on stdin")
             XCTAssertEqual(p.refContext?.ref, "#12")
         }
         // A text runRef refuses: the card still opens (its header is the row's) and says why; nothing runs.
@@ -171,7 +172,8 @@ final class XrayRefPopoverTests: XCTestCase {
         XCTAssertEqual(p.tab, .search)
         XCTAssertEqual(p.query, "#12")
         await p.reading?.value
-        XCTAssertEqual(run.calls.last, ["--xray", "api", "--search", "#12", "--json"])
+        XCTAssertEqual(run.calls.last, ["--xray", "api", "--search", "-", "--json"])
+        XCTAssertEqual(run.stdins.last, "#12\n", "#1410: the query on stdin")
     }
 
     /// Red with M3a (the close does not cancel): the presenter's close and Esc each cancel the read in flight; a replaced

@@ -1634,6 +1634,8 @@ tag from the now-released section and put it on the new top draft.
   never started no longer closes the form or takes the keys when you have edited the form since; the
   form keeps your edits and says the session started after all. Reopening the form also forgets that
   earlier start. (#1434)
+- X-ray Search and ref cards no longer put your search text on the dch command line for a local
+  session, so other users on the Mac cannot see it in the process list. (#1410)
 
 ## v2.174.0
 

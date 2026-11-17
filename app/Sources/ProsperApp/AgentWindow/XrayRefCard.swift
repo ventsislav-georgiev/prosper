@@ -238,18 +238,21 @@ extension XrayTarget {
 
 extension XrayPanels {
     /// #1416: one --ref read. A text DchCtl.refOK refuses, or one starting with "-" (dch would read it as a flag), runs
-    /// nothing and returns false. A new read cancels the one in flight (the product runner SIGTERMs its dch).
+    /// nothing and returns false. A new read cancels the one in flight (the product runner SIGTERMs its dch). #1410: a
+    /// local text goes on stdin, where dch counts its newline in the 256 bytes: over 255 runs nothing (a remote keeps 256).
     /// shortcut: one --ref for the app, not per window; the card is a transient popover (a click or key in another
     /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
     @discardableResult
     func runRef(_ text: String, for m: XrayPanelModel) -> Bool {
-        guard DchCtl.refOK(text), !text.hasPrefix("-"), let dch = m.dch, let run = m.run else { return false }
+        let (arg, input) = m.target.viaStdin(text)   // #1410: on stdin dch's 256 bytes count the newline
+        guard DchCtl.refOK(text), !text.hasPrefix("-"), input.map({ $0.count <= 256 }) ?? true, let dch = m.dch,
+              let run = m.run else { return false }
         closeRef()
         m.refContext = nil
         m.refNote = nil
-        let a = m.target.refArgs(text), env = m.target.env
+        let a = m.target.refArgs(arg), env = m.target.env
         refReading = Task { [weak m] in
-            let r = await run(dch, a, env)
+            let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
             m.takeRef(r, text: text)
         }
