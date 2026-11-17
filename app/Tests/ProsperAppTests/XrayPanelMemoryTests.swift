@@ -89,9 +89,12 @@ final class XrayPanelMemoryTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             XCTAssertGreaterThan(host.fittingSize.height, 0)
         }
-        // "Read the prompt" with no transcript (Terminal mode, remote): the card again, never a jump.
+        // "Read the prompt" with no transcript (Terminal mode, remote) and no chapters read: the memory card again with
+        // the note (#1472: never nothing), never a jump.
         p.readPrompt(m1)
-        XCTAssertEqual(shown.cards.count, 1, "a refused jump leaves the open card as it is")
+        XCTAssertEqual(shown.cards, [XrayMemoryCard.size, XrayMemoryCard.size], "the memory card again")
+        XCTAssertEqual(p.memoryCard, m1)
+        XCTAssertTrue(p.chapterCard == nil, "no chapter to show")
     }
 
     /// Red at TIP: matches had no memory form; with memory-filter-ignores-body "Second line" finds nothing.

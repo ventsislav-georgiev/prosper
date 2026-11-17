@@ -111,7 +111,16 @@ final class XrayPanels: ObservableObject {
         m.transcript = { Self.transcript(pane, target) }
         m.fromDch = { Self.chaptersRead(pane, target) }
         m.openURL = { Self.model(pane)?.openURL($0) }
-        m.cwd = { Self.model(pane)?.focusedRuntime?.transcript.cwd }
+        m.cwd = { Self.cwd(pane, target) }
+    }
+
+    /// The transcript model's cwd; #1472: without one (Terminal mode, a remote row) dch's, from the row that shows
+    /// `target` (AgentSession.cwd from dch's list, a remote row's cwd); "" (dch did not say) is none.
+    static func cwd(_ pane: UUID, _ target: XrayTarget) -> String? {
+        guard let m = model(pane) else { return nil }
+        if let c = m.focusedRuntime?.transcript.cwd { return c }
+        guard let r = m.selectedRow, XrayTarget.of(r) == target else { return nil }
+        return [r.session?.cwd, r.remote?.cwd ?? nil].compactMap { $0 }.first { !$0.isEmpty }
     }
 
     /// One dch run: (path, argv, env) -> (exit status, stdout); -1 when it never ran or timed out.
@@ -209,6 +218,12 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var card: XrayTasks.Task?
     /// #1352: the memory whose card was asked for last.
     @Published private(set) var memoryCard: XrayMemory.Item?
+    /// #1472: the chapter whose card was asked for last (no transcript: a Prompts or Responses row, Read the prompt).
+    @Published private(set) var chapterCard: TranscriptOutline.Chapter?
+    /// #1472: dch's chapter anchors to their `i` (ordinal), from the open read's chapters.
+    /// shortcut: the open read only (a poll's takeChapters keeps no anchors), so a prompt newer than the open gets the
+    /// memory card's note; upgrade by carrying `anchor` in XrayChapters.parse.
+    var chapterAnchors: [String: Int] = [:]
     var reading: Task<Void, Never>?   // the open read or a poll (XrayPoller.swift)
     /// #1368: the poller's state (XrayPoller.swift): the read's dch and runner, when the last read started, the dch
     /// path's mtime after a failed read (no retry until it moves), exit 4/7's "host unreachable", the ticker's stop.
@@ -294,6 +309,7 @@ final class XrayPanelModel: ObservableObject {
         take(tr)
         takeMemory(mr)
         if let kr { if refsOnly { takeRefs(kr) } else { takeChapters(kr) } }
+        if let kr, !refsOnly, kr.status == 0 { chapterAnchors = Self.anchors(kr.out) }   // #1472: Read the prompt's card
         loaded = true
         if let fallback, tasks == nil {
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
@@ -423,6 +439,8 @@ final class XrayPanelModel: ObservableObject {
 
     /// #1352, design 3.3: "older than the loaded part", shown with the card when the prompt is above what can load.
     static let olderNote = "The prompt is older than the loaded part."
+    /// #1472: Read the prompt with no transcript, for a prompt dch's chapters read does not hold (not read, newer, gone).
+    static let notReadNote = "The prompt is not among the chapters read."
 
     /// Return or a click on a task row: the prompt that last changed it (`chapter`, never `created_chapter`); no
     /// chapter, no transcript (Terminal mode, remote) or a refused anchor: the card; too old: the card with the note.
@@ -443,8 +461,15 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// The card's "Read the prompt": the card goes and the transcript jumps; else the card stays (with the note when old).
+    /// #1472: without a transcript (Terminal mode, remote) the prompt's chapter card; a prompt not among the chapters
+    /// read: the memory card again with the note, never nothing.
     func readPrompt(_ m: XrayMemory.Item) {
         guard XrayMemoryCard.canRead(m) else { return }
+        guard transcript() != nil else {
+            let i = m.chapter.flatMap { chapterAnchors[$0] }
+            guard let c = dchChapters?.last(where: { $0.ordinal == i }) else { return openMemoryCard(m, note: Self.notReadNote) }
+            return openChapterCard(c)
+        }
         go(m.chapter) { [weak self] older in if older { self?.openMemoryCard(m, note: Self.olderNote) } }
     }
 
@@ -510,10 +535,37 @@ final class XrayPanelModel: ObservableObject {
         return out
     }
 
-    /// Return or a click on a Prompts or Responses row: the pane's transcript jumps to that chapter (#1319's seam).
+    /// Return or a click on a Prompts or Responses row: the pane's transcript jumps to that chapter (#1319's seam);
+    /// #1472: no transcript (Terminal mode, remote): the chapter's card.
     func activate(_ c: TranscriptOutline.Chapter) {
-        guard let tm = transcript() else { return }
+        guard let tm = transcript() else { return openChapterCard(c) }
         TranscriptJumper.of(tm).jump(to: c)
+    }
+
+    /// #1472: the prompt and its response through the window's presenter, as the memory card.
+    func openChapterCard(_ c: TranscriptOutline.Chapter) {
+        chapterCard = c
+        present(AnyView(XrayChapterCard(chapter: c, refs: refs?.entries ?? [],
+                                        link: { [weak self] in self?.openLink($0) ?? .discarded })), XrayChapterCard.size)
+    }
+
+    /// #1472: a link in the chapter card (XrayRefScope's rule for the transcript's): a ref of this panel's read opens
+    /// its ref card; http/https go to the system; anything else is dropped.
+    func openLink(_ url: URL) -> XrayRefLink.Outcome {
+        XrayRefLink.open(url, refs: refs) { [weak self] in self?.openRef($0) }
+    }
+
+    /// #1472: dch's `anchor` -> `i` for each chapter, by XrayChapters.parse's rules (schema 1, the newest maxRows, `i`
+    /// else the place in the list); empty for anything else.
+    static func anchors(_ data: Data) -> [String: Int] {
+        guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return [:] }
+        var out: [String: Int] = [:]
+        for (k, c) in list.suffix(XrayChapters.maxRows).compactMap({ $0 as? [String: Any] }).enumerated() {
+            guard let a = c["anchor"] as? String else { continue }
+            out[a] = (c["i"] as? Int).flatMap { (1...Int(Int32.max)).contains($0) ? $0 : nil } ?? k + 1
+        }
+        return out
     }
 
     // MARK: #1352 Memory
@@ -981,7 +1033,8 @@ struct XrayTaskRowView: View {
     }
 }
 
-/// #1354: a Prompts or Responses row; a click (or Return / Space with VoiceOver) jumps to its chapter.
+/// #1354: a Prompts or Responses row; a click (or Return / Space with VoiceOver) jumps to its chapter (#1472: or,
+/// with no transcript, opens its card).
 struct XrayPromptRowView: View {
     let row: XrayPromptRow
     let open: () -> Void

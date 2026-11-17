@@ -1715,6 +1715,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island has its own colours again by default (white on the black notch, as before it followed
   the theme); turn on Settings > Agent Island > Look > Follow theme to draw its History rows, prompt
   cards and message field in your theme's colours. (#1452)
+- Clicking a prompt or a response in X-ray in Terminal mode opens it in a card with the prompt
+  and its response, and "Read the prompt" on a memory card opens that prompt's card instead of doing
+  nothing. (#1472)
 
 ## v2.174.0
 
