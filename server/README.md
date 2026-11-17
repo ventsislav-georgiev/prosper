@@ -30,7 +30,7 @@ About list.
 | `src/account.ts` | `/activate`, `/devices`, `/account/delete` |
 | `src/sync.ts` | settings sync (`GET`/`PUT /sync`, optimistic concurrency) |
 | `src/payment.ts` | Lemon Squeezy webhook (`/payment/lemonsqueezy`) |
-| `src/market.ts` | extension marketplace (`/market/*`) |
+| `src/market.ts` | extension, theme and kit marketplace (`/market/*`; unfiltered browse hides kits unless `kits=1`) |
 | `src/jwt.ts` | Ed25519 (EdDSA) supporter-token signing via WebCrypto |
 | `migrations/0001_init.sql` | D1 schema |
 | `migrations/0002_supporter.sql` | supporter name column + index |

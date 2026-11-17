@@ -120,7 +120,11 @@ async function publish(c: Ctx) {
 
   // Category + look-and-feel preview are client-computed (the app already parsed
   // the manifest + theme.json). The server treats both as opaque metadata.
-  const kind = body.kind === "theme" ? "theme" : "extension";
+  const kind = body.kind === "theme" || body.kind === "kit" ? body.kind : "extension";
+  // A kit is listed by its preview; refuse before any D1/KV work.
+  if (kind === "kit" && (typeof body.preview !== "object" || body.preview === null || Array.isArray(body.preview))) {
+    return c.json({ error: "kit_preview_missing" }, 400);
+  }
   const preview = body.preview != null ? JSON.stringify(body.preview) : null;
   // Preview is shown to every browser pre-install — cap it so a publish can't
   // bloat the row / browse payload. 16 KB fits many themes' flat color maps.
@@ -261,8 +265,9 @@ async function index(c: Ctx) {
   return c.json({ packages: rows.results });
 }
 
-// GET /market/packages?q=&sort=&cursor=&kind= — browse/search. `kind` filters to
-// 'theme' or 'extension' (omit for all).
+// GET /market/packages?q=&sort=&cursor=&kind=&kits= — browse/search. `kind` filters to
+// 'theme', 'extension' or 'kit'. Without a kind, kits are hidden unless kits=1, so
+// released apps (which cannot decode a kit preview) never get a kit row.
 async function listPackages(c: Ctx) {
   const q = (c.req.query("q") ?? "").trim();
   const sort = c.req.query("sort") === "downloads" ? "downloads" : "updated_at";
@@ -277,9 +282,11 @@ async function listPackages(c: Ctx) {
     binds.push(`%${q}%`);
     where.push(`(title LIKE ?${binds.length} OR description LIKE ?${binds.length} OR author LIKE ?${binds.length} OR id LIKE ?${binds.length})`);
   }
-  if (kind === "theme" || kind === "extension") {
+  if (kind === "theme" || kind === "extension" || kind === "kit") {
     binds.push(kind);
     where.push(`kind = ?${binds.length}`);
+  } else if (c.req.query("kits") !== "1") {
+    where.push(`kind IN ('theme', 'extension')`);
   }
   binds.push(limit, offset);
   const stmt = c.env.DB.prepare(

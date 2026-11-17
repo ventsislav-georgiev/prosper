@@ -145,13 +145,14 @@ function setup() {
     const text = await r.text();
     return { status: r.status, text, json: JSON.parse(text) };
   };
-  const publish = (email, id, version = "1.0.0", blob = gzipSync(cleanTar(id, version))) =>
+  const publish = (email, id, version = "1.0.0", blob = gzipSync(cleanTar(id, version)), extra = {}) =>
     req("/publish", {
       method: "POST",
       headers: { Authorization: `Bearer ${TOKEN[email]}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         manifest: { id, version, name: id, title: `T ${id}`, author: "Example Author", description: "d" },
         blob: Buffer.from(blob).toString("base64"),
+        ...extra,
       }),
     });
   return { raw, env, kv, log, req, publish };
@@ -178,6 +179,7 @@ test("no public route body contains the publisher e-mail", async () => {
   await t.publish(PUB, "com.example.one");
   await t.publish(PUB, "com.example.one", "1.1.0");
   await t.publish(PUB, "com.example.two");
+  await t.publish(PUB, "com.example.kit", "1.0.0", undefined, { kind: "kit", preview: { pieces: [] } });
   const paths = [
     "/index",
     "/packages",
@@ -185,6 +187,9 @@ test("no public route body contains the publisher e-mail", async () => {
     "/packages?q=example",
     "/packages?q=publisher",
     "/packages?kind=extension",
+    "/packages?kind=kit",
+    "/packages?kits=1",
+    "/packages/com.example.kit",
     "/packages/com.example.one",
     "/packages/com.example.two",
     "/download/com.example.one/1.0.0",
@@ -821,4 +826,68 @@ test("publish body: a body stream that is already locked reads as an empty body,
   assert.deepEqual(JSON.parse(r.text), { error: "invalid_body" });
   assert.deepEqual(marketSql(t), [], "no market D1 statement");
   assert.equal(t.kv.size, 0, "no KV write");
+});
+
+// #919 S1: the kit kind.
+const KIT = { kind: "kit", preview: { pieces: ["a"] } };
+const kindsOf = (r) => r.json.packages.map((p) => `${p.id}:${p.kind}`).sort();
+async function withKit() {
+  const t = setup();
+  await t.publish(PUB, "com.example.theme", "1.0.0", undefined, { kind: "theme", preview: { themes: [] } });
+  await t.publish(PUB, "com.example.ext");
+  const r = await t.publish(PUB, "com.example.kit", "1.0.0", undefined, KIT);
+  return { t, r };
+}
+
+test("kit publish: stored and answered as kind kit; an unknown kind is still an extension", async () => {
+  const { t, r } = await withKit();
+  assert.equal(r.status, 200);
+  assert.equal(r.json.kind, "kit");
+  assert.equal(t.raw.prepare(`SELECT kind FROM packages WHERE id = ?`).get("com.example.kit").kind, "kit");
+  const b = await t.publish(PUB, "com.example.bogus", "1.0.0", undefined, { kind: "bogus" });
+  assert.equal(b.json.kind, "extension");
+});
+
+test("browse: kind=kit lists only kits; kind=extension and no kind hide them; kits=1 adds them", async () => {
+  const { t } = await withKit();
+  assert.deepEqual(kindsOf(await t.req("/packages?kind=kit")), ["com.example.kit:kit"]);
+  assert.deepEqual(kindsOf(await t.req("/packages?kind=extension")), ["com.example.ext:extension"]);
+  assert.deepEqual(kindsOf(await t.req("/packages")), ["com.example.ext:extension", "com.example.theme:theme"]);
+  assert.deepEqual(kindsOf(await t.req("/packages?kits=1")), ["com.example.ext:extension", "com.example.kit:kit", "com.example.theme:theme"]);
+});
+
+test("kit detail carries kind kit and the decoded preview", async () => {
+  const { t } = await withKit();
+  const d = await t.req("/packages/com.example.kit");
+  assert.equal(d.json.package.kind, "kit");
+  assert.deepEqual(d.json.package.preview, KIT.preview);
+});
+
+test("kit publish without a preview object is 400 kit_preview_missing: string-only body, no D1 statement, no KV put", async () => {
+  for (const preview of [undefined, null, "x", 5, []]) {
+    const t = setup();
+    const r = await t.publish(PUB, "com.example.kit", "1.0.0", undefined, { kind: "kit", preview });
+    assert.equal(r.status, 400);
+    assert.equal(r.json.error, "kit_preview_missing");
+    assert.ok(Object.values(r.json).every((v) => typeof v === "string"));
+    assert.deepEqual(marketSql(t), []);
+    assert.equal(t.kv.size, 0);
+  }
+});
+
+test("kit preview over 16384 is 413 preview_too_large, string-only, no D1 or KV", async () => {
+  const t = setup();
+  const r = await t.publish(PUB, "com.example.kit", "1.0.0", undefined, { kind: "kit", preview: { c: "x".repeat(16_400) } });
+  assert.equal(r.status, 413);
+  assert.equal(r.json.error, "preview_too_large");
+  assert.ok(Object.values(r.json).every((v) => typeof v === "string"));
+  assert.deepEqual(marketSql(t), []);
+  assert.equal(t.kv.size, 0);
+});
+
+test("a kit publish spends the same D1 statements and KV puts as an extension publish", async () => {
+  const t = setup();
+  assert.equal((await t.publish(PUB, "com.example.kit", "1.0.0", undefined, KIT)).status, 200);
+  assert.equal(t.log.length, 5);
+  assert.deepEqual([...t.kv.keys()].sort(), ["pkg:com.example.kit:1.0.0", `rl:publish:${PUB}`]);
 });
