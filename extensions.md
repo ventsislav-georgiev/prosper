@@ -365,6 +365,8 @@ placement = "sidebar"     # "sidebar" (own entry, default) | "inline" (within Ex
 dynamic   = true          # deliver row events to settings_action so you can react live
 ```
 
+The section id `kit` is reserved: an Agent Kit extension's own Settings tab uses it. A section with that exact id is ignored and a warning is logged, and the rest of the extension loads.
+
 **Tier-A** — static `[[contributes.settings_sections.controls]]` rows, no Lua. **Tier-B** — Lua renders the rows:
 
 ```lua
