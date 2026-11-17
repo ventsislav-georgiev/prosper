@@ -185,14 +185,19 @@ enum KitValidator {
     /// #920: the agent file's frontmatter `name:` value. frontmatter false: the text does not start with a `---` line or no
     /// `---` line closes it. name nil: no `name:` line in it. One pair of matching quotes around the value is dropped.
     /// Read only: the file is installed as the kit ships it, never rewritten from this.
-    static func agentName(_ text: String) -> (frontmatter: Bool, name: String?) {
+    static func agentName(_ text: String) -> (frontmatter: Bool, name: String?, second: Bool) {
         // "\r\n" is one Character in Swift: split on it too, or a CRLF file reads as one line
         let lines = text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" })
-        guard lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---") else { return (false, nil) }
-        guard let line = lines[1..<close].first(where: { $0.hasPrefix("name:") }) else { return (true, nil) }
-        var v = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+        guard lines.first == "---", let close = lines.dropFirst().firstIndex(of: "---") else { return (false, nil, false) }
+        // top-level key lines whose key, quotes and spaces before the colon stripped, is name (`"name": b`, `name : b`)
+        let named = lines[1..<close].filter { l in
+            guard let c = l.firstIndex(of: ":"), l.first != " ", l.first != "\t" else { return false }
+            return l[..<c].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'")) == "name"
+        }
+        guard let line = named.first else { return (true, nil, false) }
+        var v = line[line.index(after: line.firstIndex(of: ":")!)...].trimmingCharacters(in: .whitespaces)
         if v.count >= 2, let q = v.first, q == "\"" || q == "'", v.last == q { v = String(v.dropFirst().dropLast()) }
-        return (true, v)
+        return (true, v, named.count > 1)
     }
 
     /// Level-2 heading texts, lowercased, outside fences; a closing `#` run is dropped.
@@ -432,6 +437,7 @@ enum KitValidator {
                     let text = String(decoding: data, as: UTF8.self)
                     let fm = KitValidator.agentName(text)
                     guard fm.frontmatter else { refuse(r, .agentNoFrontmatter); continue }
+                    guard !fm.second else { refuse(r, .agentSecondName); continue }
                     guard fm.name == agent else { refuse(r, .agentNameMismatch); continue }
                     // the staged copy renders every *.md: a file with no placeholder renders to its own bytes
                     if KitRenderContext.placeholderKeys.contains(where: { text.contains($0) }) { refuse(r, .agentPlaceholder); continue }

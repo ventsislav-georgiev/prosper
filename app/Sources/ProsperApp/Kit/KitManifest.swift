@@ -146,6 +146,7 @@ enum KitReason: String, Sendable, CaseIterable {
     // agents (#920)
     case badAgentName = "an agent file is <name>.md with name [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case agentNoFrontmatter = "an agent file starts with a --- frontmatter block that a --- line closes"
+    case agentSecondName = "an agent frontmatter has one name: key (a quoted or spaced second one is refused too)"
     case agentNameMismatch = "the agent frontmatter name: must equal the file name without .md"
     case agentTooLarge = "an agent file is at most 256 KiB"
     case tooManyAgents = "a kit ships at most 32 agent files"

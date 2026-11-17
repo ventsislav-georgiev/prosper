@@ -45,7 +45,9 @@ extension KitStore {
                 let dir = try fs.openDir(path)
                 for a in planned { notes += installAgent(a, from: kitDir, in: dir, record: &record) }
             } catch {
-                notes.append("agents: \(Self.agentsDir(claude)): \(error)")
+                // O_NOFOLLOW | O_DIRECTORY answers ENOTDIR for a link on macOS, so ask lstat rather than read the error
+                let why = fs.kind(Self.agentsDir(claude)) == .symlink ? "is a link; Prosper does not write through links" : "cannot be used: \(error)"
+                notes.append("agents: not installed: \(Self.agentsDir(claude)) \(why)")
             }
         }
         do { try writeAgentRecord(record) } catch { notes.append("agents.json: \(error)") }

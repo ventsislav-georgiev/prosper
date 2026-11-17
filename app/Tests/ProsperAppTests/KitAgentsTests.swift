@@ -54,9 +54,11 @@ final class KitAgentsTests: XCTestCase {
     }
 
     /// A kit source with a permissions piece and an agents piece shipping `agents` (file name -> text).
-    private func source(_ e: Env, agents: [String: String] = ["worker-example-high.md": high, "worker-example-low.md": low]) throws -> LoadedExtension {
-        let dir = e.root.appendingPathComponent("sources/agents-kit", isDirectory: true)
+    private func source(_ e: Env, version: String = "1.0.0",
+                        agents: [String: String] = ["worker-example-high.md": high, "worker-example-low.md": low]) throws -> LoadedExtension {
+        let dir = e.root.appendingPathComponent("sources/agents-kit-\(version)", isDirectory: true)
         let head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(Self.ext)\"")
+            .replacingOccurrences(of: "\"1.0.0\"", with: "\"\(version)\"")
             .replacingOccurrences(of: "\"2.170.0\"", with: "\"0.0.1\"") // any host the test bundle reports loads it
         var files = ["extension.toml": head + "\n" + Self.kit + "\n", "README.md": KitDirFixture.readme, "init.lua": "return {}\n"]
         for (name, text) in agents { files["agents/" + name] = text }
@@ -146,6 +148,42 @@ final class KitAgentsTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: e.agent("other-agent")), other, "a file the kit never wrote stays")
     }
 
+    func testAnEditedAgentSurvivesANewVersionWhileAnUneditedSiblingIsUpdated() async throws {
+        let e = try env()
+        let rt = try runtime(e)
+        let v1 = try source(e, version: "1.0.0")
+        _ = await rt.apply(v1)
+        let edited = Data((Self.high + "\nmy own line\n").utf8)
+        try edited.write(to: e.agent("worker-example-high"))
+        let high2 = Self.high + "\nversion two\n", low2 = Self.low + "version two\n"
+        let v2 = try source(e, version: "2.0.0", agents: ["worker-example-high.md": high2, "worker-example-low.md": low2])
+        let r = await rt.apply(v2)
+        XCTAssertEqual(r.state?.live.version, "2.0.0")
+        XCTAssertEqual(try Data(contentsOf: e.agent("worker-example-high")), edited, "the person's edit is kept")
+        XCTAssertEqual(try Data(contentsOf: e.agent("worker-example-low")), Data(low2.utf8), "the unedited sibling gets v2's bytes")
+        XCTAssertTrue(r.notes.contains { $0.contains("kept ") && $0.contains("worker-example-high.md") }, "\(r.notes)")
+        XCTAssertTrue(rt.status(v2)?.agents["workers"]?.contains("worker-example-high.md edited") == true, "\(String(describing: rt.status(v2)?.agents))")
+    }
+
+    // MARK: a linked agents folder
+
+    func testASymlinkedAgentsFolderIsNotFollowed() async throws {
+        let e = try env()
+        let target = e.root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: e.agents, withDestinationURL: target)
+        let rt = try runtime(e)
+        let ext = try source(e)
+        let r = await rt.apply(ext)
+        XCTAssertEqual(r.failures, [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: target.path), [], "nothing is written in the target")
+        let notes = r.notes.filter { $0.hasPrefix("agents:") }
+        XCTAssertEqual(notes.count, 1, "\(r.notes)")
+        XCTAssertTrue(notes.first?.contains("is a link; Prosper does not write through links") == true, "\(notes)")
+        let record = try Data(contentsOf: URL(fileURLWithPath: rt.store.agentsRecordPath))
+        XCTAssertEqual(try JSONDecoder().decode([String: KitStore.AgentRecord].self, from: record), [:], "the record is empty")
+    }
+
     // MARK: validator
 
     private func refusals(_ v: KitValidation) -> [KitRefusal] {
@@ -175,6 +213,22 @@ final class KitAgentsTests: XCTestCase {
             XCTAssertTrue(got.contains(KitRefusal(subject: subject, reason: reason)), "\(subject) \(reason): \(got)")
         }
         XCTAssertFalse(got.contains { $0.subject == "agents/worker-example-high.md" }, "the good file is not refused: \(got)")
+    }
+
+    func testASecondNameKeyIsRefused() throws {
+        let f = try makeKitDir()
+        let kit = KitFixture.kit(replacing: "\n[[contributes.kit.settings]]",
+                                 with: "\n[[contributes.kit.pieces]]\nid   = \"workers\"\nkind = \"agents\"\n\n[[contributes.kit.settings]]")
+        try f.write("agents/worker-quoted.md", "---\nname: worker-quoted\n\"name\": other\n---\n")
+        try f.write("agents/worker-spaced.md", "---\nname: worker-spaced\nname : other\n---\n")
+        try f.write("agents/worker-single.md", "---\nname: worker-single\ndescription: name: not a key\n  name: indented\n---\n")
+        let got = refusals(try f.validate(kit))
+        for n in ["worker-quoted", "worker-spaced"] {
+            XCTAssertTrue(got.contains(KitRefusal(subject: "agents/\(n).md", reason: .agentSecondName)), "\(n): \(got)")
+        }
+        XCTAssertFalse(got.contains { $0.subject == "agents/worker-single.md" }, "\(got)")
+        XCTAssertTrue(KitValidator.agentName("---\n'name': a\nname:b\n---\n").second)
+        XCTAssertEqual(KitValidator.agentName("---\nname : a\n---\n").name, "a", "a spaced key is the name")
     }
 
     func testAgentNameReadsOnlyTheFrontmatter() {
