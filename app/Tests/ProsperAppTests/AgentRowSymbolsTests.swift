@@ -145,17 +145,17 @@ extension AgentWindowD1Tests {
         // #1360: every cell's agents group is outlined, its capsule's padding (sz(4) each side) in the line's width, so
         // the count gives way sooner: from TIP's prints plus 2 * sz(4) (BADGE1268C-FIT reads the new widths).
         let drops: [Int: [CGFloat: Set<String>]] = [
-            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm).subtracting(["Working", "Exiting\u{2026}"])],   // #1453: the robot group is narrower than the people symbol was, so two more states keep the count at 1.0
             9_999: [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(["Idle"]), 1.0: all.subtracting(calm)],
             99_999: [0.7: all, 0.85: all, 1.0: all],
         ]
         // The cells drawn cut, per (digits as printed, scale).
         let cuts: [String: [CGFloat: Set<String>]] = [
-            "999": [0.7: [relaunching, first], 0.85: [relaunching, first], 1.0: [relaunching, first]],
-            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}", "Starting\u{2026}", "Stopping\u{2026}", first],
+            "999": [0.7: [relaunching, first], 0.85: [relaunching, first], 1.0: [first]],   // #1453: "Relaunching" now fits at 1.0
+            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}", first],   // #1453: "Sending" and "Starting" now fit
                      0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}", first],
                      1.0: ["Needs input", relaunching, "Restarting\u{2026}", first]],
-            "99999": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm),
+            "99999": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm).subtracting(["Working"]),   // #1453: "Working" now fits at 0.85
                       1.0: ["Needs input", "Pausing\u{2026}", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}",
                             "Starting\u{2026}", "Stopping\u{2026}", first]],
             "99999+": [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],

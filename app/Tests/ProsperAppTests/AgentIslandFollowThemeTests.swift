@@ -332,6 +332,47 @@ final class AgentIslandFollowThemeTests: XCTestCase {
         return ((c.redComponent, c.greenComponent, c.blueComponent, 1), top)
     }
 
+    /// The brightest pixel of `v` drawn over black in a never-shown host (no file): the ink as the renderer composites it.
+    func brightest<V: View>(_ v: V) throws -> RGBA {
+        let size = CGSize(width: 30, height: 30)
+        let h = NSHostingView(rootView: ZStack { Color.black; v }.frame(width: size.width, height: size.height))
+        h.frame = CGRect(origin: .zero, size: size)
+        h.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        h.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+        h.cacheDisplay(in: h.bounds, to: rep)
+        var top: RGBA = (0, 0, 0, 1)
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if p.redComponent + p.greenComponent + p.blueComponent > top.r + top.g + top.b { top = (p.redComponent, p.greenComponent, p.blueComponent, 1) }
+            }
+        }
+        return top
+    }
+
+    /// R1452b-r1 (#1453 rider): Follow theme off, on a dark and a light theme, the island card's state mark is AgentState's own
+    /// colour (= AgentIslandInk.glyph(s) off) for every state, not the row's quiet `mark` ink: the mark of the row drawn with
+    /// the card's inks has the brightest pixel of the same glyph drawn directly in AgentIslandInk.glyph(s) (the same
+    /// renderer and font, so the compositing is the same), and it is not the `mark` ink's.
+    func testOffTheCardsStateMarkIsTheStatesOwnInkOnTwoThemes() throws {
+        XCTAssertFalse(AgentIslandInk.follows, "premise: Follow theme off")
+        var marks = 0
+        try onTwoThemes { name, _ in
+            let inks = try XCTUnwrap(AgentIslandRow.inks, "\(name): off, the card has its own inks")
+            for s in AgentState.allCases {
+                let row = AgentSidebar.Row(id: .live(AgentSessionKey(dir: "/Users/example/work", name: "api")), title: "api", state: s,
+                                           detail: "", age: "", prs: [], prCount: 0, agents: 0, merged: 0)
+                let want = try brightest(Text(s.glyph).font(Neon.font(11, weight: .bold)).foregroundStyle(AgentIslandInk.glyph(s)))
+                let got = try brightest(AgentSidebarRowView(row: row, selected: false, inks: inks).stateMark)
+                XCTAssertLessThan(dist(got, want), 0.03, "\(name) \(s): the mark is AgentIslandInk.glyph: want \(want) got \(got)")
+                marks += 1
+            }
+        }
+        XCTAssertEqual(marks, 2 * AgentState.allCases.count)
+    }
+
     /// On: the session row takes the theme's inks (no own inks) and the theme's sidebar card, as #1371/#1375 drew it.
     func testOnTheSessionRowKeepsTheThemesInks() throws {
         Preferences.agentIslandFollowsTheme = true

@@ -1879,7 +1879,8 @@ struct AgentCountGroups: View {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
                     let ring = g.0 == .agents ? outline : nil
                     HStack(spacing: sz(2)) {
-                        Image(systemName: g.0.symbol).font(Neon.font(size - 1))
+                        // #1453: the sub-agents count is a robot emoji, not .agents' people symbol; the words stay the label below.
+                        if g.0 == .agents { Text("\u{1F916}").font(Neon.font(size - 1)) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
                     .padding(.horizontal, ring == nil ? 0 : sz(4))
