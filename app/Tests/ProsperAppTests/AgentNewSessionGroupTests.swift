@@ -90,7 +90,7 @@ final class AgentNewSessionGroupTests: XCTestCase {
             XCTAssertTrue(node(group.tree, AgentNewSessionView.groupChoiceLabel) != nil, "the choice with a group running")
             XCTAssertEqual(group.frames.count, 3)
             let deltas = zip(none.frames, group.frames).map { $0.minY - $1.minY }
-            XCTAssertGreaterThan(abs(deltas.first ?? 0), sz(18), "the row takes room only when shown")
+            XCTAssertGreaterThan(abs(deltas.first ?? 0), sz(9), "the row takes room only when shown (half its height: the form is centred, #1479)")
             let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
             XCTAssertEqual(Set(deltas.map { ($0 / pixel).rounded() }).count, 1, "every field by one delta: \(deltas)")
         }
@@ -272,7 +272,11 @@ final class AgentNewSessionGroupTests: XCTestCase {
                 m.setNewSessionGroup("api", sidekick: true)
                 let after = try frames()
                 XCTAssertEqual(after.count, before.count)
-                for (a, b) in zip(after, before) { d1.assertRect(a, b, accuracy: pixel, "a choice resizes nothing at \(scale)") }
+                // #1479: the form is centred, so choosing a group (which grows the form below) moves the whole column by one shift (was: nothing moved)
+                let shift = (after.last?.minY ?? 0) - (before.last?.minY ?? 0)
+                for (a, b) in zip(after, before) {
+                    d1.assertRect(a, b.offsetBy(dx: 0, dy: shift), accuracy: pixel, "a choice resizes nothing and moves the column as one at \(scale)")
+                }
                 XCTAssertTrue(spawns.calls.isEmpty)
             }
         }

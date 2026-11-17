@@ -1718,6 +1718,8 @@ tag from the now-released section and put it on the new top draft.
 - Clicking a prompt or a response in X-ray in Terminal mode opens it in a card with the prompt
   and its response, and "Read the prompt" on a memory card opens that prompt's card instead of doing
   nothing. (#1472)
+- The New session form sits in the middle of the pane (it still starts at the top and scrolls when
+  the window is short). (#1479)
 
 ## v2.174.0
 

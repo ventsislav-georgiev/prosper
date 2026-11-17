@@ -94,8 +94,8 @@ extension AgentWindowD1Tests {
 
     // MARK: T30: the one reflow
 
-    /// T30: expanding the prompt moves Start, Cancel and New shell down by one delta, sz(96) + the column's sz(6), and
-    /// nothing above moves (fields, the box); 12 typed lines keep the editor's frame; collapsing puts every row back.
+    /// T30: expanding the prompt grows the form by one delta, sz(96) + the column's sz(6); the form is centred (#1479), so
+    /// Start, Cancel and New shell move down by half of it and the fields and the box up by half (was: down by all of it, nothing above moved); 12 typed lines keep the editor's frame; collapsing puts every row back.
     @MainActor
     func testAgentWindowNewSessionFormPromptOpensByOneFixedDeltaAndTypingKeepsTheEditor() throws {
         let saved = ThemeRuntime.scale
@@ -123,15 +123,17 @@ extension AgentWindowD1Tests {
                 let frame = host.convert(editor.bounds, from: editor)
                 XCTAssertEqual(frame.height, sz(96), accuracy: pixel, "a fixed sz(96) editor at \(scale)")
                 let delta = base.start.minY - open.start.minY   // AX frames are y-up: down is a smaller minY
-                XCTAssertEqual(delta, sz(96) + sz(6), accuracy: 1, "one fixed delta at \(scale)")
+                XCTAssertEqual(delta, (sz(96) + sz(6)) / 2, accuracy: 1, "half the growth, centred, at \(scale)")
                 for (a, b, n) in [(base.cancel, open.cancel, "Cancel"), (base.shell, open.shell, "New shell")] {
                     XCTAssertEqual(a.minY - b.minY, delta, accuracy: pixel, "\(n) by the same delta at \(scale)")
                     XCTAssertEqual(a.minX, b.minX, accuracy: pixel, "\(n) not sideways at \(scale)")
                     XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(n) same size at \(scale)")
                     XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(n) same size at \(scale)")
                 }
-                assertRect(open.box, base.box, accuracy: pixel, "the box above stays at \(scale)")
-                XCTAssertEqual(formFields(host).map { host.convert($0.bounds, from: $0) }, fields, "the fields stay at \(scale)")
+                XCTAssertEqual(open.box.minY - base.box.minY, delta, accuracy: pixel, "the box above moves up by the same half at \(scale)")
+                let moved = formFields(host).map { host.convert($0.bounds, from: $0) }
+                XCTAssertEqual(moved.count, fields.count, "\(scale)")
+                for (a, b) in zip(moved, fields) { XCTAssertEqual(abs(a.minY - b.minY), delta, accuracy: pixel, "each field moves by the half at \(scale)") }
 
                 m.setNewSessionPrompt((1...12).map { "Example task line \($0)" }.joined(separator: "\n"))
                 settle(host)
@@ -297,6 +299,61 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.interaction.draft(for: a.key), "typed by hand", "a typed draft is never overwritten")
             XCTAssertEqual(island.unsentFirst[a.key], "Example task again", "kept until the draft is gone")
             XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
+    // MARK: #1479: centred when it fits, top-aligned when it scrolls
+
+    /// The form in a never-shown window of `size`, with or without the pane's ScrollView.
+    @MainActor
+    func centredFormWindow(_ m: AgentWindowModel, _ size: CGSize, scrolls: Bool) -> (AgentsNSWindow, NSView) {
+        let win = AgentsNSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.model = m
+        let host = NSHostingView(rootView: AgentDetailView(model: m, transcript: m.transcript, scrolls: scrolls)
+            .frame(width: size.width, height: size.height, alignment: .top).environment(\.colorScheme, .dark))
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        return (win, host)
+    }
+
+    /// #1479: in a tall pane the form sits in the middle: growing the pane by 200 pt moves every field down by 100 (half;
+    /// pinned to the top it would not move), the first field is well below the top, and opening the Prompt keeps the
+    /// middle (the form grows by one delta, the first field moves up by half of it). In a short pane that scrolls the form
+    /// starts at the top (the same field position at two short heights), its content is taller than the pane, and Start
+    /// is on the tree to scroll to. Host coordinates are y-down.
+    @MainActor
+    func testAgentWindowNewSessionFormIsCentredInATallPaneAndTopAlignedWhenItScrolls() throws {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
+        try withNewSessionPrefs {
+            @MainActor func firstField(_ height: CGFloat, scrolls: Bool, promptOpen: Bool = false) throws -> (top: CGFloat, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
+                let m = wiringModel(store([mapped("a")]), SpawnCalls())
+                let (win, host) = centredFormWindow(m, CGSize(width: 1600, height: height), scrolls: scrolls)
+                m.openNewSession()
+                if promptOpen { m.toggleNewSessionPrompt() }
+                settle(host)
+                _ = formRows(host)
+                let fields = formFields(host).map { host.convert($0.bounds, from: $0) }
+                XCTAssertEqual(fields.count, 3, "Folder, Name, Command at \(height)")
+                return (try XCTUnwrap(fields.map(\.minY).min(), "fields at \(height)"), host, win, m)
+            }
+            let tall = try firstField(1200, scrolls: false), taller = try firstField(1400, scrolls: false)
+            defer { tall.m.close(); taller.m.close(); tall.win.close(); taller.win.close() }
+            XCTAssertEqual(taller.top - tall.top, 100, accuracy: pixel, "200 pt more pane: the form moves down by half")
+            XCTAssertGreaterThan(tall.top, 200, "not pinned to the top of a 1200 pt pane")
+            let open = try firstField(1200, scrolls: false, promptOpen: true)
+            defer { open.m.close(); open.win.close() }
+            XCTAssertEqual(tall.top - open.top, (sz(96) + sz(6)) / 2, accuracy: 1, "the Prompt opens and the form stays centred")
+
+            let a = try firstField(260, scrolls: true), b = try firstField(300, scrolls: true)
+            defer { a.m.close(); b.m.close(); a.win.close(); b.win.close() }
+            XCTAssertEqual(a.top, b.top, accuracy: pixel, "a scrolling pane keeps the form at the top")
+            XCTAssertLessThan(a.top, 200, "starts at the top of the short pane")
+            let scroller = try XCTUnwrap(focusViews(a.host, NSScrollView.self).first, "the pane's ScrollView")
+            XCTAssertGreaterThan(scroller.documentView?.frame.height ?? 0, scroller.contentView.bounds.height, "the form is taller than the pane: Start is reached by scrolling")
+            XCTAssertTrue(formRows(a.host).rows != nil, "Start is on the tree")
         }
     }
 }

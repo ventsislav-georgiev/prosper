@@ -384,7 +384,7 @@ struct AgentNewSessionView: View {
         .onChange(of: model.newSessionFocus) { _, _ in focus = .name }
         .padding(sz(20))
         .frame(minWidth: 0, maxWidth: sz(520), alignment: .topLeading)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)   // #1479: centred when it fits; a ScrollView gives it its own height, so it stays top-aligned there
     }
 
     /// #847 D6.1: why the box and the prompt are dimmed (newSessionClaude false), shown on the Sidekick line.
