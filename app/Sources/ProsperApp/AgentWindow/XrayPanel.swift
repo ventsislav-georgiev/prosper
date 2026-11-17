@@ -705,7 +705,9 @@ final class XrayPanelModel: ObservableObject {
         refCard = e
         (refContext, refNote) = (nil, nil)
         let panels = panels
-        if panels?.runRef(e.text, for: self) != true { refNote = Self.refNotARef }   // refused: nothing runs
+        // #1489: dch keys a term by its bare text; --ref wants it in backticks (a text holding one is no ref).
+        let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text
+        if panels?.runRef(sent, shown: e.text, for: self) != true { refNote = Self.refNotARef }   // refused: nothing runs
         let read = panels?.refReading
         presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true)), XrayRefPopover.size) { [weak panels] in
             panels?.closeRef(started: read)

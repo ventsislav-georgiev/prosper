@@ -144,7 +144,7 @@ final class XrayRefsTabTests: XCTestCase {
         defer { XrayPanels.refsTab = gate }
         XrayPanels.refsTab = { true }
         let p = applied(XrayRefTermTests.refs)
-        XCTAssertEqual(p.shownRefs.map(\.text), ["#831", "API-12", "E-1", "ERR_LEDGER_SKEW", "test_retry_timeout", "`dryRun`"])
+        XCTAssertEqual(p.shownRefs.map(\.text), ["#831", "API-12", "E-1", "ERR_LEDGER_SKEW", "test_retry_timeout", "dryRun", "--ref"])
         XCTAssertTrue(p.refsToggle == nil, "no file, commit or link here: nothing hidden")
     }
 
