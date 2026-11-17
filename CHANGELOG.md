@@ -1630,6 +1630,10 @@ tag from the now-released section and put it on the new top draft.
   system asking. (#1245)
 - Settings has a page for each installed Agent Kit: its status, requirements, pieces, settings and
   overrides, and you choose which pieces and tools to take. (#1425)
+- Agent Sessions: a new session that shows up in the list only after the New session form said it
+  never started no longer closes the form or takes the keys when you have edited the form since; the
+  form keeps your edits and says the session started after all. Reopening the form also forgets that
+  earlier start. (#1434)
 
 ## v2.174.0
 

@@ -1810,7 +1810,9 @@ final class AgentWindowModel: ObservableObject {
         spawnSeen = true
     }
     /// #1096 1a: the form's start that expired unlisted; its row listing later lands it.
-    private var lateSpawn: AgentSessionKey?
+    private(set) var lateSpawn: AgentSessionKey?
+    /// #1434 (R1096-s1): the form as it was when its start expired; an edit since keeps the late row from landing.
+    private var lateForm: AgentNewSessionForm?
     /// Fires once just past `spawnSlack` after the answer; a hidden window lands or expires the spawn when shown again.
     private(set) var spawnDeadline: Timer?
     /// QA #747 INFO-1: dch --spawn answers 0 for a session whose program already exited, the same as for one that runs.
@@ -1818,6 +1820,10 @@ final class AgentWindowModel: ObservableObject {
     /// #1096 4: `command` false (a quick shell: nothing typed): no "check the command".
     nonisolated static func notListedText(_ name: String, end: String = "", command: Bool = true) -> String {
         "\(name) ended at once or never started" + (command ? ": check the command" : "") + (end.isEmpty ? "" : " (\(end))")
+    }
+    /// #1434 (R1096-s1): the late row listed over a form the person edited since: it stays, and says so.
+    nonisolated static func startedAfterAllText(_ name: String) -> String {
+        "\(name) started after all: it is in the list"
     }
     /// #948 F3: a start that never listed, waiting for the one History read after its deadline.
     private(set) var unlisted: (key: AgentSessionKey, asked: TimeInterval)?
@@ -1858,6 +1864,7 @@ final class AgentWindowModel: ObservableObject {
             return
         }
         pendingSpawn = nil
+        lateSpawn = nil; lateForm = nil   // #1434 (R1096-i1): a reopened form is not the one that said it never started
         clearDirLine()   // #948 F2: the form says its own status
         let typed = Preferences.agentIslandNewSessionCommand
         newSessionTookKeys = sessionHasKeys
@@ -2362,10 +2369,19 @@ final class AgentWindowModel: ObservableObject {
         if let k = lateSpawn, let s = row(.live(k))?.session {
             lateSpawn = nil
             if newSession?.starting == nil, newSession?.status?.hasPrefix(Self.notListedText(k.name)) == true {
-                setMode(.terminal, for: s)
-                select(.live(s.key))   // a manual pick: the form closes
-                focusSelection()
+                // #1434 (R1096-s1): only the form as it was at the expiry (its status aside: History may add the end);
+                // an edited one keeps its edits and the keys, and says the session started.
+                var form = newSession
+                form?.status = lateForm?.status
+                if form == lateForm {
+                    setMode(.terminal, for: s)
+                    select(.live(s.key))   // a manual pick: the form closes
+                    focusSelection()
+                } else {
+                    newSession?.status = Self.startedAfterAllText(k.name)
+                }
             }
+            lateForm = nil
         }
         guard let p = pendingSpawn else { return }
         // #1323: a remote start's row is in Other machines; selecting it is the person's pick, so it arms one attach.
@@ -2391,6 +2407,7 @@ final class AgentWindowModel: ObservableObject {
                 newSession?.starting = nil
                 newSession?.status = why
                 lateSpawn = p.key
+                lateForm = newSession
             } else if newSession == nil {
                 sayOnDirLine(why, until: .listed(p.key.name))
             }

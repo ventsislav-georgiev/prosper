@@ -200,6 +200,85 @@ extension AgentWindowD1Tests {
         }
     }
 
+    // MARK: #1434 (QA R1096-s1, i1): a late row never lands over a form the person is editing
+
+    /// The form's "web" start, answered and expired unlisted (other selected, the deadline on a timer no run loop fires).
+    @MainActor
+    func lateWebModel(_ st: AgentIslandStore, _ spawns: SpawnCalls, other: AgentSession) throws -> AgentWindowModel {
+        final class Clock { var t = AgentWindowD1Tests.now }
+        let clock = Clock(), m = newSessionModel(st, spawns)
+        m.now = { clock.t }
+        m.scheduleDeadline = { t, block in Timer(timeInterval: t, repeats: false, block: block) }
+        m.select(.live(other.key))
+        m.openNewSession(folder: "/Users/example/web")
+        XCTAssertTrue(m.startNewSession())
+        spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+        clock.t += AgentWindowModel.spawnSlack + 1
+        try XCTUnwrap(m.spawnDeadline).fire()
+        XCTAssertEqual(m.newSessionStatus, AgentWindowModel.notListedText("web"), "expired unlisted")
+        XCTAssertTrue(m.lateSpawn?.name == "web")
+        return m
+    }
+
+    /// Expiry, then the person edits the command, then the row lists: the form and its edit stay, the keys stay in it,
+    /// nothing is selected, and the status says the session started after all.
+    @MainActor
+    func testAgentWindowNewSessionLateRowKeepsAnEditedForm() throws {
+        try withNewSessionPrefs {
+            let other = mapped("other"), st = store([other]), spawns = SpawnCalls()
+            let m = try lateWebModel(st, spawns, other: other)
+            defer { m.close() }
+            m.setNewSessionCommand("claude --resume")
+            let edited = m.newSession
+            st.sessions = [other, mapped("web")]
+            XCTAssertEqual(m.selection, live("other"), "nothing selected")
+            XCTAssertNotNil(m.newSession, "the form stays")
+            XCTAssertEqual(m.newSession?.command, "claude --resume", "its edit stays")
+            XCTAssertEqual(m.newSession?.folder, edited?.folder)
+            XCTAssertFalse(m.terminal.focusPending, "the keys stay in the form")
+            XCTAssertFalse(m.interaction.composerFocusPending)
+            XCTAssertEqual(m.newSessionStatus, "web started after all: it is in the list")
+            XCTAssertEqual(m.newSessionStatus, AgentWindowModel.startedAfterAllText("web"))
+            XCTAssertTrue(m.lateSpawn == nil, "said once")
+            XCTAssertEqual(spawns.calls.count, 1)
+        }
+    }
+
+    /// Expiry with the form untouched, then the row lists: it lands as before, selected, Terminal, the keys in it.
+    @MainActor
+    func testAgentWindowNewSessionLateRowLandsAnUneditedForm() throws {
+        try withNewSessionPrefs {
+            let other = mapped("other"), st = store([other]), spawns = SpawnCalls()
+            let m = try lateWebModel(st, spawns, other: other)
+            defer { m.close() }
+            st.sessions = [other, mapped("web")]
+            XCTAssertEqual(m.selection, live("web"), "the late row lands")
+            XCTAssertNil(m.newSession, "the form closed by the landing")
+            XCTAssertEqual(m.paneMode, .terminal)
+            XCTAssertTrue(m.terminal.focusPending, "the keys asked into its terminal")
+            XCTAssertTrue(m.lateSpawn == nil)
+        }
+    }
+
+    /// Expiry, Cancel, the form opened again: the late start is forgotten, and its row listing lands nothing.
+    @MainActor
+    func testAgentWindowNewSessionLateRowForgottenByAReopenedForm() throws {
+        try withNewSessionPrefs {
+            let other = mapped("other"), st = store([other]), spawns = SpawnCalls()
+            let m = try lateWebModel(st, spawns, other: other)
+            defer { m.close() }
+            m.cancelNewSession()
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.lateSpawn == nil, "R1096-i1: the reopened form drops it")
+            st.sessions = [other, mapped("web")]
+            XCTAssertEqual(m.selection, live("other"), "nothing lands")
+            XCTAssertNotNil(m.newSession, "the new form stays")
+            XCTAssertTrue(m.newSessionStatus == nil)
+            XCTAssertFalse(m.terminal.focusPending)
+            XCTAssertTrue(m.lateSpawn == nil)
+        }
+    }
+
     // MARK: INFO-3: the window says why
 
     /// ⇧⌘N (and ⌘N) refused by the gate with no form open: the window's dir strip under the sidebar says why, in a
