@@ -15,7 +15,7 @@ struct CCPoolPane: View {
     /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1). #1219 step 2: a single Resume is
     /// routed as a new session; Resume interrupted (one --revive --all per folder) runs with the control environment only.
     static let routeScope = "New sessions started from Prosper that run claude. "
-        + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed."
+        + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed. A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
     /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
     /// soonest five-hour reset; the list order only breaks ties.
     static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
