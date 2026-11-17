@@ -203,19 +203,25 @@ final class DchCtlSignalTests: XCTestCase {
             r.queue.sync { r.conn.ingest(DchFrame.encode(DchFrame.ctl, json: ["argv": Self.say])) }
             let dch = try XCTUnwrap(pid(f.dir, "pid")), kid = try XCTUnwrap(pid(f.dir, "kid"))
             XCTAssertTrue(wait(20) { output(r) })
-            let sent = record(), cut = Date()
-            apply(first, r)
-            // A zombie still answers kill(pid, 0): gone means waitpid ran, and the termination handler clears the
-            // job's pid right after it (#1024: no 0.2 s wait).
-            XCTAssertTrue(wait(20) { Darwin.kill(dch, 0) != 0 }, "dch exits on the SIGTERM: \(first)")
-            apply(.stop, r)
-            // #1024: a negative no later event shows, so a wait derived from the timers it rules out: the cut's
-            // grace and the stop's 2 s, plus 0.5 s.
-            let until = max(cut + grace, Date() + DchCtl.cancelGrace) + 0.5
-            usleep(useconds_t(max(0, until.timeIntervalSinceNow) * 1_000_000))
-            XCTAssertEqual(Darwin.kill(kid, 0), 0, "the leftover kid was not SIGKILLed by a late timer: \(first)")
-            XCTAssertEqual(sent.of(dch).map { $0.sig }, [SIGTERM], "the cut's SIGTERM and no SIGKILL sent: \(first)")
-            XCTAssertEqual(terms(f.dir), 1, "\(first)")
+            let sent = record()
+            // #1444: hold the job across the timers. A stop on a reaped job frees ctlJob, and the timer then returns at
+            // `guard let self` before the pid guard; held keeps the job, as a closed connection does, so only `self.pid == pid` stops the SIGKILL.
+            let held = try XCTUnwrap(r.queue.sync { r.conn.ctlJob })
+            let cut = Date()
+            withExtendedLifetime(held) {
+                apply(first, r)
+                // A zombie still answers kill(pid, 0): gone means waitpid ran, and the termination handler clears the
+                // job's pid right after it (#1024: no 0.2 s wait).
+                XCTAssertTrue(wait(20) { Darwin.kill(dch, 0) != 0 }, "dch exits on the SIGTERM: \(first)")
+                apply(.stop, r)
+                // #1024: a negative no later event shows, so a wait derived from the timers it rules out: the cut's
+                // grace and the stop's 2 s, plus 0.5 s.
+                let until = max(cut + grace, Date() + DchCtl.cancelGrace) + 0.5
+                usleep(useconds_t(max(0, until.timeIntervalSinceNow) * 1_000_000))
+                XCTAssertEqual(Darwin.kill(kid, 0), 0, "the leftover kid was not SIGKILLed by a late timer: \(first)")
+                XCTAssertEqual(sent.of(dch).map { $0.sig }, [SIGTERM], "the cut's SIGTERM and no SIGKILL sent: \(first)")
+                XCTAssertEqual(terms(f.dir), 1, "\(first)")
+            }
         }
     }
 }
