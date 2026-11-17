@@ -101,7 +101,8 @@ final class IncreaseContrastIslandTests: XCTestCase {
         // #1375: 16, the nine faded-white inks on the History row, the prompt card and the draft field are the theme's.
         // #1452: 26, TIP's ten faded-white inks back for Follow theme off (the shown tab, the History row's title and status,
         // the prompt card's context, Open terminal, plain answer, digit, hint and detail, the draft).
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 26, "the ear count, the text sites on the black shape and the shown tab's fallback")
+        // #1452 b: 29, the live session row's own white inks for Follow theme off (title, quiet words, a glyph with no state).
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 29, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")

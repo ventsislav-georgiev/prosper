@@ -1741,6 +1741,9 @@ tag from the now-released section and put it on the new top draft.
   ones it wrote and you did not edit. (#920)
 - X-ray's Tasks and Memory tabs now update live from the same dch stream as Prompts and Responses,
   with no polling (needs dch 1.91.0 or newer; older hosts keep the periodic refresh). (#1475)
+- Agent Island: with Follow theme off (the default), the live session rows are dark as well, white
+  text on the black notch like the History rows, on every theme; the Agent Sessions window is
+  unchanged. (#1452)
 
 ## v2.174.0
 

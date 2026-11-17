@@ -1239,7 +1239,8 @@ struct AgentIslandRow: View {
         let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
         let chipLine = AgentIslandGeometry.hasChipLine(session.meta, show: show)
         // #1371: the Agent Sessions sidebar row's own pieces (hover takes its selected look and inks).
-        let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: hover)
+        let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: hover,
+                                       inks: Self.inks)
         Button(action: action) {
             // #1371: line 1 the state mark, the title, the model and effort badges; line 2 the state word, the agents,
             // merged and open counts, the age at the end; then the island's own PR chips. The text column stays
@@ -1262,8 +1263,8 @@ struct AgentIslandRow: View {
             .padding(.trailing, AgentIslandGeometry.rowTrail)
             .frame(height: (chipLine ? AgentIslandGeometry.prRowHeight : AgentIslandGeometry.rowHeight) - AgentIslandGeometry.rowGap)
             .coordinateSpace(.named(agentSidebarRowSpace))
-            .background(NeonSelectedRowFill(selected: hover))
-            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Self.cardFill))
+            .background(NeonSelectedRowFill(selected: hover && AgentIslandInk.follows))
+            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Self.card(hover: hover)))
             .contentShape(Rectangle())
             .modifier(AgentSidebarRowProbe(kind: "card", title: session.title))
             .padding(.vertical, AgentIslandGeometry.rowGap / 2)
@@ -1283,6 +1284,16 @@ struct AgentIslandRow: View {
     /// #1371: the card is the theme's sidebar surface, the one the Agent Sessions rows sit on (TIP: white at 0.05 over the
     /// island's black, 0.10 on hover). The island's black notch shape stays (#474).
     static var cardFill: Color { Neon.sidebar }
+    /// #1452 b: the card drawn: on, `cardFill` (hover adds the sidebar's selected fill); off, the History row's own card.
+    static func card(hover: Bool) -> Color { AgentIslandInk.follows ? cardFill : AgentIslandHistoryRow.ownCardFill(selected: hover) }
+    /// #1452 b: on, nil (the sidebar's theme inks); off, the island's own, alike on every theme: the History row's off table's
+    /// white (title 0.8, words, counts and age as its status 0.7, a glyph with no state 0.35), the needs-input amber, the
+    /// state glyph in AgentState's colours, the open count and badges in the default (dark) palette. Hover changes only the card.
+    static var inks: AgentSidebarRowView.Inks? {
+        AgentIslandInk.follows ? nil
+            : .init(primary: Neon.faded(.white, 0.8), quiet: Neon.faded(.white, 0.7), blue: ThemePalette.default.blue,
+                    blocked: AgentState.blocked.color, mark: Neon.faded(.white, 0.35), badges: .default)
+    }
 
     /// R1371-s1: the island's words, then what the row draws from the sidebar's Row, in its words: the model and effort
     /// (Row.modelWords) and the open count (Count.open, as Row.countWords; the agents and merged counts are spoken already).
@@ -1320,17 +1331,17 @@ struct AgentIslandRow: View {
                             .help(Text(verbatim: chip.help))
                     }
                 }
-                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), AgentSidebarRowView.ink(.quiet, selected: selected)) }
+                if prs.more > 0 { chipText(AgentIsland.moreLabel(prs.more), Self.inks?.quiet ?? AgentSidebarRowView.ink(.quiet, selected: selected)) }
             }
             .fixedSize()
             Spacer(minLength: 0)
         }
     }
 
-    /// #1452 step 0: the island's PR chip ink, in both Follow theme states. The chip sits on the row's card, which is the
-    /// theme's sidebar since #1371 (not the black notch), so the sidebar's readable amber is the right one: #FFB300 on a
-    /// light theme's card reads 1.4 to 1.6:1 (AgentIslandFollowThemeTests).
-    static func chipInk(selected: Bool) -> Color { AgentSidebarRowView.prChipInk(selected: selected) }
+    /// #1452 step 0: the island's PR chip ink. On, the chip sits on the theme's sidebar card (#1371), so the sidebar's readable
+    /// amber: #FFB300 on a light theme's card reads 1.4 to 1.6:1. #1452 b: off, the card is the island's dark own, so the
+    /// bright #FFB300 (AgentIslandFollowThemeTests).
+    static func chipInk(selected: Bool) -> Color { inks?.blocked ?? AgentSidebarRowView.prChipInk(selected: selected) }
 
     private func chipText(_ s: String, _ color: Color, _ fill: Color? = nil) -> some View {
         Text(verbatim: s)

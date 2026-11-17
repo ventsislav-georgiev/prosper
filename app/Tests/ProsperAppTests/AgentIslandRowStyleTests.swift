@@ -186,7 +186,14 @@ final class AgentIslandRowStyleTests: XCTestCase {
     /// On every theme: the card is the theme's sidebar surface (the token, and the drawn pixel over the island's black
     /// beside the age), the title is drawn in textPrimary (its farthest pixel from the card), and textPrimary on the card
     /// clears 4.5:1, the bound of the sidebar's contrast rows (AgentRowSelectedTextTests). TIP: white at 0.05 over black.
+    /// #1452 b: with Settings > Agent Island > Follow theme on (off, the card is dark: AgentIslandFollowThemeTests).
     func testTheCardAndItsTextFollowEveryTheme() throws {
+        let savedFollows = Preferences.defaults.object(forKey: "agentIslandFollowsTheme")
+        defer {
+            if let v = savedFollows { Preferences.defaults.set(v, forKey: "agentIslandFollowsTheme") }
+            else { Preferences.defaults.removeObject(forKey: "agentIslandFollowsTheme") }
+        }
+        Preferences.agentIslandFollowsTheme = true
         _ = ThemeStore.shared
         let (savedPalette, savedIC, savedScale) = (ThemeRuntime.palette, ThemeRuntime.increaseContrast, ThemeRuntime.scale)
         defer { ThemeRuntime.palette = savedPalette; ThemeRuntime.increaseContrast = savedIC; ThemeRuntime.scale = savedScale }

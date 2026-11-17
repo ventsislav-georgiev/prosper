@@ -235,23 +235,134 @@ final class AgentIslandFollowThemeTests: XCTestCase {
 
     // MARK: #1451 b: the island's PR chip
 
-    /// On a light theme the island's chip sits on the row's card, the theme's sidebar since #1371 (not the black notch), so
-    /// its text is the sidebar's readable amber, at least 3:1 over the card under the chip's wash, in both Follow theme states;
-    /// on a dark theme it is #FFB300. The bright amber there reads 1.4 to 1.6:1.
+    /// The island's chip is at least 3:1 over its card (drawn over the black notch) under the chip's wash, in both Follow theme
+    /// states. On, the card is the theme's sidebar (#1371), so the text is the sidebar's readable amber (#FFB300 on a dark
+    /// theme; on a light one the bright amber reads 1.4 to 1.6:1). #1452 b: off, the card is the island's dark own on every
+    /// theme, so the text is the bright #FFB300. Parent (ab3250d4): the sidebar's amber and card in both states.
     func testIslandChipInkReadsOnTheCardInBothStates() throws {
         for follows in [false, true] {
             Preferences.agentIslandFollowsTheme = follows
             try onTwoThemes { name, p in
-                let ink = AgentIslandRow.chipInk(selected: false)
-                let ground = onto(rgba(AgentIslandRow.cardFill), AgentSidebarRowView.prChipFill)
-                XCTAssertLessThan(dist(rgba(AgentIslandRow.cardFill), rgba(p.sidebar)), 0.001, "\(name): the card is the sidebar")
+                let ink = AgentIslandRow.chipInk(selected: false), card = AgentIslandRow.card(hover: false)
+                let ground = onto(onto((0, 0, 0, 1), card), AgentSidebarRowView.prChipFill)
                 let r = ThemeContrastTests.contrast(ns(onto(ground, ink)), on: ns(ground))
                 XCTAssertGreaterThanOrEqual(r, 3, "\(name) follows \(follows): the island chip is \(r):1")
-                XCTAssertLessThan(dist(rgba(ink), rgba(AgentSidebarRowView.prChipInk(selected: false))), 0.001,
-                                  "\(name): the sidebar chip's ink")
-                let want = name == "Default" ? agentStateColor(.blocked) : AgentSidebarRowView.darkAmber
-                XCTAssertLessThan(dist(rgba(ink), rgba(want)), 0.003, "\(name): \(rgba(ink))")
+                if follows {
+                    XCTAssertLessThan(dist(rgba(card), rgba(p.sidebar)), 0.001, "\(name): the card is the sidebar")
+                    XCTAssertLessThan(dist(rgba(ink), rgba(AgentSidebarRowView.prChipInk(selected: false))), 0.001,
+                                      "\(name): the sidebar chip's ink")
+                }
+                let want = !follows || name == "Default" ? Color(red: 1.0, green: 0.7, blue: 0.0) : AgentSidebarRowView.darkAmber
+                XCTAssertLessThan(dist(rgba(ink), rgba(want)), 0.003, "\(name) follows \(follows): \(rgba(ink))")
             }
         }
+    }
+
+    // MARK: #1452 b: the live session rows
+
+    /// The session row's inks and card as `name` gives them, by name (plain and hovered card; the badge palette's tokens).
+    func sessionRowInks() -> [String: Color] {
+        var out: [String: Color] = ["card": AgentIslandRow.card(hover: false), "hovered card": AgentIslandRow.card(hover: true),
+                                    "chip": AgentIslandRow.chipInk(selected: false), "hovered chip": AgentIslandRow.chipInk(selected: true)]
+        guard let i = AgentIslandRow.inks else { return out }
+        out["primary"] = i.primary; out["quiet"] = i.quiet; out["blue"] = i.blue; out["blocked"] = i.blocked; out["mark"] = i.mark
+        out["badge text"] = i.badges.textPrimary; out["badge quiet"] = i.badges.textSecondary; out["badge fill"] = i.badges.blue
+        out["badge fill strong"] = i.badges.magenta
+        return out
+    }
+
+    /// Off, on a dark and a light theme: the session row passes the island's own inks, each its dark literal, the same on both
+    /// themes, and the hosted row draws them: its card pixel is the dark own card and its brightest pixel is the white text
+    /// (on theme-daylight the theme's text is dark). Parent (ab3250d4): no own inks (the row took the theme's) and the card
+    /// was the theme's sidebar, light on theme-daylight.
+    func testOffTheSessionRowIsDarkOnTwoThemes() throws {
+        let white = Color.white, d = ThemePalette.default
+        let want: [String: Color] = [
+            "card": white.opacity(0.05), "hovered card": white.opacity(0.10),
+            "chip": Color(red: 1.0, green: 0.7, blue: 0.0), "hovered chip": Color(red: 1.0, green: 0.7, blue: 0.0),
+            "primary": white.opacity(0.8), "quiet": white.opacity(0.7), "blue": d.blue,
+            "blocked": Color(red: 1.0, green: 0.7, blue: 0.0), "mark": white.opacity(0.35),
+            "badge text": d.textPrimary, "badge quiet": d.textSecondary, "badge fill": d.blue, "badge fill strong": d.magenta,
+        ]
+        var seen: [String: RGBA] = [:]
+        try onTwoThemes { name, _ in
+            let all = sessionRowInks()
+            XCTAssertEqual(Set(all.keys), Set(want.keys), "\(name): every ink is the island's own")
+            for (ink, c) in all {
+                guard let w = want[ink] else { continue }
+                XCTAssertLessThan(dist(rgba(c), rgba(w)), 0.003, "\(name): \(ink) is the dark own, read \(rgba(c))")
+                if let before = seen[ink] { XCTAssertLessThan(dist(rgba(c), before), 0.001, "\(ink): a theme switch changed it") }
+                seen[ink] = rgba(c)
+            }
+            let px = try rowPixels()
+            let card = onto((0, 0, 0, 1), white.opacity(0.05))
+            XCTAssertLessThan(dist(px.lead, card), 0.03, "\(name): the drawn card is the dark own, read \(px.lead)")
+            XCTAssertGreaterThan(px.brightest, 0.5, "\(name): the row's text is drawn white, brightest \(px.brightest)")
+        }
+    }
+
+    /// The hosted session row over the black notch (never shown): the pixel in its leading inset and its brightest pixel.
+    func rowPixels() throws -> (lead: RGBA, brightest: CGFloat) {
+        let width = AgentIslandGeometry.expandedWidth - 2 * AgentIslandGeometry.listInset
+        let size = CGSize(width: width, height: AgentIslandGeometry.rowHeight)
+        var s = AgentSession(key: AgentSessionKey(dir: "/Users/example/work", name: "api"), alias: "", activity: 1_000_000 - 240,
+                             state: .idle, agents: 3)
+        s.model = "claude-opus-4-5"
+        s.effort = "high"
+        let root = ZStack(alignment: .topLeading) {
+            Color.black
+            AgentIslandRow(session: s, now: 1_000_000, notice: nil, show: .all) {}.frame(width: width)
+        }.frame(width: size.width, height: size.height, alignment: .topLeading)
+        let h = NSHostingView(rootView: root)
+        h.frame = CGRect(origin: .zero, size: size)
+        h.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        h.layoutSubtreeIfNeeded()
+        let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+        h.cacheDisplay(in: h.bounds, to: rep)
+        let k = CGFloat(rep.pixelsWide) / size.width
+        let c = try XCTUnwrap(rep.colorAt(x: Int(3 * k), y: Int(size.height / 2 * k))?.usingColorSpace(.sRGB))
+        var top: CGFloat = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                top = max(top, (p.redComponent + p.greenComponent + p.blueComponent) / 3)
+            }
+        }
+        return ((c.redComponent, c.greenComponent, c.blueComponent, 1), top)
+    }
+
+    /// On: the session row takes the theme's inks (no own inks) and the theme's sidebar card, as #1371/#1375 drew it.
+    func testOnTheSessionRowKeepsTheThemesInks() throws {
+        Preferences.agentIslandFollowsTheme = true
+        try onTwoThemes { name, p in
+            XCTAssertTrue(AgentIslandRow.inks == nil, "\(name): on, the row's own theme inks")
+            XCTAssertLessThan(dist(rgba(AgentIslandRow.card(hover: false)), rgba(p.sidebar)), 0.001, "\(name): the sidebar card")
+            XCTAssertLessThan(dist(rgba(AgentIslandRow.card(hover: true)), rgba(p.sidebar)), 0.001, "\(name): hover adds the fill")
+        }
+    }
+
+    /// The Agent Sessions sidebar rows never change: in both Follow theme states, on both themes, a sidebar row has no own
+    /// inks and every ink, plain and selected, is the theme's `ink(_:selected:)`, the same in both states.
+    func testTheSidebarRowsAreTheSameInBothStates() throws {
+        let row = AgentSidebar.Row(id: .live(AgentSessionKey(dir: "/Users/example/work", name: "api")), title: "api",
+                                   state: .working, detail: "Working", age: "4m", prs: ["api#12"], prCount: 1, agents: 2, merged: 0)
+        var seen: [String: RGBA] = [:]
+        for follows in [false, true] {
+            Preferences.agentIslandFollowsTheme = follows
+            try onTwoThemes { name, _ in
+                for selected in [false, true] {
+                    let v = AgentSidebarRowView(row: row, selected: selected)
+                    XCTAssertTrue(v.inks == nil, "\(name) follows \(follows): a sidebar row takes no island inks")
+                    for k in [AgentSidebarRowView.Ink.quiet, .blue, .blocked] {
+                        let c = rgba(v.ink(k)), key = "\(name) \(selected) \(k)"
+                        XCTAssertLessThan(dist(c, rgba(AgentSidebarRowView.ink(k, selected: selected))), 0.001, "\(key): the theme's")
+                        if let before = seen[key] { XCTAssertLessThan(dist(c, before), 0.001, "\(key): the setting changed it") }
+                        seen[key] = c
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(seen.count, 12)
     }
 }

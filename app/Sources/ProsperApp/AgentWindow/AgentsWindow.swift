@@ -1358,6 +1358,9 @@ struct AgentSidebarRowView: View {
     static var probe: ((String, String, CGRect) -> Void)?
     /// #1379: Mini's rail row.
     var mini = false
+    /// #1452 b: the island's own inks (Agent Island > Follow theme off); nil, the theme's. The Agent Sessions rows never set it.
+    var inks: Inks? = nil
+    struct Inks { var primary, quiet, blue, blocked, mark: Color; var badges: ThemePalette }
 
     @ViewBuilder var body: some View {
         if mini { miniBody } else { fullBody }
@@ -1538,11 +1541,12 @@ extension AgentSidebarRowView {
     var stateMark: some View {
         Group {   // #829 G7: a pinned History record's glyph, in the same slot
             if row.record?.pinned == true {
-                Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(Self.ink(.quiet, selected: selected))
+                Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(ink(.quiet))
             } else {
                 Text(row.state?.glyph ?? "\u{25CB}")
                     .font(Neon.font(11, weight: .bold))
-                    .foregroundStyle(row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state))
+                    .foregroundStyle(inks.map { row.state?.color ?? $0.mark }   // #1452 b: off, AgentState's own colours
+                                     ?? (row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state)))
             }
         }
         .frame(width: sz(14))
@@ -1594,7 +1598,7 @@ extension AgentSidebarRowView {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             let withBadges = badges && row.modelSlot
             let title = Text(row.title).font(Neon.font(12.5, weight: .medium))
-                .foregroundStyle(row.state == nil ? Self.ink(.quiet, selected: selected) : Neon.textPrimary)
+                .foregroundStyle(row.state == nil ? ink(.quiet) : inks?.primary ?? Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .modifier(AgentSidebarRowProbe(kind: "title", title: row.title))
             if withBadges {
@@ -1606,7 +1610,7 @@ extension AgentSidebarRowView {
             if AgentPaneLayout.splitsEnabled {
                 // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
                 // the gate on (hidden by opacity, never removed), so the title never moves; gate off: no slot.
-                Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(Self.ink(.quiet, selected: selected))
+                Image(systemName: "eye").font(Neon.font(9, weight: .semibold)).foregroundStyle(ink(.quiet))
                     .frame(width: sz(14)).opacity(inView ? 1 : 0)
                     .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
             }
@@ -1641,6 +1645,15 @@ extension AgentSidebarRowView {
         case .quiet: return Neon.textSecondary
         case .blue: return Neon.blue
         case .blocked: return amberInk
+        }
+    }
+    /// #1452 b: this row's ink: the island's own when it passed `inks` (hover changes only its card), else `ink(_:selected:)`.
+    func ink(_ k: Ink) -> Color {
+        guard let inks else { return Self.ink(k, selected: selected) }
+        switch k {
+        case .quiet: return inks.quiet
+        case .blue: return inks.blue
+        case .blocked: return inks.blocked
         }
     }
     /// #1451 step b: the needs-input amber as TEXT. #FFB300 reads 1.4 to 1.6:1 on the light themes' surfaces (under the #1360
@@ -1682,9 +1695,8 @@ extension AgentSidebarRowView {
     }
 
     /// #1268: one badge: 8.5 medium (the PR chips are 9.5), padding sz(3) x sz(1), radius sz(3).
-    static func badge(_ text: String, _ look: BadgeLook) -> some View {
-        let p = ThemeRuntime.palette
-        return Text(text).font(Neon.font(8.5, weight: .medium)).foregroundStyle(p[keyPath: look.text])
+    static func badge(_ text: String, _ look: BadgeLook, palette p: ThemePalette = ThemeRuntime.palette) -> some View {
+        Text(text).font(Neon.font(8.5, weight: .medium)).foregroundStyle(p[keyPath: look.text])
             .lineLimit(1).truncationMode(.middle)
             .padding(.horizontal, sz(3)).padding(.vertical, sz(1))
             .background(RoundedRectangle(cornerRadius: sz(3)).fill(p[keyPath: look.fill].opacity(look.opacity)))
@@ -1723,7 +1735,9 @@ extension AgentSidebarRowView {
             let shown = effortOnly ? Array(all.dropFirst()) : all
             HStack(spacing: sz(3)) {
                 // The effort badge (second) keeps its word whole before the model's name is cut.
-                ForEach(shown.indices, id: \.self) { i in Self.badge(shown[i].text, shown[i].look).layoutPriority(Double(i)) }
+                ForEach(shown.indices, id: \.self) { i in
+                    Self.badge(shown[i].text, shown[i].look, palette: inks?.badges ?? ThemeRuntime.palette).layoutPriority(Double(i))
+                }
             }
         }
         .fixedSize()
@@ -1739,7 +1753,7 @@ extension AgentSidebarRowView {
     var ageSlot: some View {
         ZStack(alignment: .trailing) {
             Text(AgentIsland.ageWidest).hidden()
-            Text(row.age).foregroundStyle(Self.ink(.quiet, selected: selected))
+            Text(row.age).foregroundStyle(ink(.quiet))
         }
         .font(Neon.font(10).monospacedDigit())
         .fixedSize()
@@ -1762,14 +1776,14 @@ extension AgentSidebarRowView {
     func detailLine(_ chips: [String], open: Int = 0) -> some View {
         HStack(spacing: sz(5)) {
             Text(row.detail).font(Neon.font(10.5))
-                .foregroundStyle(row.state == .blocked ? Self.ink(.blocked, selected: selected) : Self.ink(.quiet, selected: selected))
+                .foregroundStyle(row.state == .blocked ? ink(.blocked) : ink(.quiet))
                 .lineLimit(1)
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: Self.ink(.quiet, selected: selected), open: Self.ink(.blue, selected: selected),
-                             outline: Self.outlineInk(selected: selected))
+                             quiet: ink(.quiet), open: ink(.blue), outline: inks?.primary ?? Self.outlineInk(selected: selected))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
-                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced)).foregroundStyle(Self.prChipInk(selected: selected))
+                let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(inks?.blocked ?? Self.prChipInk(selected: selected))
                     .padding(.horizontal, sz(4)).padding(.vertical, sz(1))
                     .background(RoundedRectangle(cornerRadius: sz(3)).fill(Self.prChipFill))
                     .fixedSize()
@@ -1783,7 +1797,7 @@ extension AgentSidebarRowView {
             }
             Spacer(minLength: 0)
             if !row.age.isEmpty || row.state != nil { ageSlot }
-            if let h = row.remote?.host ?? row.host { Self.hostSlot(h, selected: selected) }   // #1324: a remote History row's too
+            if let h = row.remote?.host ?? row.host { Self.hostSlot(h, ink: ink(.quiet)) }   // #1324: a remote History row's too
         }
     }
 
@@ -1792,8 +1806,8 @@ extension AgentSidebarRowView {
     static let hostWidth: CGFloat = 84
     /// #1330 (R836-q2): a host from dch is outside text: shown through OutsideText.shown; argv and keys keep it raw.
     static func hostLabel(_ host: String) -> String { OutsideText.shown(host) }
-    static func hostSlot(_ host: String, selected: Bool = false) -> some View {
-        Text(hostLabel(host)).font(Neon.font(10, weight: .medium)).foregroundStyle(ink(.quiet, selected: selected))
+    static func hostSlot(_ host: String, ink: Color = AgentSidebarRowView.ink(.quiet, selected: false)) -> some View {
+        Text(hostLabel(host)).font(Neon.font(10, weight: .medium)).foregroundStyle(ink)
             .lineLimit(1).truncationMode(.middle)
             .frame(width: sz(hostWidth), alignment: .trailing)
             .help("On \(hostLabel(host))")
