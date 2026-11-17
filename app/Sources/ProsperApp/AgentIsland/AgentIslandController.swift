@@ -1590,8 +1590,13 @@ final class AgentIslandController {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.inFlight.remove(key)
-                    if r == .dropped { return self.setRow(key, AgentWindowText.notDelivered) }   // #1171
-                    // sent: the next poll shows the new state
+                    if r == .dropped {   // #1171
+                        self.setRow(key, AgentWindowText.notDelivered)
+                        if let at { self.recheckStaleClick(key, p, at) }   // #1436: the card comes back as after .changed
+                        return
+                    }
+                    // sent: the next poll shows the new state; #1436: an earlier drop's line is stale now
+                    if r == .sent { self.dropNotDelivered(key) }
                     guard r == .changed else { return }
                     self.setCard(.changed, key, gen)
                     if let at { self.recheckStaleClick(key, p, at) }
@@ -1941,6 +1946,7 @@ final class AgentIslandController {
     /// #1185: `seedMoved`, the poll tick's seed scan saw a session come or go in a seed dir the poll does not list.
     func checkAutoAllow(seedMoved: Bool = false) {
         guard let store else { return }
+        for s in store.sessions where s.state != .blocked { dropNotDelivered(s.key) }   // #1436: answered in the terminal
         // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
         // #1133: nor is a row kept from an earlier list while both list forms fail (not fresh).
         // #1135: nor is one dch lists as not in front (claude_foreground false: a shell reads the keys).
@@ -2017,6 +2023,11 @@ final class AgentIslandController {
     private func noteAllowed(_ key: AgentSessionKey) {
         guard !runner.isBusy(key), [nil, AgentIsland.autoAllowedText].contains(store?.actions[key]) else { return }
         store?.actions[key] = AgentIsland.autoAllowedText
+    }
+
+    /// #1436: a dropped answer's line goes once the session reads input again; any other text stays.
+    private func dropNotDelivered(_ key: AgentSessionKey) {
+        if store?.actions[key] == AgentWindowText.notDelivered { store?.actions[key] = nil }
     }
 
     /// #1315 (QA #581 INFO-7): the row is left to the human on a prompt: an earlier answer's note is stale.

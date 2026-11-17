@@ -1651,6 +1651,8 @@ tag from the now-released section and put it on the new top draft.
   not show (Mac-only or Remote-only) and updates dch's config right away, and a stray NUL byte in
   dch's config is cut from its line when Prosper rewrites the file, so it no longer keeps the island
   from answering. (#1185)
+- The island no longer keeps showing "Not delivered" on a session after a later answer went through
+  or after it moved on from needing input, and a dropped answer's card comes back. (#1436)
 
 ## v2.174.0
 

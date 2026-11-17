@@ -2083,6 +2083,78 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(AgentWindowText.notDelivered, "Not delivered: the session is not reading input")
     }
 
+    /// #1436 (R1171-s1): a drop's line goes after a delivered click on the session, and when the session moves off
+    /// blocked; any other refusal text on the key stays through both.
+    @MainActor
+    func testIslandNotDeliveredLineClearsOnDeliveryAndOnLeavingBlocked() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.modeSwitch))
+        let option = try XCTUnwrap(p.options.last)
+        func click(_ c: AgentIslandController, status: Int32) {
+            c.answer(session(.blocked), p, option)
+            until("answered, exit \(status)") { !c.heldByAutoAllow(Self.key) }
+            c.queue.sync {}
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        // a drop, then a delivered click: the line is nil
+        let a = controller(recorded(FormSim(.plain(Self.modeSwitch)), status: 1), autoAllow: false)
+        a.store?.sessions = [session(.blocked)]
+        click(a, status: 1)
+        XCTAssertEqual(a.store?.actions[Self.key], AgentWindowText.notDelivered)
+        a.io = recorded(FormSim(.plain(Self.modeSwitch)), status: 0)
+        click(a, status: 0)
+        XCTAssertTrue(a.store?.actions[Self.key] == nil, "delivered click clears the drop's line")
+        // a drop, then the session moves off blocked: the line is nil; still blocked: it stays
+        let b = controller(recorded(FormSim(.plain(Self.modeSwitch)), status: 1), autoAllow: false)
+        b.store?.sessions = [session(.blocked)]
+        click(b, status: 1)
+        b.checkAutoAllow()
+        XCTAssertEqual(b.store?.actions[Self.key], AgentWindowText.notDelivered, "still blocked: kept")
+        b.store?.sessions = [session(.working)]
+        b.checkAutoAllow()
+        XCTAssertTrue(b.store?.actions[Self.key] == nil, "off blocked clears the line")
+        // another refusal text is cleared by neither
+        let other = "Restart failed: example"
+        let d = controller(recorded(FormSim(.plain(Self.modeSwitch)), status: 0), autoAllow: false)
+        d.store?.sessions = [session(.blocked)]
+        d.store?.actions[Self.key] = other
+        click(d, status: 0)
+        XCTAssertEqual(d.store?.actions[Self.key], other, "a delivered click leaves another text")
+        d.store?.sessions = [session(.working)]
+        d.checkAutoAllow()
+        XCTAssertEqual(d.store?.actions[Self.key], other, "leaving blocked leaves another text")
+    }
+
+    /// #1436 (R1171-i1): after a drop the card is rechecked as after .changed: the stale-click re-read is armed
+    /// and, once its wait is over, reads the screen again.
+    @MainActor
+    func testIslandDropRechecksTheStaleClick() throws {
+        final class Timers: @unchecked Sendable { var fires: [@MainActor @Sendable () -> Void] = []; var now = Date() }
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.modeSwitch))
+        let option = try XCTUnwrap(p.options.last)
+        let f = FormSim(.plain(Self.modeSwitch)), t = Timers()
+        let c = controller(recorded(f, status: 1))
+        c.after = { _, fire in t.fires.append(fire) }
+        c.now = { t.now }
+        c.store?.sessions = [claudeSession(.blocked)]
+        c.checkAutoAllow()
+        until("Always allow leaves the prompt to the human") { !c.heldByAutoAllow(Self.key) }
+        t.fires = []
+        let before = f.lock.withLock { f.reads }
+        c.answer(claudeSession(.blocked), p, option)
+        until("answered") { !c.heldByAutoAllow(Self.key) }
+        c.queue.sync {}
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(c.store?.actions[Self.key], AgentWindowText.notDelivered)
+        XCTAssertFalse(t.fires.isEmpty, "the drop armed the stale-click re-read")
+        let afterDrop = f.lock.withLock { f.reads }
+        t.now += AgentPollGate.floor + 1
+        for fire in t.fires { fire() }
+        c.queue.sync {}
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertGreaterThan(f.lock.withLock { f.reads }, afterDrop, "the re-read read the screen")
+        XCTAssertGreaterThanOrEqual(afterDrop, before)
+    }
+
     /// #1171: the window's single choice that dch drops says so in the notice; one dch took says nothing.
     @MainActor
     func testAgentWindowAnswerDroppedSaysNotDelivered() {
