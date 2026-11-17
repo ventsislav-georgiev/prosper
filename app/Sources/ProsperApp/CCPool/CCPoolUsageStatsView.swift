@@ -318,7 +318,7 @@ struct CCPoolUsageStatsSection: View {
             caption("\(CCPoolUsageStatsModel.Shown.count(s.skipped, "unreadable row")) skipped.", color: Neon.magenta)
         }
         if s.truncated {
-            caption("Only the first \(CCPoolUsageReader.rowsMax) rows of this range were read; later ones are not drawn.", color: Neon.magenta)
+            caption("Only the first \(CCPoolUsageReader.rowsMax.formatted()) rows of this range were read; later ones are not drawn.", color: Neon.magenta)
         }
         if s.filesNotRead > 0 {
             caption("\(CCPoolUsageStatsModel.Shown.count(s.filesNotRead, "usage file")) could not be read.", color: Neon.magenta)

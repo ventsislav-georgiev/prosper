@@ -316,7 +316,7 @@ final class CCPoolUsageStatsTests: XCTestCase {
         XCTAssertEqual(m.shown?.truncated, true)
         XCTAssertEqual(m.shown?.filesNotRead, 2)
         let r = walked(m)
-        XCTAssertTrue(r.contains("Only the first 500000 rows of this range were read; later ones are not drawn."))
+        XCTAssertTrue(r.contains("Only the first \(CCPoolUsageReader.rowsMax.formatted()) rows of this range were read; later ones are not drawn."))
         XCTAssertTrue(r.contains("2 usage files could not be read."))
         let (m2, _) = try rig([:])
         await m2.reload().value
