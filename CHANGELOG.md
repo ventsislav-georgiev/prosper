@@ -1702,6 +1702,8 @@ tag from the now-released section and put it on the new top draft.
   Sessions window until your next action: the line goes when you open the New session form or a
   session of that name appears; and an odd "exit ..." end in the "ended at once or never started"
   line now reads in words like every other end. (#1313)
+- The X-ray window opens on the tab you used last, and on Prompts the first time, instead of always
+  opening on Tasks. (#1463)
 
 ## v2.174.0
 

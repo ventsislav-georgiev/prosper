@@ -474,6 +474,8 @@ enum Preferences {
         static let agentSidebarMode = "agentSidebarMode"
         // #1456 (OQ-153): the Agent Sessions terminal's colours, "prosper" or "ghostty" (the user's own); per Mac, not in SyncedKeys.
         static let agentTerminalColours = "agentTerminalColours"
+        // #1463: the X-ray window's last chosen tab (XrayTab raw value); per Mac, not in SyncedKeys.
+        static let xrayLastTab = "xrayLastTab"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1388,6 +1390,12 @@ enum Preferences {
     static var agentTerminalColours: String {
         get { defaults.string(forKey: Keys.agentTerminalColours) == "ghostty" ? "ghostty" : "prosper" }
         set { defaults.set(newValue, forKey: Keys.agentTerminalColours) }
+    }
+
+    /// #1463: the X-ray tab the person chose last; unset or unknown reads as Prompts, the first tab.
+    static var xrayLastTab: XrayTab {
+        get { XrayTab(rawValue: defaults.string(forKey: Keys.xrayLastTab) ?? "") ?? .prompts }
+        set { defaults.set(newValue.rawValue, forKey: Keys.xrayLastTab) }
     }
 
     /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.

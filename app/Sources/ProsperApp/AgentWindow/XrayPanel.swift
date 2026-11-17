@@ -77,6 +77,10 @@ final class XrayPanels: ObservableObject {
     /// Transcript-mode pane keeps its own chapters, never both). Off under XCTest as `run` is: rows put `fromDch` here.
     static var chaptersRead: @MainActor (UUID, XrayTarget) -> Bool = { NSClassFromString("XCTestCase") == nil && fromDch($0, $1) }
 
+    /// #1463: a tab chosen in the strip is remembered (Preferences.xrayLastTab). Off under XCTest so no row leaks its
+    /// choice into another row's default open; rows that pin it set it and restore it.
+    static var rememberTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
+
     /// #1355: a new panel has a Search tab. Off under XCTest so the existing rows keep their exact tab sets; rows set
     /// XrayPanelModel.searchable themselves.
     static var searchTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
@@ -307,6 +311,7 @@ final class XrayPanelModel: ObservableObject {
     /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
         tab = t
+        if XrayPanels.rememberTab() { Preferences.xrayLastTab = t }   // #1463: only the person's choice, never a jump
         // #1415: a Transcript pane reads its refs again on a switch to Refs: at once, or at the next tick after the read
         if t == .refs, loaded, !fromDch() {
             if reading == nil, let dch, let run { readChapters(dch, run) } else { lastRead = .distantPast }

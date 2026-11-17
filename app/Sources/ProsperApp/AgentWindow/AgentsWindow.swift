@@ -562,9 +562,9 @@ final class AgentsNSWindow: NSWindow {
     // MARK: #1351 the X-ray panel (#1346 P3a)
 
     /// Shift-Command-X, the "..." item and the Todos chip: closes the focused pane's open panel; else opens one on `tab`
-    /// for the pane's live or remote session and reads it once. Below XrayTabs.gate (XrayPanels.dch nil): false (the key
+    /// for the pane's live or remote session and reads it once. #1463: `tab` nil opens on the last tab the person chose (Prompts the first time; one the session lacks falls to the first tab it has, Prompts when there). Below XrayTabs.gate (XrayPanels.dch nil): false (the key
     /// passes through) and no process. `fallback` (the chip's list): run when the read finds no Tasks tab.
-    @discardableResult func toggleXray(on tab: XrayTab = .tasks, fallback: (() -> Void)? = nil) -> Bool {
+    @discardableResult func toggleXray(on tab: XrayTab? = nil, fallback: (() -> Void)? = nil) -> Bool {
         guard let model, let dch = XrayPanels.dch() else { return false }
         let pane = model.layout.focused, panels = XrayPanels.shared
         let target = model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil
@@ -573,7 +573,7 @@ final class AgentsNSWindow: NSWindow {
             if open.target == target || target == nil { return true }
         }
         guard let target else { return true }
-        let p = XrayPanelModel(target: target, tab: tab)
+        let p = XrayPanelModel(target: target, tab: tab ?? Preferences.xrayLastTab)
         p.close = { panels.close(pane) }
         p.fallback = fallback
         p.isCurrent = { [weak model, weak p] in

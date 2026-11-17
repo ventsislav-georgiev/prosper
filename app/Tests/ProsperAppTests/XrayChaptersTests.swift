@@ -265,4 +265,99 @@ final class XrayChaptersTests: XCTestCase {
         XCTAssertTrue(XrayChapters.parse(Data(#"{"schema":1}"#.utf8)) == nil)
         XCTAssertEqual(XrayChapters.parse(Data(#"{"schema":1,"chapters":[7,{"title":"x"}]}"#.utf8))?.map(\.title), ["x"])
     }
+
+    // MARK: #1463 the X-ray window remembers its last tab
+
+    static let lastTabKey = "xrayLastTab"
+
+    /// A Terminal-mode window whose dch answers the chapters (tabs Prompts, Responses, Tasks, Memory), the remember seam on
+    /// and the stored tab cleared before and after; `body` opens through `open`: a read panel, closed again afterwards.
+    func lastTabWindow(_ body: (AgentsNSWindow) async throws -> Void) async throws {
+        let fake = Run()
+        let (dch, prun, model, read, rem) = (XrayPanels.dch, XrayPanels.run, XrayPanels.model, XrayPanels.chaptersRead, XrayPanels.rememberTab)
+        Preferences.defaults.removeObject(forKey: Self.lastTabKey)
+        defer {
+            (XrayPanels.dch, XrayPanels.run, XrayPanels.model, XrayPanels.chaptersRead, XrayPanels.rememberTab) = (dch, prun, model, read, rem)
+            XrayPanels.shared.open = [:]
+            Preferences.defaults.removeObject(forKey: Self.lastTabKey)
+        }
+        XrayPanels.dch = XrayPanelTasksTests.gate([1, 78, 0])
+        XrayPanels.run = fake.run
+        XrayPanels.chaptersRead = XrayPanels.fromDch
+        XrayPanels.rememberTab = { true }
+        try await window { win, m in
+            XrayPanels.model = { [weak m] _ in m }
+            try await body(win)
+        }
+    }
+
+    /// Opens X-ray on `tab` (nil: the default open), waits for its read and closes it again; the panel is returned.
+    func openLast(_ win: AgentsNSWindow, _ tab: XrayTab?) async throws -> XrayPanelModel {
+        let pane = try XCTUnwrap(win.model).layout.focused
+        XCTAssertTrue(win.toggleXray(on: tab))
+        let p = try XCTUnwrap(XrayPanels.shared.open[pane])
+        await p.reading?.value
+        XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory])
+        XCTAssertTrue(win.toggleXray(), "closes")
+        XCTAssertTrue(XrayPanels.shared.open[pane] == nil)
+        return p
+    }
+
+    /// Red at TIP: the default open was Tasks (AgentsWindow.toggleXray `on tab: XrayTab = .tasks`).
+    func testTheFirstDefaultOpenShowsPrompts() async throws {
+        try await lastTabWindow { win in
+            let p = try await openLast(win, nil)
+            XCTAssertEqual(p.tab, .prompts)
+        }
+    }
+
+    /// Red at TIP: nothing stored the choice, and the default was Tasks.
+    func testTheNextDefaultOpenIsTheTabChosenLast() async throws {
+        try await lastTabWindow { win in
+            let first = try await openLast(win, nil)
+            first.select(.responses)
+            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Responses")
+            let second = try await openLast(win, nil)
+            XCTAssertEqual(second.tab, .responses)
+            second.select(.tasks)
+            let third = try await openLast(win, nil)
+            XCTAssertEqual(third.tab, .tasks)
+        }
+    }
+
+    /// A caller that names a tab (the Todos chip: Tasks) opens on it and neither reads nor overwrites the stored one; a
+    /// jump that sets `tab` directly (a ref card's Search) is not a choice either.
+    func testAnExplicitTabOpensThereAndKeepsTheStoredOne() async throws {
+        try await lastTabWindow { win in
+            try await openLast(win, nil).select(.responses)
+            let chip = try await openLast(win, .tasks)
+            XCTAssertEqual(chip.tab, .tasks)
+            chip.tab = .memory
+            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Responses", "a jump is not remembered")
+            let next = try await openLast(win, nil)
+            XCTAssertEqual(next.tab, .responses)
+        }
+    }
+
+    /// A stored tab the session lacks (Search is off under XCTest) opens on Prompts; an unknown stored value reads as Prompts.
+    func testAnUnavailableOrUnknownStoredTabOpensPrompts() async throws {
+        try await lastTabWindow { win in
+            Preferences.xrayLastTab = .search
+            let gone = try await openLast(win, nil)
+            XCTAssertEqual(gone.tab, .prompts)
+            Preferences.defaults.set("Bogus", forKey: Self.lastTabKey)
+            XCTAssertEqual(Preferences.xrayLastTab, .prompts)
+            let unknown = try await openLast(win, nil)
+            XCTAssertEqual(unknown.tab, .prompts)
+        }
+    }
+
+    /// Under XCTest the seam is off: a choice in the strip stores nothing, so no row leaks into another's default open.
+    func testTheRememberSeamIsOffUnderXCTest() throws {
+        Preferences.defaults.removeObject(forKey: Self.lastTabKey)
+        XCTAssertFalse(XrayPanels.rememberTab())
+        let p = XrayPanelModel(target: Self.local, tab: .prompts)
+        p.select(.responses)
+        XCTAssertTrue(Preferences.defaults.object(forKey: Self.lastTabKey) == nil)
+    }
 }
