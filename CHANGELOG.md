@@ -1647,6 +1647,10 @@ tag from the now-released section and put it on the new top draft.
 - Managed config writes now also work in a folder you can enter but not list (for example mode
   0300), and a write is refused if the folder Prosper holds open is no longer the folder at that
   path. (#1431)
+- Always allow now notices a session that starts in the socket folder your Agent Island view does
+  not show (Mac-only or Remote-only) and updates dch's config right away, and a stray NUL byte in
+  dch's config is cut from its line when Prosper rewrites the file, so it no longer keeps the island
+  from answering. (#1185)
 
 ## v2.174.0
 

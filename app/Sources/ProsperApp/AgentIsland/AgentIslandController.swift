@@ -33,6 +33,22 @@ private final class FirstClickHostingView<V: View>: NSHostingView<V> {
 /// runner's queue (DispatchQueue.global), never main.
 typealias SessionEnvContributor = @Sendable (_ argv: [String], _ env: [String: String]) -> [String: String]
 
+/// #1185 (b1): the seed socket dirs the poll does not list, scanned by AgentDirScanner's rule (one stat per dir per
+/// tick, a readdir only when its mtime moved). A dch client's own files move the mtime too, so only the .sock set
+/// counts. Runs on the controller's poll queue only (hence unchecked Sendable).
+final class AgentSeedScan: @unchecked Sendable {
+    private let scanner: AgentDirScanner
+    private var seen: [String: Set<String>]?
+    init(scanner: AgentDirScanner = AgentDirScanner()) { self.scanner = scanner }
+
+    /// Whether the .sock set of `dirs` moved since the last call; the first call only records it (reload syncs once).
+    func moved(_ dirs: [String]) -> Bool {
+        let now = scanner.socks(dirs)
+        defer { seen = now }
+        return seen.map { $0 != now } ?? false
+    }
+}
+
 @MainActor
 final class AgentIslandController {
     static let shared = AgentIslandController()
@@ -267,7 +283,7 @@ final class AgentIslandController {
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
         self.poller = poller
-        let t = Self.makePollTimer(poller, queue: queue, every: pollEvery) { [weak self] sessions, dirs in
+        let t = Self.makePollTimer(poller, queue: queue, every: pollEvery, onTick: seedTick()) { [weak self] sessions, dirs in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions, dirs: dirs) } }
         }
         t.resume()
@@ -281,12 +297,16 @@ final class AgentIslandController {
     /// #478: nonisolated so the handler is too. Built in reload() it was inferred
     /// @MainActor (setEventHandler is not @Sendable) and its executor check
     /// trapped on the poll queue.
+    /// #1185: `onTick` gets every tick's listed dirs, a list change or not (the seed scan).
     nonisolated static func makePollTimer(_ poller: AgentIslandPoller, queue: DispatchQueue, every: TimeInterval = 1,
+                                          onTick: @escaping @Sendable ([String]) -> Void = { _ in },
                                           onSessions: @escaping @Sendable ([AgentSession], [String]) -> Void) -> DispatchSourceTimer {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: every, leeway: .milliseconds(250))
         t.setEventHandler {
-            guard let sessions = poller.tick() else { return }
+            let changed = poller.tick()
+            onTick(poller.listedDirs)
+            guard let sessions = changed else { return }
             onSessions(sessions, poller.listedDirs)   // the dirs this tick read, on the poll queue
         }
         return t
@@ -1902,9 +1922,24 @@ final class AgentIslandController {
     /// transcript mapping), from the newest list; the queue reads it again right before a send.
     private let claudeKeys = OSAllocatedUnfairLock<Set<AgentSessionKey>>(initialState: [])
 
+    /// #1185 (b1) seam: the poll's scan of the seed socket dirs it does not list (a Mac-only or Remote-only view);
+    /// rows put in one with a counting readdir.
+    var seedScan = AgentSeedScan()
+
+    /// #1185: one poll tick's seed scan, run on `queue` with the dirs that tick listed. Only a moved .sock set of the
+    /// unlisted seed dirs checks again (on main), and that sync forks; an idle tick forks nothing.
+    func seedTick() -> @Sendable ([String]) -> Void {
+        let scan = seedScan, seeds = seedDirs
+        return { [weak self] listed in
+            guard scan.moved(seeds().filter { !listed.contains($0) }) else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.checkAutoAllow(seedMoved: true) } }
+        }
+    }
+
     /// Every list change, before it is published: a session that just went blocked
     /// gets one check, any tab, expanded or not. Off: nothing is read or held.
-    func checkAutoAllow() {
+    /// #1185: `seedMoved`, the poll tick's seed scan saw a session come or go in a seed dir the poll does not list.
+    func checkAutoAllow(seedMoved: Bool = false) {
         guard let store else { return }
         // #935: no id (another program, two Claudes, an older dch, no list yet) is not Claude Code.
         // #1133: nor is a row kept from an earlier list while both list forms fail (not fresh).
@@ -1915,7 +1950,7 @@ final class AgentIslandController {
         claudeKeys.withLock { $0 = claude }
         // #1172: a 1.29.x (or unreadable) master came or went: dch's config again (the sync reads the dirs itself).
         let hold = DchConfigWriter.holdsTrue(store.sessions.map(\.version))
-        if let was = listHold, was != hold { syncDchConfig() }
+        if seedMoved || listHold.map({ $0 != hold }) == true { syncDchConfig() }
         listHold = hold
         guard autoAllowOn() else { autoAllow = [:]; dchSeen = [:]; return }   // nothing held: published as is
         showDchAnswers(store.sessions)

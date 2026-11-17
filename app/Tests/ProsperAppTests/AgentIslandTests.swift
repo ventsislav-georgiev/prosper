@@ -582,6 +582,28 @@ final class AgentIslandTests: XCTestCase {
         t.cancel()
     }
 
+    /// #1185: the seed scan's hook gets the listed dirs on every tick, also on the ticks whose list did not change.
+    @MainActor func testPollTimerCallsOnTickOnEveryTick() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        f.rows = [session("s", .idle, dir: dir.path)]
+        let ticks = expectation(description: "three ticks")
+        ticks.expectedFulfillmentCount = 3
+        let counts = OSAllocatedUnfairLock(initialState: (ticks: 0, lists: 0))
+        let queue = DispatchQueue(label: "agentisland.test.ontick", qos: .utility)
+        let t = AgentIslandController.makePollTimer(poller([dir.path], f), queue: queue, every: 0.01, onTick: { dirs in
+            XCTAssertEqual(dirs, [dir.path], "the dirs the tick read")
+            if counts.withLock({ $0.ticks += 1; return $0.ticks }) <= 3 { ticks.fulfill() }
+        }) { _, _ in counts.withLock { $0.lists += 1 } }
+        t.resume()
+        wait(for: [ticks], timeout: 5)
+        t.cancel()
+        queue.sync {}
+        let n = counts.withLock { $0 }
+        XCTAssertEqual(n.lists, 1, "only the first tick's list changed")
+        XCTAssertGreaterThanOrEqual(n.ticks, 3)
+    }
+
     /// QA #606 INFO-6: the controller keeps the dirs of the tick it applied, though the poller's dirs flip on at once.
     @MainActor func testApplyKeepsTheDirsTheTickRead() {
         final class Dirs: @unchecked Sendable {

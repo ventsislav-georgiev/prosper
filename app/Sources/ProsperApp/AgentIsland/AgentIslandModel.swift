@@ -927,13 +927,7 @@ final class AgentDirScanner {
     func scan(_ dirs: [String]) -> AgentDirSnapshot {
         var snap: AgentDirSnapshot = [:]
         for dir in dirs {
-            // A dir that does not exist yet (isolation never used) is no sessions.
-            guard let m = Self.mtime(dir) else { cache[dir] = nil; continue }
-            if cache[dir]?.mtime != m {
-                let names = readDir(dir)
-                cache[dir] = (m, names.filter { $0.hasSuffix(".sock") }.map { String($0.dropLast(5)) })
-            }
-            for name in cache[dir]?.names ?? [] {
+            for name in names(dir) ?? [] {
                 let base = "\(dir)/\(name).sock"
                 snap[AgentSessionKey(dir: dir, name: name)] = AgentSidecarStamp(
                     act: Self.mtime(base + ".act"), state: Self.mtime(base + ".state"),
@@ -943,6 +937,26 @@ final class AgentDirScanner {
         }
         cache = cache.filter { dirs.contains($0.key) }
         return snap
+    }
+
+    /// #1185: each dir's session names (its .sock files) and nothing else: one stat of the dir, a readdir only
+    /// when its mtime moved; no sidecar is stat'd. A dir that does not exist is absent.
+    func socks(_ dirs: [String]) -> [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        for dir in dirs { out[dir] = names(dir).map(Set.init) }
+        cache = cache.filter { dirs.contains($0.key) }
+        return out
+    }
+
+    /// The dir's .sock names through the cache: one stat, a readdir only when the dir's mtime moved; nil: no dir.
+    private func names(_ dir: String) -> [String]? {
+        // A dir that does not exist yet (isolation never used) is no sessions.
+        guard let m = Self.mtime(dir) else { cache[dir] = nil; return nil }
+        if cache[dir]?.mtime != m {
+            let names = readDir(dir)
+            cache[dir] = (m, names.filter { $0.hasSuffix(".sock") }.map { String($0.dropLast(5)) })
+        }
+        return cache[dir]?.names ?? []
     }
 
     static func mtime(_ path: String) -> TimeInterval? {

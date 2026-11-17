@@ -1069,6 +1069,84 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertEqual(read(file), "auto_allow = true\nsidekick_pattern = -qa\n")
     }
 
+    /// #1185: a controller with the toggle on, two seed dirs in the row's tempDir (the poll lists only the first),
+    /// a seed scan whose readdir is counted, and reload's sync done (the build cached). `tick` runs one poll tick's
+    /// seed scan on the poll queue, as the timer does, and gives the process starts and readdirs it caused.
+    @MainActor private func seedScanned(_ file: String) -> (c: AgentIslandController, d: FakeDch, listed: String, unlisted: String,
+                                                            tick: () -> (forks: Int, reads: Int)) {
+        let listed = tempDir("listed").path, unlisted = tempDir("unlisted").path
+        let (c, d) = controller(FakeIO(), on: true, version: [1, 30, 0], build: "full", config: file)
+        c.seedDirs = { [listed, unlisted] }
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        c.seedScan = AgentSeedScan(scanner: AgentDirScanner(readDir: {
+            reads.withLock { $0 += 1 }
+            return (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? []
+        }))
+        d.lock.withLock { d.ls = [listed: "[]", unlisted: "[]"] }
+        c.syncDchConfig()
+        c.queue.sync {}
+        let scan = c.seedTick()
+        return (c, d, listed, unlisted, {
+            let f = d.called().count, r = reads.withLock { $0 }
+            c.queue.sync { scan([listed]) }
+            self.drain(c)
+            return (d.called().count - f, reads.withLock { $0 } - r)
+        })
+    }
+
+    /// #1185 (b1): an idle tick stats the unlisted seed dir and starts no process; a client's own file there moves
+    /// its mtime (one readdir) but no .sock, so nothing starts; a session coming or going there syncs once (one
+    /// `--ls-json` per seed dir: two); a session in the listed dir is the poll's own, nothing here. Fake files only.
+    @MainActor func testTheUnlistedSeedDirIsScannedWithoutAProcessPerTick() {
+        usePattern(tabs: true, "-qa")
+        let s = seedScanned(tempDir().appendingPathComponent("config").path), fm = FileManager.default
+        XCTAssertEqual(s.d.called(), [["--build"], ["--ls-json"], ["--ls-json"]], "reload's sync")
+        XCTAssertTrue(s.tick() == (0, 1), "the first tick reads the dir once and only records it")
+        for i in 0..<3 { XCTAssertTrue(s.tick() == (0, 0), "idle tick \(i): one stat, no readdir, no process") }
+        XCTAssertTrue(fm.createFile(atPath: s.unlisted + "/api.sock.client.4242", contents: nil))
+        XCTAssertTrue(s.tick() == (0, 1), "a client's file: one readdir, the .sock set unmoved, no process")
+        XCTAssertTrue(fm.createFile(atPath: s.unlisted + "/api.sock", contents: nil))
+        let came = s.tick()
+        XCTAssertTrue(came.forks <= 2 && came.forks > 0, "a session came: \(came.forks) starts")
+        XCTAssertEqual(Array(s.d.called().suffix(2)), [["--ls-json"], ["--ls-json"]])
+        XCTAssertTrue(s.tick() == (0, 0), "idle again")
+        XCTAssertNoThrow(try fm.removeItem(atPath: s.unlisted + "/api.sock"))
+        XCTAssertEqual(s.tick().forks, 2, "the session went: one sync")
+        XCTAssertTrue(fm.createFile(atPath: s.listed + "/api-qa.sock", contents: nil))
+        XCTAssertTrue(s.tick() == (0, 0), "the listed dir is the poll's: not scanned here")
+    }
+
+    /// #1185 (b1): a 1.29.x master that appears in the seed dir the poll does not list writes false at its first
+    /// tick, and true comes back at the tick after it goes.
+    @MainActor func testA129MasterInTheUnlistedSeedDirWritesFalse() {
+        usePattern(tabs: true, "-qa")
+        let file = tempDir().appendingPathComponent("config").path, s = seedScanned(file)
+        let on = "auto_allow = true\nsidekick_pattern = -qa\n", off = "auto_allow = false\nsidekick_pattern = -qa\n"
+        XCTAssertEqual(read(file), on)
+        _ = s.tick()
+        s.d.lock.withLock { s.d.ls[s.unlisted] = #"[{"name":"api","version":"1.29.1"}]"# }
+        XCTAssertTrue(FileManager.default.createFile(atPath: s.unlisted + "/api.sock", contents: nil))
+        _ = s.tick()
+        XCTAssertEqual(read(file), off, "the 1.29.1 master came: false at its first tick")
+        s.d.lock.withLock { s.d.ls[s.unlisted] = "[]" }
+        XCTAssertNoThrow(try FileManager.default.removeItem(atPath: s.unlisted + "/api.sock"))
+        _ = s.tick()
+        XCTAssertEqual(read(file), on, "it went: true again")
+    }
+
+    /// #1185 (QA 916): a config with a NUL line rewrites with that line cut at the NUL (what dch reads stays; a line
+    /// with a NUL first goes), and the next read sees no NUL (a `--config` timeout then reads false: the island answers).
+    func testARewriteCutsANulLine() {
+        let path = tempDir().appendingPathComponent("config").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: Data("# mine\nfoo = 1\u{0}2\n\u{0}bar = 3\nauto_allow = true\n".utf8)))
+        XCTAssertTrue(DchConfigWriter.mayAllow(path: path), "before: a NUL reads unknown")
+        XCTAssertEqual(DchConfigWriter.write(path: path, autoAllow: false, pattern: "-qa"), .written)
+        let d = FileManager.default.contents(atPath: path) ?? Data()
+        XCTAssertFalse(d.contains(0), "the next read sees no NUL")
+        XCTAssertEqual(read(path), "# mine\nfoo = 1\nauto_allow = false\nsidekick_pattern = -qa\n")
+        XCTAssertFalse(DchConfigWriter.mayAllow(path: path), "a later timeout reads false")
+    }
+
     /// dch's own reading of auto_allow (dch.c config_line, dch_config_bool), and of the file when the stand-down's
     /// `--config` times out (mayAllow): nothing Prosper cannot read the way dch does counts as false.
     func testDchsReadingOfAutoAllow() throws {
@@ -1119,9 +1197,9 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertTrue(DchConfigWriter.mayAllow(path: file("nulOff", "\u{0}auto_allow = true\n")), "even where dch reads false")
     }
 
-    /// #1179: render keeps a line holding a NUL byte, and finds exactly the key lines dch finds in it (dch sees the
-    /// bytes up to the NUL). So turning the toggle off writes a false dch reads, wherever the NUL stands.
-    func testANulByteLineIsKeptAndItsKeyFound() {
+    /// #1179: render finds exactly the key lines dch finds in a line holding a NUL byte (dch sees the bytes up to
+    /// the NUL). So turning the toggle off writes a false dch reads, wherever the NUL stands. #1185: any other such line is cut at the NUL.
+    func testANulByteLineIsCutAndItsKeyFound() {
         for set in ["auto_allow = true", " \tauto_allow\t=\tyes"] {
             let b = Array(set.utf8)
             for i in 0...b.count {
@@ -1136,11 +1214,12 @@ final class DchConfigWriterTests: XCTestCase {
         let old = "auto_allow = true\u{0} # off\n\u{0}auto_allow = true\nsidekick_pattern = a\u{0}b\n# note\u{0}x\n"
         XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: Data(old.utf8)))
         XCTAssertEqual(DchConfigWriter.write(path: path, autoAllow: false, pattern: "-qa"), .written, "no new refusal")
-        XCTAssertEqual(read(path), "auto_allow = false\n\u{0}auto_allow = true\nsidekick_pattern = -qa\n# note\u{0}x\n")
+        XCTAssertEqual(read(path), "auto_allow = false\nsidekick_pattern = -qa\n# note\n",
+                       "#1185: a line that sets no owned key is cut at its NUL, and dropped when nothing is left before it")
         let d = FileManager.default.contents(atPath: path) ?? Data()
         XCTAssertFalse(Self.dchAllows(d))
         XCTAssertEqual(Self.dchValue(d, "sidekick_pattern"), "-qa")
-        XCTAssertTrue(DchConfigWriter.dchAllows(d) == nil, "the kept NUL line still reads unknown at a timeout")
+        XCTAssertTrue(DchConfigWriter.dchAllows(d) == false, "#1185: no NUL left, so a timeout reads false, not unknown")
     }
 
     /// Item 2 (#792's leftover): the stand-down check's `dch --config` timing out reads the file instead. One that

@@ -190,8 +190,10 @@ enum DchConfigWriter {
     /// kept byte for byte (CRLF, non-UTF-8 and comments too), a last line without a newline given one, a
     /// missing key appended. A pattern dch could not read back as one line (a control character, over
     /// `maxPatternBytes`) is written empty: no character of it ever starts another line.
-    /// #1179: a line holding a NUL byte is safe to keep: dch sees its bytes up to the NUL, and a key in that prefix is
-    /// a key setsKey sees on the whole line (the bytes through "=" hold no NUL), so both find the same key lines.
+    /// #1179: on a line holding a NUL byte dch sees its bytes up to the NUL, and a key in that prefix is a key setsKey
+    /// sees on the whole line (the bytes through "=" hold no NUL), so both find the same key lines.
+    /// #1185 (QA 916): any other such line is cut at its first NUL (the bytes dch reads stay) and dropped when nothing
+    /// is left: kept whole, it made mayAllow read the file as unknown at every later `--config` timeout (the island stood down).
     static func render(_ old: Data, autoAllow: Bool, pattern: String) -> Data {
         let oneLine = pattern.utf8.count <= maxPatternBytes && pattern.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
         let owned = [("auto_allow", "auto_allow = \(autoAllow)"),
@@ -204,7 +206,10 @@ enum DchConfigWriter {
                 if done.insert(o.0).inserted { out.append(contentsOf: Array((o.1 + "\n").utf8)) }
                 continue
             }
-            out.append(line)
+            // #1185 (QA 916): any other line is cut at its first NUL, so the rewritten file reads to Prosper as to dch.
+            let cut = line.prefix { $0 != 0 }
+            if cut.count < line.count, cut.isEmpty { continue }   // a NUL first: nothing dch reads is left
+            out.append(cut)
             out.append(0x0A)
         }
         for (key, set) in owned where !done.contains(key) { out.append(contentsOf: Array((set + "\n").utf8)) }
