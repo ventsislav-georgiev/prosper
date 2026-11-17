@@ -99,7 +99,9 @@ final class IncreaseContrastIslandTests: XCTestCase {
         XCTAssertEqual(Self.count(".foregroundStyle(Neon.faded(.white, 0.9))", in: view), 3, "two 0.9 sites + #1316 header")
         // #1371: 25, the session row's notice and PR chip inks are the Agent Sessions row's now (AgentIslandRowStyleTests).
         // #1375: 16, the nine faded-white inks on the History row, the prompt card and the draft field are the theme's.
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 16, "the ear count, the text sites on the black shape and the shown tab's fallback")
+        // #1452: 26, TIP's ten faded-white inks back for Follow theme off (the shown tab, the History row's title and status,
+        // the prompt card's context, Open terminal, plain answer, digit, hint and detail, the draft).
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 26, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
@@ -137,12 +139,22 @@ final class IncreaseContrastIslandTests: XCTestCase {
             ".foregroundStyle(ear.state == .blocked ? ear.state.color : (s.total == 0 ? Color.white.opacity(0.35) : Neon.faded(.white, 0.9)))",
             "Text(verbatim: \"Resume \\(why)\").foregroundStyle(Color.white.opacity(0.45))",
             ".foregroundStyle(on ? AgentIslandInk.selectedTab : Color.white.opacity(0.45))",
+            // #1452: Follow theme off (the default) brings back TIP's own History row cues and fills before #1375, as kept here
+            // before #1375; with it on they are the theme's (AgentIslandFollowThemeTests).
+            "case .age: return Color.white.opacity(0.4)",
+            "case .end: return Color.white.opacity(0.5)",
+            "case .glyph, .icon, .cwd: return Color.white.opacity(0.35)",
+            "case .pinned: return Color.white.opacity(0.8)",
+            "case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))",
+            "static func ownCardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }",
+            "static var cardFill: Color { AgentIslandInk.follows ? AgentIslandRow.cardFill : Color.white.opacity(0.05) }",
         ]
         XCTAssertEqual(left, kept)
         XCTAssertEqual(Self.count(".opacity(0.7)", in: view), 0, "no raw 0.7 left")
         XCTAssertEqual(Self.count("text.opacity(", in: view), 0, "the answer buttons fade through the token")
-        // #1375: the answer buttons' dim ink is a theme token (AgentPromptCardView.look), no fade of the label ink.
-        XCTAssertEqual(Self.count("Neon.faded(text, ", in: view), 0, "digit, hint, detail take the look's dim ink")
+        // #1375: the answer buttons' dim ink is a theme token (AgentPromptCardView.look), no fade of the label ink;
+        // #1452: but with Follow theme off, TIP's one fade of the label ink (the digit's 0.7) is back.
+        XCTAssertEqual(Self.count("Neon.faded(text, ", in: view), 1, "with Follow theme off, the look's dim ink is TIP's fade")
         XCTAssertEqual(Self.count("fill(Color.white", in: view), 0, "no white wash on a card, a button or a hint")
         XCTAssertEqual(Self.count("case .plain: (Self.wash, Neon.textPrimary, Neon.textSecondary)", in: view), 1, "plain answer button")
     }

@@ -1090,46 +1090,46 @@ struct AgentIslandHistoryRow: View {
         let age = record.lastSeen > 0 ? AgentIsland.age(now - record.lastSeen) : ""
         let end = AgentIsland.endLabel(record.end)
         let cwd = (record.cwd as NSString).abbreviatingWithTildeInPath
-        // #1375: the session row's card and the sidebar's inks (hover: its selected look and inks).
-        let sel = hover && enabled, quiet = AgentSidebarRowView.ink(.quiet, selected: sel)
+        // #1375: the session row's card and the sidebar's inks (hover: its selected look and inks); #1452: off, the island's own.
+        let sel = hover && enabled, ink = { (part: Part) in Self.ink(part, selected: sel) }
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: AgentIslandGeometry.glyphGap) {
                 Text(verbatim: "○")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(quiet)
+                    .foregroundStyle(ink(.glyph))
                     .frame(width: AgentIslandGeometry.glyphWidth)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(verbatim: record.title)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Neon.textPrimary)
+                            .foregroundStyle(ink(.title))
                             .lineLimit(1)
                         Spacer(minLength: 6)
                         Text(verbatim: age)
                             .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(quiet)
+                            .foregroundStyle(ink(.age))
                             .fixedSize()
                         if enabled {   // #742: the row click's Resume, with dch's message, made visible
-                            iconButton(AgentIsland.resumeWithMessageSymbol, ink: quiet, label: AgentIsland.resumeWithMessageHelp, action: action)
+                            iconButton(AgentIsland.resumeWithMessageSymbol, ink: ink(.icon), label: AgentIsland.resumeWithMessageHelp, action: action)
                         }
                         if let resumeNoMessage {
-                            iconButton(AgentIsland.resumeNoMessageSymbol, ink: quiet, label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
+                            iconButton(AgentIsland.resumeNoMessageSymbol, ink: ink(.icon), label: AgentIsland.resumeNoMessageLabel, action: resumeNoMessage)
                         }
-                        if let pin { editControls(pin, quiet: quiet) }
+                        if let pin { editControls(pin, ink: ink) }
                     }
                     HStack(spacing: 6) {
                         if let status {
-                            Text(verbatim: status).foregroundStyle(quiet)
+                            Text(verbatim: status).foregroundStyle(ink(.status))
                         } else {
                             Text(verbatim: end)
                                 // #585: only a crash is colored; "ended (signal 15)" stays neutral.
-                                .foregroundStyle(end.hasPrefix("crashed") ? (sel ? Neon.textPrimary : AgentIslandInk.blockedOnCard) : quiet)
+                                .foregroundStyle(ink(end.hasPrefix("crashed") ? .crash : .end))
                                 // #839: a sender's program name can be long; the label truncates, cwd yields first.
                                 .lineLimit(1).layoutPriority(1)
                                 .help(Text(verbatim: endHelp))   // #1332 N937-c: the whole sender command
                             Text(verbatim: cwd)
                                 .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(quiet)
+                                .foregroundStyle(ink(.cwd))
                                 .truncationMode(.middle)
                         }
                     }
@@ -1141,8 +1141,7 @@ struct AgentIslandHistoryRow: View {
             .padding(.leading, AgentIslandGeometry.rowLead)
             .padding(.trailing, AgentIslandGeometry.rowTrail)
             .frame(height: AgentIslandGeometry.rowHeight - AgentIslandGeometry.rowGap)
-            .background(NeonSelectedRowFill(selected: sel))
-            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(AgentIslandRow.cardFill))
+            .background(card(selected: sel))
             .contentShape(Rectangle())
             .padding(.vertical, AgentIslandGeometry.rowGap / 2)
         }
@@ -1162,11 +1161,11 @@ struct AgentIslandHistoryRow: View {
 
     /// The pin (filled while pinned) and the X; a pinned row keeps the X's room
     /// empty, so the pins line up. Static, in the age's ink; #1375: a pinned pin in the title's.
-    private func editControls(_ pin: @escaping () -> Void, quiet: Color) -> some View {
+    private func editControls(_ pin: @escaping () -> Void, ink: (Part) -> Color) -> some View {
         HStack(spacing: 4) {
-            iconButton(record.pinned ? "pin.fill" : "pin", ink: record.pinned ? Neon.textPrimary : quiet, label: pinLabel, action: pin)
+            iconButton(record.pinned ? "pin.fill" : "pin", ink: ink(record.pinned ? .pinned : .icon), label: pinLabel, action: pin)
             if let remove {
-                iconButton("xmark", ink: quiet, label: removeLabel, action: remove)
+                iconButton("xmark", ink: ink(.icon), label: removeLabel, action: remove)
             } else {
                 Color.clear.frame(width: Self.iconSize, height: Self.iconSize)
             }
@@ -1174,6 +1173,43 @@ struct AgentIslandHistoryRow: View {
     }
 
     static let iconSize: CGFloat = 14
+
+    /// #1452: the History row's parts by ink.
+    enum Part: CaseIterable { case glyph, title, age, icon, pinned, status, end, crash, cwd }
+    /// #1452: Follow theme on, #1375's inks (the sidebar's, hover its selected ones); off, the island's own white on black
+    /// as before #1375 (hover changed only the card).
+    static func ink(_ part: Part, selected sel: Bool) -> Color {
+        guard AgentIslandInk.follows else {
+            switch part {
+            case .title: return Neon.faded(.white, 0.8)
+            case .age: return Color.white.opacity(0.4)
+            case .pinned: return Color.white.opacity(0.8)
+            case .status: return Neon.faded(.white, 0.7)
+            case .end: return Color.white.opacity(0.5)
+            case .crash: return AgentState.blocked.color
+            case .glyph, .icon, .cwd: return Color.white.opacity(0.35)
+            }
+        }
+        switch part {
+        case .title, .pinned: return Neon.textPrimary
+        case .crash: return sel ? Neon.textPrimary : AgentIslandInk.blockedOnCard
+        case .glyph, .age, .icon, .status, .end, .cwd: return AgentSidebarRowView.ink(.quiet, selected: sel)
+        }
+    }
+    /// #1452: the card's fill when Follow theme is off (TIP before #1375: white over the island's black, brighter on hover).
+    static func ownCardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }
+
+    /// The card: on, #1375's session row card with the sidebar's selected fill; off, the island's own (#1452).
+    @ViewBuilder private func card(selected sel: Bool) -> some View {
+        if AgentIslandInk.follows {
+            ZStack {
+                RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(AgentIslandRow.cardFill)
+                NeonSelectedRowFill(selected: sel)
+            }
+        } else {
+            RoundedRectangle(cornerRadius: 12).fill(Self.ownCardFill(selected: sel))
+        }
+    }
 
     private func iconButton(_ symbol: String, ink: Color, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -1276,11 +1312,11 @@ struct AgentIslandRow: View {
             HStack(spacing: AgentIsland.chipSpacing) {
                 ForEach(Array(prs.chips.enumerated()), id: \.offset) { _, chip in
                     if chip.url != nil {
-                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, AgentSidebarRowView.prChipInk(selected: selected), AgentSidebarRowView.prChipFill) }
+                        Button { AgentIsland.open(chip) } label: { chipText(chip.label, Self.chipInk(selected: selected), AgentSidebarRowView.prChipFill) }
                             .buttonStyle(.plain)
                             .help(Text(verbatim: chip.help))
                     } else {
-                        chipText(chip.label, AgentSidebarRowView.prChipInk(selected: selected), AgentSidebarRowView.prChipFill)
+                        chipText(chip.label, Self.chipInk(selected: selected), AgentSidebarRowView.prChipFill)
                             .help(Text(verbatim: chip.help))
                     }
                 }
@@ -1290,6 +1326,11 @@ struct AgentIslandRow: View {
             Spacer(minLength: 0)
         }
     }
+
+    /// #1452 step 0: the island's PR chip ink, in both Follow theme states. The chip sits on the row's card, which is the
+    /// theme's sidebar since #1371 (not the black notch), so the sidebar's readable amber is the right one: #FFB300 on a
+    /// light theme's card reads 1.4 to 1.6:1 (AgentIslandFollowThemeTests).
+    static func chipInk(selected: Bool) -> Color { AgentSidebarRowView.prChipInk(selected: selected) }
 
     private func chipText(_ s: String, _ color: Color, _ fill: Color? = nil) -> some View {
         Text(verbatim: s)
@@ -1307,15 +1348,20 @@ struct AgentIslandRow: View {
 /// white on the black shape, textPrimary on a themed card. AgentIslandThemeTests measures every ink on all 22 themes.
 @MainActor
 enum AgentIslandInk {
+    /// #1452: Settings > Agent Island > Follow theme, off by default. The one switch: off, every ink #1375 themed is the
+    /// island's own again (TIP before #1375); a change redraws the island as a theme switch does (ThemeStore publishes).
+    static var follows: Bool { Preferences.agentIslandFollowsTheme }
     static func readable(_ ink: Color, on surface: Color, else fallback: Color, dim: Bool = false) -> Color {
         ThemeRuntime.contrastRatio(ink, surface) >= (dim ? 3 : 4.5) ? ink : fallback
     }
     /// The shown tab on the black shape: the theme's accent, else TIP's white.
-    static var selectedTab: Color { readable(Neon.blue, on: .black, else: Neon.faded(.white, 0.9)) }
+    static var selectedTab: Color { follows ? readable(Neon.blue, on: .black, else: Neon.faded(.white, 0.9)) : Neon.faded(.white, 0.9) }
     /// A state glyph on the black shape (a mark): the Agent Sessions state colour.
-    static func glyph(_ s: AgentState) -> Color { readable(agentStateColor(s), on: .black, else: .white, dim: true) }
+    static func glyph(_ s: AgentState) -> Color { follows ? readable(agentStateColor(s), on: .black, else: .white, dim: true) : s.color }
     /// The needs-input amber on a themed card (a crashed History row, the prompt's caption), else textPrimary.
-    static var blockedOnCard: Color { readable(agentStateColor(.blocked), on: AgentIslandRow.cardFill, else: Neon.textPrimary) }
+    static var blockedOnCard: Color {
+        follows ? readable(agentStateColor(.blocked), on: AgentIslandRow.cardFill, else: Neon.textPrimary) : AgentState.blocked.color
+    }
 }
 
 /// #1137: a count as the Agent Sessions window draws it (AgentSidebar.Count's symbol plus the capped number), in the
@@ -1534,7 +1580,7 @@ struct AgentPromptCardView: View {
             switch card {
             case .prompt(let p):
                 let l = p.layout
-                rows(l.question) { line($0, Neon.textPrimary) }
+                rows(l.question) { line($0, Self.questionInk) }
                 context(l.context)
                 context(l.preview, l.previewFont, l.previewLine)
                 rows(l.caption) { line($0, AgentIslandInk.blockedOnCard) }
@@ -1554,25 +1600,48 @@ struct AgentPromptCardView: View {
         .padding(G.cardPad)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .frame(height: G.cardHeight(card) - G.cardGap, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Self.cardFill))   // #1375: the session row's card
+        .background(RoundedRectangle(cornerRadius: 12).fill(Self.cardFill))   // #1375: the session row's card (#1452: when on)
         .padding(.bottom, G.cardGap)
     }
 
-    static var cardFill: Color { AgentIslandRow.cardFill }
+    /// #1452: with Follow theme off (`AgentIslandInk.follows`) every ink below is TIP's before #1375, white on the black shape.
+    static var cardFill: Color { AgentIslandInk.follows ? AgentIslandRow.cardFill : Color.white.opacity(0.05) }
+    static var questionInk: Color { AgentIslandInk.follows ? Neon.textPrimary : Color.white }
+    static var contextInk: Color { AgentIslandInk.follows ? Neon.textSecondary : Neon.faded(.white, 0.6) }
+    static var jumpInk: Color { AgentIslandInk.follows ? Neon.textPrimary : Neon.faded(.white, 0.7) }
+    /// #1452: TIP's answer colours before #1375 (the working orange, a red deny).
+    static let ownAccent = AgentState.working.color
+    static let ownDeny = Color(red: 0.95, green: 0.4, blue: 0.4)
     /// #1375: the answer buttons' fill, label and dim ink (digit, hint, detail) by style, from the theme: the accent fill
     /// with bgTop (the sidebar's digit chip pair), the danger tint with textPrimary, the plain wash with the sidebar inks.
+    /// #1452: off, TIP's: the dim ink is the digit's (the label's at 0.7).
     static func look(_ style: AgentPromptOption.Style) -> (fill: Color, text: Color, dim: Color) {
-        switch style {
+        guard AgentIslandInk.follows else {
+            let (fill, text): (Color, Color) = switch style {
+            case .accent: (ownAccent, Color.white)
+            case .deny: (ownDeny.opacity(0.18), ownDeny)
+            case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))
+            }
+            return (fill, text, Neon.faded(text, 0.7))
+        }
+        return switch style {
         case .accent: (Neon.blue, Neon.bgTop, Neon.bgTop)
         case .deny: (Neon.magenta.opacity(0.18), Neon.textPrimary, Neon.textSecondary)
         case .plain: (Self.wash, Neon.textPrimary, Neon.textSecondary)
         }
     }
     /// #1377: the detail lines are words read to choose an answer: the label's ink (4.5:1 on every theme), not dim (3:1).
-    static func detailInk(_ style: AgentPromptOption.Style) -> Color { look(style).text }
-    static var wash: Color { Neon.textPrimary.opacity(0.08) }
-    static var contextFill: Color { Neon.textPrimary.opacity(0.04) }
-    static var hintFill: Color { Neon.textPrimary.opacity(0.1) }
+    /// #1452: off, TIP's dim detail (the label's at 0.55).
+    static func detailInk(_ style: AgentPromptOption.Style) -> Color {
+        AgentIslandInk.follows ? look(style).text : Neon.faded(look(style).text, 0.55)
+    }
+    /// The hint's ink: the dim one; #1452: off, TIP's (the label's at 0.6).
+    static func hintInk(_ style: AgentPromptOption.Style) -> Color {
+        AgentIslandInk.follows ? look(style).dim : Neon.faded(look(style).text, 0.6)
+    }
+    static var wash: Color { (AgentIslandInk.follows ? Neon.textPrimary : Color.white).opacity(0.08) }
+    static var contextFill: Color { (AgentIslandInk.follows ? Neon.textPrimary : Color.white).opacity(0.04) }
+    static var hintFill: Color { (AgentIslandInk.follows ? Neon.textPrimary : Color.white).opacity(0.1) }
 
     static let changedText = "Prompt changed, open the terminal"
     static let jumpText = "Open terminal"
@@ -1604,7 +1673,7 @@ struct AgentPromptCardView: View {
             VStack(alignment: .leading, spacing: 0) {
                 rows(lines) { l in
                     cardText(l, f)
-                        .foregroundStyle(Neon.textSecondary)
+                        .foregroundStyle(Self.contextInk)
                         .lineLimit(1)
                         .agentCardSlot(height: height, alignment: .leading)
                 }
@@ -1635,7 +1704,7 @@ struct AgentPromptCardView: View {
                         Spacer(minLength: G.cardSpacerMin)
                         if let hint = o.hint {
                             cardText(hint, G.hintFont)
-                                .foregroundStyle(dim)
+                                .foregroundStyle(Self.hintInk(style))
                                 .padding(.horizontal, G.hintInset).padding(.vertical, 1)
                                 .background(Capsule().fill(Self.hintFill))
                                 .fixedSize()
@@ -1671,7 +1740,7 @@ struct AgentPromptCardView: View {
             cardText(Self.jumpText, G.labelFont)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(Neon.textPrimary)
+        .foregroundStyle(Self.jumpInk)
     }
 
     private func button<L: View>(action: @escaping () -> Void, fill: Color, height: CGFloat = G.cardButton - 4,
@@ -1709,12 +1778,12 @@ struct AgentIslandComposer: View {
         let prompt = store.messagePrompt, empty = AgentIsland.messageText(store.messageDraft ?? "") == nil
         HStack(spacing: 10) {
             TextField(text: Binding(get: { store.messageDraft ?? "" }, set: { store.typeMessage($0) }),
-                      prompt: Text(verbatim: prompt).foregroundStyle(Neon.textSecondary)) { Text(verbatim: prompt) }
+                      prompt: AgentIslandInk.follows ? Text(verbatim: prompt).foregroundStyle(Neon.textSecondary) : Text(verbatim: prompt)) { Text(verbatim: prompt) }
                 .textFieldStyle(.plain)
-                .foregroundStyle(Neon.textPrimary)
+                .foregroundStyle(Self.draftInk)
                 // #1375: the field is a themed card in the sidebar's inks; Send and Cancel stay on the black shape.
                 .padding(.horizontal, 6)
-                .background(RoundedRectangle(cornerRadius: 5).fill(AgentIslandRow.cardFill))
+                .background(RoundedRectangle(cornerRadius: 5).fill(Self.fieldFill))
                 .focused($focused)
                 .onSubmit(onSend)
                 .onExitCommand(perform: onCancel)
@@ -1730,4 +1799,8 @@ struct AgentIslandComposer: View {
         }
         .onAppear { focused = true }
     }
+
+    /// #1452: Follow theme on, #1375's themed field; off, TIP's white draft with no card (the placeholder in the system's ink).
+    static var draftInk: Color { AgentIslandInk.follows ? Neon.textPrimary : Neon.faded(.white, 0.9) }
+    static var fieldFill: Color { AgentIslandInk.follows ? AgentIslandRow.cardFill : .clear }
 }

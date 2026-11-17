@@ -15,6 +15,25 @@ final class AgentIslandThemeTests: XCTestCase {
                            "theme-teal", "theme-violet"]
     typealias RGBA = (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat)
     static let now: TimeInterval = 1_000_000
+    private static var savedFollows: Any?
+
+    /// #1452: these rows prove #1375's theme inks, so each runs with Settings > Agent Island > Follow theme on (off by
+    /// default since #1452: AgentIslandFollowThemeTests); the scratch suite's value is put back after.
+    override func setUp() {
+        super.setUp()
+        MainActor.assumeIsolated {
+            Self.savedFollows = Preferences.defaults.object(forKey: "agentIslandFollowsTheme")
+            Preferences.agentIslandFollowsTheme = true
+        }
+    }
+
+    override func tearDown() {
+        MainActor.assumeIsolated {
+            if let v = Self.savedFollows { Preferences.defaults.set(v, forKey: "agentIslandFollowsTheme") }
+            else { Preferences.defaults.removeObject(forKey: "agentIslandFollowsTheme") }
+        }
+        super.tearDown()
+    }
 
     /// The 22 themes as ThemeContrastTests loads them; the literal list above must be all of them.
     func themes() throws -> [ThemeDescriptor] {

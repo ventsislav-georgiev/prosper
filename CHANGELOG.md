@@ -1712,6 +1712,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions and Agent Island: on light themes the amber of a session's "Needs input" badge and
   of its PR chips is now a darker amber, so the text is readable (dark themes are unchanged).
   (#1451)
+- Agent Island has its own colours again by default (white on the black notch, as before it followed
+  the theme); turn on Settings > Agent Island > Look > Follow theme to draw its History rows, prompt
+  cards and message field in your theme's colours. (#1452)
 
 ## v2.174.0
 

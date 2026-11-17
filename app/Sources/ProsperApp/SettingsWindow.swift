@@ -896,7 +896,7 @@ private struct SettingsRootView: View {
         // then (#571) the sort and sidekick tabs, then (#534) the row-detail toggles.
         case "com.prosper.agentisland":
             footer = AnyView(Group {
-                AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentSessionsSection()
+                AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentIslandLookSection(); AgentSessionsSection()
             })
         // ccpool (#871): the account pool pane as the FOOTER. The page exists only while the
         // extension is live, and going live built the owner (AppDelegate's onEnabledChanged).
@@ -1019,6 +1019,21 @@ struct AgentIslandRowDetailsSection: View {
             Preferences.agentIslandRowDetails = v
             AgentIslandController.shared.rowDetailsChanged()
         }
+    }
+}
+
+/// #1452: Agent Island > Look: Follow theme, off by default (the island's own colours). Per Mac (not in SyncedKeys);
+/// a change redraws the open island as a theme switch does (the island's views observe ThemeStore).
+struct AgentIslandLookSection: View {
+    static let label = "Follow theme"
+    static let subtitle = "Off: the island keeps its own colours."
+    @State private var follows = Preferences.agentIslandFollowsTheme
+
+    var body: some View {
+        NeonSection("Look") {
+            NeonRow(Self.label, subtitle: Self.subtitle) { Toggle("", isOn: $follows).labelsHidden().accessibilityLabel(Self.label) }
+        }
+        .onChange(of: follows) { _, v in Preferences.agentIslandFollowsTheme = v; ThemeStore.shared.objectWillChange.send() }
     }
 }
 

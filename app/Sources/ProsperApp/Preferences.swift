@@ -447,6 +447,7 @@ enum Preferences {
         static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
         static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
+        static let agentIslandFollowsTheme = "agentIslandFollowsTheme"   // #1452, per Mac
         // #821: the Agent Sessions window's verbosity (AgentVerbosity); per Mac, so not in SyncedKeys.
         static let agentWindowVerbosity = "agentWindowVerbosity"
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
@@ -1424,6 +1425,12 @@ enum Preferences {
     static var agentIslandAutoAllow: Bool {
         get { defaults.bool(forKey: Keys.agentIslandAutoAllow) }
         set { defaults.set(newValue, forKey: Keys.agentIslandAutoAllow) }
+    }
+
+    /// #1452: Agent Island's inks follow the theme (#1375); off when unset, the island's own colours.
+    static var agentIslandFollowsTheme: Bool {
+        get { defaults.bool(forKey: Keys.agentIslandFollowsTheme) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandFollowsTheme) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable
