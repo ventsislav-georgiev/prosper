@@ -41,14 +41,14 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
 
     func testTitleIsTheDisplayNameWithTheIdBelowOrTheIdAlone() {
         let named = model(Self.set(name: "Fake Kit"))
-        XCTAssertEqual(named.title, "Fake Kit")
+        XCTAssertEqual(named.title, "Extension \"Fake Kit\"")
         XCTAssertEqual(named.idLine, Self.id)
         let unnamed = model(Self.set())
         XCTAssertEqual(unnamed.title, Self.id)
         XCTAssertTrue(unnamed.idLine == nil, "the id is the title already")
         // outside data: no control, line break or direction character reaches the title
         let hostile = model(Self.set(name: "Fake\u{202E}Kit\n\u{0007}\u{2066}2"))
-        XCTAssertEqual(hostile.title, "FakeKit2")
+        XCTAssertEqual(hostile.title, "Extension \"FakeKit2\"")
         XCTAssertFalse(hostile.title.unicodeScalars.contains { $0.properties.generalCategory == .control || $0.properties.generalCategory == .format })
         // nothing visible left: the id, as when no name is known
         let blank = model(Self.set(name: " \u{202E}\n "))
@@ -140,7 +140,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        let name = "*Fake* `kit` [docs](https://example.com)"
+        let name = "*Fake* `kit` [docs](https://example.com)", shown = "Extension \"\(name)\""   // #1245: quoted after the word
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
             for action: ManagedConfigChangeSet.Action in [.apply, .remove, .repair] {
@@ -150,11 +150,11 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                 let texts = tree.map(\.text)
                 XCTAssertTrue(texts.contains(m.verb), "\(tag): \(texts)")
                 if action != .apply { XCTAssertFalse(texts.contains("Apply"), "\(tag): \(texts)") }
-                XCTAssertTrue(texts.contains(name), "\(tag): the name as written: \(texts)")
+                XCTAssertTrue(texts.contains(shown), "\(tag): the name as written: \(texts)")
                 XCTAssertTrue(texts.contains(Self.id), "\(tag): the id below the name: \(texts)")
                 // a selectable Text is on the tree twice (the text and its static text): distinct lines are counted
                 XCTAssertEqual(Set(texts.filter { $0.hasPrefix("Backup: ") }), ["Backup: \(Self.existing.backupDirectory)"], "\(tag): \(texts)")
-                if let title = tree.first(where: { $0.text == name }), let id = tree.first(where: { $0.text == Self.id }) {
+                if let title = tree.first(where: { $0.text == shown }), let id = tree.first(where: { $0.text == Self.id }) {
                     XCTAssertLessThanOrEqual(id.frame.maxY, title.frame.minY + pixel, "\(tag): the id is below the title") // y up
                 }
             }
@@ -178,7 +178,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                 let without = model(Self.set(.remove, name: "Fake Kit"))
                 let with = model(Self.set(.remove, name: "Fake Kit", files: [noted]))
                 let size = fitting(with)
-                let ready: ([AXItem]) -> Bool = { t in t.contains { $0.text == "Remove" } && t.contains { $0.text == "Fake Kit" } }
+                let ready: ([AXItem]) -> Bool = { t in t.contains { $0.text == "Remove" } && t.contains { $0.text == "Extension \"Fake Kit\"" } }
                 let a = axTree(without, size, until: ready)
                 let b = axTree(with, size) { t in ready(t) && t.contains { $0.text == note } }
                 let item = try XCTUnwrap(b.first { $0.text == note }, "\(tag): \(b.map(\.text))")
@@ -192,7 +192,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
                 XCTAssertLessThanOrEqual(item.frame.width, size.width, tag)
                 // fixed: everything above the note (AX frames are in screen points, y up)
                 let above = b.filter { $0.frame.height > 0 && $0.frame.minY >= item.frame.maxY && $0.text != note && !$0.text.isEmpty }
-                XCTAssertTrue(above.contains { $0.text == "Fake Kit" } && above.contains { $0.text == Self.id }, "\(tag): \(above.map(\.text))")
+                XCTAssertTrue(above.contains { $0.text == "Extension \"Fake Kit\"" } && above.contains { $0.text == Self.id }, "\(tag): \(above.map(\.text))")
                 for e in above {
                     // per dimension, one device pixel: two drawn frames are not exactly equal at a fractional scale on a 1x runner
                     func same(_ f: CGRect) -> Bool {

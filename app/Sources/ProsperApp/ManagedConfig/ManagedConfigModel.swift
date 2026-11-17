@@ -14,6 +14,9 @@ struct ManagedConfigOwner: Sendable, Equatable {
     /// #1235 (B-INFO-6): the manifest's display name for the consent sheet's title (outside data, sanitized
     /// where shown). nil: the sheet shows the id. Shown only; never part of a path or a record.
     var displayName: String? = nil
+
+    /// #1245: one owner is one id; a version, slug, dir or display name never splits it in two.
+    static func == (l: Self, r: Self) -> Bool { l.id == r.id }
 }
 
 /// One managed change. `value` is JSON text (a Lua table is converted to JSON by the P2 bridge).

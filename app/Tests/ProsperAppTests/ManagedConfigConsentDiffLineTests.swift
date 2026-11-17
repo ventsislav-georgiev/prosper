@@ -456,7 +456,7 @@ final class ManagedConfigConsentDiffLineTests: XCTestCase {
         let shown = b.filter { $0.named(note) && $0.frame.height > 0 }
         XCTAssertEqual(Set(shown.map { $0.frame.minY.rounded() }).count, 1, "the note once: \(shown.map(\.frame))")
         let frame = try XCTUnwrap(shown.first, "\(b.map(\.names))").frame
-        for label in ["Fake Kit", Self.owner, "Cancel", Self.apply] {
+        for label in ["Extension \"Fake Kit\"", Self.owner, "Cancel", Self.apply] {
             let node = try XCTUnwrap(b.first { $0.named(label) && $0.frame.height > 0 }, "\(label): \(b.map(\.names))")
             XCTAssertFalse(node.frame.intersects(frame), "\(label) \(node.frame) meets the note \(frame)")
         }

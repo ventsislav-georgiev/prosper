@@ -83,16 +83,16 @@ final class ManagedConfigConsentMarksTests: XCTestCase {
         }
         for title in ["Calculator", "Calc 2.0", "Fake Kit"] {
             let m = model(title)
-            XCTAssertEqual(m.title, title, "'\(title)' stays a title")
+            XCTAssertEqual(m.title, "Extension \"\(title)\"", "'\(title)' stays a title, quoted")
             XCTAssertEqual(m.idLine, Self.owner)
         }
         // 200 characters with one space and a dot: not id-shaped, shown cut at 120 with the id under it
         let spaced = String(repeating: "a", count: 99) + " " + String(repeating: "a", count: 49) + "." + String(repeating: "a", count: 50)
         XCTAssertEqual(spaced.count, 200)
         let s = model(spaced)
-        XCTAssertEqual(s.title.count, 120)
-        XCTAssertTrue(s.title.hasPrefix(String(repeating: "a", count: 99) + " "))
-        XCTAssertTrue(s.title.hasSuffix("\u{2026}"))
+        XCTAssertEqual(s.displayName?.count, 120)
+        XCTAssertTrue(s.title.hasPrefix("Extension \"" + String(repeating: "a", count: 99) + " "))
+        XCTAssertTrue(s.title.hasSuffix("\u{2026}\""))
         XCTAssertEqual(s.idLine, Self.owner)
     }
 

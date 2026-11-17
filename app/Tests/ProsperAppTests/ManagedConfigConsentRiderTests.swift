@@ -212,9 +212,9 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
         _ = await env.mc.apply([MCPieces.block()], owner: o)
         let changes = try XCTUnwrap(env.consent.seen.first)
         let m = ManagedConfigConsentModel(changes: changes) { _ in }
-        XCTAssertEqual(m.title, "Fake Kit")
+        XCTAssertEqual(m.title, "Extension \"Fake Kit\"")
         XCTAssertEqual(m.idLine, "com.example.kit")
-        XCTAssertEqual(Array(m.renderedStrings.prefix(2)), ["Fake Kit", "com.example.kit"], "the title above the id")
+        XCTAssertEqual(Array(m.renderedStrings.prefix(2)), ["Extension \"Fake Kit\"", "com.example.kit"], "the title above the id")
     }
 
     /// The title is outside data: the owner carries it as written, the sheet cleans and cuts it, and an empty title (or
@@ -223,7 +223,7 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
         let hostile = try loaded(title: "Fake\\u202EKit\\u0007\\u2066\\nTwo").managedConfigOwner
         XCTAssertEqual(hostile.displayName, "Fake\u{202E}Kit\u{0007}\u{2066}\nTwo", "the owner carries the title as written")
         let shown = sheet(hostile)
-        XCTAssertEqual(shown.title, "FakeKitTwo", "no control, direction or line break reaches the title")
+        XCTAssertEqual(shown.title, "Extension \"FakeKitTwo\"", "no control, direction or line break reaches the title")
         XCTAssertEqual(shown.idLine, "com.example.kit", "the id is under it")
         for title in ["", "\\u2066 \\n \\uFEFF"] {
             let m = sheet(try loaded(title: title).managedConfigOwner)
@@ -231,8 +231,8 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
             XCTAssertTrue(m.idLine == nil, "'\(title)': no second id line")
         }
         let long = sheet(try loaded(title: String(repeating: "Kit ", count: 80)).managedConfigOwner)
-        XCTAssertEqual(long.title.count, 120, "bounded")
-        XCTAssertTrue(long.title.hasSuffix("\u{2026}"))
+        XCTAssertEqual(long.displayName?.count, 120, "bounded")
+        XCTAssertTrue(long.title.hasSuffix("\u{2026}\""))
         XCTAssertEqual(long.idLine, "com.example.kit")
     }
 
@@ -281,7 +281,7 @@ final class ManagedConfigConsentRiderTests: XCTestCase {
             let a = tree(s, fitting(s), id: short)
             let b = tree(w, size, id: long)
             let idNode = try XCTUnwrap(b.first { $0.named(long) && $0.frame.height > 0 }, "\(tag): \(b.map(\.name))")
-            let title = try XCTUnwrap(b.first { $0.named("Fake Kit") && $0.frame.height > 0 }, tag)
+            let title = try XCTUnwrap(b.first { $0.named("Extension \"Fake Kit\"") && $0.frame.height > 0 }, tag)
             XCTAssertLessThanOrEqual(idNode.frame.maxY, title.frame.minY + pixel, "\(tag): the id is below the title") // y up
             // whole: at least the lines the id needs at its width (a lower bound: a break may come earlier, never later)
             let font = NSFont.monospacedSystemFont(ofSize: 11 * scale, weight: .regular)

@@ -92,8 +92,10 @@ final class ManagedConfigConsentModel: ObservableObject {
         return shown.isEmpty ? nil : shown
     }
 
-    /// The title: the display name, or the id when no name is known (one line, drawn verbatim).
-    var title: String { displayName ?? changes.owner }
+    /// The title: the display name quoted after a fixed word, or the id when no name is known (one line, drawn verbatim).
+    /// #1245 (N1235-b): a name is free text, so one equal to Prosper, macOS or another extension reads as a quoted
+    /// extension name, never as that product asking; the middle cut keeps the word.
+    var title: String { displayName.map { "Extension \"\($0)\"" } ?? changes.owner }
 
     /// The id under a display name; nil when the title is the id already.
     var idLine: String? { displayName == nil ? nil : changes.owner }
