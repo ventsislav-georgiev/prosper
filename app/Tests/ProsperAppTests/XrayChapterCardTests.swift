@@ -179,4 +179,184 @@ final class XrayChapterCardTests: XCTestCase {
             XCTAssertGreaterThan(host.fittingSize.height, 0)
         }
     }
+
+    // MARK: #1472 b, the --chapter read
+
+    /// A fake dch for the --chapter read: records argv; an anchor "f9:1" holds until cancelled (bounded 5 s) and then
+    /// records the SIGTERM the product runner would send. Never a real dch.
+    final class ChapterRun: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _calls: [[String]] = []
+        private var _sigterms = 0
+        var answer: (status: Int32, out: Data) = (0, Data())
+        var calls: [[String]] { lock.withLock { _calls } }
+        var sigterms: Int { lock.withLock { _sigterms } }
+        var run: XrayPanels.Run {
+            { [self] _, args, _ in
+                lock.withLock { _calls.append(args) }
+                if args.contains("f9:1") {
+                    let end = Date().addingTimeInterval(5)
+                    while !Task.isCancelled, Date() < end { try? await Task.sleep(nanoseconds: 1_000_000) }
+                    if Task.isCancelled { lock.withLock { _sigterms += 1 } }
+                }
+                return lock.withLock { answer }
+            }
+        }
+    }
+
+    static let anchor = "f3a41c:200"
+
+    /// dch's --chapter object: the user entry, tool and output entries, an interim and a final assistant entry.
+    static func object(user: String = "Please rerun the api suite\nand then the web one", tool: String = "npm test",
+                       output: String = "ran 42 tests", interim: String = "Running now", answer: String = "All green") -> Data {
+        let o: [String: Any] = ["schema": 1, "session": "api", "anchor": anchor, "title": "Please rerun", "kind": "prompt",
+                                "truncated": false, "entries": [
+                                    ["role": "user", "text": user, "offset": 200],
+                                    ["role": "assistant", "text": interim, "offset": 300],
+                                    ["role": "tool", "tool": "Bash", "text": tool, "offset": 400],
+                                    ["role": "output", "text": output, "error": false, "offset": 500],
+                                    ["role": "assistant", "text": answer, "offset": 600]] as [[String: Any]]]
+        return (try? JSONSerialization.data(withJSONObject: o)) ?? Data()
+    }
+
+    /// The chapter as dch's chapters gave it (title and capped response).
+    static var rerun: TranscriptOutline.Chapter {
+        var c = TranscriptOutline.Chapter(id: 0, ordinal: 3, title: "Please rerun", kind: .prompt, hasError: false)
+        c.response = "Rerunning"
+        return c
+    }
+
+    /// A bare Terminal-mode panel (no transcript) with the fake runner and a presenter that captures the card.
+    func panel(_ run: ChapterRun, anchors: [String: Int] = [XrayChapterCardTests.anchor: 3]) -> (XrayPanelModel, XrayRefPopoverTests.Cards) {
+        let cards = XrayRefPopoverTests.Cards()
+        let p = XrayPanelModel(target: XrayRefRunTests.local, tab: .prompts)
+        (p.dch, p.run, p.chapterAnchors) = ("/fake/dch", run.run, anchors)
+        p.presentRef = { cards.present($0, $1, $2) }
+        p.dismiss = { cards.close() }
+        XCTAssertTrue(p.transcript() == nil)
+        return (p, cards)
+    }
+
+    /// Red at base: openChapterCard ran no read (XrayPanel.swift:609 `present(...)` alone): no call, no full text.
+    /// Red with shows-tool-entries.
+    func testTheReadShowsTheWholePromptAndTheLastAnswer() async throws {
+        let run = ChapterRun()
+        run.answer = (0, Self.object())
+        let (p, cards) = panel(run)
+        let c = Self.rerun
+        p.openChapterCard(c)
+        XCTAssertEqual(cards.views.count, 1, "the card at once, through the presenter")
+        XCTAssertEqual(cards.sizes.first, XrayChapterCard.size)
+        let read = try XCTUnwrap(p.chapterRead)
+        await read.reading?.value
+        XCTAssertEqual(run.calls, [["--xray", "api", "--chapter", Self.anchor, "--json"]], "one read, for the chapter's anchor")
+        let full = try XCTUnwrap(read.full)
+        XCTAssertEqual(full.prompt, "Please rerun the api suite\nand then the web one", "the whole prompt, its line kept")
+        XCTAssertEqual(full.response, "All green", "the last assistant entry")
+        XCTAssertFalse(full.promptCut || full.responseCut)
+        XCTAssertTrue(read.note == nil)
+        let text = XrayChapterCard.text(c, full: full, note: read.note)
+        XCTAssertTrue(text.contains("and then the web one"), text)
+        XCTAssertTrue(text.contains("All green"), text)
+        for hidden in ["Running now", "npm test", "ran 42 tests", "Rerunning", XrayChapterRead.cutNote] {
+            XCTAssertFalse(text.contains(hidden), "not shown: " + hidden)
+        }
+        // The card draws offscreen with the read in hand (a hosting view never put in a window).
+        let host = NSHostingView(rootView: XrayChapterCard(chapter: c, read: read)
+            .frame(width: XrayChapterCard.size.width, height: XrayChapterCard.size.height))
+        host.frame = CGRect(origin: .zero, size: XrayChapterCard.size)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        cards.close()
+    }
+
+    /// Red at base: no read to cancel (no call at all). Red with no-cancel-on-close: the read runs its 5 s, no SIGTERM.
+    func testClosingTheCardCancelsTheRead() async throws {
+        let run = ChapterRun()
+        run.answer = (0, Self.object())
+        let (p, cards) = panel(run, anchors: ["f9:1": 3])
+        p.openChapterCard(Self.rerun)
+        let read = try XCTUnwrap(p.chapterRead)
+        let task = try XCTUnwrap(read.reading)
+        let end = Date().addingTimeInterval(5)
+        while run.calls.isEmpty, Date() < end { try await Task.sleep(nanoseconds: 1_000_000) }   // the read started
+        cards.close()
+        await task.value
+        XCTAssertEqual(run.sigterms, 1, "the close cancelled the read (the product runner SIGTERMs dch)")
+        XCTAssertTrue(read.full == nil && read.note == nil, "a cancelled answer is not news")
+    }
+
+    /// Red at base: no read, so no note. Each exit's note; the capped text stays.
+    func testEachExitSaysWhyAndKeepsTheCappedText() async throws {
+        let toolsOnly = Data(#"{"schema":1,"entries":[{"role":"tool","text":"ls"},{"role":"output","text":"a"}]}"#.utf8)
+        let cases: [(Int32, Data, String)] = [(1, Data(), XrayChapterRead.gone), (2, Data(), XrayChapterRead.badAnchor),
+                                              (0, Data("not json".utf8), XrayChapterRead.nothing),
+                                              (0, Data(#"{"schema":2,"entries":[{"role":"user","text":"x"}]}"#.utf8), XrayChapterRead.nothing),
+                                              (0, toolsOnly, XrayChapterRead.nothing), (5, Data(), XrayChapterRead.failed)]
+        for (status, out, note) in cases {
+            let run = ChapterRun()
+            run.answer = (status, out)
+            let (p, cards) = panel(run)
+            let c = Self.rerun
+            p.openChapterCard(c)
+            let read = try XCTUnwrap(p.chapterRead)
+            await read.reading?.value
+            XCTAssertEqual(read.note, note, "exit \(status)")
+            XCTAssertTrue(read.full == nil)
+            let text = XrayChapterCard.text(c, full: read.full, note: read.note)
+            XCTAssertTrue(text.contains("Please rerun") && text.contains("Rerunning") && text.hasSuffix(note), text)
+            cards.close()
+        }
+        XCTAssertTrue(XrayChapterRead.parse(Data(count: XrayChapterRead.maxBytes + 1)) == nil, "over the cap: nothing to read")
+    }
+
+    /// Red with read-without-anchor. No anchor for the chapter, or one that is not dch's shape: the card, no read.
+    func testNoReadWithoutAnAnchor() async throws {
+        for anchors in [[:], ["f1:0": 1], ["-f3:200": 3], ["f3 200": 3]] as [[String: Int]] {
+            let run = ChapterRun()
+            run.answer = (0, Self.object())
+            let (p, cards) = panel(run, anchors: anchors)
+            p.openChapterCard(Self.rerun)
+            XCTAssertEqual(cards.views.count, 1, "the card still opens")
+            XCTAssertTrue(p.chapterRead?.reading == nil, "\(anchors)")
+            XCTAssertEqual(run.calls.count, 0)
+            cards.close()
+        }
+    }
+
+    /// A text at dch's 6000-scalar cap says so; one under it does not; a longer one is cut here too.
+    func testACutTextSaysSo() throws {
+        let long = String(repeating: "a", count: XrayChapterRead.entryCap + 10)
+        let full = try XCTUnwrap(XrayChapterRead.parse(Self.object(user: long)))
+        XCTAssertEqual(full.prompt?.unicodeScalars.count, XrayChapterRead.entryCap)
+        XCTAssertTrue(full.promptCut)
+        XCTAssertFalse(full.responseCut)
+        let text = XrayChapterCard.text(Self.rerun, full: full)
+        XCTAssertTrue(text.contains(XrayChapterRead.cutNote))
+        XCTAssertEqual(text.components(separatedBy: XrayChapterRead.cutNote).count, 2, "once, after the prompt")
+    }
+
+    /// QA r1433 s1: U+202E, U+0007 and 40 combining marks in the title, peer, tools and response, and in the read's
+    /// user and assistant text: the card's text holds no unseen scalar (its line breaks aside) and no base carries more
+    /// than OutsideText.maxMarks marks. Red with card-response-raw.
+    func testOutsideTextIsCleanedEverywhereInTheCard() throws {
+        let bad = "x\u{202E}y\u{0007}z w" + String(repeating: "\u{0301}", count: 40) + "v"
+        var c = TranscriptOutline.Chapter(id: 0, ordinal: 3, title: "Rerun " + bad, kind: .prompt, hasError: false)
+        c.peer = "peer" + bad
+        c.tools = "Bash 1 " + bad
+        c.response = "Done " + bad + "\nline two " + bad
+        let full = try XCTUnwrap(XrayChapterRead.parse(Self.object(user: "Prompt " + bad + "\nmore " + bad, answer: "Answer " + bad)))
+        for text in [XrayChapterCard.text(c), XrayChapterCard.text(c, full: full)] {
+            XCTAssertFalse(text.unicodeScalars.contains { $0 != "\n" && OutsideText.isUnseen($0) }, text)
+            var marks = 0, most = 0
+            for u in text.unicodeScalars {
+                marks = u.properties.generalCategory == .nonspacingMark ? marks + 1 : 0
+                most = max(most, marks)
+            }
+            XCTAssertLessThanOrEqual(most, OutsideText.maxMarks, "marks capped")
+            XCTAssertTrue(text.contains("xyz"), "the visible text stays")
+        }
+        XCTAssertTrue(XrayChapterCard.text(c, full: full).contains("Answer xyz"))
+        XCTAssertTrue(XrayChapterCard.text(c, full: full).contains("Prompt xyz"))
+    }
 }

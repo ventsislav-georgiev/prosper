@@ -35,6 +35,8 @@ struct XrayTarget: Equatable {
     var chaptersArgs: [String] { ["--xray", name, "--json"] }
     /// #1355: dch README "dch --xray <n> --search <text> --json"; the text is checked by DchCtl.searchOK first.
     func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
+    /// #1472 b: dch.1 "dch --xray <n> --chapter <anchor> --json" (host:name for remote); the anchor is checked first.
+    func chapterArgs(_ anchor: String) -> [String] { ["--xray", name, "--chapter", anchor, "--json"] }
     /// #1410: a local name takes the text on stdin ("-" in argv), so it never shows in ps; a remote one keeps
     /// it in argv (dch reads "-" there as the text itself; the serve path hides it). #1442: dch 1.84.0 reads stdin for
     /// every local name, one with ":" included. #1443: older dch (1.78 to 1.83) reads "-" as the text itself, so stdin
@@ -223,6 +225,8 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var memoryCard: XrayMemory.Item?
     /// #1472: the chapter whose card was asked for last (no transcript: a Prompts or Responses row, Read the prompt).
     @Published private(set) var chapterCard: TranscriptOutline.Chapter?
+    /// #1472 b: that card's --chapter read (XrayChapterRead), cancelled when the card closes.
+    private(set) var chapterRead: XrayChapterRead?
     /// #1472: dch's chapter anchors to their `i` (ordinal); #1475: from every chapters read and the follow's state.
     var chapterAnchors: [String: Int] = [:]
     /// #1475: the follow this panel's chapters and refs come from (XrayFollow.swift); nil: today's reads and polls.
@@ -603,11 +607,26 @@ final class XrayPanelModel: ObservableObject {
         TranscriptJumper.of(tm).jump(to: c)
     }
 
-    /// #1472: the prompt and its response through the window's presenter, as the memory card.
+    /// #1472: the prompt and its response through the window's presenter, as the memory card. #1472 b: it opens with
+    /// what dch's chapters gave and runs one --chapter read for the chapter's anchor (none known, or one that is not
+    /// dch's shape: no read); the card's close, or the next card, cancels that read (the product runner SIGTERMs dch).
     func openChapterCard(_ c: TranscriptOutline.Chapter) {
         chapterCard = c
-        present(AnyView(XrayChapterCard(chapter: c, refs: refs?.entries ?? [],
-                                        link: { [weak self] in self?.openLink($0) ?? .discarded })), XrayChapterCard.size)
+        chapterRead?.cancel()
+        let read = XrayChapterRead()
+        chapterRead = read
+        if let anchor = chapterAnchors.filter({ $0.value == c.ordinal }).keys.min(), DchCtl.anchorOK(anchor),
+           !anchor.hasPrefix("-"), let dch, let run {
+            let a = target.chapterArgs(anchor), env = target.env
+            read.reading = Task { [weak read] in
+                let r = await run(dch, a, env)
+                guard !Task.isCancelled, let read else { return }   // cancelled: the SIGTERMed answer is not news
+                read.take(r)
+            }
+        }
+        presentRef(AnyView(XrayChapterCard(chapter: c, read: read, refs: refs?.entries ?? [],
+                                           link: { [weak self] in self?.openLink($0) ?? .discarded })),
+                   XrayChapterCard.size) { [weak read] in read?.cancel() }
     }
 
     /// #1472: a link in the chapter card (XrayRefScope's rule for the transcript's): a ref of this panel's read opens

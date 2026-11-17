@@ -1730,6 +1730,8 @@ tag from the now-released section and put it on the new top draft.
   session names keep their room. (#1470)
 - The ccpool status line now also names the pool account for a session running behind headroom.
   (#1485)
+- X-ray: a prompt's card now shows the whole prompt and the whole final answer, read from dch; long
+  text says where it was cut, and the card says why when the chapter can no longer be read. (#1472)
 
 ## v2.174.0
 
