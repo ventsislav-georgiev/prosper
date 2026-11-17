@@ -778,7 +778,7 @@ struct AgentWindowRootView: View {
     /// sidebar over the panes, which keep their width; the pointer leaving it slides it out.
     var slideLayer: some View {
         ZStack(alignment: .topLeading) {
-            AgentSlideTracker(edge: true) { model.slide(true) }
+            AgentSlideTracker(edge: true) { _ in model.slide(true) }
                 .frame(width: AgentSlideTracker.edgeWidth)
                 .frame(maxHeight: .infinity)
             if model.slideOpen {
@@ -789,7 +789,7 @@ struct AgentWindowRootView: View {
                         .background(NeonSidebarSurface())
                     Rectangle().fill(Neon.stroke).frame(width: 1)
                 }
-                .background(AgentSlideTracker(edge: false) { model.slide(false) })
+                .background(AgentSlideTracker(edge: false, onMenu: { model.slideMenu($0) }) { model.slide($0) })
                 .transition(.move(edge: .leading))
             }
         }
@@ -829,16 +829,21 @@ enum AgentSidebarMode: String, CaseIterable {
 /// slides the sidebar in; else behind the slid-in sidebar, whose exit slides it out. Tests call the handlers directly.
 struct AgentSlideTracker: NSViewRepresentable {
     let edge: Bool
-    let action: @MainActor () -> Void
+    /// #1461: a sidebar menu's tracking began (true) or ended (false).
+    var onMenu: @MainActor (Bool) -> Void = { _ in }
+    /// The pointer entered (true) or left (false).
+    let action: @MainActor (Bool) -> Void
     /// A few points: the pointer at the window's very edge, never over the panes' own controls.
     static let edgeWidth: CGFloat = 4
     func makeNSView(context: Context) -> AgentSlideTrackerView { AgentSlideTrackerView(edge: edge) }
-    func updateNSView(_ nsView: AgentSlideTrackerView, context: Context) { nsView.action = action }
+    func updateNSView(_ nsView: AgentSlideTrackerView, context: Context) { (nsView.action, nsView.onMenu) = (action, onMenu) }
 }
 
 final class AgentSlideTrackerView: NSView {
     let edge: Bool
-    var action: @MainActor () -> Void = {}
+    var action: @MainActor (Bool) -> Void = { _ in }
+    var onMenu: @MainActor (Bool) -> Void = { _ in }
+    private var menuTracking = false
     init(edge: Bool) {
         self.edge = edge
         super.init(frame: .zero)
@@ -853,8 +858,27 @@ final class AgentSlideTrackerView: NSView {
             : [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .assumeInside]
         addTrackingArea(NSTrackingArea(rect: .zero, options: opts, owner: self))
     }
-    override func mouseEntered(with event: NSEvent) { if edge { action() } }
-    override func mouseExited(with event: NSEvent) { if !edge { action() } }
+    override func mouseEntered(with event: NSEvent) { action(true) }
+    override func mouseExited(with event: NSEvent) {
+        guard !edge else { return }
+        // #1461: a menu or submenu opened from the sidebar tracks in this mode; its window over the sidebar sends the exit.
+        if !menuTracking, RunLoop.current.currentMode == .eventTracking { holdUntilTrackingEnds() }
+        action(false)
+    }
+
+    /// #1461: the model holds the exit until the menu closes (the run loop is back in its default mode); then the
+    /// sidebar hides only if the pointer is outside it. Strong self: the close must always reach the model's count.
+    func holdUntilTrackingEnds() {
+        menuTracking = true
+        onMenu(true)
+        RunLoop.main.perform(inModes: [.default]) { MainActor.assumeIsolated { self.trackingEnded() } }
+    }
+
+    func trackingEnded() {
+        menuTracking = false
+        if let w = window, bounds.contains(convert(w.mouseLocationOutsideOfEventStream, from: nil)) { action(true) }
+        onMenu(false)
+    }
 }
 
 struct AgentSidebarView: View {
@@ -1088,6 +1112,7 @@ struct AgentSidebarTitleRow: View {
             }
             .popover(isPresented: Binding(get: { diagnostics != nil }, set: { if !$0 { diagnostics = nil } })) {
                 AgentDiagnosticsView(text: diagnostics ?? "")
+                    .onAppear { model.slideMenu(true) }.onDisappear { model.slideMenu(false) }   // #1461: holds a Slide exit
             }
             AgentNewSessionButtons(model: model, store: store)
         }

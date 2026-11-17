@@ -1670,6 +1670,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions controls (Restart, Stop, End, the terminal and +) keep working after you install a
   newer dch than the one Prosper ships: Prosper now also finds dch in ~/.local/bin and on your login
   PATH, and picks it up as soon as a session starts on the newer version. (#1460)
+- Agent Sessions: in Slide mode the sidebar now stays open while its own menus, submenus (such as
+  Row details) or the Diagnostics popover are open, and slides away after they close only if the
+  pointer has left it. (#1461)
 
 ## v2.174.0
 

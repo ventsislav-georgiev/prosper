@@ -509,9 +509,26 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// #1379 Slide: the edge's enter (true) and the sidebar's exit (false); a pinned sidebar stays. Other modes: nothing.
+    /// #1461: the sidebar's enter is true too. While a menu or popover of the sidebar is open an exit is held (it stays
+    /// revealed and keeps the keys); an enter drops the held exit.
     func slide(_ reveal: Bool) {
-        guard sidebarMode == .slide, reveal != slideRevealed else { return }
+        guard sidebarMode == .slide else { return }
+        slideExitHeld = slideMenusOpen > 0 && !reveal
+        guard !slideExitHeld, reveal != slideRevealed else { return }
         animateSlide { slideRevealed = reveal }
+    }
+
+    /// #1461: menus, submenus and popovers the slid sidebar has open now, and an exit that came while one was.
+    private(set) var slideMenusOpen = 0
+    private(set) var slideExitHeld = false
+
+    /// #1461: a sidebar menu or popover opened (true) or closed (false). The last close runs a held exit (the pointer
+    /// left and did not come back), the normal exit path.
+    func slideMenu(_ open: Bool) {
+        slideMenusOpen = max(0, slideMenusOpen + (open ? 1 : -1))
+        guard slideMenusOpen == 0, slideExitHeld else { return }
+        slideExitHeld = false
+        slide(false)
     }
 
     private func animateSlide(_ change: () -> Void) {

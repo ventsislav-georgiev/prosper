@@ -283,6 +283,87 @@ final class AgentSidebarModeTests: XCTestCase {
         }
     }
 
+    // MARK: Menus (#1461)
+
+    /// A Slide model, slid in with the sidebar holding the keys.
+    func slidIn() -> AgentWindowModel {
+        Preferences.agentSidebarMode = .slide
+        let m = d1.windowModel(d1.store([d1.session("api", .idle)]))
+        m.slide(true)
+        m.keyFocus = .sidebar
+        return m
+    }
+
+    /// #1461: the sidebar's menu opens (its window over the sidebar sends the exit): the sidebar stays and keeps the keys,
+    /// through a submenu too; the last close with the pointer still out slides it out, as a plain exit does.
+    func testSlideMenuHoldsTheExitUntilItClosesWithThePointerOutside() throws {
+        try withModeRow {
+            let m = slidIn()
+            defer { m.close() }
+            m.slideMenu(true)
+            m.slide(false)
+            XCTAssertTrue(m.slideRevealed && m.sidebarShown, "the menu is open: still revealed")
+            XCTAssertEqual(m.keyFocus, .sidebar, "the menu is open: the keys stay")
+            m.slideMenu(true)   // Row details' submenu
+            m.slide(false)
+            m.slideMenu(false)
+            XCTAssertTrue(m.slideRevealed, "one menu still open")
+            XCTAssertEqual(m.keyFocus, .sidebar)
+            m.slideMenu(false)
+            XCTAssertFalse(m.slideRevealed || m.sidebarShown, "closed with the pointer outside: slid out")
+            XCTAssertEqual(m.keyFocus, .pane)
+            XCTAssertEqual(m.slideMenusOpen, 0)
+            m.slideMenu(false)
+            XCTAssertEqual(m.slideMenusOpen, 0, "an extra close never goes below zero")
+            m.slide(true)
+            m.slide(false)
+            XCTAssertFalse(m.slideRevealed, "no menu: a plain exit hides at once")
+        }
+    }
+
+    /// #1461: the pointer comes back over the sidebar before the menu closes: it stays revealed with the keys.
+    func testSlideMenuCloseWithThePointerInsideKeepsTheSidebar() throws {
+        try withModeRow {
+            let m = slidIn()
+            defer { m.close() }
+            m.slideMenu(true)
+            m.slide(false)
+            m.slide(true)   // the sidebar's enter
+            m.slideMenu(false)
+            XCTAssertTrue(m.slideRevealed && m.sidebarShown, "the pointer is inside: stays")
+            XCTAssertEqual(m.keyFocus, .sidebar)
+            m.slide(false)
+            XCTAssertFalse(m.slideRevealed, "the next exit hides it")
+        }
+    }
+
+    /// #1461: a pinned Slide sidebar and the Full and Mini modes are as before around a menu.
+    func testSlideMenuLeavesPinnedAndOtherModesAlone() throws {
+        try withModeRow {
+            let m = slidIn()
+            defer { m.close() }
+            m.slide(false)
+            m.toggleSidebar()   // from slid out: pins open
+            XCTAssertTrue(m.slidePinned && !m.slideRevealed)
+            m.slideMenu(true)
+            m.slide(false)
+            m.slideMenu(false)
+            XCTAssertTrue(m.slidePinned && m.sidebarShown, "pinned: stays")
+            for mode in [AgentSidebarMode.full, .mini] {
+                Preferences.agentSidebarMode = mode
+                let o = d1.windowModel(d1.store([d1.session("api", .idle)]))
+                defer { o.close() }
+                o.keyFocus = .sidebar
+                o.slideMenu(true)
+                o.slide(false)
+                XCTAssertFalse(o.slideExitHeld, "\(mode): nothing held")
+                o.slideMenu(false)
+                XCTAssertTrue(o.sidebarShown && !o.slideRevealed, "\(mode)")
+                XCTAssertEqual(o.keyFocus, .sidebar, "\(mode): the keys stay")
+            }
+        }
+    }
+
     // MARK: Keys and folds (#1383)
 
     private func keyEvent(_ code: UInt16, _ flags: NSEvent.ModifierFlags = [], _ chars: String = "") throws -> NSEvent {
