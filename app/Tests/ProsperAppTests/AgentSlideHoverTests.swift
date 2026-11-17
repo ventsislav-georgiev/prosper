@@ -148,6 +148,25 @@ final class AgentSlideHoverTests: XCTestCase {
         }
     }
 
+    /// R1458b-s1: a dwell already running when the chord unpins (pinned open, pointer entering the area) must not slide
+    /// the sidebar back in; after the pointer leaves and enters again the dwell opens it as usual.
+    func testAChordDuringARunningDwellKeepsItClosed() throws {
+        try modes.withModeRow(open: .milliseconds(60)) {
+            let m = slideModel()
+            defer { m.close() }
+            m.toggleSidebar()   // pins it open, nothing slid
+            XCTAssertTrue(m.slideOpen && !m.slideRevealed)
+            m.slideArea(true)   // the dwell starts
+            m.toggleSidebar()   // the chord within the dwell: unpins and holds
+            XCTAssertFalse(m.slideOpen)
+            modes.pump(0.3)
+            XCTAssertFalse(m.slideOpen, "the running dwell opens nothing after the chord")
+            m.slideArea(false)
+            m.slideArea(true)
+            XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "a new enter and its dwell open it")
+        }
+    }
+
     /// i1: band off under No title bar, the area starts below the window's buttons (the title bar's row), not at y 0.
     func testTheAreaClearsTheWindowButtonsWithTheBandOff() throws {
         let d = Preferences.defaults, saved = d.object(forKey: "agentWindowStyle")

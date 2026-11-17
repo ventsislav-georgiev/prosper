@@ -617,7 +617,7 @@ final class AgentWindowModel: ObservableObject {
     private func slideTimerFired(_ open: Bool) {
         guard sidebarMode == .slide else { return }
         if open {
-            guard slideInArea, !slideRevealed else { return }
+            guard slideInArea, !slideAreaHeld, !slideRevealed else { return }
             slideInSidebar = true   // the area lies inside the sidebar's width; its tracker assumes inside (no enter comes)
             animateSlide { slideRevealed = true }
         } else {
@@ -653,6 +653,7 @@ final class AgentWindowModel: ObservableObject {
     func toggleSidebar() {
         if sidebarMode == .slide {
             slideAreaHeld = slideOpen && slideInArea   // a chord close holds the area; the opening chord drops it
+            slideCancel()   // a dwell already running must not land after the chord
             animateSlide { slidePinned = !slideOpen; slideRevealed = false }
             return
         }
