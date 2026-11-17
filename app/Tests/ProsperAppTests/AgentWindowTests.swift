@@ -791,6 +791,12 @@ final class AgentWindowTests: XCTestCase {
 
     @MainActor
     func inkPixels<V: View>(_ v: V, width: CGFloat = 520, write name: String? = nil) throws -> Int {
+        // The pool drains the image, the bitmap rep and the per-pixel NSColors at once; a loop of renders held them all until the test ended.
+        try autoreleasepool { try inkPixelsInPool(v, width: width, write: name) }
+    }
+
+    @MainActor
+    private func inkPixelsInPool<V: View>(_ v: V, width: CGFloat, write name: String?) throws -> Int {
         let r = ImageRenderer(content: v.frame(width: sz(width)).padding(sz(10)).background(Neon.bgBottom)
             .environment(\.colorScheme, .dark))
         r.scale = 2
