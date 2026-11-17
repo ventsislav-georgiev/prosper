@@ -1653,6 +1653,9 @@ tag from the now-released section and put it on the new top draft.
   from answering. (#1185)
 - The island no longer keeps showing "Not delivered" on a session after a later answer went through
   or after it moved on from needing input, and a dropped answer's card comes back. (#1436)
+- The consent sheet title now also shows the fullwidth quotation mark and the CJK double prime
+  quotes (U+301D, U+301E, U+301F) in an extension name as an apostrophe, so they cannot close the
+  quoting. (#1441)
 
 ## v2.174.0
 

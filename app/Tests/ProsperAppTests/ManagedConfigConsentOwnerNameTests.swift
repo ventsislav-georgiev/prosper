@@ -57,8 +57,8 @@ final class ManagedConfigConsentOwnerNameTests: XCTestCase {
         XCTAssertEqual(m.idLine, Self.owner)
     }
 
-    func testEachOfTheEightQuoteMarksShowsAsAnApostrophe() {
-        let literal: [UInt32] = [0x22, 0x201C, 0x201D, 0x201E, 0x201F, 0xAB, 0xBB, 0x2033]
+    func testEachOfTheTwelveQuoteMarksShowsAsAnApostrophe() {
+        let literal: [UInt32] = [0x22, 0x201C, 0x201D, 0x201E, 0x201F, 0xAB, 0xBB, 0x2033, 0xFF02, 0x301D, 0x301E, 0x301F]
         XCTAssertEqual(Set(literal), Set(ManagedConfigConsentModel.quoteMarks.map(\.value)), "the list is the set the code maps")
         for v in literal {
             guard let u = Unicode.Scalar(v) else { return XCTFail("\(v)") }

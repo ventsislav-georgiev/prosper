@@ -95,9 +95,9 @@ final class ManagedConfigConsentModel: ObservableObject {
     /// The title: the display name quoted after a fixed word, or the id when no name is known (one line, drawn verbatim).
     /// #1245 (N1235-b): a name is free text, so one equal to Prosper, macOS or another extension reads as a quoted
     /// extension name, never as that product asking; the middle cut keeps the word.
-    /// #1437 (R1245-s1): a quote mark inside the name would close the quoting early, so each shows as an apostrophe.
+    /// #1437 (R1245-s1): a quote mark inside the name would close the quoting early, so each of the twelve marks listed below shows as an apostrophe.
     // scalars, not Characters: a quote with a combining mark on it is one Character but still closes the quoting
-    static let quoteMarks: Set<Unicode.Scalar> = ["\u{22}", "\u{201C}", "\u{201D}", "\u{201E}", "\u{201F}", "\u{AB}", "\u{BB}", "\u{2033}"]
+    static let quoteMarks: Set<Unicode.Scalar> = ["\u{22}", "\u{201C}", "\u{201D}", "\u{201E}", "\u{201F}", "\u{AB}", "\u{BB}", "\u{2033}", "\u{FF02}", "\u{301D}", "\u{301E}", "\u{301F}"]
 
     var title: String {
         displayName.map { name in
