@@ -911,6 +911,37 @@ extension AgentRowModelEffortTests {
         }
     }
 
+    /// #1490 b: the eye is one column, sz(1) left of the badges, whatever the title: a short name and the long one cut to its
+    /// floor, 0.7 / 0.85 / 1.0, 1x / 2x: badges.minX - glyph.maxX is sz(1) within a device pixel and the glyph's maxX is the
+    /// same on both rows. Old line that makes it red: the overlay centred on the Spacer (mutant eye-centred).
+    @MainActor
+    func testInViewGlyphSitsInOneColumnBesideTheBadges() {
+        let pixel = AXTreeSupport.devicePixel
+        let gate = AgentPaneLayout.splitsEnabled
+        AgentPaneLayout.splitsEnabled = true
+        defer { AgentPaneLayout.splitsEnabled = gate }
+        let rows = [named1345("session-tokens"), named1345("api-" + String(repeating: "session-tokens-", count: 4))]
+        atScales { scale in
+            let width = AgentWindowModel.fullSidebarWidth - sz(16)
+            for px: CGFloat in [1, 2] {
+                var edges: [CGFloat] = []
+                for r in rows {
+                    let tag = "\(r.title.count) chars (\(scale), \(Int(px))x)"
+                    let f = hosted1345(r, number: 4, width: width, backing: px, inView: true).frames
+                    guard let g = f["glyph"], let b = f["badges"] else {
+                        XCTFail("glyph and badges probed: \(f.keys.sorted()) \(tag)"); continue
+                    }
+                    XCTAssertEqual(b.minX - g.maxX, sz(1), accuracy: pixel, "the glyph is sz(1) left of the badges: \(g) \(b) \(tag)")
+                    edges.append(g.maxX)
+                }
+                XCTAssertEqual(edges.count, 2, "both rows probed (\(scale), \(Int(px))x)")
+                if let lo = edges.min(), let hi = edges.max() {
+                    XCTAssertLessThanOrEqual(hi - lo, pixel, "one column: the glyph's maxX is equal on both rows: \(edges) (\(scale), \(Int(px))x)")
+                }
+            }
+        }
+    }
+
     /// #1470 a2 (operator 2026-11-17, "Widen the sidebar"): at 0.7 / 0.85 / 1.0 the full sidebar is TIP's sz(290) plus
     /// exactly the chip column's growth (all 18 chips' column less the nine Command chips', both built and measured here,
     /// exact ideals), Mini keeps sz(84), and a full row at the sidebar's width keeps TIP's text block (line one and two)

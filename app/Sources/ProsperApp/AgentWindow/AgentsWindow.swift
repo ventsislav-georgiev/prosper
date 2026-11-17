@@ -1637,7 +1637,7 @@ extension AgentSidebarRowView {
                 .frame(width: sz(14)).opacity(inView ? 1 : 0)
                 .modifier(AgentSidebarRowProbe(kind: inView ? "glyph" : "slot", title: row.title))
             if AgentPaneLayout.splitsEnabled && withBadges {
-                Spacer(minLength: sz(4)).overlay { inViewSlot }
+                Spacer(minLength: sz(4)).overlay(alignment: .trailing) { inViewSlot.offset(x: sz(5)) }   // one column: 1 pt left of the badges
             } else {
                 Spacer(minLength: sz(4))
                 // #900 B2 step 4b (7.2, #828 slot rule): the "in view" glyph's slot is always laid out with
