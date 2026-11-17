@@ -81,6 +81,8 @@ final class ManagedConfig: Sendable {
     /// #1243 test seam, nil in the product: runs in commit with the temp and its open handle, after the handle's
     /// checks and before the temp's identity check and the rename, so a row can swap things there without a race.
     let beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)?
+    /// #1431 test seam, nil in the product: the path of the directory the commit holds open (a nil answer: F_GETPATH).
+    let pinnedDirPath: (@Sendable (_ dir: Int32) -> String?)?
 
     /// errata C9: re-plan at most 3 times on a concurrent write, then "file changed, retry".
     static let maxReplans = 3
@@ -93,12 +95,14 @@ final class ManagedConfig: Sendable {
 
     init(roots: ManagedConfigRoots, consent: any ManagedConfigConsent,
          writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(), now: @escaping @Sendable () -> Date = { Date() },
-         beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)? = nil) {
+         beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)? = nil,
+         pinnedDirPath: (@Sendable (_ dir: Int32) -> String?)? = nil) {
         self.roots = roots
         self.consent = consent
         self.writer = writer
         self.now = now
         self.beforeRename = beforeRename
+        self.pinnedDirPath = pinnedDirPath
     }
 
     var stateURL: URL { roots.stateDir.appendingPathComponent("state.json") }
@@ -324,7 +328,9 @@ final class ManagedConfig: Sendable {
                         // opens and the rename below are relative to it: a parent swapped after this point is never followed.
                         // Checked first: the target still resolves to the same path, and that path's directory is the one held.
                         let dirURL = f.url.deletingLastPathComponent()
-                        let dir = open(dirURL.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), dirErrno = errno
+                        // #1431 (R1243-i3): O_SEARCH needs only search permission (a 0300 folder); fsync, openat, fstatat
+                        // and renameat all work on it on Darwin
+                        let dir = open(dirURL.path, O_SEARCH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), dirErrno = errno
                         defer { if dir >= 0 { _ = close(dir) } }
                         guard dir >= 0 else {
                             if let backup { _ = unlink(backup.path) }
@@ -336,6 +342,15 @@ final class ManagedConfig: Sendable {
                               pinned.st_dev == atPath.st_dev, pinned.st_ino == atPath.st_ino else {
                             if let backup { _ = unlink(backup.path) }
                             return .changed(committed: committed)
+                        }
+                        // #1431 (R1243-i1): stat() above follows links, so a link put back in place by the stat passes the
+                        // dev/ino compare. The held directory's own path (F_GETPATH, link free) must be the resolved folder
+                        // path, normalised the way the resolve did it (it drops the /private of /var and /tmp). Never a
+                        // realpath of dirURL: that follows a link still in place now.
+                        guard let heldPath = pinnedDirPath?(dir) ?? Self.path(of: dir),
+                              URL(fileURLWithPath: heldPath).resolvingSymlinksInPath().path == dirURL.path else {
+                            if let backup { _ = unlink(backup.path) }
+                            throw ManagedConfigPOSIXWriter.WriteError(step: "check directory", code: EEXIST, reason: "the directory is not the one held")
                         }
                         // #1025 (c): the mode as it is now; a chmod while the sheet was up changes no byte and stays
                         var st = stat()
@@ -431,6 +446,13 @@ final class ManagedConfig: Sendable {
               case .ours = ManagedConfigPaths.ownership(of: dir, owner: owner.id),
               Self.entries(of: dir) == [ManagedConfigPaths.kitMarkerFile] else { return }
         if unlink(dir.appendingPathComponent(ManagedConfigPaths.kitMarkerFile).path) == 0 { _ = rmdir(dir.path) }
+    }
+
+    /// #1431: the path an open descriptor names now (F_GETPATH), nil when the call fails.
+    static func path(of fd: Int32) -> String? {
+        var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buf) == 0 else { return nil }
+        return buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
     }
 
     /// Every name in `dir` by readdir: FileManager hides AppleDouble `._*` names.

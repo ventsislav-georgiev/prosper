@@ -1644,6 +1644,9 @@ tag from the now-released section and put it on the new top draft.
 - A kit turned off in Extensions no longer keeps its tools on the PATH of new sessions, and a kit's
   Settings tab and search entry now show its title cleaned and capped like the kit pane does.
   (#1438)
+- Managed config writes now also work in a folder you can enter but not list (for example mode
+  0300), and a write is refused if the folder Prosper holds open is no longer the folder at that
+  path. (#1431)
 
 ## v2.174.0
 
