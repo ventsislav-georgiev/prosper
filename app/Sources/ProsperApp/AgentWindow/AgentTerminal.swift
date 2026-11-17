@@ -832,14 +832,29 @@ enum AgentTerminalLook {
     ]
 
     /// A ghostty app on Prosper's config, its generated config file already gone (QA #681 INFO-10).
-    static func make() -> TerminalController {
+    /// #1456: `colours` nil reads the Settings choice (and the user's file); a row hands in its own.
+    static func make(colours: [(key: String, value: String)]? = nil) -> TerminalController {
         let c = TerminalController(configuration: configuration, theme: theme())
         dropConfigFile(c)
+        refresh(c, colours: colours)
         return c
     }
 
-    static var configuration: TerminalConfiguration {
+    /// #1456 (OQ-153): Settings' "Terminal colours": none for Prosper, else the colour lines kept from the user's own
+    /// Ghostty config (GhosttyUserColours: colours only, checked). Read in the app at each make and refresh.
+    static func userColours(choice: String = Preferences.agentTerminalColours,
+                            files: @autoclosure () -> [URL] = GhosttyUserColours.files(
+                                home: FileManager.default.homeDirectoryForCurrentUser,
+                                xdgConfigHome: ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"])) -> [(key: String, value: String)] {
+        choice == "ghostty" ? GhosttyUserColours.read(files()) : []
+    }
+
+    static var configuration: TerminalConfiguration { configuration(colours: []) }
+
+    static func configuration(colours: [(key: String, value: String)]) -> TerminalConfiguration {
         TerminalConfiguration(startingFrom: .default) {
+            // #1456: the user's colour lines first, so every Prosper line below comes later and wins.
+            for c in colours { $0.withCustom(c.key, c.value) }
             $0.withCustom("keybind", "clear")
             for bind in textKeybinds { $0.withCustom("keybind", bind) }
             $0.withCustom("clipboard-read", "deny")
@@ -857,7 +872,9 @@ enum AgentTerminalLook {
     }
 
     /// Prosper's palette follows its own theme, not the system appearance: both variants are the same.
-    static func theme() -> TerminalTheme {
+    /// #1456: with the user's colour lines there is no theme, so Prosper's background and text never cover them.
+    static func theme(colours: [(key: String, value: String)] = []) -> TerminalTheme {
+        guard colours.isEmpty else { return TerminalTheme() }
         let colours = TerminalConfiguration {
             $0.withBackground(hex(Neon.bgBottom))
             $0.withForeground(hex(Neon.textPrimary))
@@ -865,9 +882,16 @@ enum AgentTerminalLook {
         return TerminalTheme(light: colours, dark: colours)
     }
 
-    /// A theme switch since the last attach: one reconfigure, no rebuild (and a new config file, dropped).
-    static func refresh(_ c: TerminalController) {
-        if c.setTheme(theme()) { dropConfigFile(c) }
+    /// A theme switch (or a "Terminal colours" change) since the last attach: a reconfigure, no rebuild; each load's
+    /// new config file is dropped before the next one is written.
+    /// #1456: Prosper's own config stays the base; the user's colours ride on an overlay with Prosper's lines repeated after
+    /// them. A line libghostty refuses rolls the whole overlay back (TerminalController: any diagnostic fails a load), and
+    /// the theme then keeps Prosper's colours: never a config without Prosper's keys and clipboard rules.
+    static func refresh(_ c: TerminalController, colours: [(key: String, value: String)]? = nil) {
+        let colours = colours ?? userColours()
+        let overlay = colours.isEmpty ? TerminalConfiguration() : configuration(colours: colours)
+        if c.setTerminalConfiguration(overlay) { dropConfigFile(c) }
+        if c.setTheme(theme(colours: c.terminalConfiguration == overlay ? colours : [])) { dropConfigFile(c) }
     }
 
     /// QA #681 INFO-10: GhosttyTerminal writes each config it loads to $TMPDIR/<bundle id>/ghostty-config-

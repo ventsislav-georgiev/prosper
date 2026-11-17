@@ -1030,6 +1030,10 @@ struct AgentSessionsSection: View {
     @State private var style = Preferences.agentWindowStyle
     @State private var rounded = Preferences.agentWindowRoundedCorners
     @State private var sidebar = Preferences.agentSidebarMode
+    @State private var colours = Preferences.agentTerminalColours
+    /// #1456 (OQ-153): the "Terminal colours" choices, stored value first.
+    static let colourChoices = [("prosper", "Prosper"), ("ghostty", "My Ghostty theme")]
+    static let coloursFooter = "Colours only; Prosper keeps its own keys and clipboard rules."
     /// #1378: the corners toggle's line, fixed per style (a window with a title bar keeps the system's corners).
     static func roundedHint(_ style: AgentWindowStyle) -> String {
         style == .borderless ? "Off: square corners, filling the window to its edges."
@@ -1060,8 +1064,17 @@ struct AgentSessionsSection: View {
                 }
                 .labelsHidden().pickerStyle(.menu).fixedSize()
             }
+            NeonDivider()
+            // #1456: menu, not segmented (segmented ignores the UI scale); applied to the open terminal at once.
+            NeonRow("Terminal colours", subtitle: Self.coloursFooter) {
+                Picker("", selection: $colours) {
+                    ForEach(Self.colourChoices, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .labelsHidden().pickerStyle(.menu).fixedSize()
+            }
         }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
+        .onChange(of: colours) { _, v in Preferences.agentTerminalColours = v; AgentTerminalLook.refresh(AgentTerminalLook.controller) }
         .onChange(of: style) { _, v in Preferences.agentWindowStyle = v; AgentsWindow.shared.restyle() }
         .onChange(of: rounded) { _, v in Preferences.agentWindowRoundedCorners = v; AgentsWindow.shared.restyle() }
         .onChange(of: sidebar) { _, v in AgentsWindow.shared.setSidebarMode(v) }

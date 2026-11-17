@@ -1689,6 +1689,9 @@ tag from the now-released section and put it on the new top draft.
   sessions (and their sidekick, and sessions started from the phone) start with that effort unless
   the command already sets one; "Claude Code picks" leaves it to Claude Code, and Restart and Resume
   keep what the session had. (#1454)
+- Settings > Agent Island > Agent Sessions: a new "Terminal colours" choice keeps Prosper's colours
+  (the default) or uses "My Ghostty theme", which takes only the colour settings from your own
+  Ghostty config; Prosper's own keys and clipboard rules stay as they are. (#1456)
 
 ## v2.174.0
 

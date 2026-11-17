@@ -472,6 +472,8 @@ enum Preferences {
         static let agentWindowRoundedCorners = "agentWindowRoundedCorners"
         // #1379: the Agent Sessions sidebar's mode (AgentSidebarMode); per Mac, not in SyncedKeys.
         static let agentSidebarMode = "agentSidebarMode"
+        // #1456 (OQ-153): the Agent Sessions terminal's colours, "prosper" or "ghostty" (the user's own); per Mac, not in SyncedKeys.
+        static let agentTerminalColours = "agentTerminalColours"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1380,6 +1382,12 @@ enum Preferences {
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandSidekickPrompt) }
             else { defaults.set(v, forKey: Keys.agentIslandSidekickPrompt) }
         }
+    }
+
+    /// #1456: Agent Sessions' "Terminal colours": "ghostty" (My Ghostty theme) or "prosper"; unset or unknown reads as Prosper.
+    static var agentTerminalColours: String {
+        get { defaults.string(forKey: Keys.agentTerminalColours) == "ghostty" ? "ghostty" : "prosper" }
+        set { defaults.set(newValue, forKey: Keys.agentTerminalColours) }
     }
 
     /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.
