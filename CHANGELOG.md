@@ -1746,6 +1746,8 @@ tag from the now-released section and put it on the new top draft.
   unchanged. (#1452)
 - Agent Sessions can split: Go > Split Right (⌘D) and Split Down (⇧⌘D) show local sessions side by
   side, each in its own live terminal. (#1477)
+- Settings > Account pool shows usage charts: utilisation per account, tokens by kind, cache hit
+  rate, top sessions and time to finish, over the last 24 hours, 7 days or 14 days. (#1484)
 
 ## v2.174.0
 

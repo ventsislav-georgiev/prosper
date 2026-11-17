@@ -1,0 +1,260 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import ProsperApp
+
+// #1484 (#1183 R3): the Usage history card. Literal rows written to a record folder under the row's tempDir() (fake
+// accounts "id-a" = Example Org A, "id-b" = Example Org B, one removed id; sessions s-0001...), read through the real
+// reader, literal expected chart models. Hosted offscreen only: no window, nothing clicked, no event posted.
+
+private let stNow = 1_800_000_000.0          // 2027-01-15 08:00:00 UTC
+private let stDay = 86_400.0
+private let stLabels = ["id-a": "Example Org A", "id-b": "Example Org B"]
+
+/// One row as JSON text, in the writer's shape; tokens are (in, out, cr, cw5, cw1); lim is five_hour (u, r).
+private func stLine(_ t: Double, acct: String = "id-a", model: String = "claude-opus-5", sess: String? = "s-0001", agent: String = "",
+                    st: Int = 200, ms: Int = 1000, done: Bool = true, qc: Bool = false, tok: [Int]? = nil, five: (Double, Double)? = nil) -> String {
+    var o: [String: Any] = ["v": 1, "t": t, "acct": acct, "model": model, "path": "messages", "st": st, "ms": ms, "done": done, "qc": qc,
+                            "att": 1, "thr": 0, "mv": false, "routed": "pin"]
+    if let sess { o["sess"] = sess; o["agent"] = agent }
+    if let tok, tok.count == 5 { for (k, v) in zip(["in", "out", "cr", "cw5", "cw1"], tok) { o[k] = v } }
+    if let five { o["lim"] = ["five_hour": ["u": five.0, "r": five.1, "s": "a"] as [String: Any]] }
+    let data = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])
+    return String(decoding: data ?? Data(), as: UTF8.self)
+}
+
+private final class StReads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [(range: CCPoolUsageRange, onMain: Bool)] = []
+    var calls: [(range: CCPoolUsageRange, onMain: Bool)] { lock.withLock { _calls } }
+    func add(_ r: CCPoolUsageRange, _ main: Bool) { lock.withLock { _calls.append((r, main)) } }
+}
+
+@MainActor
+final class CCPoolUsageStatsTests: XCTestCase {
+    private typealias M = CCPoolUsageStatsModel
+    private var t1: Double { stNow - 13 * stDay }
+    private var t3: Double { stNow - 7 * stDay }
+
+    /// A record folder under tempDir() holding `files` (name -> lines), and a model on it whose reads are recorded.
+    private func rig(_ files: [String: [String]], labels: [String: String] = stLabels) throws -> (M, StReads) {
+        let dir = tempDir().appendingPathComponent("usage")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (n, lines) in files { try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: dir.appendingPathComponent(n)) }
+        let reads = StReads()
+        let model = M(directory: dir, clock: { stNow }, labels: { labels }, read: { d, r, now in
+            reads.add(r, Thread.isMainThread)
+            return CCPoolUsageReader.readNow(directory: d, range: r, now: now)
+        })
+        return (model, reads)
+    }
+
+    /// The 14-day fixture: two accounts, a removed one, two sessions, a subagent, a move, a quota check, a failed reply,
+    /// a reset, and one line that does not decode.
+    private func fortnight() throws -> (M, StReads) {
+        try rig([
+            "usage-2027-01-02.jsonl": [stLine(t1, tok: [100, 50, 0, 900, 0], five: (0.25, t1 + 3600)),
+                                       stLine(t1 + 60, agent: "a-1", ms: 3000, tok: [100, 50, 300, 0, 0], five: (0.125, t1 + 3600))],
+            "usage-2027-01-08.jsonl": [stLine(t3, acct: "id-b", ms: 2000, tok: [100, 100, 0, 1900, 0], five: (0.5, t3 + 3600)),
+                                       stLine(t3 + 60, model: "claude-sonnet-5", sess: "s-0002", ms: 100, qc: true, five: (0.75, t3 + 3660))],
+            "usage-2027-01-15.jsonl": [stLine(stNow - 3600, acct: "id-removed", model: "claude-sonnet-5", sess: nil, ms: 2000, tok: [10, 20, 30, 40, 0]),
+                                       "{not json", stLine(stNow - 60, sess: "s-0002", st: 529, ms: 500, done: false)],
+        ])
+    }
+
+    /// Every string the card's view values hold (the walk of CCPoolPaneTests: closures of sections, rows and ForEach
+    /// called; class instances not entered except SwiftUI's text storage).
+    private func walked(_ m: M) -> [String] {
+        var out: [String] = []
+        func walk(_ v: Any, _ depth: Int) {
+            guard depth < 120 else { return }
+            if let s = v as? String { out.append(s); return }
+            let mirror = Mirror(reflecting: v)
+            if mirror.displayStyle == .class, !"\(type(of: v))".contains("TextStorage") { return }
+            if let inner = v as? CCPoolViewInner { inner.ccpoolInner.forEach { walk($0, depth + 1) } }
+            for c in mirror.children { walk(c.value, depth + 1) }
+        }
+        walk(CCPoolUsageStatsSection(model: m).content, 0)
+        return out
+    }
+
+    /// The walk plus the published chart models and every chart's VoiceOver label and value.
+    private func rendered(_ m: M) -> [String] {
+        var dumped = ""
+        dump(m.shown, to: &dumped)
+        let charts = M.Grouping.allCases.flatMap { g in (m.shown?.charts(g) ?? []).flatMap { [$0.title, $0.summary] } }
+        return walked(m) + [dumped] + charts
+    }
+
+    private func line(_ name: String, _ pts: [(Double, Double)], _ markers: [Double] = []) -> M.Line {
+        M.Line(name: name, points: pts.map { .init(t: $0.0, value: $0.1) }, markers: markers)
+    }
+
+    // MARK: fixtures
+
+    func testEmptyRecordShowsTheEmptyStateAndNoCharts() async throws {
+        let (m, _) = try rig([:])
+        XCTAssertTrue(walked(m).contains("Not read yet."))
+        await m.reload().value
+        var empty = M.Shown()
+        empty.tokens = [.account: [], .model: [], .session: []]
+        XCTAssertEqual(m.shown, empty)
+        XCTAssertTrue(walked(m).contains("No usage recorded in this range."))
+        XCTAssertFalse(walked(m).contains(M.Shown.titles[0]), "no chart without rows")
+        XCTAssertEqual(m.shown?.charts(.account).map(\.summary), Array(repeating: "Nothing in this range.", count: 5))
+    }
+
+    func testOneRowRendersEveryChartModel() async throws {
+        let t = stNow - 600
+        let (m, _) = try rig(["usage-2027-01-15.jsonl": [stLine(t, ms: 1500, tok: [500, 250, 3000, 400, 100], five: (0.5, stNow + 3000))]])
+        await m.reload().value
+        let s = try XCTUnwrap(m.shown)
+        XCTAssertEqual(s.rows, 1)
+        XCTAssertEqual(s.skipped, 0)
+        XCTAssertEqual(s.utilization, [line("Example Org A \u{00B7} 5 h", [(t, 50)])])
+        let kinds = [500, 400, 100, 3000, 250]
+        XCTAssertEqual(s.tokens, [.account: [M.Bar(name: "Example Org A", kinds: kinds, total: 4250)],
+                                  .model: [M.Bar(name: "claude-opus-5", kinds: kinds, total: 4250)],
+                                  .session: [M.Bar(name: "s-000\u{2026}", kinds: kinds, total: 4250)]])
+        XCTAssertEqual(s.cache, [line("s-000\u{2026}", [(t, 75)])])
+        let main = M.SessionRow(name: "main", kinds: kinds, total: 4250, requests: 1, accounts: "", agents: [])
+        XCTAssertEqual(s.top, [M.SessionRow(name: "s-000\u{2026}", kinds: kinds, total: 4250, requests: 1, accounts: "Example Org A", agents: [main])])
+        XCTAssertEqual(s.finish, [M.Finish(model: "claude-opus-5", day: "2027-01-15", median: 1500, p90: 1500, count: 1)])
+        XCTAssertEqual(s.charts(.session).map(\.summary), [
+            "Example Org A \u{00B7} 5 h: latest 50%, peak 50%, 0 resets",
+            "s-000\u{2026}: 4250 tokens",
+            "s-000\u{2026}: latest 75%, 0 moves",
+            "1 session; most tokens: s-000\u{2026}, 4250 tokens",
+            "claude-opus-5 on 2027-01-15: median 1.5 s, 90th percentile 1.5 s, 1 request",
+        ])
+    }
+
+    func testFourteenDayFixtureRendersEveryChartModel() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let s = try XCTUnwrap(m.shown)
+        XCTAssertEqual(s.rows, 6)
+        XCTAssertEqual(s.skipped, 1)
+        // Running max inside one reset (25 stays 25 after 12.5), a new reset starts over with a marker; the quota check counts.
+        XCTAssertEqual(s.utilization, [line("Example Org A \u{00B7} 5 h", [(t1, 25), (t1 + 60, 25), (t3 + 60, 75)], [t3 + 60]),
+                                       line("Example Org B \u{00B7} 5 h", [(t3, 50)])])
+        XCTAssertEqual(s.tokens[.account], [M.Bar(name: "Example Org A", kinds: [200, 900, 0, 300, 100], total: 1500),
+                                            M.Bar(name: "Example Org B", kinds: [100, 1900, 0, 0, 100], total: 2100),
+                                            M.Bar(name: "removed account", kinds: [10, 40, 0, 30, 20], total: 100)])
+        XCTAssertEqual(s.tokens[.model], [M.Bar(name: "claude-opus-5", kinds: [300, 2800, 0, 300, 200], total: 3600),
+                                          M.Bar(name: "claude-sonnet-5", kinds: [10, 40, 0, 30, 20], total: 100)])
+        XCTAssertEqual(s.tokens[.session], [M.Bar(name: "s-000\u{2026}", kinds: [300, 2800, 0, 300, 200], total: 3600)])
+        // The move to Example Org B is a marker, and its cache write shows as the dip to 0.
+        XCTAssertEqual(s.cache, [line("s-000\u{2026}", [(t1, 0), (t1 + 60, 75), (t3, 0)], [t3])])
+        XCTAssertEqual(s.top, [M.SessionRow(
+            name: "s-000\u{2026}", kinds: [300, 2800, 0, 300, 200], total: 3600, requests: 3, accounts: "Example Org A, Example Org B", agents: [
+                M.SessionRow(name: "main", kinds: [200, 2800, 0, 0, 150], total: 3150, requests: 2, accounts: "", agents: []),
+                M.SessionRow(name: "subagent a-1", kinds: [100, 0, 0, 300, 50], total: 450, requests: 1, accounts: "", agents: []),
+            ])])
+        XCTAssertEqual(s.finish, [M.Finish(model: "claude-opus-5", day: "2027-01-02", median: 2000, p90: 3000, count: 2),
+                                  M.Finish(model: "claude-opus-5", day: "2027-01-08", median: 2000, p90: 2000, count: 1),
+                                  M.Finish(model: "claude-sonnet-5", day: "2027-01-15", median: 2000, p90: 2000, count: 1)])
+        XCTAssertEqual(s.charts(.account).map(\.summary), [
+            "Example Org A \u{00B7} 5 h: latest 75%, peak 75%, 1 reset; Example Org B \u{00B7} 5 h: latest 50%, peak 50%, 0 resets",
+            "Example Org A: 1500 tokens; Example Org B: 2100 tokens; removed account: 100 tokens",
+            "s-000\u{2026}: latest 0%, 1 move",
+            "1 session; most tokens: s-000\u{2026}, 3600 tokens",
+            "claude-opus-5 on 2027-01-02: median 2.0 s, 90th percentile 3.0 s, 2 requests; "
+                + "claude-opus-5 on 2027-01-08: median 2.0 s, 90th percentile 2.0 s, 1 request; "
+                + "claude-sonnet-5 on 2027-01-15: median 2.0 s, 90th percentile 2.0 s, 1 request",
+        ])
+        let r = walked(m)
+        XCTAssertTrue(r.contains("1 unreadable row skipped."), "the skipped count is shown")
+        // VoiceOver: each chart's title is drawn, and its label/value pair is the model's.
+        XCTAssertEqual(s.charts(.model).map(\.title), ["Utilisation per account", "Tokens by kind", "Cache hit rate per session",
+                                                       "Top sessions and subagents", "Time to finish per model"])
+        for title in M.Shown.titles { XCTAssertTrue(r.contains(title), title) }
+    }
+
+    func testRangePickerReReadsOffMain() async throws {
+        let (m, reads) = try fortnight()
+        await m.reload().value
+        XCTAssertEqual(m.shown?.rows, 2, "24 h: the two rows of the last day")
+        await m.select(.week)?.value
+        XCTAssertEqual(m.shown?.rows, 4, "7 d starts at the first row of 2027-01-08")
+        XCTAssertTrue(m.select(.week) == nil, "the same range does not read again")
+        await m.select(.fortnight)?.value
+        XCTAssertEqual(m.shown?.rows, 6)
+        XCTAssertEqual(reads.calls.map(\.range), [.day, .week, .fortnight])
+        XCTAssertEqual(reads.calls.map(\.onMain), [false, false, false], "every read runs off main")
+    }
+
+    // MARK: what is never shown
+
+    func testNoSessionIdIsShownWholeAnywhere() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let r = rendered(m)
+        XCTAssertTrue(r.contains { $0.contains("s-000\u{2026}") }, "the walk saw the sessions")
+        for id in ["s-0001", "s-0002"] { XCTAssertFalse(r.contains { $0.contains(id) }, id) }
+        XCTAssertEqual(M.shortSession("0f3c2a9e-1111-4222-8333-944445555666"), "0f3c2a9e\u{2026}")
+        XCTAssertEqual(M.shortSession("s-0001"), "s-000\u{2026}")
+        XCTAssertEqual(M.shortSession("s"), "\u{2026}")
+        XCTAssertEqual(M.names(["s-0001", "s-0002", "s-0003"], M.shortSession),
+                       ["s-0001": "s-000\u{2026}", "s-0002": "s-000\u{2026} (2)", "s-0003": "s-000\u{2026} (3)"])
+    }
+
+    func testNoPriceOrCurrencyAnywhere() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let text = rendered(m).joined(separator: "\n") + CCPoolUsageStatsSection.footer
+        for needle in ["$", "\u{20AC}", "\u{00A3}", "\u{00A5}", "USD", "price", "Price", "cost", "Cost", "dollar"] {
+            XCTAssertFalse(text.contains(needle), needle)
+        }
+    }
+
+    // QA r1448 i1: account labels, models, sessions and agents are outside strings: drawn only through OutsideText.shown.
+    func testOutsideStringsAreDrawnCleaned() async throws {
+        let rlo = "\u{202E}", bell = "\u{0007}", rlm = "\u{200F}", acute = "\u{0301}"
+        let (m, _) = try rig(["usage-2027-01-15.jsonl": [
+            stLine(stNow - 60, model: "claude-" + rlo + "x" + bell + "e" + String(repeating: acute, count: 6), sess: "s-" + rlm + "0009-extra",
+                   agent: rlo + "sub-1", tok: [100, 0, 100, 0, 0], five: (0.5, stNow + 600)),
+        ]], labels: ["id-a": "Example Org A" + rlo + bell])
+        await m.reload().value
+        let s = try XCTUnwrap(m.shown)
+        let model = "claude-xe" + String(repeating: acute, count: 3)
+        XCTAssertEqual(s.finish.map(\.model), [model])
+        XCTAssertEqual(s.tokens[.model]?.map(\.name), [model])
+        XCTAssertEqual(s.top.map(\.name), ["s-0009-e\u{2026}"])
+        XCTAssertEqual(s.top.first?.agents.map(\.name), ["subagent sub-1"])
+        XCTAssertEqual(s.top.first?.accounts, "Example Org A")
+        XCTAssertEqual(s.utilization.map(\.name), ["Example Org A \u{00B7} 5 h"])
+        for text in rendered(m) {
+            XCTAssertFalse(text.unicodeScalars.contains { OutsideText.isUnseen($0) && $0 != "\n" }, text.debugDescription)
+            XCTAssertFalse(text.contains(String(repeating: acute, count: 4)), "marks capped")
+        }
+    }
+
+    // MARK: hosted
+
+    /// The 14-day card lays out offscreen (no window) inside the pane's room at the smallest and largest UI scale.
+    func testCardFitsThePaneWidth() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale in [1.0, 0.7] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            let width = 820 * max(scale, 0.85) - 302 * scale - 2 * sz(16)
+            let hc = NSHostingController(rootView: CCPoolUsageStatsSection(model: m).content)
+            let fit = hc.sizeThatFits(in: CGSize(width: width, height: 100_000))
+            XCTAssertLessThanOrEqual(fit.width, width + 1, "card wider than its room at scale \(scale)")
+            XCTAssertGreaterThan(fit.height, 4 * sz(160), "the five charts laid out at scale \(scale)")
+        }
+    }
+
+    // The pane hosts the card on the pane model's record folder.
+    func testPaneModelPointsTheCardAtItsRecordFolder() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(r.model.usageStats.directory, r.store.usageDirectory)
+        XCTAssertTrue(r.model.usageStats === r.model.usageStats, "one model for the life of the pane")
+        try r.add(["Example Org A"])
+        let id = try XCTUnwrap(r.store.snapshot.accounts["Example Org A"]?.id)
+        XCTAssertEqual(r.model.usageStats.labels(), [id: "Example Org A"])
+    }
+}

@@ -36,6 +36,7 @@ struct CCPoolPane: View {
             accountsSection
             addSection
             usageSection
+            CCPoolUsageStatsSection(model: model.usageStats)
             // Shown since the spawn path applies the env (P2b-2 flipped CCPool.routingWired).
             if CCPool.routingWired { sessionsSection }
             terminalSection

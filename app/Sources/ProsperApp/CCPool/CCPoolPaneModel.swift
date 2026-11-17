@@ -78,6 +78,9 @@ final class CCPoolPaneModel: ObservableObject {
     @Published private(set) var unverified: Set<String> = []
     @Published private(set) var importPhase: ImportPhase = .idle
     @Published var importChoices: [String: CCPoolMigration.Choice] = [:]
+    /// #1484: the Usage history card's model; labels are today's, looked up from the Keychain id at each read.
+    lazy var usageStats = CCPoolUsageStatsModel(directory: store.usageDirectory, clock: clock,
+                                                labels: { [store] in CCPoolUsageStatsModel.labels(store.snapshot) })
 
     init(store: CCPoolStore, secrets: CCPoolSecrets, service: CCPoolService, logger: CCPoolLogger = CCPoolOSLog(),
          defaults: UserDefaults = Preferences.defaults,
