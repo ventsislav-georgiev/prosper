@@ -347,6 +347,31 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1488 c: fakeTerminal(m) with every pane terminal on its recorders. Splits on, each pane has its own controller
+    /// (#1477, made on first need), so the focused pane of a layout adopted later would otherwise get one that never
+    /// spawns a fake. A pane's controller takes the first one's seams as they are when it is made (its `after` too); an
+    /// unfocused pane's rest is never run here.
+    @MainActor
+    func dividerTerminals(_ m: AgentWindowModel) -> (spawned: () -> [AgentTerminalSpawn], children: () -> [AgentTerminalTests.FakeChild]) {
+        let log = fakeTerminal(m)
+        let first = m.terminal
+        m.paneAfter = { _, _ in }
+        m.makeTerminal = {
+            let t = AgentTerminalController()
+            t.request = first.request
+            t.spawn = first.spawn
+            t.makeScreen = { [weak t] events in
+                if let g = t?.grid { events.resize(g.cols, g.rows) }
+                return AgentTerminalTests.FakeScreen(events)
+            }
+            t.after = first.after
+            t.clientVersion = first.clientVersion
+            t.gridChanged(cols: 80, rows: 24)
+            return t
+        }
+        return log
+    }
+
     // MARK: Item 4: the terminal re-grids once, at the drag's end
 
     /// 7.5 / 14.2: the window's one terminal (the focused live pane's, Terminal mode) gets 0 setSize during 30 moves,
@@ -362,7 +387,7 @@ extension AgentWindowD1Tests {
                 let st = store([mapped("api"), mapped("web")])
                 st.controlDch = bin([1, 38, 0])
                 let m = windowModel(st)
-                let t = fakeTerminal(m)
+                let t = dividerTerminals(m)
                 let clock = AgentTerminalTests.Clock()
                 m.terminal.after = { clock.schedule($0, $1) }
                 Calls().wire(m)

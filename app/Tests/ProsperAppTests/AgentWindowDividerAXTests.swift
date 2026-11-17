@@ -43,7 +43,7 @@ extension AgentWindowD1Tests {
                 let st = store([mapped("api"), mapped("web")])
                 st.controlDch = bin([1, 38, 0])
                 let m = windowModel(st, layouts: d)
-                let t = fakeTerminal(m)
+                let t = dividerTerminals(m)
                 let clock = AgentTerminalTests.Clock()
                 m.terminal.after = { clock.schedule($0, $1) }
                 Calls().wire(m)
