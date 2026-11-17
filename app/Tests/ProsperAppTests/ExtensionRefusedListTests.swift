@@ -137,6 +137,25 @@ final class ExtensionRefusedListTests: XCTestCase {
                        ["Not loaded: " + shown + ": The extension's manifest could not be read."])
     }
 
+    /// R984-s1: two refused folders give two different Reveal labels, each naming its folder (the button's action is never run).
+    func testRevealLabelNamesItsFolder() throws {
+        let user = tempDir().appendingPathComponent("user")
+        for name in ["alpha", "beta"] { try writeExt(user.appendingPathComponent(name), Self.manifest("com.example.bad") + "= =\n") }
+        let reg = registry(user)
+        reg.discover()
+        let labels = reg.refused.map(ExtensionsPane.revealLabel)
+        XCTAssertEqual(labels, ["Reveal alpha in Finder", "Reveal beta in Finder"])
+        XCTAssertEqual(Set(labels).count, 2)
+    }
+
+    /// A scan by necessity (no hosting row, no window): the refused row's button is labelled with revealLabel.
+    func testRefusedRowButtonUsesTheRevealLabel() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains(".accessibilityLabel(Self.revealLabel(refused))"))
+    }
+
     /// The marketplace's install error for each refused manifest, from the loader the market path reads with
     /// (bindMarketIdentity, no download), and for the two errors that carry a manifest value.
     func testMarketplaceInstallErrorIsThePlainSentence() throws {

@@ -96,7 +96,7 @@ struct ExtensionsPane: View {
                         Spacer()
                         Button("Reveal in Finder") {
                             NSWorkspace.shared.activateFileViewerSelecting([refused.directory])
-                        }.rowAction()
+                        }.rowAction().accessibilityLabel(Self.revealLabel(refused))
                     }
                 }
             }
@@ -114,6 +114,11 @@ struct ExtensionsPane: View {
     /// #984: one refused folder's line in the list: its name as shown and why it was not loaded.
     nonisolated static func refusedLine(_ refused: ExtensionRegistry.RefusedFolder) -> String {
         "Not loaded: \(refused.folder): \(refused.reason)"
+    }
+
+    /// R984-s1: the refused row's Reveal button names its folder for VoiceOver (already cleaned and cut at 80).
+    nonisolated static func revealLabel(_ refused: ExtensionRegistry.RefusedFolder) -> String {
+        "Reveal \(refused.folder) in Finder"
     }
 
     /// #726: the row's "Allow on iPhone" toggle shows only for a trusted user or market

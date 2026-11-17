@@ -1621,6 +1621,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions and the island now say "Not delivered: the session is not reading input" when you
   answer a prompt and dch reports that the session dropped the keystroke or typed text because its
   program is not reading input. (#1171)
+- Reveal in Finder for a folder Prosper could not load now says which folder it belongs to when read
+  by VoiceOver. (#1433)
 
 ## v2.174.0
 
