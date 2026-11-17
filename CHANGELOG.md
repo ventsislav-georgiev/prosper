@@ -1673,6 +1673,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: in Slide mode the sidebar now stays open while its own menus, submenus (such as
   Row details) or the Diagnostics popover are open, and slides away after they close only if the
   pointer has left it. (#1461)
+- Agent Sessions transcript: sessions on Claude Code up to 2.1.326 no longer show the "Newer Claude
+  Code: some details may show simplified" note. (#1464)
 
 ## v2.174.0
 

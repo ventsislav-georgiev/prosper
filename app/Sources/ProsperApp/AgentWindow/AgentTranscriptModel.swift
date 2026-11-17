@@ -10,7 +10,7 @@ import os
 /// Tests/Fixtures/claude-code/). Above `upper`, the window shows a quiet banner.
 enum ClaudeCodeCompat {
     static let lower = "2.1.223"
-    static let upper = "2.1.318"
+    static let upper = "2.1.326"
     static let newerBanner = "Newer Claude Code: some details may show simplified"
 
     static func parts(_ v: String) -> [Int] { DchCommand.masterVersion(v) }

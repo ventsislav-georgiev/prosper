@@ -281,7 +281,7 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertFalse(ClaudeCodeCompat.isNewer(ClaudeCodeCompat.lower))
         XCTAssertFalse(ClaudeCodeCompat.isNewer("2.1.100"))
         XCTAssertFalse(ClaudeCodeCompat.isNewer("junk"))
-        XCTAssertTrue(ClaudeCodeCompat.isNewer("2.1.319"))
+        XCTAssertTrue(ClaudeCodeCompat.isNewer("2.1.327"))
         XCTAssertTrue(ClaudeCodeCompat.isNewer("2.2.0"))
         XCTAssertEqual(ClaudeCodeCompat.sanitized("2.1.300; rm"), "unknown")
     }
@@ -294,11 +294,11 @@ final class AgentWindowTests: XCTestCase {
         m.start()
         defer { m.stop() }
         XCTAssertNil(m.banner)
-        try write(url, [assistant([["type": "text", "text": "b"]], version: "2.1.319")], append: true)
+        try write(url, [assistant([["type": "text", "text": "b"]], version: "2.1.327")], append: true)
         m.poll()
         XCTAssertEqual(m.banner, ClaudeCodeCompat.newerBanner)
-        XCTAssertEqual(m.latestVersion, "2.1.319")
-        XCTAssertEqual(m.counts["2.1.319"]?.specific, 1, "tier counts per version")
+        XCTAssertEqual(m.latestVersion, "2.1.327")
+        XCTAssertEqual(m.counts["2.1.327"]?.specific, 1, "tier counts per version")
         XCTAssertEqual(m.mode, .conversation, "the banner never blocks")
     }
 
@@ -307,6 +307,20 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertTrue(versions.contains(ClaudeCodeCompat.lower))
         XCTAssertTrue(versions.contains(ClaudeCodeCompat.upper))
         XCTAssertTrue(versions.contains { ClaudeCodeCompat.isNewer($0) }, "a future-version fixture")
+    }
+
+    /// #1464: a Claude Code 2.1.326 session shows no "Newer Claude Code" note; the 2.4.0 one still does.
+    @MainActor
+    func testTheBannerIsGoneForTheUpperFixtureAndKeptForTheFutureOne() {
+        XCTAssertEqual(ClaudeCodeCompat.upper, "2.1.326")
+        for (file, newer) in [("2.1.326/a-tools-and-noise.jsonl", false), ("2.1.326/c-tasks.jsonl", false),
+                              ("2.4.0/future-renamed-and-unknown.jsonl", true)] {
+            let m = model(Self.corpus.appendingPathComponent(file).path)
+            m.start()
+            defer { m.stop() }
+            XCTAssertEqual(m.banner, newer ? ClaudeCodeCompat.newerBanner : nil, file)
+            XCTAssertEqual(m.latestVersion, file.hasPrefix("2.4.0") ? "2.4.0" : "2.1.326", file)
+        }
     }
 
     // MARK: - Rule 5: health
