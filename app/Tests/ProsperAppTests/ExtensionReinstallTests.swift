@@ -169,8 +169,8 @@ final class ExtensionReinstallTests: XCTestCase {
     }
 
     /// A copy that fails (a folder in the new source nobody can read, inside this row's tempDir) leaves the old
-    /// record live and holding: no release, the timer armed, no launch. The old folder's own file is gone, so the
-    /// install got past the remove and failed in the copy.
+    /// record live and holding: no release, the timer armed, no launch. #1430: the old folder's own file stays and
+    /// no stage is left beside it.
     func testFailedCopyLeavesTheOldExtensionLiveAndHolding() async throws {
         let services = ReinstallRecordingServices()
         defer { TimerScheduler.shared.cancelAll(extID: id) }
@@ -186,16 +186,19 @@ final class ExtensionReinstallTests: XCTestCase {
         let lockedFile = v2.appendingPathComponent("locked.txt")   // unreadable too: a copy cannot open or clone it
         try "x".write(to: lockedFile, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedFile.path)
-        let copied = root.appendingPathComponent("user/\(id)/locked", isDirectory: true)
-        addTeardownBlock {   // runs before tempDir's removal: both may be unreadable
-            for dir in [locked, copied] where FileManager.default.fileExists(atPath: dir.path) {
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        addTeardownBlock {   // runs before tempDir's removal: the source and any copy of it (in a stage) may be unreadable
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: user.path)) ?? []
+            let copies = names.map { user.appendingPathComponent("\($0)/locked", isDirectory: true) }
+            for dir in [locked] + copies where FileManager.default.fileExists(atPath: dir.path) {
                 try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
             }
         }
 
         XCTAssertThrowsError(try reg.installLocal(from: v2), "the copy must fail for this row to mean anything")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("user/\(id)/old-only.txt").path),
-                       "precondition: the install failed in the copy, after the old folder was removed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: user.appendingPathComponent("\(id)/old-only.txt").path),
+                      "a failed copy removed the old folder")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: user.path), [id], "a failed copy left a stage")
         await Task { @MainActor in }.value   // a stray replay Task would have run by now
 
         XCTAssertEqual(services.resets(id), 0, "a failed copy released the old generation's resources")
@@ -223,5 +226,149 @@ final class ExtensionReinstallTests: XCTestCase {
         XCTAssertEqual(services.resets(id), 0, "a first install released resources")
         XCTAssertEqual(services.titles, ["marker-new"], "a first install ran the launch handler")
         XCTAssertTrue(reg.record(id: id)?.isLive == true)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("user").path), [id],
+                       "a first install left a stage")
+    }
+
+    // MARK: - #1430: stage, then swap
+
+    private struct ForcedCopyFailure: Error {}
+
+    /// A copy that finishes and then fails: the stage exists when the error lands, so a stage left behind shows.
+    private static let failingCopy: (URL, URL) throws -> Void = { src, dst in
+        try FileManager.default.copyItem(at: src, to: dst)
+        throw ForcedCopyFailure()
+    }
+
+    /// Every member under `dir` (hidden ones too) by relative path, with a file's bytes; a folder maps to empty data.
+    private func snapshot(_ dir: URL) -> [String: Data] {
+        var out: [String: Data] = [:]
+        let base = dir.resolvingSymlinksInPath().path
+        let all = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []
+        for url in all {
+            let path = String(url.resolvingSymlinksInPath().path.dropFirst(base.count))
+            out[path] = (try? Data(contentsOf: url)) ?? Data()
+        }
+        return out
+    }
+
+    /// A forced copy failure on an install over a live extension leaves its folder byte-identical, the record live
+    /// and holding, nothing torn down, and no stage. Parent: the old folder was removed before the copy.
+    func testForcedCopyFailureOnInstallLeavesTheOldFolderAndRecord() async throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("stage-install-failed")
+        let reg = try await installHoldingOld(root, services)
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let before = snapshot(user.appendingPathComponent(id))
+        XCTAssertTrue(before.keys.contains("/old-only.txt"), "precondition: the old folder's own file is there")
+        let v2 = root.appendingPathComponent("v2", isDirectory: true)
+        try writeSource(v2, version: "2.0.0", lua: Self.newLua)
+
+        reg.copyFolder = Self.failingCopy
+        XCTAssertThrowsError(try reg.installLocal(from: v2)) { XCTAssertTrue($0 is ForcedCopyFailure, "\($0)") }
+        await Task { @MainActor in }.value   // a stray replay Task would have run by now
+
+        XCTAssertEqual(snapshot(user.appendingPathComponent(id)), before, "a failed copy changed the old folder")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: user.path), [id], "a failed copy left a stage")
+        XCTAssertEqual(services.resets(id), 0, "a failed copy released the old generation's resources")
+        XCTAssertEqual(services.held(id), ["system"], "a failed copy dropped the old generation's assertion")
+        XCTAssertTrue(reg.record(id: id)?.isLive == true, "a failed copy must leave the old record live")
+        XCTAssertEqual(reg.record(id: id)?.manifest.extension.version, "1.0.0")
+    }
+
+    /// A good install over a live extension swaps the folder in (the old-only file is gone), tears the old code down
+    /// once, and leaves no stage or old folder beside it.
+    func testGoodInstallSwapsTheFolderAndTearsDownOnce() async throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("stage-install-good")
+        let reg = try await installHoldingOld(root, services)
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let v2 = root.appendingPathComponent("v2", isDirectory: true)
+        try writeSource(v2, version: "2.0.0", lua: Self.newLua)
+
+        try reg.installLocal(from: v2)
+
+        XCTAssertEqual(Set(snapshot(user.appendingPathComponent(id)).keys), ["/extension.toml", "/init.lua"],
+                       "the installed folder must be the new source's, nothing of the old one")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: user.path), [id], "an install left a stage")
+        XCTAssertEqual(services.resets(id), 1, "the old generation must be torn down exactly once")
+        XCTAssertEqual(reg.record(id: id)?.manifest.extension.version, "2.0.0")
+    }
+
+    /// Reset with a forced copy failure leaves the edited copy byte-identical, its record in place, nothing torn
+    /// down and no stage; a reset after that (the real copy) swaps the pristine copy in and tears down once.
+    /// Parent: the edited folder was removed before the copy.
+    func testForcedCopyFailureOnResetLeavesTheEditedFolderThenAGoodResetSwaps() throws {
+        let sid = "com.example.stage-reset"
+        let services = ReinstallRecordingServices()
+        let root = tempDir("stage-reset")
+        let pristine = root.appendingPathComponent("system/\(sid)", isDirectory: true)
+        try FileManager.default.createDirectory(at: pristine, withIntermediateDirectories: true)
+        try """
+        [extension]
+        id = "\(sid)"
+        name = "stage-reset"
+        title = "Stage reset"
+        description = "reset fixture"
+        version = "1.0.0"
+        author = "Example Org"
+        system = true
+
+        [extension.host]
+        min_version = "2.0.0"
+        api_level = 1
+
+        [extension.entry]
+        main = "init.lua"
+        """.write(to: pristine.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try "-- pristine".write(to: pristine.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let reg = ExtensionRegistry(systemDir: root.appendingPathComponent("system", isDirectory: true), userDir: user,
+                                    hostVersion: "2.0.0", defaults: scratchDefaults("stage-reset"), services: services)
+        reg.discover()
+        XCTAssertTrue(reg.record(id: sid)?.isSystem == true, "precondition: the fixture is a built-in")
+        let edited = user.appendingPathComponent(sid, isDirectory: true)
+        try "-- edited".write(to: edited.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+        try "mine".write(to: edited.appendingPathComponent("edited.txt"), atomically: true, encoding: .utf8)
+        let before = snapshot(edited)
+
+        reg.copyFolder = Self.failingCopy
+        XCTAssertThrowsError(try reg.reset(id: sid)) { XCTAssertTrue($0 is ForcedCopyFailure, "\($0)") }
+        XCTAssertEqual(snapshot(edited), before, "a failed reset changed the edited folder")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: user.path), [sid], "a failed reset left a stage")
+        XCTAssertEqual(services.resets(sid), 0, "a failed reset tore the extension down")
+        XCTAssertTrue(reg.record(id: sid) != nil, "a failed reset dropped the record")
+
+        reg.copyFolder = { try FileManager.default.copyItem(at: $0, to: $1) }
+        try reg.reset(id: sid)
+        XCTAssertEqual(snapshot(edited), snapshot(pristine), "a good reset must leave the pristine copy")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: user.path), [sid], "a good reset left a stage")
+        XCTAssertEqual(services.resets(sid), 1, "a good reset tears the old code down once")
+    }
+
+    /// A stage and a replaced copy left beside the real folder (a crash mid-install, a failed remove), each with a
+    /// valid manifest of the same id, and a partial stage with no manifest: none is loaded or refused; the real
+    /// folder's record is the one loaded. Parent: ".old-x" sorts first and loads in place of the real folder, and
+    /// the partial stage is listed as refused.
+    func testDotNamedLeftoversAreNeitherLoadedNorRefused() throws {
+        let services = ReinstallRecordingServices()
+        defer { TimerScheduler.shared.cancelAll(extID: id) }
+        let root = tempDir("stage-leftovers")
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        try writeSource(user.appendingPathComponent(id, isDirectory: true), version: "1.0.0", lua: Self.newLua)
+        try writeSource(user.appendingPathComponent(".stage-x", isDirectory: true), version: "9.0.0", lua: Self.newLua)
+        try writeSource(user.appendingPathComponent(".old-x", isDirectory: true), version: "8.0.0", lua: Self.newLua)
+        let partial = user.appendingPathComponent(".stage-partial", isDirectory: true)
+        try FileManager.default.createDirectory(at: partial, withIntermediateDirectories: true)
+        try Self.newLua.write(to: partial.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+
+        let reg = registry(root, services)
+
+        XCTAssertEqual(reg.records.filter { $0.id == id }.count, 1, "one record for the id")
+        XCTAssertEqual(reg.record(id: id)?.manifest.extension.version, "1.0.0", "a dot-named leftover was loaded")
+        XCTAssertEqual(reg.record(id: id)?.loaded.directory.lastPathComponent, id)
+        XCTAssertTrue(reg.refused.isEmpty, "a dot-named leftover was refused: \(reg.refused.map(\.folder))")
     }
 }

@@ -1615,6 +1615,9 @@ tag from the now-released section and put it on the new top draft.
 - Uninstalling an extension whose block in your config file has broken Prosper markers no longer
   gets stuck: a sheet first says the file stays exactly as it is and Prosper only forgets the block,
   and nothing changes if you cancel. (#1244)
+- Installing, updating or resetting an extension no longer deletes the installed copy when the new
+  copy fails: the old version stays in place and keeps working, and a half-finished copy left by a
+  crash is ignored. (#1430)
 
 ## v2.174.0
 

@@ -475,6 +475,9 @@ final class ExtensionRegistry: ObservableObject {
         var loads: [LoadedExtension] = []
         var refusedFound: [RefusedFolder] = []
         for entry in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            // #1430: an install's stage or replaced copy (a crash can leave one) is never an extension. Only these two
+            // prefixes: a hand-made ".kit" folder still loads (#1246, ExtensionInstallIDCaseTests).
+            guard !entry.lastPathComponent.hasPrefix(".stage-"), !entry.lastPathComponent.hasPrefix(".old-") else { continue }
             guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }
             do {
@@ -1212,13 +1215,7 @@ final class ExtensionRegistry: ObservableObject {
         try fm.createDirectory(at: userDir, withIntermediateDirectories: true)
         // Use the extension id as the on-disk folder name (stable across renames).
         let dest = userDir.appendingPathComponent(loaded.id, isDirectory: true)
-        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-        try fm.copyItem(at: sourceDir, to: dest)
-        // #1142: the copy leaves out hidden files and folders by the publish rule. A source
-        // given as a link is copied as that link: never swept, it is the source folder itself.
-        if try fm.attributesOfItem(atPath: dest.path)[.type] as? FileAttributeType == .typeDirectory {
-            try RemoteInstaller.removeHiddenMembers(dest)
-        }
+        try stageAndSwap(sourceDir, into: dest, sweep: true)
         // #1241: an install over an installed id tears the old code down as reset does: after the copy, so a failed
         // copy changes nothing, and before discover. Enabled, trusted and privileged stay (discover reads them by id).
         let old = record(id: loaded.id)
@@ -1230,6 +1227,46 @@ final class ExtensionRegistry: ObservableObject {
             replayLaunch(id: loaded.id)   // as a re-enable: only the launch handler re-takes what the teardown released
         }
         return record
+    }
+
+    /// #1430: the folder copy install and reset use; a row swaps in a failing one.
+    var copyFolder: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
+
+    /// #1430: copies `source` into a dot-named stage beside `dest` (same folder, so the same volume), sweeps it when
+    /// asked, then renames it into place. A failed copy or sweep removes only the stage: the installed folder stays.
+    /// An existing `dest` is renamed aside first and removed once the stage is in; a failed rename puts it back.
+    private func stageAndSwap(_ source: URL, into dest: URL, sweep: Bool) throws {
+        let fm = FileManager.default
+        let parent = dest.deletingLastPathComponent()
+        let stage = parent.appendingPathComponent(".stage-\(UUID().uuidString)", isDirectory: true)
+        do {
+            try copyFolder(source, stage)
+            // #1142: the copy leaves out hidden files and folders by the publish rule. A source
+            // given as a link is copied as that link: never swept, it is the source folder itself.
+            if sweep, try fm.attributesOfItem(atPath: stage.path)[.type] as? FileAttributeType == .typeDirectory {
+                try RemoteInstaller.removeHiddenMembers(stage)
+            }
+        } catch {
+            try? fm.removeItem(at: stage)
+            throw error
+        }
+        guard fm.fileExists(atPath: dest.path) else {
+            do { try fm.moveItem(at: stage, to: dest) } catch { try? fm.removeItem(at: stage); throw error }
+            return
+        }
+        let aside = parent.appendingPathComponent(".old-\(UUID().uuidString)", isDirectory: true)
+        do { try fm.moveItem(at: dest, to: aside) } catch { try? fm.removeItem(at: stage); throw error }
+        do {
+            try fm.moveItem(at: stage, to: dest)
+        } catch {
+            try? fm.moveItem(at: aside, to: dest)
+            try? fm.removeItem(at: stage)
+            throw error
+        }
+        // Not thrown: the new folder is in and the teardown must run; discover skips a ".old-" leftover.
+        do { try fm.removeItem(at: aside) } catch {
+            log.error("could not remove the replaced extension folder: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Fetch + install an extension from a GitHub URL (repo or repo subdir).
@@ -1498,9 +1535,7 @@ final class ExtensionRegistry: ObservableObject {
             throw ExtensionError.noPristineCopy(id)
         }
         let dest = userDir.appendingPathComponent(folder, isDirectory: true)
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-        try fm.copyItem(at: pristine, to: dest)
+        try stageAndSwap(pristine, into: dest, sweep: false)
         // #1038: the old code's VMs, in-flight calls, timers and held resources go; settings, trust and
         // the enabled state stay. After the copy, so a failed reset changes nothing.
         teardown(record)
