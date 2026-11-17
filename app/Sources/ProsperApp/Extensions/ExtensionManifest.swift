@@ -113,7 +113,14 @@ struct Contributes: Codable, Sendable, Equatable {
     var allCommands: [CommandContribution] { commands ?? [] }
     var allKeybindings: [KeybindingContribution] { keybindings ?? [] }
     var allViews: [ViewContribution] { views ?? [] }
-    var allSettingsSections: [SettingsSection] { settings_sections ?? [] }
+    /// #1440: the id "kit" is the kit pane's own tab ("ext:<id>|kit", settingsKitTabID), compared exactly as that tab id
+    /// is formed (no case folding or trimming). A section with it is dropped, the rest of the extension loads.
+    static let kitSectionID = "kit"
+    var allSettingsSections: [SettingsSection] { (settings_sections ?? []).filter { $0.id != Self.kitSectionID } }
+    var settingsSectionWarnings: [String] {
+        (settings_sections ?? []).contains { $0.id == Self.kitSectionID }
+            ? ["settings section \"kit\" ignored (that id is the kit pane's own tab)"] : []
+    }
     var allPlaceholders: [PlaceholderContribution] { placeholders ?? [] }
     var allEvents: [EventSubscription] { events ?? [] }
     var allThemes: [ThemeContribution] { themes ?? [] }

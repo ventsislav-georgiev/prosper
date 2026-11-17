@@ -366,4 +366,29 @@ final class ExtensionManifestTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: "enabledExtensionIDs") ?? [], [])
         XCTAssertEqual(defaults.stringArray(forKey: "disabledExtensionIDs") ?? [], [])
     }
+
+    // MARK: - #1440 settings_sections id "kit"
+
+    private func sectionIDs(_ ids: [String]) throws -> Contributes? {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let secs = ids.map { "[[contributes.settings_sections]]\nid = \"\($0)\"\ntitle = \"T\"\n" }.joined(separator: "\n")
+        let toml = Self.sampleManifest.components(separatedBy: "[[contributes.settings_sections]]")[0] + secs
+        _ = try writeExtension(in: dir, dirName: "ex", toml: toml)
+        return try ExtensionLoader.load(directory: dir.appendingPathComponent("ex"), isSystem: false,
+                                        hostVersion: "2.0.0").manifest.contributes
+    }
+
+    func testKitSectionIsDroppedAndTheRestLoads() throws {
+        let c = try sectionIDs(["kit", "general"])
+        XCTAssertEqual(c?.allSettingsSections.map(\.id), ["general"])
+        XCTAssertEqual(c?.settingsSectionWarnings.count, 1)
+        XCTAssertTrue(c?.settingsSectionWarnings.first?.contains("\"kit\"") == true)
+    }
+
+    func testKitLookalikeSectionIdsAreKept() throws {
+        let c = try sectionIDs(["kit2", "Kit", " kit"])
+        XCTAssertEqual(c?.allSettingsSections.map(\.id), ["kit2", "Kit", " kit"])
+        XCTAssertEqual(c?.settingsSectionWarnings, [])
+    }
 }

@@ -1656,6 +1656,9 @@ tag from the now-released section and put it on the new top draft.
 - The consent sheet title now also shows the fullwidth quotation mark and the CJK double prime
   quotes (U+301D, U+301E, U+301F) in an extension name as an apostrophe, so they cannot close the
   quoting. (#1441)
+- An extension that declares a Settings section with the id "kit" no longer gets a second tab with
+  the same id as its kit pane: that section is ignored (logged), and the rest of the extension
+  loads. (#1440)
 
 ## v2.174.0
 

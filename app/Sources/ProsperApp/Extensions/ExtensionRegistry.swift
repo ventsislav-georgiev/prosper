@@ -508,7 +508,7 @@ final class ExtensionRegistry: ObservableObject {
             }
             seen.insert(loaded.id)
             if !loaded.isSystem {
-                for w in loaded.manifest.contributes?.phoneWarnings ?? [] {
+                for w in (loaded.manifest.contributes?.phoneWarnings ?? []) + (loaded.manifest.contributes?.settingsSectionWarnings ?? []) {
                     log.warning("extension \(loaded.id, privacy: .public): \(w, privacy: .public)")
                 }
             }
