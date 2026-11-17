@@ -1916,11 +1916,12 @@ extension AgentSidebarRowView {
     /// nothing before it moves when it ticks; a live row keeps it with no age (working), as the first line did (#828,
     /// #829, R1115-2).
     var ageSlot: some View {
-        ZStack(alignment: .trailing) {
-            Text(AgentIsland.ageWidest).hidden()
-            Text(row.age).foregroundStyle(ink(.quiet))
-        }
-        .font(Neon.font(10).monospacedDigit())
+        // #1500: the font on each Text and the age an overlay of the hidden widest one: the slot's height is that text's
+        // own line at the scale (it was 14 pt at every scale).
+        Text(AgentIsland.ageWidest).font(Neon.font(10).monospacedDigit()).hidden()
+            .overlay(alignment: .trailing) {
+                Text(row.age).font(Neon.font(10).monospacedDigit()).foregroundStyle(ink(.quiet))
+            }
         .fixedSize()
         .modifier(AgentSidebarRowProbe(kind: "age", title: row.title))
     }

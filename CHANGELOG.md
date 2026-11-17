@@ -1770,6 +1770,8 @@ tag from the now-released section and put it on the new top draft.
   of where the sidebar would be (not just the window's very edge), stays open while the pointer is
   over it, and waits 1.5 seconds after you move away before it slides out. (#1458)
 - The small Command number in the Mini sidebar is readable on every theme. (#1505)
+- A session row's detail line (state, counts, age) now follows the UI size: at a smaller size the
+  row is no longer held 14 pt tall by an empty age slot. (#1500)
 
 ## v2.174.0
 
