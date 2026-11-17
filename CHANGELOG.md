@@ -1664,6 +1664,9 @@ tag from the now-released section and put it on the new top draft.
 - X-ray sends search and ref text on stdin only when the probed dch is 1.84.0 or later; an older or
   not yet probed dch gets the text in argv, so a bundle without its own dch and an older installed
   dch no longer search for "-". (#1443)
+- Settings, Agent island: the Command and Default model fields keep the right height after you
+  change the UI scale (before, a field could keep the previous scale's height until something
+  measured it again). (#1250)
 
 ## v2.174.0
 

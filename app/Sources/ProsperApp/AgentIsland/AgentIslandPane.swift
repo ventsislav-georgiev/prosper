@@ -170,9 +170,9 @@ struct AgentIslandPane: View {
         NeonSection("New session", footer: Self.newSessionFooter) {
             NeonRow("Command") {
                 // Unset: inferred once from the sessions you run (and stored), else claude.
-                TextField("claude", text: $command)
-                    .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(260))
-                    .onSubmit { command = Self.commit(command) }
+                // #1250: our own field, sized from its font at this scale (a SwiftUI TextField could keep the last scale's height).
+                ScaledTextField(placeholder: "claude", text: $command, onSubmit: { command = Self.commit(command) })
+                    .frame(width: sz(260))
             }
             NeonDivider()
             NeonRow("Sidekick prompt") {
@@ -185,10 +185,9 @@ struct AgentIslandPane: View {
             // The subtitle is one slot: the hint, or the refusal in its place (nothing moves).
             NeonRow("Default model", subtitle: modelRefusal ?? Self.modelHint) {
                 HStack(spacing: sz(6)) {
-                    TextField("Claude Code's default", text: $model)
-                        .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(200))
-                        .accessibilityLabel("Default model")
-                        .onSubmit { saveModel() }
+                    ScaledTextField(placeholder: "Claude Code's default", text: $model, onSubmit: { saveModel() })
+                        .frame(width: sz(200))
+                        .accessibilityLabel("Default model")   // the AX tree's node is SwiftUI's (an NSTextField's own label never reached it)
                     // #1237: a Menu ignores the UI scale (24 high at every scale): its control size follows it, so it is
                     // never taller than the field; fixedSize plus ViewThatFits is the house shape (SettingsWindow's
                     // ActivityControls), the short form only where "Aliases" does not fit. Both run on the main actor.

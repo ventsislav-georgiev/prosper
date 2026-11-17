@@ -309,6 +309,128 @@ final class AgentIslandDefaultModelTests: XCTestCase {
             }
         }
     }
+
+    // MARK: #1250: the two one-line fields are ScaledTextField, sized from the font they hold now
+
+    /// Every hosted NSTextField under `host` (depth first), after a layout and one run loop turn (as AXTreeSupport.poll does).
+    @MainActor
+    private func nativeFields(_ host: NSView) -> [NSTextField] {
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+        func all(_ v: NSView) -> [NSTextField] { v.subviews.flatMap { (($0 as? NSTextField).map { [$0] } ?? []) + all($0) } }
+        return all(host)
+    }
+
+    /// #1250: a SwiftUI TextField in a new pane could keep the previous UI scale's height in its own frame (probe of
+    /// 2026-11-17: the platform field's view frame, which the AX tree only reports). ScaledTextField measures the stock
+    /// field's one-line height at the font it holds: the same field moved from 1.45 to 0.7 takes 0.7's font and exactly
+    /// the height of a field built at 0.7, never 1.45's.
+    @MainActor
+    func testScaledFieldTakesTheNewScalesFontAndHeightWhenTheScaleChanges() {
+        _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
+        let savedScale = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = savedScale }
+        let pixel = AXTreeSupport.devicePixel
+        func field() -> ScaledTextField { ScaledTextField(placeholder: "claude", text: .constant("claude-example-1")) }
+        let size = CGSize(width: 240, height: 80)
+        ThemeRuntime.scale = 1.45
+        let (win, host) = AXTreeSupport.hosted(field(), size)
+        defer { win.close() }
+        let before = nativeFields(host).first?.frame.height
+        ThemeRuntime.scale = 0.7
+        host.rootView = field()
+        let moved = nativeFields(host).first
+        let (freshWin, freshHost) = AXTreeSupport.hosted(field(), size)
+        defer { freshWin.close() }
+        let want = nativeFields(freshHost).first
+        guard let before, let moved, let want else { return XCTFail("the hosted NSTextField in both windows") }
+        XCTAssertGreaterThan(before, want.frame.height + 1, "1.45 is taller than 0.7: the row tells the two apart")
+        XCTAssertEqual(moved.font?.pointSize, want.font?.pointSize, "the moved field holds 0.7's font")
+        XCTAssertEqual(moved.frame.height, want.frame.height, accuracy: pixel, "and 0.7's height, not 1.45's")
+        XCTAssertEqual(want.frame.height, ScaledTextField.size(of: want, width: nil).height, accuracy: pixel,
+                       "the frame is ScaledTextField's one-line measure at its font")
+    }
+
+    /// #1250: the pane's Command and Default model fields are ScaledTextField's (their delegate is its coordinator), so
+    /// their heights come from the measure above, not from a SwiftUI TextField's placement.
+    @MainActor
+    func testThePanesCommandAndDefaultModelFieldsAreScaledTextFields() {
+        _ = ThemeStore.shared
+        let size = CGSize(width: sz(560), height: sz(900))
+        let (win, host) = AXTreeSupport.hosted(AgentIslandPane().frame(width: size.width), size)
+        defer { win.close() }
+        let ours = nativeFields(host).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString)
+        XCTAssertEqual(ours.sorted(), ["Claude Code's default", "claude"])
+    }
+
+    /// #1250: ScaledTextField looks and measures as the stock SwiftUI TextField it replaced (itself an NSTextField
+    /// underneath, read here offscreen side by side at the six scales, dark as the pane is shown): every property below
+    /// and the height. Not compared, on purpose: the classes (SwiftUI's private field and cell) and the font's name
+    /// (at 1.0 SwiftUI resolves the body text style to the same monospaced system face under another name, with the same
+    /// size and line height but a 0.69 pt leading and isFixedPitch false: nothing a person sees).
+    @MainActor
+    func testScaledFieldMatchesTheStockFieldAtEveryScale() {
+        _ = ThemeStore.shared
+        let savedScale = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = savedScale }
+        let pixel = AXTreeSupport.devicePixel
+        let size = CGSize(width: 400, height: 120)
+        var heights: [(scale: CGFloat, ours: CGFloat, stock: CGFloat)] = []
+        for scale in [0.7, 0.85, 1.0, 1.15, 1.3, 1.45] as [CGFloat] {
+            ThemeRuntime.scale = scale
+            let stock = TextField("claude", text: .constant("claude-example-1"))
+                .font(Neon.font(.body, design: .monospaced)).lineLimit(1).frame(width: sz(200)).preferredColorScheme(.dark)
+            let ours = ScaledTextField(placeholder: "claude", text: .constant("claude-example-1"))
+                .frame(width: sz(200)).preferredColorScheme(.dark)
+            let (stockWin, stockHost) = AXTreeSupport.hosted(stock, size)
+            defer { stockWin.close() }
+            let (ourWin, ourHost) = AXTreeSupport.hosted(ours, size)
+            defer { ourWin.close() }
+            guard let s = nativeFields(stockHost).first, let o = nativeFields(ourHost).first else {
+                XCTFail("both hosted NSTextFields at \(scale)"); continue
+            }
+            func same<T: Equatable>(_ what: String, _ read: (NSTextField) -> T) { XCTAssertEqual(read(o), read(s), "\(what) at \(scale)") }
+            same("bezeled") { $0.isBezeled }
+            same("bezel style") { $0.bezelStyle }
+            same("bordered") { $0.isBordered }
+            same("draws background") { $0.drawsBackground }
+            same("background colour") { $0.backgroundColor }
+            same("focus ring") { $0.focusRingType }
+            same("text colour") { $0.textColor }
+            same("placeholder") { $0.placeholderString }
+            same("attributed placeholder") { $0.placeholderAttributedString }
+            same("alignment") { $0.alignment }
+            same("control size") { $0.controlSize }
+            same("cell control size") { $0.cell?.controlSize }
+            same("font size") { $0.font?.pointSize }
+            same("line height") { $0.font.map { NSLayoutManager().defaultLineHeight(for: $0) } }
+            same("editable") { $0.isEditable }
+            same("selectable") { $0.isSelectable }
+            same("one line") { $0.usesSingleLineMode }
+            same("line break") { $0.lineBreakMode }
+            same("wraps") { $0.cell?.wraps }
+            same("scrolls") { $0.cell?.isScrollable }
+            same("rich text") { $0.allowsEditingTextAttributes }
+            same("action on end of editing") { $0.cell?.sendsActionOnEndEditing }
+            same("no label of its own (the AX node is SwiftUI's)") { $0.accessibilityLabel() }
+            heights.append((scale, o.frame.height, s.frame.height))
+        }
+        // The stock reference itself can show this entry's fault: another scale's height in its frame. Such a read tells
+        // nothing about ours, so it is skipped and said: a stock height equal to ours at ANOTHER scale (the six are all
+        // different). A real mismatch (ours 1 pt off at a scale) is no other scale's height and stays compared.
+        var compared = 0
+        for (scale, ourHeight, stockHeight) in heights {
+            if heights.contains(where: { $0.scale != scale && abs($0.ours - stockHeight) < pixel }) {
+                print("#1250 stock reference stale at \(scale): \(stockHeight); not compared")
+                continue
+            }
+            XCTAssertEqual(ourHeight, stockHeight, accuracy: pixel, "the stock field's height at \(scale)")
+            compared += 1
+        }
+        XCTAssertEqual(heights.count, 6, "both fields at the six scales")
+        XCTAssertGreaterThanOrEqual(compared, 4, "the heights were compared at most scales")
+    }
 }
 
 /// #1228: the window's New session form shows the command with the Default model and starts exactly that argv.
