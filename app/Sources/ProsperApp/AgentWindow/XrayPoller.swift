@@ -21,6 +21,9 @@ extension XrayPanelModel {
         guard isCurrent() else { return cancel() }   // hidden by a selection change: SIGTERM; read again on return
         // #1475: a follow with no snapshot past the bound: today's reads instead
         if let f = follow, f.state == nil, let t = followSince, now().timeIntervalSince(t) >= DchCommand.remoteTimeout { return giveUpFollow() }
+        // #1475 a2 (QA r1436 s2): a follow that ended after its snapshot (a dropped link, a serve restart or eviction):
+        // the rows stay and the polls resume (the next open follows again)
+        if let f = follow, f.state != nil, !f.running { detachFollow() }
         let s = paneState()
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again

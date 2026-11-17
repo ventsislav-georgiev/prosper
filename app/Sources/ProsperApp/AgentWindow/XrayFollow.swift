@@ -21,10 +21,15 @@ final class XrayFollow: ObservableObject {
     let target: XrayTarget
     /// nil until the first snapshot; a reset leaves an empty state until the snapshot after it.
     @Published private(set) var state: State?
-    /// The stream ended before any snapshot (exit 2 from a dch without the form, no session, unreachable).
+    /// The stream ended before any snapshot (exit 2 from a dch without the form, no session, unreachable), or its object
+    /// grew past maxKept (#1475 a2).
     @Published private(set) var failed = false
     /// The snapshot with every delta since applied: dch's `--json` object of this moment (README "X-ray queries").
     private var object: [String: Any]?
+    /// #1475 a2 (QA r1436 s1): the bytes `object` holds (the snapshot line, plus each delta line, less what a delta
+    /// replaced or dropped), bounded as XrayChapters.parse bounds one read; rows set it and restore it.
+    static var maxKept = XrayChapters.maxBytes
+    private var kept = 0
     /// The process's stop (SIGTERM); nil once it ended.
     private var stopProcess: (() -> Void)?
     var running: Bool { stopProcess != nil }
@@ -59,36 +64,54 @@ final class XrayFollow: ObservableObject {
         var changed = false
         for d in lines {
             guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], o["schema"] as? Int == 1 else { continue }
-            if let s = o["snapshot"] as? [String: Any] { object = s; changed = true; continue }
-            if o["reset"] != nil { object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; changed = true; continue }
+            // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
+            if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; changed = true; continue }
+            if o["reset"] != nil { object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; changed = true; continue }
             guard var obj = object else { continue }   // a delta before any snapshot has nothing to apply to
             if let c = o["chapter"] as? [String: Any] {
                 var list = obj["chapters"] as? [Any] ?? []
                 if let a = c["anchor"] as? String, let k = list.lastIndex(where: { ($0 as? [String: Any])?["anchor"] as? String == a }) {
+                    kept -= Self.bytes(list[k])
                     list[k] = c
                 } else {
                     list.append(c)
-                    if list.count > XrayChapters.maxRows { list.removeFirst(list.count - XrayChapters.maxRows) }   // the newest, as parse
+                    if list.count > XrayChapters.maxRows {   // the newest, as parse
+                        let n = list.count - XrayChapters.maxRows
+                        kept -= list.prefix(n).reduce(0) { $0 + Self.bytes($1) }
+                        list.removeFirst(n)
+                    }
                 }
                 obj["chapters"] = list
             } else if let r = o["ref"] as? [String: Any], let key = r["key"] as? String {
                 var list = obj["refs"] as? [Any] ?? []
                 let k = list.firstIndex { ($0 as? [String: Any])?["key"] as? String == key }
+                if let k { kept -= Self.bytes(list[k]) }
                 if (r["count"] as? Int).map({ $0 <= 0 }) == true { if let k { list.remove(at: k) } }
                 else if let k { list[k] = r }
                 // shortcut: a new key past dch's 2000 is not held (no dropped_keys bump), until the next snapshot
                 else if list.count < XrayRefs.maxRows { list.append(r) }
                 obj["refs"] = list
             } else if let e = o["evict"] as? [String: Any], let seq = e["seq"] as? Int {
-                obj["chapters"] = (obj["chapters"] as? [Any] ?? []).filter {
-                    (($0 as? [String: Any])?["offset"] as? Int).map { $0 >= seq } ?? true
-                }
+                let all = obj["chapters"] as? [Any] ?? []
+                let keep = all.filter { (($0 as? [String: Any])?["offset"] as? Int).map { $0 >= seq } ?? true }
+                kept -= all.reduce(0) { $0 + Self.bytes($1) } - keep.reduce(0) { $0 + Self.bytes($1) }
+                obj["chapters"] = keep
             } else { continue }
+            kept += d.count   // a removal (count 0, evict) adds its own small line too
             object = obj
             changed = true
+            // #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow)
+            if kept > Self.maxKept { object = nil; failed = true; onEnd(self); return }
         }
         guard changed, let object else { return }
         state = State(chapters: XrayChapters.parse(object), refs: XrayRefs.parse(object), anchors: XrayPanelModel.anchors(object))
+    }
+
+    /// One kept element's size as JSON (its line's, give or take the wrapper and escapes); 0 for what is not a JSON
+    /// object or array (data(withJSONObject:) raises on those).
+    private static func bytes(_ e: Any) -> Int {
+        guard JSONSerialization.isValidJSONObject(e) else { return 0 }
+        return (try? JSONSerialization.data(withJSONObject: e, options: .withoutEscapingSlashes).count) ?? 0
     }
 }
 
@@ -177,8 +200,9 @@ extension XrayPanels {
     }
 
     /// The follow's blocking body: spawn, split stdout into lines (each at most XrayChapters.maxBytes: a longer one ends
-    /// the stream), wait. The exit is marked on the child before it can be signalled again (as runBounded).
+    /// the stream), wait. The exit is marked on the child before it can be signalled again (as runBounded). `cap`: rows'.
     nonisolated static func streamLines(_ child: XrayChild, _ path: String, _ args: [String], _ env: [String: String],
+                                        cap: Int = XrayChapters.maxBytes,
                                         _ batch: @escaping @Sendable ([Data]) -> Void) -> Int32 {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
@@ -193,6 +217,7 @@ extension XrayPanels {
         do { try p.run() } catch { return -1 }
         child.started(p.processIdentifier)
         var split = XrayLineSplit()
+        split.cap = cap
         while case let chunk = out.fileHandleForReading.availableData, !chunk.isEmpty {
             guard let ls = split.take(chunk) else { child.cancel(); break }
             if !ls.isEmpty { batch(ls) }

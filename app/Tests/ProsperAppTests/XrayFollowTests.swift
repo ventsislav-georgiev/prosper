@@ -353,6 +353,105 @@ final class XrayFollowTests: XCTestCase {
         XCTAssertEqual(f.state?.anchors, ["s:20": 2])
     }
 
+    /// QA r1436 s1: the follow's object is bounded as one read is. Replaced lines and a new snapshot do not add up;
+    /// a new chapter past XrayFollow.maxKept (a test-sized cap here) ends the follow and today's chapters read runs.
+    /// Red with follow-bytes-unbounded: the follow keeps the seventh chapter and nothing is stopped or read.
+    func testObjectPastTheCapFallsBackToTheReads() async throws {
+        let cap = XrayFollow.maxKept
+        defer { XrayFollow.maxKept = cap }
+        try await withFollow { fake, panels in
+            let run = XrayChaptersTests.Run()
+            let p = panel(panels)
+            await open(p, run.run)
+            let snap = Self.snapshot()
+            XrayFollow.maxKept = snap.utf8.count + 2 * Self.chapter7.utf8.count
+            fake.send(1, snap)
+            for _ in 0..<5 { fake.send(1, Self.chapter7) }   // one anchor: each line replaces the last
+            XCTAssertEqual(p.dchChapters?.count, 7)
+            XCTAssertTrue(p.follow != nil, "a replaced chapter's bytes are subtracted")
+            fake.send(1, snap)   // the count starts again at a snapshot
+            fake.send(1, Self.chapter7, Self.chapter7)
+            XCTAssertTrue(p.follow != nil, "a snapshot resets the count")
+            XCTAssertTrue(fake.stopped.isEmpty)
+            let big = String(repeating: "x", count: 2 * Self.chapter7.utf8.count)
+            fake.send(1, #"{"schema":1,"chapter":{"anchor":"f3a41c:950","offset":950,"i":8,"title":""# + big + #"","kind":"prompt"}}"#)
+            XCTAssertEqual(fake.stopped, [1], "past the cap: the follow got its SIGTERM")
+            XCTAssertTrue(p.follow == nil)
+            XCTAssertTrue(panels.follows.follows.isEmpty, "and left the LRU")
+            await p.reading?.value
+            XCTAssertEqual(run.chapterReads, 1, "today's chapters read instead")
+            XCTAssertEqual(p.dchChapters?.count, 6)
+            XCTAssertTrue(p.loaded)
+            p.stop()
+        }
+    }
+
+    /// QA r1436 s2: a follow that ends after its snapshot while the panel is shown and live (a dropped link, a serve
+    /// restart, serve evicting it) keeps its rows and the 5 s chapters poll resumes, so Prompts and Responses update
+    /// again. Red with ended-follow-frozen: `follow` stays set and no chapters read ever runs.
+    func testAFollowEndedAfterItsSnapshotLetsThePollsResume() async throws {
+        try await withFollow { fake, panels in
+            let run = XrayChaptersTests.Run(), clock = Clock()
+            let p = panel(panels, clock: clock)
+            await open(p, run.run)
+            fake.send(1, Self.snapshot(#"{"schema":1,"chapters":[{"anchor":"f9:0","i":1,"title":"Before the drop","kind":"prompt"}],"refs":[]}"#))
+            fake.end(1, 1)
+            await tick(p, clock, at: 1)
+            XCTAssertEqual(p.dchChapters?.map(\.title), ["Before the drop"], "the rows stay")
+            XCTAssertEqual(run.chapterReads, 0, "not before the interval")
+            await tick(p, clock, at: 5)
+            XCTAssertEqual(run.chapterReads, 1, "the 5 s poll resumes")
+            XCTAssertEqual(p.dchChapters?.count, 6, "Prompts update again")
+            p.tab = .responses
+            await tick(p, clock, at: 10)
+            XCTAssertEqual(run.chapterReads, 2, "and on Responses")
+            XCTAssertTrue(fake.stopped.isEmpty)
+            XCTAssertEqual(fake.args.count, 1, "the polls, no restart")
+            p.stop()
+        }
+    }
+
+    /// QA r1436 s3: the product's streamLines on a /bin/sh fixture in tempDir (never dch). A snapshot and one delta
+    /// written in two parts (the second only after the first batch landed) come out as two batches of whole lines,
+    /// then exit 0. Red if the splitter emitted the partial line or dropped the tail.
+    func testStreamLinesJoinsADeltaSplitAcrossTwoWrites() async throws {
+        let dir = tempDir("xray-follow-stream")
+        let script = dir.appendingPathComponent("fake-follow.sh"), go = dir.appendingPathComponent("go")
+        let snap = Self.snapshot(#"{"schema":1,"chapters":[],"refs":[]}"#), delta = Self.chapter7
+        let half = delta.index(delta.startIndex, offsetBy: 40)
+        try """
+        printf '%s\\n%s' '\(snap)' '\(delta[..<half])'
+        i=0; while [ ! -e "$D/go" ] && [ $i -lt 100 ]; do /bin/sleep 0.1; i=$((i+1)); done
+        printf '%s\\n' '\(delta[half...])'
+        exit 0
+
+        """.write(to: script, atomically: true, encoding: .utf8)
+        let got = XrayBatches()
+        let status = await Task.detached {
+            XrayPanels.streamLines(XrayChild(), "/bin/sh", [script.path], ["D": dir.path]) { b in
+                got.add(b)
+                FileManager.default.createFile(atPath: go.path, contents: nil)
+            }
+        }.value
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(got.all, [[Data(snap.utf8)], [Data(delta.utf8)]])
+    }
+
+    /// QA r1436 s3: a line past the (test-sized) cap ends the stream: the child gets its SIGTERM long before its sleep
+    /// ends, and no batch is sent. Red with line-cap-dropped: status 0 after the 20 s sleep.
+    func testStreamLinesEndsALinePastTheCap() async throws {
+        let dir = tempDir("xray-follow-cap")
+        let script = dir.appendingPathComponent("fake-follow.sh")
+        try "printf '%s' 0123456789abcdef\nexec /bin/sleep 20\n".write(to: script, atomically: true, encoding: .utf8)
+        let got = XrayBatches(), t0 = Date()
+        let status = await Task.detached {
+            XrayPanels.streamLines(XrayChild(), "/bin/sh", [script.path], [:], cap: 8) { got.add($0) }
+        }.value
+        XCTAssertEqual(status, SIGTERM, "the child got its SIGTERM")
+        XCTAssertTrue(got.all.isEmpty)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 15, "ended by the signal, not by the sleep")
+    }
+
     func testLineSplit() {
         var s = XrayLineSplit()
         XCTAssertEqual(s.take(Data("a\nb".utf8)), [Data("a".utf8)])
@@ -362,4 +461,12 @@ final class XrayFollowTests: XCTestCase {
         XCTAssertEqual(t.take(Data("1234".utf8)), [])
         XCTAssertTrue(t.take(Data("5".utf8)) == nil, "a line past the cap ends the stream")
     }
+}
+
+/// streamLines' batches, from its reading thread.
+private final class XrayBatches: @unchecked Sendable {
+    private let lock = NSLock()
+    private var got: [[Data]] = []
+    var all: [[Data]] { lock.withLock { got } }
+    func add(_ b: [Data]) { lock.withLock { got.append(b) } }
 }
