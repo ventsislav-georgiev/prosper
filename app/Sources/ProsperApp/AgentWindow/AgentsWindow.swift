@@ -1796,8 +1796,11 @@ struct AgentNoSessionsState: View {
     @ObservedObject var store: AgentIslandStore
 
     var body: some View {
-        AgentEmptyState(icon: "terminal", title: "No agent sessions", detail: Self.detail(canStart: store.resumeGate.isOK))
+        AgentEmptyState(icon: "terminal", title: "No agent sessions", detail: detail)
     }
+
+    /// #1096 4: what the body shows, from the store's gate now.
+    var detail: String { Self.detail(canStart: store.resumeGate.isOK) }
 
     static func detail(canStart: Bool) -> String {
         "Sessions started with dch show up here." + (canStart ? " Press + or ⌘N to start one." : "")

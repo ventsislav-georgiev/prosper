@@ -166,8 +166,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(reads.lock.withLock { reads.n }, 0, "no read before the deadline")
             clock.t += AgentWindowModel.spawnSlack + 1
             try XCTUnwrap(m.spawnDeadline).fire()
-            let said = AgentWindowModel.notListedText(shell, end: "exit 127")
-            XCTAssertEqual(said, "\(shell) ended at once or never started: check the command (exit 127)")
+            let said = AgentWindowModel.notListedText(shell, end: "exit 127", command: false)
+            XCTAssertEqual(said, "\(shell) ended at once or never started (exit 127)", "#1096 4: a quick shell: no command")
             drain { st.actions[key] == said }
             XCTAssertEqual(st.actions[key], said, "the record's end in the sentence")
             XCTAssertEqual(reads.lock.withLock { reads.n }, 1, "one History read")
@@ -254,7 +254,7 @@ extension AgentWindowD1Tests {
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
             clock += AgentWindowModel.spawnSlack + 1
             try XCTUnwrap(m.spawnDeadline).fire()
-            let want = AgentWindowModel.notListedText(shell, end: "crashed (signal 9) from /bin/killx -9")
+            let want = AgentWindowModel.notListedText(shell, end: "crashed (signal 9) from /bin/killx -9", command: false)
             let until = Date().addingTimeInterval(5)
             while st.actions[key] != want, Date() < until {
                 island.queue.sync {}

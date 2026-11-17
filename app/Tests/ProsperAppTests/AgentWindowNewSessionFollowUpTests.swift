@@ -28,14 +28,17 @@ extension AgentWindowD1Tests {
             let m = newSessionModel(st, spawns)
             defer { m.close() }
             m.now = { clock.t }
+            // #1096 4: the deadline's interval as asked for, on a timer no run loop fires (no wall clock).
+            final class Asked { var intervals: [TimeInterval] = [] }
+            let asked = Asked()
+            m.scheduleDeadline = { t, block in asked.intervals.append(t); return Timer(timeInterval: t, repeats: false, block: block) }
             m.select(.live(other.key))   // a first listed row is otherwise selected as the window fills (#828)
             m.openNewSession(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             XCTAssertTrue(m.spawnDeadline == nil, "no answer yet: no deadline")
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             let deadline = try XCTUnwrap(m.spawnDeadline, "the answer arms its own deadline")
-            XCTAssertEqual(deadline.fireDate.timeIntervalSinceNow, AgentWindowModel.spawnSlack + 0.5, accuracy: 1,
-                           "just past the slack, not the next refresh")
+            XCTAssertEqual(asked.intervals, [AgentWindowModel.spawnSlack + 0.5], "just past the slack, not the next refresh")
             XCTAssertGreaterThan(m.ageInterval, AgentWindowModel.spawnSlack + 0.5, "the age clock would come later")
             XCTAssertEqual(m.newSessionStatus, "Starting web…")
             clock.t += AgentWindowModel.spawnSlack + 1
@@ -50,8 +53,11 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.pendingSpawn == nil)
             XCTAssertTrue(m.spawnDeadline == nil, "one-shot")
             st.sessions = [other, mapped("web")]
-            XCTAssertEqual(m.selection, .live(other.key), "a late row selects nothing")
-            XCTAssertNotNil(m.newSession)
+            // #1096 1a: the late row lands; no text stays up and no second Start makes web-2.
+            XCTAssertEqual(m.selection, live("web"), "a late row lands")
+            XCTAssertNil(m.newSession, "the form and its sentence gone")
+            XCTAssertFalse(m.startNewSession(), "no form: no second Start")
+            XCTAssertEqual(spawns.calls.count, 1)
             // A quick shell: the dir line the window draws under its sidebar.
             m.cancelNewSession()
             st.sessions = [other]
@@ -60,8 +66,9 @@ extension AgentWindowD1Tests {
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
             clock.t += AgentWindowModel.spawnSlack + 1
             try XCTUnwrap(m.spawnDeadline).fire()
-            XCTAssertEqual(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")], AgentWindowModel.notListedText(shell))
-            XCTAssertEqual(st.dirStatus, AgentWindowModel.notListedText(shell))
+            XCTAssertEqual(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")], "\(shell) ended at once or never started",
+                           "#1096 4: nothing typed: no \"check the command\"")
+            XCTAssertEqual(st.dirStatus, AgentWindowModel.notListedText(shell, command: false))
             XCTAssertNil(m.newSession, "no form opened for it")
             // Closing the window drops a pending deadline.
             XCTAssertTrue(m.startShell())
@@ -74,6 +81,92 @@ extension AgentWindowD1Tests {
             late?(AgentSessionKey(dir: "/tmp/dch-test", name: lateName), nil)
             XCTAssertTrue(m.spawnDeadline == nil, "an answer after the close arms no deadline")
             m.spawnDeadline?.invalidate()
+        }
+    }
+
+    // MARK: #1096: the never-started sentence only when it is true
+
+    /// #1096 1b: the island off after the answer (the form goes: it started) drops the pending start too, so the
+    /// island back past the slack, before its first poll lists the session, says nothing over a session that runs.
+    @MainActor
+    func testAgentWindowNewSessionIslandOffDropsThePendingStart() throws {
+        try withNewSessionPrefs {
+            final class Clock { var t = AgentWindowD1Tests.now }
+            let clock = Clock(), other = mapped("other"), st = store([other]), spawns = SpawnCalls()
+            let m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.now = { clock.t }
+            m.select(.live(other.key))
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+            XCTAssertNotNil(m.pendingSpawn)
+            m.bind(nil)
+            XCTAssertNil(m.newSession, "answered: it started, the form goes")
+            XCTAssertTrue(m.pendingSpawn == nil, "and its pending start")
+            XCTAssertTrue(m.spawnDeadline == nil, "with its deadline")
+            clock.t += AgentWindowModel.spawnSlack + 5
+            m.bind(st)   // back before the poll lists web
+            XCTAssertTrue(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] == nil, "no never-started line")
+            XCTAssertTrue(m.dirLine == nil)
+        }
+    }
+
+    /// #1096 1c: hidden (another Space), the store listed the start and then lost it: it ran and ended. Shown again
+    /// it is not called never started: the waiting form goes, no sentence anywhere. Never listed while hidden: the
+    /// sentence as before.
+    @MainActor
+    func testAgentWindowNewSessionEndedWhileHiddenIsNotNeverStarted() throws {
+        try withNewSessionPrefs {
+            final class Clock { var t = AgentWindowD1Tests.now }
+            let clock = Clock(), other = mapped("other"), st = store([other]), spawns = SpawnCalls()
+            let m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.now = { clock.t }
+            m.select(.live(other.key))
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+            m.setVisible(false)
+            st.sessions = [other, mapped("web")]   // the store saw it run
+            st.sessions = [other]                  // and end
+            clock.t += AgentWindowModel.spawnSlack + 5
+            m.setVisible(true)
+            XCTAssertNil(m.newSession, "it started: the waiting form goes")
+            XCTAssertTrue(m.pendingSpawn == nil)
+            XCTAssertTrue(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] == nil, "no never-started line")
+            XCTAssertEqual(m.selection, .live(other.key), "nothing picked")
+            // Never listed while hidden: never started, as before.
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startNewSession())
+            let name = try XCTUnwrap(spawns.calls.last?.name)
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: name), nil)
+            m.setVisible(false)
+            st.sessions = [other]
+            clock.t += AgentWindowModel.spawnSlack + 5
+            m.setVisible(true)
+            XCTAssertEqual(m.newSessionStatus, AgentWindowModel.notListedText(name))
+        }
+    }
+
+    /// #1096 3: each caller's own button word through the chooser seam (never a real panel): the window's form fills
+    /// its Folder field ("Choose"); the island's "Choose folder\u{2026}" starts a session at once ("Start").
+    @MainActor
+    func testFolderChooserButtonWordIsTheCallersOwn() throws {
+        try withNewSessionPrefs {
+            final class Words { var all: [String] = [] }
+            let words = Words(), st = store([mapped("a")]), m = newSessionModel(st, SpawnCalls())
+            defer { m.close() }
+            m.island().chooseFolder = { ask in words.all.append(ask.prompt); ask("/Users/example/web") }
+            m.openNewSession(folder: "/Users/example")
+            m.chooseNewSessionFolder()
+            XCTAssertEqual(words.all, [AgentIslandController.FolderAsk.choose])
+            XCTAssertEqual(m.newSession?.folder, "~/web", "the form's field filled")
+            let c = AgentIslandController()
+            c.store = st
+            c.chooseFolder = { ask in words.all.append(ask.prompt); ask(nil) }   // cancelled: nothing starts
+            c.chooseNewSessionFolder()
+            XCTAssertEqual(words.all, ["Choose", "Start"])
         }
     }
 
@@ -301,5 +394,15 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentNoSessionsState.detail(canStart: true),
                        "Sessions started with dch show up here. Press + or ⌘N to start one.")
         XCTAssertEqual(AgentNoSessionsState.detail(canStart: false), "Sessions started with dch show up here.")
+    }
+
+    /// #1096 4: the empty sidebar's body reads the store's gate as it is now.
+    @MainActor
+    func testAgentWindowNoSessionsStateBodyFollowsTheStoresGate() {
+        let st = store([])
+        st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
+        XCTAssertEqual(AgentNoSessionsState(store: st).detail, AgentNoSessionsState.detail(canStart: true))
+        st.controlDch = nil
+        XCTAssertEqual(AgentNoSessionsState(store: st).detail, AgentNoSessionsState.detail(canStart: false))
     }
 }

@@ -785,11 +785,10 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(t.spawned().count, 0)
             XCTAssertEqual(formFields(host).count, 3)
             st.sessions = [a, mapped("web")]
-            XCTAssertEqual(m.selection, .live(a.key), "a late row selects nothing")
-            XCTAssertNotNil(m.newSession)
-            m.cancelNewSession()
             settle(host)
-            XCTAssertEqual(m.terminal.key?.name, "a", "Cancel: a's terminal again")
+            XCTAssertEqual(m.selection, live("web"), "#1096 1a: a late row lands")
+            XCTAssertNil(m.newSession)
+            XCTAssertEqual(m.terminal.key?.name, "web", "its terminal")
             XCTAssertTrue(win.firstResponder === m.terminal.view, "the keys where they were")
             XCTAssertFalse(win.isVisible, "never shown")
         }

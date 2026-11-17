@@ -1605,6 +1605,13 @@ tag from the now-released section and put it on the new top draft.
 - An extension whose manifest Prosper refuses (too large, nested too deep, or unreadable) now shows
   in Settings > Extensions as a "Not loaded" row with the reason, and the Marketplace shows that
   same plain sentence instead of the parser's raw error text. (#984)
+- Agent Sessions: the "ended at once or never started" note no longer shows for a session that did
+  start (it listed late, ran while the window was on another Space, or Agent Island was turned off
+  and on), and a session that shows up late is selected instead of leaving a second Start that would
+  duplicate it; the island's "Choose folder..." panel now says Start, since choosing a folder there
+  starts the session. (#1096)
+- Agent Sessions: when a quick shell (Shift-Command-N) never shows up, the note no longer says
+  "check the command", since no command was typed. (#1096)
 
 ## v2.174.0
 

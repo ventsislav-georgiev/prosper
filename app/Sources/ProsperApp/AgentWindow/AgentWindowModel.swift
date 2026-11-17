@@ -1315,6 +1315,7 @@ final class AgentWindowModel: ObservableObject {
                     newSession?.status = "No answer for \(asked.name): Agent Island is off"
                 }
             }
+            pendingSpawn = nil   // #1096 1b: the island back later would expire it over a session that runs
             claimed = [:]
             sections = []
             // #901 B3 step 2 (decision c): the pane about to be emptied and its target, once per island-off spell.
@@ -1333,6 +1334,7 @@ final class AgentWindowModel: ObservableObject {
             .combineLatest(store.$details, store.$actions)
             .sink { [weak self] v, details, actions in
                 MainActor.assumeIsolated {
+                    self?.seeSpawn(v.0)
                     self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
                     self?.pollRemote()
                     self?.stampLastLive(v.0)   // after the refresh: a pane it just filled is stamped by this publish
@@ -1787,21 +1789,35 @@ final class AgentWindowModel: ObservableObject {
     /// #948 F3: `asked`, the request's time (a record that landed since is this start's).
     private(set) var pendingSpawn: (key: AgentSessionKey, at: TimeInterval, asked: TimeInterval)? {
         didSet {
+            spawnSeen = false
             // #887 (QA #747 INFO-1): the slack has its own deadline, not the next refresh (the 30 s age clock).
             spawnDeadline?.invalidate()
             spawnDeadline = pendingSpawn == nil || closed ? nil
-                : Timer.scheduledTimer(withTimeInterval: Self.spawnSlack + 0.5, repeats: false) { [weak self] _ in
+                : scheduleDeadline(Self.spawnSlack + 0.5) { [weak self] _ in
                     MainActor.assumeIsolated { self?.refresh() }
                 }
         }
     }
     static let spawnSlack: TimeInterval = 15
+    /// #1096 4: the deadline's timer; a test records the interval it asks for (no wall clock).
+    var scheduleDeadline: (TimeInterval, @escaping @Sendable (Timer) -> Void) -> Timer = {
+        Timer.scheduledTimer(withTimeInterval: $0, repeats: false, block: $1)
+    }
+    /// #1096 1c: the store listed the pending start while the window was hidden (its sink runs, the rebuild does not).
+    private(set) var spawnSeen = false
+    private func seeSpawn(_ sessions: [AgentSession]) {
+        guard !visible, let p = pendingSpawn, sessions.contains(where: { $0.key == p.key }) else { return }
+        spawnSeen = true
+    }
+    /// #1096 1a: the form's start that expired unlisted; its row listing later lands it.
+    private var lateSpawn: AgentSessionKey?
     /// Fires once just past `spawnSlack` after the answer; a hidden window lands or expires the spawn when shown again.
     private(set) var spawnDeadline: Timer?
     /// QA #747 INFO-1: dch --spawn answers 0 for a session whose program already exited, the same as for one that runs.
     /// #948 F3: with the end of a record of that name that landed after the start ("exit 127"), in brackets.
-    nonisolated static func notListedText(_ name: String, end: String = "") -> String {
-        "\(name) ended at once or never started: check the command" + (end.isEmpty ? "" : " (\(end))")
+    /// #1096 4: `command` false (a quick shell: nothing typed): no "check the command".
+    nonisolated static func notListedText(_ name: String, end: String = "", command: Bool = true) -> String {
+        "\(name) ended at once or never started" + (command ? ": check the command" : "") + (end.isEmpty ? "" : " (\(end))")
     }
     /// #948 F3: a start that never listed, waiting for the one History read after its deadline.
     private(set) var unlisted: (key: AgentSessionKey, asked: TimeInterval)?
@@ -1935,10 +1951,10 @@ final class AgentWindowModel: ObservableObject {
 
     func chooseNewSessionFolder() {
         guard newSession?.host == nil else { return }   // #1323: this Mac's chooser; another Mac's folder is typed
-        island().chooseFolder { [weak self] path in
+        island().chooseFolder(.init(prompt: AgentIslandController.FolderAsk.choose) { [weak self] path in
             guard let self, let path, self.newSession?.starting == nil else { return }
             self.setNewSessionFolder(AgentNewSession.abbreviate(path, home: self.home))
-        }
+        })
     }
 
     /// The live sessions' and records' names in the spawn dir, from this window's store.
@@ -2254,11 +2270,13 @@ final class AgentWindowModel: ObservableObject {
         guard let u = unlisted,
               let r = history.first(where: { $0.key == u.key && !$0.end.isEmpty && $0.started >= u.asked - 1 }) else { return }
         unlisted = nil
-        let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: r.end.hasPrefix("exit ") ? r.end : AgentIsland.endLabel(r.end))
+        let end = r.end.hasPrefix("exit ") ? r.end : AgentIsland.endLabel(r.end)
+        let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: end)
         if newSession?.status == plain {
             newSession?.status = said
-        } else if newSession == nil, let l = dirLine, l.text == plain, store?.actions[l.key] == plain {
-            sayOnDirLine(said, until: l.cause)
+        } else if newSession == nil, let l = dirLine, l.text == Self.notListedText(u.key.name, command: false),
+                  store?.actions[l.key] == l.text {   // #1096 4: the dir line is a quick shell's
+            sayOnDirLine(Self.notListedText(u.key.name, end: end, command: false), until: l.cause)
         }
     }
 
@@ -2339,6 +2357,16 @@ final class AgentWindowModel: ObservableObject {
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.
     /// #887 (QA #747 INFO-2): the row first, so a window shown again past the slack still lands a row already listed.
     private func landSpawn() {
+        // #1096 1a: the row lists after the expiry: the form that still says so lands it (a second Start would make
+        // a duplicate under the next free name).
+        if let k = lateSpawn, let s = row(.live(k))?.session {
+            lateSpawn = nil
+            if newSession?.starting == nil, newSession?.status?.hasPrefix(Self.notListedText(k.name)) == true {
+                setMode(.terminal, for: s)
+                select(.live(s.key))   // a manual pick: the form closes
+                focusSelection()
+            }
+        }
         guard let p = pendingSpawn else { return }
         // #1323: a remote start's row is in Other machines; selecting it is the person's pick, so it arms one attach.
         if p.key.dir.hasPrefix("@") {
@@ -2350,13 +2378,19 @@ final class AgentWindowModel: ObservableObject {
             }
         }
         guard let s = row(.live(p.key))?.session else {
+            guard !spawnSeen else {   // #1096 1c: listed while hidden, gone now: it ran and ended, it did start
+                if newSession?.starting == p.key { cancelNewSession() }
+                pendingSpawn = nil
+                return
+            }
             guard now() - p.at > Self.spawnSlack else { return }
             // QA #747 INFO-1: answered but never listed: the form stays, re-enabled, and says so; a quick shell, the dir line.
             pendingSpawn = nil
-            let why = Self.notListedText(p.key.name)
+            let why = Self.notListedText(p.key.name, command: newSession != nil)   // no form: a quick shell
             if newSession?.starting == p.key {
                 newSession?.starting = nil
                 newSession?.status = why
+                lateSpawn = p.key
             } else if newSession == nil {
                 sayOnDirLine(why, until: .listed(p.key.name))
             }

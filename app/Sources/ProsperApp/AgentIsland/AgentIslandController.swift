@@ -214,8 +214,17 @@ final class AgentIslandController {
     }
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
-    var chooseFolder: @MainActor (@escaping @MainActor (String?) -> Void) -> Void = { done in
+    /// #1096 3: `done.prompt` is the panel's button word, the caller's own.
+    var chooseFolder: @MainActor (FolderAsk) -> Void = { done in
         AgentIslandController.openFolderPanel(done)
+    }
+    /// #1096 3: one chooser ask: the button word and the answer (`ask(path)`; nil: cancelled).
+    struct FolderAsk: Sendable {
+        /// The window's form only fills its Folder field; the island's "Choose folder\u{2026}" starts a session at once.
+        static let choose = "Choose", start = "Start"
+        let prompt: String
+        let done: @MainActor @Sendable (String?) -> Void
+        @MainActor func callAsFunction(_ path: String?) { done(path) }
     }
     /// #910 seam: opens the Agent Sessions window with the new-session form. Tests replace it; none shows a window.
     /// The window builds on show (no store: its form refuses silently, as for Command-N).
@@ -1347,9 +1356,9 @@ final class AgentIslandController {
     func chooseNewSessionFolder() {
         guard let store, store.resumeGate.isOK else { return }
         setExpanded(false)
-        chooseFolder { [weak self] path in
+        chooseFolder(FolderAsk(prompt: FolderAsk.start) { [weak self] path in
             if let path { self?.newSession(in: path) }
-        }
+        })
     }
 
     /// #910 "New session\u{2026}": the island collapses, then the window's form (it starts nothing itself).
@@ -1361,12 +1370,12 @@ final class AgentIslandController {
 
     /// The live chooser: directories only, after activating the app (an
     /// LSUIElement app's panel would open behind the front app). Non-modal.
-    private static func openFolderPanel(_ done: @escaping @MainActor (String?) -> Void) {
+    private static func openFolderPanel(_ done: FolderAsk) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"   // QA #747 INFO-7: the window's form only fills its Folder field with it
+        panel.prompt = done.prompt   // #1096 3: the caller's word (FolderAsk.choose fills a field, .start starts)
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { resp in
             MainActor.assumeIsolated { done(resp == .OK ? panel.url?.path : nil) }
