@@ -118,19 +118,52 @@ final class ThemeContrastTests: XCTestCase {
         XCTAssertEqual(Self.contrast(grey, on: .white), 4.54, accuracy: 0.01)
     }
 
-    /// #1457 b: the Mini row's 8 pt Command superscript on the Default theme: unselected it is Neon.faded(blue, 0.75) over
-    /// the rail surface, selected Neon.blue over NeonSelectedRowFill's blue at 0.14 over the rail. Both reach 4.5:1.
-    func testMiniSuperscriptInkClearsItsSurfacesOnDefault() {
-        let p = ThemePalette.default
-        let rail = NSColor(p.sidebar), blue = NSColor(p.blue)
+    /// #1505 (was #1457 b, Default only): the Mini row's 8 pt Command superscript on EVERY bundled theme, Increase Contrast
+    /// off and on. The ink is the shipped AgentSidebarRowView.miniSuperscriptInk, read with the theme's palette live:
+    /// unselected over the rail (the plain sidebar and its washed top), selected over NeonSelectedRowFill's blue at 0.14
+    /// over each. The theme list is literal and must be every bundled theme. The "old" figures log the former inks
+    /// (faded blue 0.75 / blue) for the report; they assert nothing.
+    func testMiniSuperscriptInkClearsItsSurfacesOnEveryTheme() throws {
+        let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
+                        "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
+                        "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
+                        "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
+                        "theme-teal", "theme-violet"]
+        let themes = try themes()
+        XCTAssertEqual(expected.count, 22)
+        XCTAssertEqual(Set(themes.map(\.title)), Set(expected), "the literal list is every bundled theme")
+        let savedPalette = ThemeRuntime.palette, savedIC = ThemeRuntime.increaseContrast
+        defer { ThemeRuntime.palette = savedPalette; ThemeRuntime.increaseContrast = savedIC }
         func over(_ f: NSColor, _ a: CGFloat, _ b: NSColor) -> NSColor {
             let f = Self.srgb(f), b = Self.srgb(b)
             return NSColor(srgbRed: f.r * a + b.r * (1 - a), green: f.g * a + b.g * (1 - a), blue: f.b * a + b.b * (1 - a), alpha: 1)
         }
-        let unselected = Self.contrast(blue.withAlphaComponent(0.75), on: rail)
-        let selected = Self.contrast(blue, on: over(blue, 0.14, rail))
-        XCTAssertGreaterThanOrEqual(unselected, Self.minimum, "unselected superscript is \(unselected):1")
-        XCTAssertGreaterThanOrEqual(selected, Self.minimum, "selected superscript is \(selected):1")
+        var cases = 0
+        for d in themes {
+            let p = ThemePalette.load(for: d)
+            let blue = NSColor(p.blue)
+            let rails = Self.ruleSurfaces(p).filter { $0.0 == "sidebar" || $0.0 == "sidebarWashTop" }
+            XCTAssertEqual(rails.map(\.0), ["sidebar", "sidebarWashTop"], d.title)
+            for hc in [false, true] {
+                ThemeRuntime.palette = p
+                ThemeRuntime.increaseContrast = hc
+                let unsel = NSColor(AgentSidebarRowView.miniSuperscriptInk(selected: false))
+                let sel = NSColor(AgentSidebarRowView.miniSuperscriptInk(selected: true))
+                for (rn, rail) in rails {
+                    let u = Self.contrast(unsel, on: rail)
+                    let s = Self.contrast(sel, on: over(blue, 0.14, rail))
+                    XCTAssertGreaterThanOrEqual(u, Self.minimum, "\(d.title) hc=\(hc): unselected superscript on \(rn) is \(u):1")
+                    XCTAssertGreaterThanOrEqual(s, Self.minimum, "\(d.title) hc=\(hc): selected superscript on \(rn) is \(s):1")
+                    if !hc {
+                        let ou = Self.contrast(blue.withAlphaComponent(0.75), on: rail)
+                        let os = Self.contrast(blue, on: over(blue, 0.14, rail))
+                        print("MINI1505 \(d.title) \(rn) unsel old \(ou) new \(u) sel old \(os) new \(s)")
+                    }
+                    cases += 1
+                }
+            }
+        }
+        XCTAssertEqual(cases, 22 * 2 * 2, "22 themes, hc off and on, two rail surfaces")
     }
 
     /// Every surface token text is painted on, written out. #1095: the tint rule

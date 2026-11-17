@@ -1699,9 +1699,12 @@ extension AgentSidebarRowView {
         .padding(.horizontal, sz(6))
     }
 
+    /// #1505: the Command number's ink; the text tokens clear 4.5:1 on the rail on every theme, the faded blue did not.
+    static func miniSuperscriptInk(selected: Bool) -> Color { selected ? Neon.textPrimary : Neon.textSecondary }
+
     static func miniSuperscript(_ n: Int, selected: Bool) -> some View {
         Text("\(n)").font(Neon.font(8, weight: .bold, design: .rounded))
-            .foregroundStyle(selected ? Neon.blue : Neon.faded(Neon.blue, 0.75)).fixedSize()
+            .foregroundStyle(miniSuperscriptInk(selected: selected)).fixedSize()
     }
 
     /// #1457: the widest Mini line: a name of `miniNameLength` W's cut as a longer name is, the mark's and needs-you slots.
