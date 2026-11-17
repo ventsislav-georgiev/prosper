@@ -2294,7 +2294,7 @@ final class AgentWindowModel: ObservableObject {
         guard let u = unlisted,
               let r = history.first(where: { $0.key == u.key && !$0.end.isEmpty && $0.started >= u.asked - 1 }) else { return }
         unlisted = nil
-        let end = r.end.hasPrefix("exit ") ? r.end : AgentIsland.endLabel(r.end)
+        let end = r.end.hasPrefix("exit ") && Int(r.end.dropFirst(5)) != nil ? r.end : AgentIsland.endLabel(r.end)   // R948-n2: raw only for a number
         let plain = Self.notListedText(u.key.name), said = Self.notListedText(u.key.name, end: end)
         if newSession?.status == plain {
             newSession?.status = said
@@ -2314,6 +2314,8 @@ final class AgentWindowModel: ObservableObject {
         guard let key else {
             claimed[name] = nil
             if mine { newSession?.starting = nil; newSession?.status = failure }
+            // #1313: no form open: the island wrote the same line; the window owns it, gone when the form opens or the name lists.
+            else if newSession == nil, let failure { sayOnDirLine(failure, until: .listed(name)) }
             return
         }
         claimed[name] = now()

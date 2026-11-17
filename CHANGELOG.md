@@ -1698,6 +1698,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions and Agent Island: PR chips are now amber on a dark amber wash, like the "Needs
   input" badge, so they stand out; on a selected or hovered row their text stays the theme's main
   text colour. (#1451)
+- A quick shell that dch refuses to start no longer leaves "New session failed" on the Agent
+  Sessions window until your next action: the line goes when you open the New session form or a
+  session of that name appears; and an odd "exit ..." end in the "ended at once or never started"
+  line now reads in words like every other end. (#1313)
 
 ## v2.174.0
 

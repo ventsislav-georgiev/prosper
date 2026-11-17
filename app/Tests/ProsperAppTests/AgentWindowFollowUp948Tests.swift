@@ -266,4 +266,88 @@ extension AgentWindowD1Tests {
             XCTAssertFalse(line.contains("\u{202E}"))
         }
     }
+
+    /// #1313: a quick shell dch refuses (no form open) leaves its failure on the dir line as the window's own: it goes
+    /// when a session of that name lists or the form opens; another name listing leaves it.
+    @MainActor
+    func testAgentWindow1313RefusedQuickShellLineGoesWhenItsCauseGoes() throws {
+        try withNewSessionPrefs {
+            let other = mapped("other"), st = store([other]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            let key = AgentSessionKey(dir: "/tmp/dch-test", name: "")
+            XCTAssertTrue(m.startShell())
+            let shell = try XCTUnwrap(spawns.calls.last?.name)
+            let failed = "New session failed: dch: \(shell): nope"
+            spawns.done.last?(nil, failed)
+            XCTAssertEqual(st.actions[key], failed, "the refusal shows")
+            XCTAssertEqual(m.dirLine?.cause, .listed(shell))
+            st.sessions = [other, mapped("unrelated")]
+            XCTAssertEqual(st.actions[key], failed, "an unrelated name lists: it stays")
+            st.sessions = [other, mapped("unrelated"), mapped(shell)]
+            XCTAssertTrue(st.actions[key] == nil, "a session of that name lists: gone")
+            XCTAssertTrue(m.dirLine == nil)
+
+            XCTAssertTrue(m.startShell())
+            let again = try XCTUnwrap(spawns.calls.last?.name)
+            spawns.done.last?(nil, "New session failed: dch: \(again): nope")
+            XCTAssertEqual(st.actions[key], "New session failed: dch: \(again): nope")
+            m.openNewSession()
+            XCTAssertNotNil(m.newSession)
+            XCTAssertTrue(st.actions[key] == nil, "the form opens: gone")
+
+            // A form's own failure stays the form's: no dir line.
+            m.setNewSessionName("web")
+            XCTAssertTrue(m.startNewSession())
+            spawns.done.last?(nil, "New session failed: dch: web: nope")
+            XCTAssertTrue(st.actions[key] == nil)
+            XCTAssertTrue(m.dirLine == nil)
+        }
+    }
+
+    /// R948-n2: the not-listed sentence shows dch's "exit N" raw only when N is a number; any other "exit ..." reads
+    /// through endLabel, as every other end does.
+    @MainActor
+    func testAgentWindow1313UnlistedExitEndIsRawOnlyForANumber() throws {
+        try withNewSessionPrefs {
+            let st = store([mapped("other")]), spawns = SpawnCalls()
+            let m = newSessionModel(st, spawns)
+            defer { m.close() }
+            var clock = Self.now
+            m.now = { clock }
+            let island = m.island()
+            island.store = st
+            island.showsPanel = false
+            island.controlDch = { DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1]) }
+            island.listSessions = { _ in [] }
+            final class Box: @unchecked Sendable {
+                let lock = NSLock()
+                var records: [DchHistoryRecord] = []
+            }
+            let box = Box()
+            island.readHistory = { _, _ in box.lock.withLock { box.records } }
+            let key = AgentSessionKey(dir: "/tmp/dch-test", name: "")
+            for (end, shown) in [("exit 1", "exit 1"), ("exit 1x\u{202E}", AgentIsland.endLabel("exit 1x\u{202E}"))] {
+                m.select(.live(mapped("other").key))
+                XCTAssertTrue(m.startShell())
+                let shell = try XCTUnwrap(spawns.calls.last?.name)
+                var r = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: shell))
+                r.started = clock
+                r.ended = clock
+                r.end = end
+                box.lock.withLock { box.records = [r] }
+                spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
+                clock += AgentWindowModel.spawnSlack + 1
+                try XCTUnwrap(m.spawnDeadline).fire()
+                let want = AgentWindowModel.notListedText(shell, end: shown, command: false)
+                let until = Date().addingTimeInterval(5)
+                while st.actions[key] != want, Date() < until {
+                    island.queue.sync {}
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                }
+                XCTAssertEqual(st.actions[key], want, "end \(end.debugDescription)")
+            }
+            XCTAssertEqual(AgentIsland.endLabel("exit 1x\u{202E}"), "exited (1x\u{202E})", "the exact endLabel reading")
+            XCTAssertNotEqual(AgentIsland.endLabel("exit 1x\u{202E}"), "exit 1x\u{202E}", "not the raw text")
+        }
+    }
 }
