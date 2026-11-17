@@ -9,6 +9,8 @@ import XCTest
 /// no URL opened, no key or mouse event posted, no dch.
 @MainActor
 final class XrayRefPopoverTests: XCTestCase {
+    override func setUp() { XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 84, 0]) }   // #1443: stdin needs 1.84.0
+    override func tearDown() { XrayPanels.probed = nil }
     typealias T = XrayRefStreamTests
 
     nonisolated static let refs = #"""

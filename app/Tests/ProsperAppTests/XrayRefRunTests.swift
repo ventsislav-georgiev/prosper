@@ -32,6 +32,9 @@ final class XrayRefRunTests: XCTestCase {
         }
     }
 
+    override func setUp() { XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 84, 0]) }   // #1443: stdin needs 1.84.0
+    override func tearDown() { XrayPanels.probed = nil }
+
     func panel(_ run: Run) -> XrayPanelModel {
         let p = XrayPanelModel(target: Self.local, tab: .search)
         (p.dch, p.run) = ("/fake/dch", run.run)
@@ -69,6 +72,32 @@ final class XrayRefRunTests: XCTestCase {
         await p.reading?.value
         XCTAssertEqual(run.calls.last, ["--xray", "api:2", "--search", "-", "--json"])
         XCTAssertEqual(run.stdins.last, "login\n")
+    }
+
+    /// #1443: a probed dch below 1.84.0 (1.82.0) or none probed (nil) reads "-" as the text: a local name keeps the text in
+    /// argv and binds no stdin, for a ref and a search; 1.84.0 sends "-" plus stdin (red with the version ignored, or with
+    /// an unknown version on stdin).
+    func testAnOlderOrUnknownDchGetsTheTextInArgv() async {
+        let versions: [[Int]?] = [[1, 82, 0], nil]
+        for v in versions {
+            XrayPanels.probed = v.map { DchCommand.Binary(path: "/fake/dch", version: $0) }
+            let run = Run(), panels = XrayPanels(), p = panel(run)
+            XCTAssertTrue(panels.runRef("#12", for: p))
+            await panels.refReading?.value
+            XCTAssertEqual(run.calls, [["--xray", "api", "--ref", "#12", "--scope", "project", "--full", "--json"]], "\(String(describing: v))")
+            XCTAssertTrue(run.stdins.last == .some(nil), "no stdin for a ref")
+            p.query = "login"
+            p.runSearch()
+            await p.reading?.value
+            XCTAssertEqual(run.calls.last, ["--xray", "api", "--search", "login", "--json"])
+            XCTAssertTrue(run.stdins.last == .some(nil), "no stdin for a search")
+        }
+        XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 84, 0])
+        let run = Run(), panels = XrayPanels(), p = panel(run)
+        XCTAssertTrue(panels.runRef("#12", for: p))
+        await panels.refReading?.value
+        XCTAssertEqual(run.calls.last, ["--xray", "api", "--ref", "-", "--scope", "project", "--full", "--json"])
+        XCTAssertEqual(run.stdins.last, "#12\n")
     }
 
     /// #1410: dch reads at most 256 stdin bytes, newline included. A local 255-byte text runs, 256 runs nothing (red with

@@ -244,7 +244,7 @@ extension XrayPanels {
     /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
     @discardableResult
     func runRef(_ text: String, for m: XrayPanelModel) -> Bool {
-        let (arg, input) = m.target.viaStdin(text)   // #1410: on stdin dch's 256 bytes count the newline
+        let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
         guard DchCtl.refOK(text), !text.hasPrefix("-"), input.map({ $0.count <= 256 }) ?? true, let dch = m.dch,
               let run = m.run else { return false }
         closeRef()

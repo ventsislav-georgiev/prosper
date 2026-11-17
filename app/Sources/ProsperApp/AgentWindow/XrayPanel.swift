@@ -37,10 +37,13 @@ struct XrayTarget: Equatable {
     func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
     /// #1410: a local name takes the text on stdin ("-" in argv), so it never shows in ps; a remote one keeps
     /// it in argv (dch reads "-" there as the text itself; the serve path hides it). #1442: dch 1.84.0 reads stdin for
-    /// every local name, one with ":" included.
-    func viaStdin(_ text: String) -> (arg: String, stdin: Data?) {
-        dir == nil ? (text, nil) : ("-", Data((text + "\n").utf8))
+    /// every local name, one with ":" included. #1443: older dch (1.78 to 1.83) reads "-" as the text itself, so stdin
+    /// only for a probed `version` at stdinMinimum or later; unknown (nil: no probe yet) goes in argv.
+    func viaStdin(_ text: String, version: [Int]?) -> (arg: String, stdin: Data?) {
+        dir == nil || !(version.map { DchCommand.isAtLeast($0, Self.stdinMinimum) } ?? false)
+            ? (text, nil) : ("-", Data((text + "\n").utf8))
     }
+    static let stdinMinimum = [1, 84, 0]
     var env: [String: String] { AgentIsland.listEnv(dir: dir ?? DchCommand.defaultSocketDir) }
 }
 
@@ -152,7 +155,7 @@ final class XrayPanels: ObservableObject {
     static var dch: @MainActor () -> String? = { if case .ok(let path) = XrayTabs.gate(probed) { path } else { nil } }
 
     /// The bundled (else installed) dch's version, probed off main by `warm`; nil until then and under XCTest.
-    private static var probed: DchCommand.Binary?
+    static var probed: DchCommand.Binary?   // internal: rows set it (#1443)
 
     /// shortcut: probed once per window open, so a dch upgrade shows on the next open; re-probe per toggle if needed.
     static func warm() {

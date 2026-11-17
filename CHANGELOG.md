@@ -1661,6 +1661,9 @@ tag from the now-released section and put it on the new top draft.
   loads. (#1440)
 - X-ray: with dch 1.84.0, a session name containing a colon now also sends search and reference text
   on stdin, so it stays out of the process list. (#1442)
+- X-ray sends search and ref text on stdin only when the probed dch is 1.84.0 or later; an older or
+  not yet probed dch gets the text in argv, so a bundle without its own dch and an older installed
+  dch no longer search for "-". (#1443)
 
 ## v2.174.0
 

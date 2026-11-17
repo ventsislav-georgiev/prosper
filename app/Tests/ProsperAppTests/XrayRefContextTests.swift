@@ -5,6 +5,8 @@ import XCTest
 /// Memory; Open, Search and a mention's jump through seams. No dch, no window, no pasteboard, no URL opened.
 @MainActor
 final class XrayRefContextTests: XCTestCase {
+    override func setUp() { XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 84, 0]) }   // #1443: stdin needs 1.84.0
+    override func tearDown() { XrayPanels.probed = nil }
     typealias T = XrayRefStreamTests
 
     static func def(_ title: String, at: Int, session: String = "api") -> String {

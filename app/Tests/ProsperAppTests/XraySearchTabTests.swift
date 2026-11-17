@@ -83,6 +83,8 @@ final class XraySearchTabTests: XCTestCase {
     /// Red at TIP: no Search tab, no searchArgs, no runSearch (XrayPanel.swift:15 has four tabs). #1410: a local query
     /// goes on stdin with one newline and never in argv (red with the text in argv); a remote one keeps it in argv.
     func testArgvForALocalSessionAndARemoteOne() async {
+        XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 84, 0])   // #1443: stdin needs 1.84.0
+        defer { XrayPanels.probed = nil }
         let cases: [(XrayTarget, [String], String?)] = [
             (Self.local, ["--xray", "api", "--search", "-", "--json"], "login test\n"),
             (Self.remote, ["--xray", "example-host:api", "--search", "login test", "--json"], nil)]

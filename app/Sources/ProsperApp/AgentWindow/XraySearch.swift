@@ -90,7 +90,7 @@ extension XrayPanelModel {
         guard let dch, let run else { return }
         cancel()
         searchNote = nil
-        let env = target.env, (text, input) = target.viaStdin(query), a = target.searchArgs(text)
+        let env = target.env, (text, input) = target.viaStdin(query, version: XrayPanels.probed?.version), a = target.searchArgs(text)
         reading = Task { [weak self] in
             let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             guard !Task.isCancelled, let self else { return }
