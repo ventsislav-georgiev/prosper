@@ -476,6 +476,45 @@ test("under the GNU magic the bytes at offset 345 are not a prefix", async () =>
   assert.equal(r.json.error, "Hidden files can't be published: ./.DS_Store. Update Prosper and publish again.");
 });
 
+// R1140-1: the walk refuses past 1000 members (pax and GNU long-name headers are not members).
+const CAP = 1000;
+const CAP_ERROR = "The extension has too many files to publish (1000 max).";
+const files = (n) => Array.from({ length: n }, (_, i) => ({ name: `./f${String(i).padStart(4, "0")}.lua` }));
+const capGz = (blob) => {
+  const gz = gzipSync(blob);
+  assert.ok(gz.length < 262_144, `fixture gzips to ${gz.length} bytes`);
+  return gz;
+};
+
+test("an archive of exactly the member cap publishes; one member more is refused with a string-only 400", async () => {
+  const t = setup();
+  const r = await t.publish(PUB, "com.example.one", "1.0.0", capGz(tar(files(CAP))));
+  assert.equal(r.status, 200, r.text);
+  const t2 = setup();
+  const r2 = await refused(t2, tar(files(CAP + 1)));
+  assert.equal(r2.status, 400, r2.text);
+  assert.deepEqual(r2.json, { error: CAP_ERROR });
+});
+
+test("pax and GNU long-name headers do not count as members", async () => {
+  // CAP members, each after a pax 'x' record, and one GNU 'L' header: 2001 headers, CAP members.
+  const t = setup();
+  const entries = files(CAP).flatMap((f) => [{ name: "./PaxHeader/f", type: "x", data: pax({ mtime: "1.5" }) }, f]);
+  entries.splice(-1, 0, { name: "././@LongLink", type: "L", data: `${LONG}/x.lua\0` }); // names the last member
+  const r = await t.publish(PUB, "com.example.one", "1.0.0", capGz(tar(entries)));
+  assert.equal(r.status, 200, r.text);
+});
+
+test("the walk stops as the member cap is passed: a hidden member and a broken header after it are never read", async () => {
+  const t = setup();
+  const walked = tar([...files(CAP + 1), { name: "./.DS_Store", data: "x" }]);
+  // Drop the end-of-archive block and end in a non-tar block: a full walk would refuse as not_gzip.
+  const blob = Buffer.concat([walked.subarray(0, walked.length - 1024), Buffer.alloc(2048, 0x41)]);
+  const r = await refused(t, blob);
+  assert.equal(r.status, 400, r.text);
+  assert.deepEqual(r.json, { error: CAP_ERROR });
+});
+
 test("a long hidden name is cut by code point: the error is well formed and keeps the file name", async () => {
   // UTF-16 cuts at 40 and at -59 would both fall inside a surrogate pair here.
   const name = `./li/${"\u{1F600}".repeat(100)}/.state/note.txt`;

@@ -175,6 +175,9 @@ async function publish(c: Ctx) {
     return c.json({ error: `The extension is too large to publish once unpacked (${Math.floor((max * UNPACK_FACTOR) / 1024)} KB max).` }, 413);
   }
   const members = tar === "bad" ? null : tarMembers(tar);
+  if (members === "too_many") {
+    return c.json({ error: `The extension has too many files to publish (${MAX_MEMBERS} max).` }, 400);
+  }
   if (!members) return c.json({ error: "not_gzip" }, 400); // the app shows "wasn't a valid .tar.gz"
   const hidden = members.names.filter(isHiddenPath);
   if (hidden.length > 0) {
@@ -406,6 +409,10 @@ async function yank(c: Ctx) {
 /** #1140: publish inflates at most MARKET_MAX_BYTES * 8 (2 MiB at the default 256 KB);
  *  the largest bundled extension unpacks to ~115 KB. */
 const UNPACK_FACTOR = 8;
+/** R1140-1: the walk refuses past this many members, so its CPU stays far under the Free plan's
+ *  10 ms (QA: 3,900 empty members walked in 5-10 ms in node). The largest bundled extension
+ *  (ccpool) packs 4 files. pax ('x', 'g') and GNU long-name ('L', 'K') headers are not members. */
+const MAX_MEMBERS = 1000;
 
 /** The app's isHiddenMember rule (RemoteInstaller.swift, #1131): a path component that
  *  starts with "." other than the root "." itself (so "..", "._x" and ".a/b" count). */
@@ -519,10 +526,12 @@ function paxRecords(b: Uint8Array): Map<string, string> | null {
  *  joined; a global 'g' path counts as a name) and whether any header or pax record holds
  *  a user or group name. A type it does not know is a member: its name is read, its data
  *  skipped by its size. null when the bytes are not a whole tar (bad checksum, a size past
- *  the bytes, no end-of-archive block). Stops at the first zero block, as bsdtar does. */
-function tarMembers(data: Uint8Array): { names: string[]; owner: boolean } | null {
+ *  the bytes, no end-of-archive block). Stops at the first zero block, as bsdtar does.
+ *  "too_many" as soon as the member count passes MAX_MEMBERS: the rest is never walked. */
+function tarMembers(data: Uint8Array): { names: string[]; owner: boolean } | "too_many" | null {
   const names: string[] = [];
   let owner = false;
+  let count = 0;
   let next: string | null = null;
   for (let off = 0; ; ) {
     if (data.length - off < 512) return null;
@@ -551,6 +560,7 @@ function tarMembers(data: Uint8Array): { names: string[]; owner: boolean } | nul
     } else if (type === 0x4c) { // 'L' GNU long name
       next = field(body, 0, body.length);
     } else if (type !== 0x4b) { // 'K' is a GNU long link target, not a name
+      if (++count > MAX_MEMBERS) return "too_many";
       const name = field(h, 0, 100);
       const prefix = field(h, 257, 6) === "ustar" ? field(h, 345, 155) : ""; // POSIX "ustar\0" only
       names.push(next ?? (prefix ? `${prefix}/${name}` : name));
