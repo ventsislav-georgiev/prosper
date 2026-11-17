@@ -1675,6 +1675,8 @@ tag from the now-released section and put it on the new top draft.
   pointer has left it. (#1461)
 - Agent Sessions transcript: sessions on Claude Code up to 2.1.326 no longer show the "Newer Claude
   Code: some details may show simplified" note. (#1464)
+- Agent Sessions: the sidebar "..." menu's submenus, such as Row details, now stay open and
+  highlighted while the session list updates, instead of closing about every second. (#1466)
 
 ## v2.174.0
 

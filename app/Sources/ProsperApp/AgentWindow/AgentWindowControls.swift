@@ -876,12 +876,51 @@ struct AgentAlwaysAllowStrip: View {
 struct AgentSidebarMenuButton: View {
     @ObservedObject var store: AgentIslandStore
     let run: (AgentSidebarVerb) -> Void
+    /// #1466: the entries the menu draws; they change only when the list does.
+    @StateObject private var menu: AgentSidebarMenuModel
+
+    init(store: AgentIslandStore, run: @escaping (AgentSidebarVerb) -> Void) {
+        self.store = store
+        self.run = run
+        _menu = StateObject(wrappedValue: AgentSidebarMenuModel(
+            AgentWindowControls.sidebarMenu(store: store, autoAllow: Preferences.agentIslandAutoAllow)))
+    }
 
     var body: some View {
+        // #1466: the store publishes about every second (ages, History); an equal list must not rebuild the open
+        // menu (that closes an open submenu such as Row details), so the menu observes only its own entries.
+        let entries = AgentWindowControls.sidebarMenu(store: store, autoAllow: Preferences.agentIslandAutoAllow)
+        let _ = menu.run = run   // not published: the newest window closure, no redraw
+        AgentSidebarMenu(menu: menu)
+            .onChange(of: entries) { _, e in menu.show(e) }
+    }
+}
+
+/// #1466: what the "..." menu draws; publishes only on a real change.
+@MainActor
+final class AgentSidebarMenuModel: ObservableObject {
+    private(set) var entries: [AgentSidebarMenuEntry]
+    var run: (AgentSidebarVerb) -> Void = { _ in }
+
+    init(_ entries: [AgentSidebarMenuEntry]) { self.entries = entries }
+
+    func show(_ e: [AgentSidebarMenuEntry]) {
+        guard e != entries else { return }
+        objectWillChange.send()
+        entries = e
+    }
+}
+
+/// #1466: the "..." menu itself. It holds only its model, so a parent's redraw (a poll tick) leaves it alone.
+struct AgentSidebarMenu: View {
+    @ObservedObject var menu: AgentSidebarMenuModel
+    /// Test seam: how many times this body ran.
+    @MainActor static var bodies = 0
+
+    var body: some View {
+        let _ = Self.bodies += 1
         Menu {
-            AgentSidebarMenuEntries(entries: AgentWindowControls.sidebarMenu(store: store,
-                                                                             autoAllow: Preferences.agentIslandAutoAllow),
-                                    run: run)
+            AgentSidebarMenuEntries(entries: menu.entries, run: { menu.run($0) })
         } label: {
             Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .contentShape(Rectangle())

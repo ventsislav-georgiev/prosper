@@ -379,4 +379,49 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(AgentWindowControls.islandExtensionID, "com.prosper.agentisland")
         XCTAssertEqual(AgentWindowControls.islandSectionID, "agentisland")
     }
+
+    // MARK: #1466: an equal publish leaves the menu alone
+
+    /// Counts its own body: a store publish reached the hosted tree when this moves.
+    struct PublishProbe: View {
+        @ObservedObject var store: AgentIslandStore
+        @MainActor static var bodies = 0
+        var body: some View {
+            let _ = Self.bodies += 1
+            AgentSidebarMenuButton(store: store) { _ in }
+        }
+    }
+
+    /// The poll publishes about every second with nothing the "..." shows changed (F5 in the report): the menu's body
+    /// must not run again then (a re-run rebuilds the open menu and closes an open submenu such as Row details), and
+    /// must run once a gate or a checked item changes. Offscreen: a hosted tree, no window, no menu popped.
+    @MainActor
+    func testSidebarMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange() throws {
+        let st = store([session("api"), session("api-qa")], dch: bin([1, 38, 0]))
+        let host = NSHostingView(rootView: PublishProbe(store: st).frame(width: 40, height: 40))
+        func pump(_ moved: () -> Bool) {
+            settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() }
+        }
+        pump { AgentSidebarMenu.bodies > 0 }
+        let probe0 = PublishProbe.bodies, menu0 = AgentSidebarMenu.bodies
+        XCTAssertGreaterThan(menu0, 0, "precondition: the menu is drawn")
+        let before = AgentWindowControls.sidebarMenu(store: st, autoAllow: Preferences.agentIslandAutoAllow)
+        for _ in 0..<2 {   // two poll ticks whose menu content is equal
+            let probe = PublishProbe.bodies
+            st.sessions = st.sessions
+            st.notices = st.notices
+            pump { PublishProbe.bodies > probe }
+            XCTAssertGreaterThan(PublishProbe.bodies, probe, "precondition: the publish reached the hosted tree")
+        }
+        XCTAssertEqual(AgentWindowControls.sidebarMenu(store: st, autoAllow: Preferences.agentIslandAutoAllow), before,
+                       "precondition: the entries are equal")
+        XCTAssertEqual(AgentSidebarMenu.bodies, menu0,
+                       "equal publishes: the menu is not rebuilt (probe ran \(PublishProbe.bodies - probe0) times)")
+        st.details.agents.toggle()   // a checked Row details item changes
+        pump { AgentSidebarMenu.bodies > menu0 }
+        XCTAssertEqual(AgentSidebarMenu.bodies, menu0 + 1, "a changed entry rebuilds the menu once")
+        st.controlDch = nil   // the base gate turns off: every list-wide item goes off
+        pump { AgentSidebarMenu.bodies > menu0 + 1 }
+        XCTAssertEqual(AgentSidebarMenu.bodies, menu0 + 2, "a changed gate rebuilds the menu once")
+    }
 }
