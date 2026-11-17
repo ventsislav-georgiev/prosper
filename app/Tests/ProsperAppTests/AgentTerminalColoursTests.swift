@@ -34,8 +34,9 @@ final class AgentTerminalColoursTests: XCTestCase {
             """)
         _ = try fixture(home, "Library/Application Support/com.mitchellh.ghostty/config", "foreground = #eeeeee\nworking-directory = /tmp\n")
         let kept = GhosttyUserColours.read(GhosttyUserColours.files(home: home, xdgConfigHome: nil))
-        XCTAssertEqual(pairs(kept), ["theme=Example Dark", "palette=0=#1d1f21", "background=#101010", "cursor-color=#a0b0c0",
-                                     "foreground=#eeeeee"], "colours only, in Ghostty's load order (Application Support last)")
+        XCTAssertEqual(pairs(kept), ["palette=0=#1d1f21", "background=#101010", "cursor-color=#a0b0c0",
+                                     "foreground=#eeeeee"], "colours only, in Ghostty's load order (Application Support last); "
+                       + "no theme pair, and no themes dir given so the theme adds nothing")
     }
 
     func testTheLocatorFollowsXDGConfigHomeAndBothFileNames() {
@@ -73,7 +74,8 @@ final class AgentTerminalColoursTests: XCTestCase {
     @MainActor
     func testAMissingFileGivesTheProsperLook() {
         let home = tempDir()
-        let kept = AgentTerminalLook.userColours(choice: "ghostty", files: GhosttyUserColours.files(home: home, xdgConfigHome: nil))
+        let kept = AgentTerminalLook.userColours(choice: "ghostty", files: GhosttyUserColours.files(home: home, xdgConfigHome: nil),
+                                                 themeDirs: [], appearance: .dark)
         XCTAssertTrue(kept.isEmpty)
         XCTAssertEqual(AgentTerminalLook.theme(colours: kept), AgentTerminalLook.theme(), "Prosper's background and text")
         XCTAssertEqual(AgentTerminalLook.configuration(colours: kept), AgentTerminalLook.configuration)
@@ -82,8 +84,9 @@ final class AgentTerminalColoursTests: XCTestCase {
     @MainActor
     func testTheProsperChoiceIgnoresAFixtureConfig() throws {
         let file = try fixture(tempDir(), "ghostty/config", "background = #101010\n")
-        XCTAssertTrue(AgentTerminalLook.userColours(choice: "prosper", files: [file]).isEmpty)
-        XCTAssertEqual(pairs(AgentTerminalLook.userColours(choice: "ghostty", files: [file])), ["background=#101010"], "the same file is read when chosen")
+        XCTAssertTrue(AgentTerminalLook.userColours(choice: "prosper", files: [file], themeDirs: [], appearance: .dark).isEmpty)
+        XCTAssertEqual(pairs(AgentTerminalLook.userColours(choice: "ghostty", files: [file], themeDirs: [], appearance: .dark)),
+                       ["background=#101010"], "the same file is read when chosen")
     }
 
     /// The kept lines go first; every Prosper line comes after them, unchanged, and libghostty takes the result with the
@@ -123,6 +126,86 @@ final class AgentTerminalColoursTests: XCTestCase {
         XCTAssertFalse(c.renderedConfig.contains("notacolourname"))
         XCTAssertTrue(c.renderedConfig.contains("clipboard-read = deny"))
         XCTAssertTrue(c.renderedConfig.contains("background = \(AgentTerminalLook.hex(Neon.bgBottom))"))
+    }
+
+    /// QA r1418 m1: a theme file is a whole Ghostty config: only its colour lines are kept, its own `theme` is not
+    /// followed, and no `theme` line ever reaches libghostty.
+    @MainActor
+    func testAThemeIsResolvedByProsperToItsColourLinesOnly() throws {
+        let home = tempDir()
+        let config = try fixture(home, ".config/ghostty/config", "theme = Example\n")
+        _ = try fixture(home, ".config/ghostty/themes/Example", """
+            background = #202020
+            shell-integration = none
+            keybind = super+k=text:x
+            clipboard-write = allow
+            theme = Other
+            """)
+        _ = try fixture(home, ".config/ghostty/themes/Other", "foreground = #303030\n")
+        let dirs = GhosttyUserColours.themeDirs(home: home, xdgConfigHome: nil, bundled: home.appendingPathComponent("bundled"))
+        let kept = AgentTerminalLook.userColours(choice: "ghostty", files: [config], themeDirs: dirs, appearance: .dark)
+        XCTAssertEqual(pairs(kept), ["background=#202020"], "colours only, the theme file's own theme not followed")
+        let rendered = AgentTerminalLook.configuration(colours: kept).rendered.components(separatedBy: "\n")
+        XCTAssertFalse(rendered.contains { $0.hasPrefix("theme") }, "no theme line for libghostty")
+        try "theme = Missing\n".write(to: config, atomically: true, encoding: .utf8)
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: dirs, appearance: .dark)), [], "a missing theme file adds nothing")
+    }
+
+    func testThemeLinesComeBeforeTheConfigsOwnColours() throws {
+        let home = tempDir()
+        let config = try fixture(home, "ghostty/config", "background = #101010\ntheme = Example\n")
+        let themes = home.appendingPathComponent("themes")
+        _ = try fixture(home, "themes/Example", "background = #202020\n")
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: [themes], appearance: .dark)),
+                       ["background=#202020", "background=#101010"], "the config's own colour is last, so it wins")
+    }
+
+    func testTheUserThemesFolderWinsOverGhosttyAppsBundledThemes() throws {
+        let home = tempDir()
+        let config = try fixture(home, ".config/ghostty/config", "theme = Example\n")
+        let bundled = home.appendingPathComponent("Ghostty.app/Contents/Resources/ghostty/themes")
+        _ = try fixture(home, "Ghostty.app/Contents/Resources/ghostty/themes/Example", "background = #bbbbbb\n")
+        _ = try fixture(home, "Ghostty.app/Contents/Resources/ghostty/themes/Bundled Only", "background = #cccccc\n")
+        _ = try fixture(home, ".config/ghostty/themes/Example", "background = #aaaaaa\n")
+        let dirs = GhosttyUserColours.themeDirs(home: home, xdgConfigHome: nil, bundled: bundled)
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: dirs, appearance: .dark)), ["background=#aaaaaa"], "user folder first")
+        try "theme = Bundled Only\n".write(to: config, atomically: true, encoding: .utf8)
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: dirs, appearance: .dark)), ["background=#cccccc"],
+                       "Ghostty.app's theme when the user folder has none")
+    }
+
+    /// light:A,dark:B follows Prosper's own theme appearance (the terminal follows Prosper's theme, not the system).
+    func testLightDarkThemePicksTheSideOfProsperAppearance() throws {
+        let home = tempDir()
+        let config = try fixture(home, "ghostty/config", "theme = light:Example Day,dark:Example Night\n")
+        let themes = home.appendingPathComponent("themes")
+        _ = try fixture(home, "themes/Example Day", "background = #eeeeee\n")
+        _ = try fixture(home, "themes/Example Night", "background = #111111\n")
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: [themes], appearance: .light)), ["background=#eeeeee"])
+        XCTAssertEqual(pairs(GhosttyUserColours.read([config], themeDirs: [themes], appearance: .dark)), ["background=#111111"])
+    }
+
+    /// QA r1418 s1: a FIFO at the config path is refused at once (non-blocking open, regular files only), even with a
+    /// colour line waiting in it; the parent's blocking open hung here until a writer came.
+    func testAFifoAtTheConfigPathIsRefusedWithoutBlocking() throws {
+        let fifo = tempDir().appendingPathComponent("config")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        let holder = open(fifo.path, O_RDONLY | O_NONBLOCK)   // keeps the written line in the pipe
+        XCTAssertTrue(holder >= 0)
+        defer { close(holder) }
+        let writer = open(fifo.path, O_WRONLY | O_NONBLOCK)
+        XCTAssertTrue(writer >= 0)
+        let line = Array("background = #101010\n".utf8)
+        XCTAssertEqual(write(writer, line, line.count), line.count)
+        close(writer)
+        let done = expectation(description: "read() returned [] for a FIFO")
+        DispatchQueue.global().async {   // off-thread so a blocking open fails the row instead of hanging it
+            if GhosttyUserColours.read([fifo]).isEmpty { done.fulfill() }
+        }
+        wait(for: [done], timeout: 2)
+        // Unblock a reader still waiting for a writer (the parent's open), so nothing stays blocked.
+        let unblock = open(fifo.path, O_WRONLY | O_NONBLOCK)
+        if unblock >= 0 { close(unblock) }
     }
 
     @MainActor

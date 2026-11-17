@@ -842,11 +842,17 @@ enum AgentTerminalLook {
 
     /// #1456 (OQ-153): Settings' "Terminal colours": none for Prosper, else the colour lines kept from the user's own
     /// Ghostty config (GhosttyUserColours: colours only, checked). Read in the app at each make and refresh.
+    /// QA r1418 m1: a `theme` is resolved here (user themes folder, then Ghostty.app's), never handed to libghostty;
+    /// light:A,dark:B follows Prosper's own theme appearance, as the terminal does.
     static func userColours(choice: String = Preferences.agentTerminalColours,
                             files: @autoclosure () -> [URL] = GhosttyUserColours.files(
                                 home: FileManager.default.homeDirectoryForCurrentUser,
-                                xdgConfigHome: ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"])) -> [(key: String, value: String)] {
-        choice == "ghostty" ? GhosttyUserColours.read(files()) : []
+                                xdgConfigHome: ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]),
+                            themeDirs: @autoclosure () -> [URL] = GhosttyUserColours.themeDirs(
+                                home: FileManager.default.homeDirectoryForCurrentUser,
+                                xdgConfigHome: ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"]),
+                            appearance: @autoclosure () -> ThemeAppearance = ThemeStore.shared.appearance) -> [(key: String, value: String)] {
+        choice == "ghostty" ? GhosttyUserColours.read(files(), themeDirs: themeDirs(), appearance: appearance()) : []
     }
 
     static var configuration: TerminalConfiguration { configuration(colours: []) }
