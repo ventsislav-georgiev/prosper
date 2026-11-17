@@ -482,4 +482,45 @@ final class AgentSidebarModeTests: XCTestCase {
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }
+
+    /// #1461: the tracker holds an exit that arrives while the run loop is in its menu-tracking mode (a sidebar menu's
+    /// window sends it), tells the model (onMenu true), and releases it in one default-mode turn (onMenu false). Offscreen:
+    /// an unshown borderless window, events built and handed to mouseExited, never posted.
+    func testTrackerHoldsAnExitArrivingInEventTrackingModeUntilTheDefaultTurn() throws {
+        func make() -> (NSWindow, AgentSlideTrackerView, () -> [Bool], () -> [Bool]) {
+            final class Rec { var action: [Bool] = [], menu: [Bool] = [] }
+            let rec = Rec(), t = AgentSlideTrackerView(edge: false)
+            t.action = { rec.action.append($0) }
+            t.onMenu = { rec.menu.append($0) }
+            let win = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 100, height: 100), styleMask: [.borderless],
+                               backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.contentView = t
+            return (win, t, { rec.action }, { rec.menu })
+        }
+        let (win, t, action, menu) = make()
+        defer { win.close() }
+        // Built inside each block: an NSEvent is not Sendable.
+        @Sendable func exitEvent() -> NSEvent? {
+            NSEvent.enterExitEvent(with: .mouseExited, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                   context: nil, eventNumber: 0, trackingNumber: 0, userData: nil)
+        }
+        RunLoop.current.perform(inModes: [.eventTracking]) {
+            MainActor.assumeIsolated { if let e = exitEvent() { t.mouseExited(with: e); t.mouseExited(with: e) } }
+        }
+        RunLoop.current.run(mode: .eventTracking, before: Date().addingTimeInterval(1))
+        XCTAssertEqual(menu(), [true], "held once: the second exit in the same tracking adds nothing")
+        XCTAssertEqual(action(), [false, false], "every exit still reaches the model")
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(1))
+        XCTAssertEqual(menu(), [true, false], "released by one default-mode turn")
+        XCTAssertEqual(action(), [false, false], "the pointer is outside: no re-enter")
+
+        let (win2, t2, action2, menu2) = make()
+        defer { win2.close() }
+        RunLoop.current.perform(inModes: [.default]) { MainActor.assumeIsolated { if let e = exitEvent() { t2.mouseExited(with: e) } } }
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(1))
+        XCTAssertEqual(menu2(), [], "a default-mode exit is not held")
+        XCTAssertEqual(action2(), [false])
+        XCTAssertFalse(win.isVisible || win2.isVisible, "never shown")
+    }
 }
