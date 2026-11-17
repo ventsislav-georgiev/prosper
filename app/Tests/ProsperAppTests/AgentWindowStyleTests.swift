@@ -16,6 +16,15 @@ final class AgentWindowStyleTests: XCTestCase {
     static let standardMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
     static let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
 
+    /// A Standard window on an otherwise unset store (#1478: unset now builds Borderless), the style put back after; for rows
+    /// that test the title-bar chrome or sample the Standard layout. Shared by the other Agent Sessions window rows.
+    static func makeStandardWindow(_ m: AgentWindowModel) -> AgentsNSWindow {
+        let d = Preferences.defaults, saved = d.object(forKey: "agentWindowStyle")
+        defer { if let saved { d.set(saved, forKey: "agentWindowStyle") } else { d.removeObject(forKey: "agentWindowStyle") } }
+        Preferences.agentWindowStyle = .standard
+        return AgentsWindow.makeWindow(m, autosave: nil)
+    }
+
     /// Runs `body` with both settings unset, the gate off, scale 1, opacity 1, no frost; all put back after.
     func withStyleRow(_ body: () throws -> Void) rethrows {
         let d = Preferences.defaults
@@ -77,6 +86,7 @@ final class AgentWindowStyleTests: XCTestCase {
 
     func testStandardIsTodaysWindow() throws {
         try withStyleRow {
+            Preferences.agentWindowStyle = .standard   // #1478: was the unset default
             try built { win in
                 XCTAssertEqual(win.style, .standard)
                 XCTAssertEqual(win.styleMask, Self.standardMask, "#860's mask, no .fullSizeContentView")
@@ -94,6 +104,27 @@ final class AgentWindowStyleTests: XCTestCase {
                 XCTAssertLessThan(cv.convert(cv.bounds, to: nil).maxY, win.frame.height, "the content starts under the title bar band")
                 XCTAssertEqual(cv.layer?.cornerRadius ?? 0, 0)
             }
+        }
+    }
+
+    /// #1478: a fresh store builds a Borderless window with square corners; a stored Standard and a stored `true` are kept.
+    func testUnsetStoreBuildsBorderlessSquareAndStoredChoicesWin() throws {
+        try withStyleRow {
+            try built { win in
+                XCTAssertEqual(win.style, .borderless)
+                XCTAssertFalse(win.styleMask.contains(.titled))
+                XCTAssertFalse(win.roundedCorners)
+                XCTAssertTrue(win.isOpaque, "square: opaque")
+                XCTAssertEqual(win.contentView?.layer?.cornerRadius ?? 0, 0)
+            }
+            Preferences.agentWindowStyle = .standard
+            Preferences.agentWindowRoundedCorners = true
+            try built { win in
+                XCTAssertEqual(win.style, .standard, "a stored Standard is kept")
+                XCTAssertEqual(win.styleMask, Self.standardMask)
+            }
+            Preferences.agentWindowStyle = .borderless
+            try built { win in XCTAssertTrue(win.roundedCorners, "a stored true is kept") }
         }
     }
 
@@ -144,9 +175,10 @@ final class AgentWindowStyleTests: XCTestCase {
     func testBorderlessRoundedCornersOnAndOff() throws {
         try withStyleRow {
             Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = true   // #1478: was the unset default
             try built { win in
                 let cv = try XCTUnwrap(win.contentView)
-                XCTAssertTrue(win.roundedCorners, "on when unset")
+                XCTAssertTrue(win.roundedCorners, "on when stored")
                 XCTAssertFalse(win.isOpaque)
                 XCTAssertEqual(win.backgroundColor.alphaComponent, 0, "clear outside the corners")
                 XCTAssertEqual(cv.layer?.cornerRadius, AgentsWindow.cornerRadius)
@@ -173,6 +205,7 @@ final class AgentWindowStyleTests: XCTestCase {
     /// with today's literals again.
     func testRestyleInPlaceReturnsToStandard() throws {
         try withStyleRow {
+            Preferences.agentWindowStyle = .standard   // #1478: was the unset default
             try built { win in
                 AgentsWindow.applyStyle(win, style: .borderless, rounded: true)
                 XCTAssertFalse(win.styleMask.contains(.titled))
@@ -381,15 +414,17 @@ final class AgentWindowStyleTests: XCTestCase {
             let d = Preferences.defaults
             XCTAssertEqual(AgentWindowStyle.allCases.map(\.rawValue), ["standard", "noTitleBar", "borderless"])
             XCTAssertEqual(AgentWindowStyle.allCases.map(\.label), ["Standard", "No title bar", "Borderless"])
-            XCTAssertEqual(Preferences.agentWindowStyle, .standard, "Standard when unset")
-            XCTAssertTrue(Preferences.agentWindowRoundedCorners, "rounded when unset")
+            XCTAssertEqual(Preferences.agentWindowStyle, .borderless, "Borderless when unset (#1478)")
+            XCTAssertFalse(Preferences.agentWindowRoundedCorners, "square when unset (#1478)")
             for s in AgentWindowStyle.allCases {
                 Preferences.agentWindowStyle = s
                 XCTAssertEqual(Preferences.agentWindowStyle, s)
                 XCTAssertEqual(d.string(forKey: "agentWindowStyle"), s.rawValue)
             }
             d.set("fancy", forKey: "agentWindowStyle")
-            XCTAssertEqual(Preferences.agentWindowStyle, .standard, "an unknown value reads as Standard")
+            XCTAssertEqual(Preferences.agentWindowStyle, .borderless, "an unknown value reads as the default, Borderless")
+            d.set("standard", forKey: "agentWindowStyle")
+            XCTAssertEqual(Preferences.agentWindowStyle, .standard, "a stored Standard wins over the default")
             Preferences.agentWindowRoundedCorners = false
             XCTAssertFalse(Preferences.agentWindowRoundedCorners)
             XCTAssertEqual(d.object(forKey: "agentWindowRoundedCorners") as? Bool, false)

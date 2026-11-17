@@ -32,7 +32,7 @@ extension AgentWindowD1Tests {
             let b = Seen()
             box = b
             AgentPaneArea.probe = { kind, _, r in b.d[kind] = r }
-            let built = AgentsWindow.makeWindow(m, autosave: nil)
+            let built = AgentWindowStyleTests.makeStandardWindow(m)
             host = built.contentViewController ?? NSViewController()
             built.contentViewController = nil   // the hosting controller moves into the forced-backing window
             win = OverlayBackingWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)

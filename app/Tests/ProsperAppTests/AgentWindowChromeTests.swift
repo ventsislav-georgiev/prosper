@@ -326,7 +326,7 @@ extension AgentWindowD1Tests {
         ThemeRuntime.frost = false
         let m = windowModel(store([session("a", .idle)]))
         defer { m.close() }
-        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        let win = AgentWindowStyleTests.makeStandardWindow(m)
         XCTAssertFalse(win.isVisible, "built, never shown")
         XCTAssertEqual(win.titleVisibility, .hidden, "the title is hidden, as Settings'")
         XCTAssertTrue(win.titlebarAppearsTransparent)
@@ -471,7 +471,7 @@ extension AgentWindowD1Tests {
         let m = windowModel(store([session("prosper", .working), session("infra", .blocked), session("notes", .idle)]))
         m.setVisible(true)
         defer { m.close() }
-        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        let win = AgentWindowStyleTests.makeStandardWindow(m)
         defer { win.contentViewController = nil }
         let view = try XCTUnwrap(win.contentView)
         let size = view.bounds.size
@@ -636,7 +636,7 @@ extension AgentWindowD1Tests {
         let m = windowModel(store([session("prosper", .working), session("notes", .idle)]))
         m.setVisible(true)
         defer { m.close() }
-        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        let win = AgentWindowStyleTests.makeStandardWindow(m)
         defer { win.contentViewController = nil }
         let view = try XCTUnwrap(win.contentView)
         let size = view.bounds.size
@@ -779,7 +779,7 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         defer { m.close() }
         m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "prosper")))
-        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        let win = AgentWindowStyleTests.makeStandardWindow(m)
         defer { win.contentViewController = nil }
         let view = try XCTUnwrap(win.contentView)
         let size = view.bounds.size

@@ -43,7 +43,7 @@ final class AgentSidebarModeTests: XCTestCase {
         XCTAssertEqual(m.sidebarMode, mode, "read when the model is made")
         m.setVisible(true)   // the model builds its sections only while visible
         m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "api")))
-        let win = AgentsWindow.makeWindow(m, autosave: nil)
+        let win = AgentWindowStyleTests.makeStandardWindow(m)
         defer { win.contentViewController = nil }
         settle(win)
         XCTAssertFalse(win.isVisible, "built, never shown")

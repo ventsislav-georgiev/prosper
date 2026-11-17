@@ -1236,9 +1236,9 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentWindowSidebarHidden) }
     }
 
-    /// #1378: the Agent Sessions window's style; unset or unknown reads as Standard.
+    /// #1378: the Agent Sessions window's style; unset or unknown reads as Borderless (#1478; a stored choice wins).
     static var agentWindowStyle: AgentWindowStyle {
-        get { AgentWindowStyle(rawValue: defaults.string(forKey: Keys.agentWindowStyle) ?? "") ?? .standard }
+        get { AgentWindowStyle(rawValue: defaults.string(forKey: Keys.agentWindowStyle) ?? "") ?? .borderless }
         set { defaults.set(newValue.rawValue, forKey: Keys.agentWindowStyle) }
     }
 
@@ -1248,9 +1248,9 @@ enum Preferences {
         set { defaults.set(newValue.rawValue, forKey: Keys.agentSidebarMode) }
     }
 
-    /// #1378: Borderless's rounded corners; on when unset.
+    /// #1378: Borderless's rounded corners; off (square) when unset (#1478; a stored choice wins).
     static var agentWindowRoundedCorners: Bool {
-        get { defaults.object(forKey: Keys.agentWindowRoundedCorners) as? Bool ?? true }
+        get { defaults.object(forKey: Keys.agentWindowRoundedCorners) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.agentWindowRoundedCorners) }
     }
 

@@ -367,7 +367,7 @@ extension AgentWindowD1Tests {
                 ThemeRuntime.scale = scale
                 let m = wiringModel(store([mapped("a")]), SpawnCalls())
                 defer { m.close() }
-                let win = AgentsWindow.makeWindow(m, autosave: nil)
+                let win = AgentWindowStyleTests.makeStandardWindow(m)
                 defer { win.contentViewController = nil }
                 let cv = try XCTUnwrap(win.contentView)
                 cv.layoutSubtreeIfNeeded()

@@ -1734,6 +1734,8 @@ tag from the now-released section and put it on the new top draft.
   text says where it was cut, and the card says why when the chapter can no longer be read. (#1472)
 - Cmd-click on a relative file path in a local agent session now opens it too, resolved against the
   session's folder; a remote session's paths never open. (#1480)
+- Agent Sessions now opens borderless with square corners by default; Settings > Agent Sessions
+  changes it back. (#1478)
 
 ## v2.174.0
 
