@@ -1084,10 +1084,18 @@ struct AgentSidebarTitleRow: View {
                 .foregroundStyle(Neon.textPrimary).lineLimit(1)
                 .allowsHitTesting(false)   // #1378: a press on the name drags the window, as on a title bar
             Spacer(minLength: 0)
-            let n = model.sections.filter { $0.title != "History" }.reduce(0) { $0 + $1.rows.count }
-            if n > 0 {
-                Text(n == 1 ? "1 session" : "\(n) sessions").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-                    .lineLimit(1).layoutPriority(-1).allowsHitTesting(false)   // #1378: drags too
+            let rows = model.sections.filter { $0.title != "History" }.flatMap(\.rows)
+            if !rows.isEmpty {
+                // #1467: "6/17 active · \u{1F916} 9"; a header too narrow for it drops the word "active" first.
+                let t = Self.countText(rows.map { (state: $0.state, agents: max(0, $0.session?.agents ?? 0)) })
+                ViewThatFits(in: .horizontal) {
+                    Text(t.short)
+                    Text(t.narrow)
+                }
+                .font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+                .lineLimit(1).layoutPriority(-1)
+                .help(t.long).accessibilityElement(children: .ignore).accessibilityLabel(t.long)
+                .allowsHitTesting(false)   // #1378: drags too
             }
         }
         // The buttons sit over a reserved trailing strip, inside the row's height: a cut count can never move them.
@@ -1122,6 +1130,22 @@ struct AgentSidebarTitleRow: View {
     /// #1103 F2: the content starts under the titlebar (no .fullSizeContentView), so the row's centre sits on the
     /// session header's title line: 14 + 18 / 2 = AgentSessionHeader's 10 + 26 / 2.
     static var padTop: CGFloat { sz(14) }
+
+    /// #1467: the header count of the listed sessions (state, sub-agents). short "6/17 active \u{B7} \u{1F916} 9" (active =
+    /// working or blocked; the robot part is left out at 0), narrow the same without "active", long the full split
+    /// for the tooltip and VoiceOver: "4 working, 2 need input, 3 done, 8 idle \u{B7} 9 sub-agents" (zero parts left out).
+    /// A row with no state reads as idle. n = 0 has no count: the caller shows nothing.
+    static func countText(_ rows: [(state: AgentState?, agents: Int)]) -> (short: String, narrow: String, long: String) {
+        func n(_ s: AgentState) -> Int { rows.filter { ($0.state ?? .idle) == s }.count }
+        let (blocked, working, done, idle) = (n(.blocked), n(.working), n(.done), n(.idle))
+        let subs = rows.reduce(0) { $0 + max(0, $1.agents) }
+        let robot = subs > 0 ? " \u{B7} \u{1F916} \(subs)" : ""
+        let ratio = "\(working + blocked)/\(rows.count)"
+        let parts = [working > 0 ? "\(working) working" : nil, blocked > 0 ? "\(blocked) need\(blocked == 1 ? "s" : "") input" : nil,
+                     done > 0 ? "\(done) done" : nil, idle > 0 ? "\(idle) idle" : nil].compactMap { $0 }
+        let tail = subs > 0 ? " \u{B7} \(subs) sub-agent\(subs == 1 ? "" : "s")" : ""
+        return ("\(ratio) active\(robot)", "\(ratio)\(robot)", parts.joined(separator: ", ") + tail)
+    }
     /// #897: the trailing strip the overlay holds: the "..." slot, the gap, #847's pair.
     static var buttonsWidth: CGFloat { AgentNewSessionButtons.width + sz(4) + sz(18) }
 }

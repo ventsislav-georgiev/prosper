@@ -1682,6 +1682,9 @@ tag from the now-released section and put it on the new top draft.
   (#1460)
 - Agent Sessions terminal: trackpad scrolling moves twice as far per swipe, as in Ghostty (mouse
   wheels unchanged). (#1465)
+- Agent Sessions: the header count reads like "6/17 active · 🤖 9" (sessions working or needing
+  input, of all, and the total sub-agents); hover it, or use VoiceOver, for the full split; a narrow
+  header drops the word "active". (#1467)
 
 ## v2.174.0
 
