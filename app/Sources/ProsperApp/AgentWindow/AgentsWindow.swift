@@ -782,13 +782,14 @@ struct AgentWindowRootView: View {
         .overlayPreferenceValue(AgentMiniTipAnchors.self) { AgentMiniTipLabel(tip: model.miniTip, anchors: $0) }
     }
 
-    /// #1379 Slide: the left edge's strip (its pointer enter slides the sidebar in) and, while slid in or pinned, the full
-    /// sidebar over the panes, which keep their width; the pointer leaving it slides it out.
+    /// #1379 Slide: the left edge's hover area (#1458: a short dwell in it slides the sidebar in) and, while slid in or
+    /// pinned, the full sidebar over the panes, which keep their width; the pointer leaving both slides it out a while later.
     var slideLayer: some View {
         ZStack(alignment: .topLeading) {
-            AgentSlideTracker(edge: true) { _ in model.slide(true) }
-                .frame(width: AgentSlideTracker.edgeWidth)
+            AgentSlideTracker(edge: true) { model.slideArea($0) }
+                .frame(width: AgentSlideTracker.areaWidth)
                 .frame(maxHeight: .infinity)
+                .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)   // below the band's controls
             if model.slideOpen {
                 HStack(spacing: 0) {
                     AgentSidebarView(model: model)
@@ -833,16 +834,18 @@ enum AgentSidebarMode: String, CaseIterable {
     }
 }
 
-/// #1379 Slide: a pointer tracker that never takes a click (no hit). `edge`: the window's left edge strip, whose enter
-/// slides the sidebar in; else behind the slid-in sidebar, whose exit slides it out. Tests call the handlers directly.
+/// #1379 Slide: a pointer tracker that never takes a click (no hit). `edge`: the window's left hover area, whose enter or
+/// move (true) and exit (false) go to the model's dwell and hide (#1458); else behind the slid-in sidebar, whose exit
+/// slides it out. Tests call the handlers directly.
 struct AgentSlideTracker: NSViewRepresentable {
     let edge: Bool
     /// #1461: a sidebar menu's tracking began (true) or ended (false).
     var onMenu: @MainActor (Bool) -> Void = { _ in }
     /// The pointer entered (true) or left (false).
     let action: @MainActor (Bool) -> Void
-    /// A few points: the pointer at the window's very edge, never over the panes' own controls.
-    static let edgeWidth: CGFloat = 4
+    /// #1458 (operator 2026-11-17): half the open sidebar's width (was 4 pt, too narrow to land on). It takes no click,
+    /// so the panes' controls under it work as before.
+    static var areaWidth: CGFloat { AgentWindowModel.fullSidebarWidth / 2 }
     func makeNSView(context: Context) -> AgentSlideTrackerView { AgentSlideTrackerView(edge: edge) }
     func updateNSView(_ nsView: AgentSlideTrackerView, context: Context) { (nsView.action, nsView.onMenu) = (action, onMenu) }
 }
@@ -862,13 +865,16 @@ final class AgentSlideTrackerView: NSView {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         // The sidebar slides in under the pointer, so its first event is the exit (assumeInside).
-        let opts: NSTrackingArea.Options = edge ? [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        // #1458: the area's moves too: a pointer already inside it (a hide landed there, or the area was made under it)
+        // sends no fresh enter.
+        let opts: NSTrackingArea.Options = edge ? [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect]
             : [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .assumeInside]
         addTrackingArea(NSTrackingArea(rect: .zero, options: opts, owner: self))
     }
     override func mouseEntered(with event: NSEvent) { action(true) }
+    override func mouseMoved(with event: NSEvent) { if edge { action(true) } }
     override func mouseExited(with event: NSEvent) {
-        guard !edge else { return }
+        guard !edge else { return action(false) }
         // #1461: a menu or submenu opened from the sidebar tracks in this mode; its window over the sidebar sends the exit.
         if !menuTracking, RunLoop.current.currentMode == .eventTracking { holdUntilTrackingEnds() }
         action(false)

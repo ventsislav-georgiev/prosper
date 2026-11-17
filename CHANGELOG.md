@@ -1766,6 +1766,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: the Mini sidebar now shows each session's name (its first 8 characters) beside the
   status dot, with the Command number as a small superscript, and hovering a row shows its full name
   after a moment. (#1457)
+- Agent Sessions: the slide-in sidebar now opens when you rest the pointer anywhere in the left half
+  of where the sidebar would be (not just the window's very edge), stays open while the pointer is
+  over it, and waits 1.5 seconds after you move away before it slides out. (#1458)
 
 ## v2.174.0
 

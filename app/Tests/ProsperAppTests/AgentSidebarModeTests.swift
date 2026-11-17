@@ -14,12 +14,15 @@ final class AgentSidebarModeTests: XCTestCase {
     static let modeKey = "agentSidebarMode"
     static let scales: [CGFloat] = [0.7, 0.85, 1.0]
 
-    /// Runs `body` with the mode unset, the gate off, scale 1, Reduce Motion on (no animation in a row); all put back after.
-    func withModeRow(_ body: () throws -> Void) rethrows {
+    /// Runs `body` with the mode unset, the gate off, scale 1, Reduce Motion on (no animation in a row), #1458's Slide
+    /// dwell and hide shortened to `open` and `hide`; all put back after.
+    func withModeRow(open: Duration = .milliseconds(30), hide: Duration = .milliseconds(100), _ body: () throws -> Void) rethrows {
         let d = Preferences.defaults
         let saved = d.object(forKey: Self.modeKey), hidden = d.object(forKey: AgentWindowD1Tests.sidebarKey)
         let gate = AgentPaneLayout.splitsEnabled, scale = ThemeRuntime.scale, motion = AgentWindowModel.reduceMotion
+        let delays = (AgentWindowModel.slideOpenDelay, AgentWindowModel.slideHideDelay)
         defer {
+            (AgentWindowModel.slideOpenDelay, AgentWindowModel.slideHideDelay) = delays
             if let saved { d.set(saved, forKey: Self.modeKey) } else { d.removeObject(forKey: Self.modeKey) }
             if let hidden { d.set(hidden, forKey: AgentWindowD1Tests.sidebarKey) } else { d.removeObject(forKey: AgentWindowD1Tests.sidebarKey) }
             AgentPaneLayout.splitsEnabled = gate
@@ -32,7 +35,22 @@ final class AgentSidebarModeTests: XCTestCase {
         AgentPaneLayout.splitsEnabled = false
         ThemeRuntime.scale = 1
         AgentWindowModel.reduceMotion = { true }
+        (AgentWindowModel.slideOpenDelay, AgentWindowModel.slideHideDelay) = (open, hide)
         try body()
+    }
+
+    /// #1458: turns the main run loop (the dwell's and the hide's tasks run on it) until `done` or 5 s; true when done.
+    @discardableResult
+    func waitUntil(_ done: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(5)
+        while !done(), Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        return done()
+    }
+
+    /// #1458: turns the main run loop for `seconds` (a wait that must change nothing).
+    func pump(_ seconds: TimeInterval) {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
     }
 
     /// The real window for `mode`, never shown, with one session selected and laid out.
@@ -192,8 +210,9 @@ final class AgentSidebarModeTests: XCTestCase {
 
     // MARK: Slide
 
-    /// The edge tracker sits at the window's left edge, a few points wide, over the whole height; its enter reveals the
-    /// sidebar as an overlay (the panes keep x = 0 and their width), the overlay's exit hides it again.
+    /// The edge tracker sits at the window's left edge, half the sidebar wide (#1458), over the whole height below the band;
+    /// its enter reveals the sidebar as an overlay after the dwell (the panes keep x = 0 and their width), the overlay's exit
+    /// hides it again after the hide delay.
     func testSlideEdgeRevealsAnOverlayAndLeavingHidesIt() throws {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withModeRow {
@@ -203,17 +222,20 @@ final class AgentSidebarModeTests: XCTestCase {
                     let edge = try XCTUnwrap(trackers(win, edge: true).first, "the edge tracker at \(scale)")
                     let r = edge.convert(edge.bounds, to: nil), content = try XCTUnwrap(win.contentView).bounds
                     XCTAssertEqual(r.minX, 0, accuracy: pixel, "at the left edge at \(scale)")
-                    XCTAssertTrue(r.width > 0 && r.width <= 8, "a few points wide at \(scale): \(r)")
-                    XCTAssertEqual(r.height, content.height, accuracy: 1, "the whole height at \(scale)")
+                    XCTAssertEqual(r.width, AgentWindowModel.fullSidebarWidth / 2, accuracy: pixel, "half the sidebar at \(scale): \(r)")
+                    XCTAssertEqual(r.height, content.height - (AgentWindowBand.shown ? AgentWindowBand.height : 0), accuracy: 1,
+                                   "the whole height below the band at \(scale)")
                     edge.updateTrackingAreas()
                     XCTAssertEqual(edge.trackingAreas.count, 1)
-                    XCTAssertTrue(edge.trackingAreas.first?.options.contains([.mouseEnteredAndExited, .inVisibleRect]) == true)
+                    XCTAssertTrue(edge.trackingAreas.first?.options.contains([.mouseEnteredAndExited, .mouseMoved, .inVisibleRect]) == true)
                     XCTAssertNil(edge.hitTest(NSPoint(x: 1, y: 1)), "the strip never takes a click")
                     XCTAssertTrue(trackers(win, edge: false).isEmpty, "slid out: no overlay")
                     edge.mouseExited(with: try pointer(.mouseExited))
+                    pump(0.1)
                     XCTAssertFalse(m.slideOpen, "the edge's exit does nothing")
                     edge.mouseEntered(with: try pointer(.mouseEntered))
-                    XCTAssertTrue(m.slideRevealed && m.sidebarShown, "entering the edge reveals at \(scale)")
+                    XCTAssertFalse(m.slideRevealed, "#1458: not before the dwell at \(scale)")
+                    XCTAssertTrue(waitUntil { m.slideRevealed } && m.sidebarShown, "entering the edge reveals at \(scale)")
                     settle(win)
                     let size = content.size
                     XCTAssertEqual(m.paneAreaFrame(in: size)?.minX ?? -1, 0, "the overlay does not move the panes")
@@ -227,7 +249,9 @@ final class AgentSidebarModeTests: XCTestCase {
                     over.mouseEntered(with: try pointer(.mouseEntered))
                     XCTAssertTrue(m.slideRevealed, "the overlay's enter does nothing")
                     over.mouseExited(with: try pointer(.mouseExited))
-                    XCTAssertFalse(m.slideRevealed || m.sidebarShown, "leaving the sidebar hides it at \(scale)")
+                    edge.mouseExited(with: try pointer(.mouseExited))
+                    XCTAssertTrue(m.slideRevealed, "#1458: not before the hide delay at \(scale)")
+                    XCTAssertTrue(waitUntil { !m.slideRevealed } && !m.sidebarShown, "leaving the sidebar hides it at \(scale)")
                     XCTAssertEqual(m.keyFocus, .pane, "a hidden sidebar never holds the keys")
                     settle(win)
                     XCTAssertTrue(trackers(win, edge: false).isEmpty, "slid out again at \(scale)")
@@ -318,14 +342,14 @@ final class AgentSidebarModeTests: XCTestCase {
             XCTAssertTrue(m.slideRevealed, "one menu still open")
             XCTAssertEqual(m.keyFocus, .sidebar)
             m.slideMenu(false)
-            XCTAssertFalse(m.slideRevealed || m.sidebarShown, "closed with the pointer outside: slid out")
+            XCTAssertTrue(waitUntil { !m.slideRevealed } && !m.sidebarShown, "closed with the pointer outside: slid out")
             XCTAssertEqual(m.keyFocus, .pane)
             XCTAssertEqual(m.slideMenusOpen, 0)
             m.slideMenu(false)
             XCTAssertEqual(m.slideMenusOpen, 0, "an extra close never goes below zero")
             m.slide(true)
             m.slide(false)
-            XCTAssertFalse(m.slideRevealed, "no menu: a plain exit hides at once")
+            XCTAssertTrue(waitUntil { !m.slideRevealed }, "no menu: a plain exit hides (#1458: after the hide delay)")
         }
     }
 
@@ -341,7 +365,7 @@ final class AgentSidebarModeTests: XCTestCase {
             XCTAssertTrue(m.slideRevealed && m.sidebarShown, "the pointer is inside: stays")
             XCTAssertEqual(m.keyFocus, .sidebar)
             m.slide(false)
-            XCTAssertFalse(m.slideRevealed, "the next exit hides it")
+            XCTAssertTrue(waitUntil { !m.slideRevealed }, "the next exit hides it")
         }
     }
 
@@ -351,6 +375,7 @@ final class AgentSidebarModeTests: XCTestCase {
             let m = slidIn()
             defer { m.close() }
             m.slide(false)
+            XCTAssertTrue(waitUntil { !m.slideRevealed }, "#1458: slid out after the hide delay")
             m.toggleSidebar()   // from slid out: pins open
             XCTAssertTrue(m.slidePinned && !m.slideRevealed)
             m.slideMenu(true)
@@ -405,6 +430,7 @@ final class AgentSidebarModeTests: XCTestCase {
             XCTAssertTrue(win.sidebarFocused, "revealed: the sidebar holds the keys")
             XCTAssertEqual(try route(51, [.command], "\u{7F}"), .stopOrRemove, "revealed: Command-Backspace is the row's")
             m.slide(false)
+            XCTAssertTrue(waitUntil { !m.slideRevealed }, "#1458: slid out after the hide delay")
             XCTAssertEqual(m.keyFocus, .pane)
             m.keyFocus = .sidebar   // what the chapter list's close writes back
             XCTAssertFalse(m.sidebarShown)

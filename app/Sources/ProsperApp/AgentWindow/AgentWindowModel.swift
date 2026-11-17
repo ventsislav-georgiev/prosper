@@ -480,7 +480,8 @@ final class AgentWindowModel: ObservableObject {
 
     /// #1379: Settings' and the Go menu's sidebar mode (Preferences.agentSidebarMode), read when the model is made.
     @Published private(set) var sidebarMode = Preferences.agentSidebarMode
-    /// #1379 Slide: slid in by the pointer at the window's left edge (out again when it leaves the sidebar), or pinned by Control-Command-S.
+    /// #1379 Slide: slid in by the pointer at the window's left edge (#1458: its hover area; out again a while after it
+    /// leaves the area and the sidebar), or pinned by Control-Command-S.
     @Published private(set) var slideRevealed = false
     @Published private(set) var slidePinned = false
     var slideOpen: Bool { slideRevealed || slidePinned }
@@ -539,18 +540,86 @@ final class AgentWindowModel: ObservableObject {
         Preferences.agentSidebarMode = m
         guard m != sidebarMode else { return }
         sidebarMode = m
-        (slideRevealed, slidePinned) = (false, false)
+        (slideRevealed, slidePinned, slideInArea, slideInSidebar) = (false, false, false, false)
+        slideCancel()
         if !sidebarShown { keyFocus = .pane }
     }
 
-    /// #1379 Slide: the edge's enter (true) and the sidebar's exit (false); a pinned sidebar stays. Other modes: nothing.
-    /// #1461: the sidebar's enter is true too. While a menu or popover of the sidebar is open an exit is held (it stays
-    /// revealed and keeps the keys); an enter drops the held exit.
+    /// #1379 Slide: the sidebar's enter (true) reveals at once, its exit (false) hides `slideHideDelay` later unless the
+    /// pointer is back over the sidebar or the hover area by then (#1458); a pinned sidebar stays. Other modes: nothing.
+    /// #1461: while a menu or popover of the sidebar is open an exit is held (it stays revealed and keeps the keys); an
+    /// enter drops the held exit.
     func slide(_ reveal: Bool) {
         guard sidebarMode == .slide else { return }
+        slideInSidebar = reveal
         slideExitHeld = slideMenusOpen > 0 && !reveal
-        guard !slideExitHeld, reveal != slideRevealed else { return }
-        animateSlide { slideRevealed = reveal }
+        if reveal {
+            slideCancel()
+            if !slideRevealed { animateSlide { slideRevealed = true } }
+        } else {
+            slideHideLater()
+        }
+    }
+
+    /// #1458: the hover area's dwell before it opens the sidebar, and the wait after the pointer has left both the area
+    /// and the sidebar before it hides. Static seams: tests shorten them.
+    static var slideOpenDelay: Duration = .milliseconds(150)
+    static var slideHideDelay: Duration = .milliseconds(1500)
+    /// #1458: the pointer is over the hover area or the slid sidebar (their trackers' enter, move and exit).
+    private(set) var slideInArea = false
+    private(set) var slideInSidebar = false
+    /// #1458: the pending dwell (open) or hide.
+    private var slideTimer: (open: Bool, task: Task<Void, Never>)?
+
+    /// #1458: the hover area's enter or move (true) and exit (false). Slid out: inside starts the dwell (a move keeps a
+    /// running one), outside drops it, so a pass that leaves sooner opens nothing. Slid in: inside drops a pending hide,
+    /// outside starts it unless the pointer is over the sidebar. A move also reopens after a hide that landed (or an
+    /// area made) with the pointer already inside, which sends no fresh enter.
+    func slideArea(_ inside: Bool) {
+        guard sidebarMode == .slide else { return }
+        slideInArea = inside
+        switch (slideRevealed, inside) {
+        case (false, true): slideLater(open: true)
+        case (false, false), (true, true): slideCancel()
+        case (true, false): slideHideLater()
+        }
+    }
+
+    /// #1458: starts the hide unless the pointer is over the area or the sidebar, or a sidebar menu holds the exit.
+    private func slideHideLater() {
+        guard slideRevealed, !slideInArea, !slideInSidebar, !slideExitHeld else { return }
+        slideLater(open: false)
+    }
+
+    private func slideLater(open: Bool) {
+        guard slideTimer?.open != open else { return }   // a running dwell or hide keeps its start
+        slideTimer?.task.cancel()
+        let delay = open ? Self.slideOpenDelay : Self.slideHideDelay
+        slideTimer = (open, Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.slideTimer = nil
+            self.slideTimerFired(open)
+        })
+    }
+
+    private func slideCancel() {
+        slideTimer?.task.cancel()
+        slideTimer = nil
+    }
+
+    /// The states are checked again when the wait lands: the pointer may have come back, or a menu opened meanwhile.
+    private func slideTimerFired(_ open: Bool) {
+        guard sidebarMode == .slide else { return }
+        if open {
+            guard slideInArea, !slideRevealed else { return }
+            slideInSidebar = true   // the area lies inside the sidebar's width; its tracker assumes inside (no enter comes)
+            animateSlide { slideRevealed = true }
+        } else {
+            guard slideRevealed, !slideInArea, !slideInSidebar else { return }
+            if slideMenusOpen > 0 { slideExitHeld = true; return }   // #1461: the menu's last close runs it
+            animateSlide { slideRevealed = false }
+        }
     }
 
     /// #1461: menus, submenus and popovers the slid sidebar has open now, and an exit that came while one was.
@@ -558,7 +627,7 @@ final class AgentWindowModel: ObservableObject {
     private(set) var slideExitHeld = false
 
     /// #1461: a sidebar menu or popover opened (true) or closed (false). The last close runs a held exit (the pointer
-    /// left and did not come back), the normal exit path.
+    /// left and did not come back), the normal exit path (#1458: the hide follows after its delay).
     func slideMenu(_ open: Bool) {
         slideMenusOpen = max(0, slideMenusOpen + (open ? 1 : -1))
         guard slideMenusOpen == 0, slideExitHeld else { return }
