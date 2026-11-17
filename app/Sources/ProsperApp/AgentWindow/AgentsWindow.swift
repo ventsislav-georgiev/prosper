@@ -789,7 +789,7 @@ struct AgentWindowRootView: View {
             AgentSlideTracker(edge: true) { model.slideArea($0) }
                 .frame(width: AgentSlideTracker.areaWidth)
                 .frame(maxHeight: .infinity)
-                .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)   // below the band's controls
+                .padding(.top, AgentSlideTracker.areaTop)
             if model.slideOpen {
                 HStack(spacing: 0) {
                     AgentSidebarView(model: model)
@@ -846,6 +846,12 @@ struct AgentSlideTracker: NSViewRepresentable {
     /// #1458 (operator 2026-11-17): half the open sidebar's width (was 4 pt, too narrow to land on). It takes no click,
     /// so the panes' controls under it work as before.
     static var areaWidth: CGFloat { AgentWindowModel.fullSidebarWidth / 2 }
+    /// The area starts below the row of the window's controls: the band's, or, band off under No title bar (the content
+    /// runs under the title bar), the title bar's own height as AppKit gives it for a titled window.
+    @MainActor static var areaTop: CGFloat {
+        if AgentWindowBand.shown { return AgentWindowBand.height }
+        return Preferences.agentWindowStyle == .noTitleBar ? NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height : 0
+    }
     func makeNSView(context: Context) -> AgentSlideTrackerView { AgentSlideTrackerView(edge: edge) }
     func updateNSView(_ nsView: AgentSlideTrackerView, context: Context) { (nsView.action, nsView.onMenu) = (action, onMenu) }
 }

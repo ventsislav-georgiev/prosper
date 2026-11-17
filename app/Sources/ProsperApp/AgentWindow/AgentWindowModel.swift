@@ -540,7 +540,7 @@ final class AgentWindowModel: ObservableObject {
         Preferences.agentSidebarMode = m
         guard m != sidebarMode else { return }
         sidebarMode = m
-        (slideRevealed, slidePinned, slideInArea, slideInSidebar) = (false, false, false, false)
+        (slideRevealed, slidePinned, slideInArea, slideInSidebar, slideAreaHeld) = (false, false, false, false, false)
         slideCancel()
         if !sidebarShown { keyFocus = .pane }
     }
@@ -568,6 +568,9 @@ final class AgentWindowModel: ObservableObject {
     /// #1458: the pointer is over the hover area or the slid sidebar (their trackers' enter, move and exit).
     private(set) var slideInArea = false
     private(set) var slideInSidebar = false
+    /// #1458: Control-Command-S closed the sidebar with the pointer in the area: no dwell starts from it until the area
+    /// reports the pointer left (a move there would else reopen it 150 ms later).
+    private(set) var slideAreaHeld = false
     /// #1458: the pending dwell (open) or hide.
     private var slideTimer: (open: Bool, task: Task<Void, Never>)?
 
@@ -578,6 +581,8 @@ final class AgentWindowModel: ObservableObject {
     func slideArea(_ inside: Bool) {
         guard sidebarMode == .slide else { return }
         slideInArea = inside
+        if !inside { slideAreaHeld = false }
+        guard !slideAreaHeld else { return }
         switch (slideRevealed, inside) {
         case (false, true): slideLater(open: true)
         case (false, false), (true, true): slideCancel()
@@ -647,6 +652,7 @@ final class AgentWindowModel: ObservableObject {
     /// #1379 Slide: pins the slid-in sidebar open or closed instead (nothing saved; any split gate).
     func toggleSidebar() {
         if sidebarMode == .slide {
+            slideAreaHeld = slideOpen && slideInArea   // a chord close holds the area; the opening chord drops it
             animateSlide { slidePinned = !slideOpen; slideRevealed = false }
             return
         }

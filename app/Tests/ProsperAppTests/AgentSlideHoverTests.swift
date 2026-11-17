@@ -91,8 +91,9 @@ final class AgentSlideHoverTests: XCTestCase {
         }
     }
 
-    /// The STEP 1 bug: a hide that lands with the pointer still in the area (Control-Command-S closing it there), or an
-    /// area made under the pointer, sends no fresh enter; a move inside the area opens it again after the dwell.
+    /// The STEP 1 bug: a hide that lands with the pointer still in the area, or an area made under the pointer, sends no
+    /// fresh enter; a move inside the area opens it again after the dwell. R1458a-s1: not after Control-Command-S, which
+    /// holds the area closed (see testAChordCloseHoldsTheAreaUntilThePointerLeaves).
     func testReopensWithThePointerStillInTheArea() throws {
         try modes.withModeRow {
             try modes.built(.slide) { win, m in
@@ -106,7 +107,61 @@ final class AgentSlideHoverTests: XCTestCase {
                 modes.pump(0.2)
                 XCTAssertFalse(m.slideOpen, "no move: stays closed")
                 edge.mouseMoved(with: try moved())
-                XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "a move inside opens it again")
+                modes.pump(0.2)
+                XCTAssertFalse(m.slideOpen, "a move inside after the chord: the area is held, stays closed")
+                m.slide(true)   // the sidebar tracker's enter (a hover over its other part) is not held
+                edge.mouseExited(with: try modes.pointer(.mouseExited))   // the pointer left the area: the hold ends
+                m.slide(false)
+                XCTAssertTrue(modes.waitUntil { !m.slideRevealed }, "an ordinary timed hide")
+                edge.mouseMoved(with: try moved())
+                XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "after an ordinary hide a move inside opens it again")
+            }
+        }
+    }
+
+    /// R1458a-s1: a chord close with the pointer in the area holds it: moves keep it closed; the pointer leaving and a later
+    /// enter (then the dwell) opens it as before. A chord close with the pointer outside holds nothing.
+    func testAChordCloseHoldsTheAreaUntilThePointerLeaves() throws {
+        try modes.withModeRow {
+            try modes.built(.slide) { win, m in
+                let edge = try XCTUnwrap(modes.trackers(win, edge: true).first)
+                edge.mouseEntered(with: try modes.pointer(.mouseEntered))
+                XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "the dwell opens it")
+                m.toggleSidebar()   // the chord, the pointer still in the area
+                XCTAssertFalse(m.slideOpen)
+                for _ in 0..<3 {
+                    edge.mouseMoved(with: try moved())
+                    modes.pump(0.1)
+                }
+                XCTAssertFalse(m.slideOpen, "moves in the area keep it closed")
+                edge.mouseExited(with: try modes.pointer(.mouseExited))
+                edge.mouseEntered(with: try modes.pointer(.mouseEntered))
+                XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "exit, enter and the dwell open it again")
+                edge.mouseExited(with: try modes.pointer(.mouseExited))   // the pointer outside the area when the chord comes
+                m.slide(false)
+                XCTAssertTrue(modes.waitUntil { !m.slideRevealed })
+                m.toggleSidebar()   // pins
+                m.toggleSidebar()   // unpins
+                edge.mouseEntered(with: try modes.pointer(.mouseEntered))
+                XCTAssertTrue(modes.waitUntil { m.slideRevealed }, "a chord close with the pointer outside holds nothing")
+            }
+        }
+    }
+
+    /// i1: band off under No title bar, the area starts below the window's buttons (the title bar's row), not at y 0.
+    func testTheAreaClearsTheWindowButtonsWithTheBandOff() throws {
+        let d = Preferences.defaults, saved = d.object(forKey: "agentWindowStyle")
+        defer { if let saved { d.set(saved, forKey: "agentWindowStyle") } else { d.removeObject(forKey: "agentWindowStyle") } }
+        try modes.withModeRow {
+            Preferences.agentWindowStyle = .noTitleBar
+            XCTAssertFalse(AgentWindowBand.shown)
+            try modes.built(.slide) { win, _ in
+                let edge = try XCTUnwrap(modes.trackers(win, edge: true).first)
+                let area = edge.convert(edge.bounds, to: nil)
+                let button = try XCTUnwrap(win.standardWindowButton(.closeButton))
+                let buttons = button.convert(button.bounds, to: nil)
+                XCTAssertGreaterThan(buttons.height, 0)
+                XCTAssertLessThanOrEqual(area.maxY, buttons.minY, "the area's top is at or below the buttons' bottom (window coordinates, y up)")
             }
         }
     }
