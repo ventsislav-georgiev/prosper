@@ -130,6 +130,8 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         typealias R = AgentsNSWindow.KeyRoute
         var rows: [(NSEvent, R)] = Self.topDigits.enumerated().map { (layoutKeyEvent($1, [.command], "\($0 + 1)"), R.jump($0 + 1)) }
+        // #1470 a: Option-Command-1...9 jump to rows 10...18 in both modes (they were the detail-level keys, swallowed here).
+        rows += Self.topDigits.enumerated().map { (layoutKeyEvent($1, [.command, .option], "\($0 + 1)"), R.jump($0 + 10)) }
         rows += [
             (layoutKeyEvent(83, [.command], "1"), .jump(1)),
             (layoutKeyEvent(24, [.command], "="), .font(1)),
@@ -143,9 +145,6 @@ extension AgentWindowD1Tests {
             (layoutKeyEvent(5, [.command, .shift], "G"), .findNext(false)),
             (layoutKeyEvent(45, [.command], "n"), .newSession),
             (layoutKeyEvent(45, [.command, .shift], "N"), .newShell),
-            (layoutKeyEvent(18, [.command, .option], "1"), .swallow),
-            (layoutKeyEvent(19, [.command, .option], "2"), .swallow),
-            (layoutKeyEvent(20, [.command, .option], "3"), .swallow),
             (layoutKeyEvent(1, [.control, .command], "\u{13}"), .pass),
             (layoutKeyEvent(8, [.command], "c"), .pass),
             (layoutKeyEvent(9, [.command], "v"), .pass),

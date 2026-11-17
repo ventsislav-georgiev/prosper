@@ -81,8 +81,9 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(off.sidebarHidden && off.sidebarShown, "read, but the gate off draws the sidebar")
             XCTAssertEqual(off.keyFocus, .sidebar, "gate off: a new model's keys are the sidebar's, as before")
             let size = CGSize(width: 1600, height: 900)
-            XCTAssertEqual(off.sidebarFrame(in: size), CGRect(x: 0, y: 0, width: 290, height: 900), "the parent's sidebar")
-            XCTAssertEqual(off.paneAreaFrame(in: size), CGRect(x: 291, y: 0, width: 1309, height: 900), "the parent's area")
+            let side = measuredSidebarWidth(), lead = side + 1   // #1470 a2: TIP's sz(290) plus the chip column's growth
+            XCTAssertEqual(off.sidebarFrame(in: size), CGRect(x: 0, y: 0, width: side, height: 900), "the parent's sidebar")
+            XCTAssertEqual(off.paneAreaFrame(in: size), CGRect(x: lead, y: 0, width: 1600 - lead, height: 900), "the parent's area")
         }
     }
 
@@ -118,8 +119,9 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let size = CGSize(width: 1600, height: 900)
             let sidebar = m.sidebarFrame(in: size), area = m.paneAreaFrame(in: size)
-            XCTAssertEqual(sidebar, CGRect(x: 0, y: 0, width: 290, height: 900))
-            XCTAssertEqual(area, CGRect(x: 291, y: 30, width: 1309, height: 870))
+            let side = measuredSidebarWidth(), lead = side + 1   // #1470 a2: TIP's sz(290) plus the chip column's growth
+            XCTAssertEqual(sidebar, CGRect(x: 0, y: 0, width: side, height: 900))
+            XCTAssertEqual(area, CGRect(x: lead, y: 30, width: 1600 - lead, height: 870))
             XCTAssertTrue(m.perform(.toggleSidebar))
             XCTAssertTrue(m.sidebarFrame(in: size) == nil, "hidden: no sidebar frame")
             XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: 0, y: 30, width: 1600, height: 870), "from x = 0")

@@ -721,7 +721,10 @@ extension AgentWindowD1Tests {
                 let s = try XCTUnwrap(st.sessions.first { $0.name == name })
                 for scale: CGFloat in [1.0, 0.85, 0.7] {
                     ThemeRuntime.scale = scale
-                    for (label, size) in [("min", CGSize(width: 640 * scale, height: 420 * scale)),
+                    // #1470 a2: "min" is the window's least content (wider by the sidebar's growth, so the panes keep
+                    // TIP's least width). #1488: the old literal 640 rendered the panes 11 pt under it at 1.0, where the
+                    // controls' walk read one more ink run than the box holds.
+                    for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)),
                                           ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
                         for mode in [AgentPaneMode.transcript, .terminal] {
                             guard heavy || (scale == 1.0 && label == "default"

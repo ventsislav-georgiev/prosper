@@ -236,11 +236,23 @@ extension AgentWindowD1Tests {
         return bandCount(tree, "Verbose view")
     }
 
+    /// #1470 a2: the full sidebar's width at the current scale: TIP's sz(290), plus how much wider the full row's chip
+    /// column (all 18 chips) is than the nine Command chips', measured from the chip views as the product does
+    /// (AgentWindowModel.digitColumnExtra). The pane area starts 1 pt (the line) right of it.
+    @MainActor
+    func measuredSidebarWidth() -> CGFloat {
+        let w = AgentSidebarRowView.idealWidths(AgentSidebarRowView.digitColumn, AgentSidebarRowView.miniDigitColumn)
+        XCTAssertEqual(w.count, 2, "the chip columns were measured")
+        let extra = max(0, (w.first ?? 0) - (w.last ?? 0))
+        XCTAssertGreaterThan(extra, 0, "#1470: the 18 chips' column is wider than the nine's")
+        return sz(290) + extra
+    }
+
     /// #1224 (the supervisor's decision, 2026-11-14): with the split gate off (the product) the window is the parent's.
     /// No band is laid out (no probe frame at all); the pane area is the whole column (paneAreaFrame and the size the
     /// view writes; a click in the top 30 points is the pane's, as before); the session header draws the picker as
     /// #1103 did, in Transcript mode and none in Terminal mode, and the window reads each button once (the header's).
-    /// Literal numbers at UI scale 1.0 in a 1600 x 900 content.
+    /// At UI scale 1.0 in a 1600 x 900 content; the column's left edge from measuredSidebarWidth (#1470 a2).
     @MainActor
     func testAgentWindowGateOffHasNoBandAndTheHeaderDrawsThePicker() throws {
         let restoreModes = transcriptMode(["api"]), restoreAX = bandAXOn()
@@ -257,8 +269,9 @@ extension AgentWindowD1Tests {
         let size = CGSize(width: 1600, height: 900)
         let seen = bandSnapshot(m, size)
         XCTAssertTrue(seen.isEmpty, "no band and no band slot is laid out: \(seen.keys)")
-        XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: 291, y: 0, width: 1309, height: 900), "the parent's pane area")
-        XCTAssertEqual(m.paneArea.width, 1309, accuracy: 0.5, "the view's pane area: the whole column")
+        let lead = measuredSidebarWidth() + 1
+        XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: lead, y: 0, width: 1600 - lead, height: 900), "the parent's pane area")
+        XCTAssertEqual(m.paneArea.width, 1600 - lead, accuracy: 0.5, "the view's pane area: the whole column")
         XCTAssertEqual(m.paneArea.height, 900, accuracy: 0.5, "the view's pane area: the whole height")
         m.keyFocus = .sidebar
         XCTAssertFalse(m.mouseDown(at: CGPoint(x: 341, y: 15), in: size))
@@ -271,7 +284,7 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// #1224: with the split gate on the band is laid out (one row of 30 points at 1.0 over the 1309-point column) and
+    /// #1224: with the split gate on the band is laid out (one row of 30 points at 1.0 over the column) and
     /// draws the picker, the pane area starts under it (paneAreaFrame and the size the view writes), and the session
     /// header draws no picker in either mode (one picker in the window: the band's).
     @MainActor
@@ -291,10 +304,11 @@ extension AgentWindowD1Tests {
         let size = CGSize(width: 1600, height: 900)
         let seen = bandSnapshot(m, size)
         let band = try XCTUnwrap(seen["band"], "the band is laid out")
-        XCTAssertEqual(band.width, 1309, accuracy: pixel)
+        let lead = measuredSidebarWidth() + 1
+        XCTAssertEqual(band.width, 1600 - lead, accuracy: pixel)
         XCTAssertEqual(band.height, 30, accuracy: pixel)
         XCTAssertNotNil(seen["picker"], "the band draws the picker")
-        XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: 291, y: 30, width: 1309, height: 870), "the pane area under the band")
+        XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: lead, y: 30, width: 1600 - lead, height: 870), "the pane area under the band")
         XCTAssertEqual(m.paneArea.height, 870, accuracy: 0.5, "the view's pane area: the column less the band")
         XCTAssertEqual(try bandHeaderPickers(m, a, .transcript), 0, "the header draws no picker in Transcript mode")
         XCTAssertEqual(try bandHeaderPickers(m, a, .terminal), 0, "nor in Terminal mode")
