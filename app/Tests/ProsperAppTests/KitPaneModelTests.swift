@@ -21,46 +21,16 @@ final class KitPaneModelTests: XCTestCase {
     }
 
     private func env(_ consent: KitRTConsent = KitRTConsent(), sheet: (any ManagedConfigConsent)? = nil, label: String = #function) throws -> Env {
-        let root = tempDir(label)
-        let roots = ManagedConfigRoots(claude: root.appendingPathComponent("claude home", isDirectory: true),
-                                       configHome: root.appendingPathComponent("config", isDirectory: true),
-                                       stateDir: root.appendingPathComponent("state", isDirectory: true))
-        for d in [roots.claude, roots.configHome] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
-        try Data(KitRuntimeTests.userMD.utf8).write(to: roots.claude.appendingPathComponent("CLAUDE.md"))
-        try Data(KitRuntimeTests.userSettings.utf8).write(to: roots.claude.appendingPathComponent("settings.json"))
-        let clock = MCClock()
-        let mc = ManagedConfig(roots: roots, consent: sheet ?? consent, writer: ManagedConfigPOSIXWriter(), now: { clock.now() })
-        return Env(root: root, roots: roots, consent: consent, provider: ManagedConfigProvider(mc))
+        try kitPaneEnv(consent, sheet: sheet, label: label)
     }
 
-    /// A kit source dir under the row's tempDir (every piece kind, two tools). `updateURL` goes into [extension].
     private func source(_ e: Env, id: String = KitPaneModelTests.ext, name: String = KitRuntimeTests.slug, version: String = "1.0.0",
                         kit: String = KitFixture.kit, updateURL: String? = nil, extra: [(String, String, Int)] = []) throws -> LoadedExtension {
-        let dir = e.root.appendingPathComponent("sources/\(id)-\(version)", isDirectory: true)
-        var head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(id)\"")
-            .replacingOccurrences(of: "\"1.0.0\"", with: "\"\(version)\"")
-            .replacingOccurrences(of: "\"2.170.0\"", with: "\"0.0.1\"")
-            .replacingOccurrences(of: "name        = \"calm-agent\"", with: "name        = \"\(name)\"")
-        if let updateURL { head = head.replacingOccurrences(of: "license     = \"MIT\"", with: "license     = \"MIT\"\nupdate_url  = \"\(updateURL)\"") }
-        let files: [(String, String, Int)] = [
-            ("extension.toml", head + "\n" + kit + "\n", 0o644), ("README.md", KitDirFixture.readme, 0o644),
-            ("CLAUDE.md", KitDirFixture.claudeMD, 0o644), ("init.lua", "return {}\n", 0o644),
-            ("hooks/guard.sh", KitDirFixture.guardScript, 0o755), ("statusline/hud.mjs", "console.log('calm')\n", 0o644),
-            ("tools/calm-note", "#!/bin/sh\necho note\n", 0o755), ("tools/calm-todo", "#!/bin/sh\necho todo\n", 0o755),
-            ("seed/notes.toml", "# your notes\n", 0o644)] + extra
-        for (rel, text, mode) in files {
-            let u = dir.appendingPathComponent(rel)
-            try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(text.utf8).write(to: u)
-            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: u.path)
-        }
-        return LoadedExtension(manifest: try KitFixture.manifest(kit, head: head), directory: dir, isSystem: false)
+        try kitPaneSource(e, id: id, name: name, version: version, kit: kit, updateURL: updateURL, extra: extra)
     }
 
     private func owner(_ e: Env, _ records: @escaping @MainActor () -> [ExtensionRecord], login: FakeLogin = FakeLogin("/Users/example/bin")) -> KitRuntimes {
-        let provider = e.provider
-        return KitRuntimes(configHome: e.roots.configHome, records: records, loginPath: { login.read() },
-                           make: { store, trusted in KitRuntime(provider: provider, store: store, isTrusted: trusted, now: { Date() }) })
+        kitPaneOwner(e, records, login: { login.read() })
     }
 
     private func layout(_ e: Env, _ id: String = KitPaneModelTests.ext) throws -> KitStoreLayout {
@@ -235,6 +205,104 @@ final class KitPaneModelTests: XCTestCase {
         XCTAssertEqual(o.liveBins(), [], "an off tools piece adds nothing")
     }
 
+    // MARK: #1424 riders
+
+    /// #1423 left 3 (#1428): b never applied, so its apply writes the install selection first; that write is refused
+    /// busy while a's apply holds the runtime, parked at its sheet (the KitParkedConsent seam holds it, no timing): b
+    /// shows the plain busy text, never "not written: refused(...)", and pieces.json keeps a's selection.
+    func testInstallSelectionWriteDuringAParkedApplyShowsBusy() async throws {
+        let rec = KitRTConsent()
+        let gate = KitParkedConsent(rec)
+        let e = try env(rec, sheet: gate)
+        let r = ExtensionRecord(loaded: try source(e), enabled: true, trusted: true)
+        let o = owner(e) { [r] }
+        let a = KitPaneModel(extID: Self.ext, owner: o), b = KitPaneModel(extID: Self.ext, owner: o)
+        await a.load()?.value
+        await b.load()?.value
+        let first = a.apply()
+        let watcher = Task { await first?.value; gate.wake() }
+        await gate.waitParked()
+        XCTAssertTrue(gate.didPark, "a's apply holds the runtime at its sheet")
+        let before = try Data(contentsOf: URL(fileURLWithPath: try layout(e).piecesJSON))
+        b.installOff = ["perms"]
+        await b.apply()?.value
+        XCTAssertEqual(b.busy, KitRuntime.busyText)
+        XCTAssertEqual(b.result, KitRuntime.busyText)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: try layout(e).piecesJSON)), before, "b's selection was not written")
+        gate.release()
+        await first?.value
+        await watcher.value
+        XCTAssertEqual(a.result, "done")
+    }
+
+    /// An applied kit and its model (the fixture's CLAUDE.md holds the local.md import line and {{kit_bin}}).
+    private func applied(_ e: Env) async throws -> (KitPaneModel, KitStoreLayout) {
+        let r = ExtensionRecord(loaded: try source(e), enabled: true, trusted: true)
+        let m = KitPaneModel(extID: Self.ext, owner: owner(e) { [r] })
+        await m.load()?.value
+        await m.apply()?.value
+        XCTAssertEqual(m.result, "done")
+        return (m, try layout(e))
+    }
+
+    /// R1423-i1: right after a clean apply the RENDERED live copy is not "edited" (its *.md differ from the source).
+    func testFilesEditedIsFalseRightAfterACleanApply() async throws {
+        let e = try env()
+        let (m, l) = try await applied(e)
+        let live = try String(contentsOfFile: l.live + "/CLAUDE.md", encoding: .utf8)
+        XCTAssertFalse(live.contains("{{kit_config}}"), "the live copy is rendered")
+        XCTAssertEqual(m.facts?.filesEdited, false)
+        let again = KitPaneModel(extID: Self.ext, owner: owner(e) { [m.owner.record(Self.ext)].compactMap { $0 } })
+        await again.load()?.value
+        XCTAssertEqual(again.facts?.filesEdited, false, "after a relaunch too (the rendered tree is in runtime.json)")
+    }
+
+    func testOneByteEditInTheLiveCopyReadsEdited() async throws {
+        let e = try env()
+        let (m, l) = try await applied(e)
+        let f = URL(fileURLWithPath: l.live + "/init.lua")
+        try Data("return {}\n ".utf8).write(to: f)
+        await m.load()?.value
+        XCTAssertEqual(m.facts?.filesEdited, true)
+    }
+
+    /// A link in live/ makes the hash throw: that counts as edited, never as clean.
+    func testALinkInTheLiveCopyReadsEdited() async throws {
+        let e = try env()
+        let (m, l) = try await applied(e)
+        try FileManager.default.createSymbolicLink(atPath: l.live + "/extra-link", withDestinationPath: "init.lua")
+        await m.load()?.value
+        XCTAssertEqual(m.facts?.filesEdited, true)
+    }
+
+    /// R1409-i1: after a relaunch whose re-validation fails, the warnings and a repair say "not validated again".
+    func testFailedRevalidationShowsNotValidatedAgain() async throws {
+        let e = try env()
+        let (m, l) = try await applied(e)
+        try FileManager.default.removeItem(atPath: l.live + "/README.md")
+        let again = KitPaneModel(extID: Self.ext, owner: owner(e) { [m.owner.record(Self.ext)].compactMap { $0 } })
+        await again.load()?.value
+        XCTAssertTrue(again.warnings.contains { $0.hasSuffix(": not validated again") }, "\(again.warnings)")
+        await again.repair()?.value
+        XCTAssertEqual(again.result?.hasSuffix(": not validated again"), true, "\(String(describing: again.result))")
+        XCTAssertFalse((again.warnings + [again.result ?? ""]).contains { $0.contains("nothing applied") })
+    }
+
+    /// R1409-i1: a refused state file (the restore refusal) reads "not validated again" in the warnings and the result.
+    func testRestoreRefusalShowsNotValidatedAgain() async throws {
+        let e = try env()
+        let (m, _) = try await applied(e)
+        let state = try KitStore(configHome: e.roots.configHome, extID: Self.ext).runtimeStatePath
+        try Data("{".utf8).write(to: URL(fileURLWithPath: state))
+        let again = KitPaneModel(extID: Self.ext, owner: owner(e) { [m.owner.record(Self.ext)].compactMap { $0 } })
+        await again.load()?.value
+        XCTAssertEqual(again.warnings.count, 1, "\(again.warnings)")
+        XCTAssertEqual(again.warnings.first?.hasSuffix(": not validated again"), true, "\(again.warnings)")
+        await again.repair()?.value
+        XCTAssertEqual(again.result?.hasSuffix(": not validated again"), true, "\(String(describing: again.result))")
+        XCTAssertFalse((again.warnings + [again.result ?? ""]).contains { $0.contains("nothing applied") })
+    }
+
     // MARK: R1422-i1
 
     func testRequirementNamesAreShownAsOutsideText() {
@@ -268,5 +336,55 @@ final class KitPaneModelTests: XCTestCase {
         XCTAssertFalse(KitPaneFacts.hooksDisabled(settingsAt: big), "over the cap reads as false")
         XCTAssertFalse(KitPaneFacts.hooksDisabled(settingsAt: dir), "a dir is not read")
         XCTAssertFalse(KitPaneFacts.hooksDisabled(settingsAt: dir.appendingPathComponent("missing.json")))
+    }
+}
+
+/// The KitPaneModel rows' fixtures, shared with KitPaneViewTests (#1424): roots, ManagedConfig and every write under the
+/// row's own tempDir(); a fake registry lookup and a fake login PATH.
+@MainActor
+extension XCTestCase {
+    func kitPaneEnv(_ consent: KitRTConsent = KitRTConsent(), sheet: (any ManagedConfigConsent)? = nil, label: String = #function) throws -> KitRuntimeTests.Env {
+        let root = tempDir(label)
+        let roots = ManagedConfigRoots(claude: root.appendingPathComponent("claude home", isDirectory: true),
+                                       configHome: root.appendingPathComponent("config", isDirectory: true),
+                                       stateDir: root.appendingPathComponent("state", isDirectory: true))
+        for d in [roots.claude, roots.configHome] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        try Data(KitRuntimeTests.userMD.utf8).write(to: roots.claude.appendingPathComponent("CLAUDE.md"))
+        try Data(KitRuntimeTests.userSettings.utf8).write(to: roots.claude.appendingPathComponent("settings.json"))
+        let clock = MCClock()
+        let mc = ManagedConfig(roots: roots, consent: sheet ?? consent, writer: ManagedConfigPOSIXWriter(), now: { clock.now() })
+        return KitRuntimeTests.Env(root: root, roots: roots, consent: consent, provider: ManagedConfigProvider(mc))
+    }
+
+    /// A kit source dir under the row's tempDir (every piece kind, two tools). `updateURL` goes into [extension].
+    func kitPaneSource(_ e: KitRuntimeTests.Env, id: String = KitPaneModelTests.ext, name: String = KitRuntimeTests.slug, version: String = "1.0.0",
+                        kit: String = KitFixture.kit, updateURL: String? = nil, extra: [(String, String, Int)] = [],
+                        title: String = "Calm Agent Kit", author: String = "Example Author") throws -> LoadedExtension {
+        let dir = e.root.appendingPathComponent("sources/\(id)-\(version)", isDirectory: true)
+        var head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(id)\"")
+            .replacingOccurrences(of: "\"1.0.0\"", with: "\"\(version)\"")
+            .replacingOccurrences(of: "\"2.170.0\"", with: "\"0.0.1\"")
+            .replacingOccurrences(of: "name        = \"calm-agent\"", with: "name        = \"\(name)\"")
+            .replacingOccurrences(of: "\"Calm Agent Kit\"", with: "\"\(title)\"").replacingOccurrences(of: "\"Example Author\"", with: "\"\(author)\"")
+        if let updateURL { head = head.replacingOccurrences(of: "license     = \"MIT\"", with: "license     = \"MIT\"\nupdate_url  = \"\(updateURL)\"") }
+        let files: [(String, String, Int)] = [
+            ("extension.toml", head + "\n" + kit + "\n", 0o644), ("README.md", KitDirFixture.readme, 0o644),
+            ("CLAUDE.md", KitDirFixture.claudeMD, 0o644), ("init.lua", "return {}\n", 0o644),
+            ("hooks/guard.sh", KitDirFixture.guardScript, 0o755), ("statusline/hud.mjs", "console.log('calm')\n", 0o644),
+            ("tools/calm-note", "#!/bin/sh\necho note\n", 0o755), ("tools/calm-todo", "#!/bin/sh\necho todo\n", 0o755),
+            ("seed/notes.toml", "# your notes\n", 0o644)] + extra
+        for (rel, text, mode) in files {
+            let u = dir.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: u)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: u.path)
+        }
+        return LoadedExtension(manifest: try KitFixture.manifest(kit, head: head), directory: dir, isSystem: false)
+    }
+
+    func kitPaneOwner(_ e: KitRuntimeTests.Env, _ records: @escaping @MainActor () -> [ExtensionRecord], login: @escaping @Sendable () -> String? = { "/Users/example/bin" }) -> KitRuntimes {
+        let provider = e.provider
+        return KitRuntimes(configHome: e.roots.configHome, records: records, loginPath: login,
+                           make: { store, trusted in KitRuntime(provider: provider, store: store, isTrusted: trusted, now: { Date() }) })
     }
 }

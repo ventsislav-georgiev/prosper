@@ -16,6 +16,9 @@ struct KitRef: Hashable, Sendable, Codable {
     var version: String
     var treeHash: String
     var slug: String
+    /// #1424 (R1423-i1): the RENDERED copy's tree hash, recorded by KitRuntime when the render answers; treeHash is the
+    /// SOURCE tree's, which the rendered *.md never match. nil: not recorded (a state file from before it).
+    var rendered: String? = nil
 }
 
 enum KitUpdatePhase: Hashable, Sendable, Codable {

@@ -40,6 +40,8 @@ final class KitPaneModel: ObservableObject {
         /// KIT_<KEY> -> value, as .settings.env holds them
         var settingsEnv: [String: String]
         var offTools: [String: Set<String>]
+        /// #1421 carry: a market kit's source over the market byte cap (apply would refuse it): why; nil otherwise
+        var sourceRefusal: String? = nil
     }
 
     let extID: String
@@ -75,7 +77,15 @@ final class KitPaneModel: ObservableObject {
     var live: String? { facts?.status?.live }
     var canAct: Bool { trusted && !running }
     /// #1409 S4: the restore refusal and the refresh notes (refresh carries the refusal itself; without a status, it alone).
-    var warnings: [String] { facts?.status.map(\.notes) ?? (facts?.restoreRefusal.map { [$0] } ?? []) }
+    /// R1409-i1: a restore refusal reads "not validated again", never "nothing applied" (files may still be live).
+    var warnings: [String] { (facts?.status.map(\.notes) ?? (facts?.restoreRefusal.map { [$0] } ?? [])).map(Self.restoreShown) }
+
+    nonisolated static let notValidated = "not validated again"
+
+    /// R1409-i1: the runtime's restore refusal ends ": nothing applied"; the pane says the state was not validated again.
+    nonisolated static func restoreShown(_ s: String) -> String {
+        s.hasSuffix(": nothing applied") ? String(s.dropLast("nothing applied".count)) + notValidated : s
+    }
 
     private var kit: KitManifest? { owner.record(extID)?.manifest.contributes?.kit.map { KitManifest.parse($0).kit } }
 
@@ -146,11 +156,17 @@ final class KitPaneModel: ObservableObject {
             hooksOff = KitPaneFacts.hooksDisabled(settingsAt: config.roots.claude.appendingPathComponent("settings.json"))
         }
         var edited = false
-        if let ref = rt.current?.live, !ref.version.isEmpty, let tree = try? store.treeHash(of: layout.live) { edited = tree != ref.treeHash }
+        // #1424 (R1423-i1): the live copy against the RENDERED tree recorded at its render, never the source tree; a
+        // throw (a link or a special file in live/) counts as edited. No recorded hash (an older state file): not shown.
+        if let ref = rt.current?.live, !ref.version.isEmpty, let want = ref.rendered { edited = (try? store.treeHash(of: layout.live)) != want }
+        var capped: String?
+        if source == .market {
+            do { _ = try store.treeHash(of: ext.directory.path, byteCap: KitStore.marketByteCap) } catch { capped = "source: \(error)" }
+        }
         return Facts(status: status, preview: rt.preview(ext, source: source, otherKitSlugs: others), requirements: reqs,
                      overrides: hooksDir.flatMap { KitPaneFacts.overrides($0, uid: getuid()) }, inUse: inUse, hooksDisabled: hooksOff,
                      filesEdited: edited, updateAvailable: await rt.updateAvailable(ext), restoreRefusal: rt.restoreRefusal,
-                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools())
+                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools(), sourceRefusal: capped)
     }
 
     // MARK: actions
@@ -180,7 +196,12 @@ final class KitPaneModel: ObservableObject {
     nonisolated private static let notWritten = "not written: "
 
     nonisolated private static func line(_ r: KitRuntimeResult) -> String {
-        if let why = r.refused { return why }
+        // R1409-i1: after a relaunch whose re-validation failed, the runtime answers "nothing applied" with the reason
+        // in its notes: show that note; a restore refusal reads "not validated again"
+        if let why = r.refused {
+            if why == "nothing applied", let note = r.notes.first(where: { $0.hasSuffix(": " + notValidated) }) { return note }
+            return restoreShown(why)
+        }
         if let f = r.failures.first { return f }
         if let c = r.configRefusals.first { return "\(c)" }
         if let c = r.config, !c.ok { return c.message }
@@ -192,8 +213,10 @@ final class KitPaneModel: ObservableObject {
         do {
             if case .refused(let why) = try rt.setSelection(v, off: off, offTools: offTools) { return why.description }
             return nil
+        } catch KitRuntimeError.refused(let why) {
+            return why // #1428: refused busy while another op holds the runtime: shown as busy, nothing written
         } catch {
-            return notWritten + "\(error)"
+            return notWritten + ((error as? KitRuntimeError)?.text ?? error.localizedDescription)
         }
     }
 

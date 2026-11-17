@@ -380,6 +380,11 @@ final class KitRuntime: @unchecked Sendable {
         while !pending.isEmpty, steps < 32 {
             steps += 1
             let e = pending.removeFirst()
+            // #1424 (R1423-i1): the staged copy is rendered now; its hash travels with the ref to live (the pane's
+            // "kit files edited" compares the live copy with this one, like with like). A throw leaves nil.
+            if case let .rendered(v, t) = e, s.staged?.version == v, s.staged?.treeHash == t {
+                s.staged?.rendered = try? store.treeHash(of: store.stagedPath(v, t))
+            }
             let (n, actions) = KitUpdateMachine.step(s, e)
             var r = KitEffectResult()
             var rest = actions[...]
