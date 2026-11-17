@@ -484,6 +484,22 @@ final class DchCtlTests: XCTestCase {
         XCTAssertFalse(r.queue.sync { r.conn.inFlight }, "the exit ends the request")
     }
 
+    /// #1171: the phone's `--send` that dch reports as dropped (dch 1.64.0+: exit 1, its words on stderr) reaches the
+    /// phone as dch's own reply: the stderr chunk, then 0x33 {"exit": 1}. Exit 0: no stderr, {"exit": 0}.
+    func testADroppedSendReachesThePhoneAsItsStderrAndExit() throws {
+        let words = "dch: alpha: input dropped: the program is not reading (4 MB held); the text's start may still be in its input\n"
+        for (code, err) in [(1, words), (0, "")] {
+            let f = try fake("printf '%s\\n' \"$@\" > \"$D/argv\"; printf '%s' \"\(err)\" >&2; exit \(code)")
+            let r = rig(f.path)
+            send(r, Self.ctl(["--send", "alpha", "--", "hi"]))
+            XCTAssertTrue(wait(5) { !finals(r).isEmpty }, "exit \(code)")
+            XCTAssertEqual(finals(r).count, 1)
+            XCTAssertEqual(Self.object(all(r).last) as NSDictionary, ["exit": code] as NSDictionary, "dch's own exit")
+            XCTAssertEqual(String(decoding: bytes(r, DchFrame.ctlStderr), as: UTF8.self), err, "exit \(code): dch's words")
+            XCTAssertEqual(try String(contentsOf: f.dir.appendingPathComponent("argv"), encoding: .utf8), "--send\nalpha\n--\nhi\n")
+        }
+    }
+
     func testSpawnRunsInTheGivenCwd() throws {
         let f = try fake("/bin/pwd -P > \"$D/pwd\"; printf 'alpha\\n'")
         let cwd = tempDir("ctl-spawn-cwd")

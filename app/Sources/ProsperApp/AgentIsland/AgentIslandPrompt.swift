@@ -195,6 +195,15 @@ struct AgentPromptIO: Sendable {
     /// QA #651 INFO-2: true when dch says the session has no terminal mirror (dch-lite or
     /// DCH_NO_VT: `--read` exits 3), so every read is empty. Asked only after an empty read.
     var noMirror: @Sendable (AgentSessionKey) -> Bool = { _ in false }
+    /// #1171: `send` that says whether dch took the text: false when dch 1.64.0+ exits 1 with "input dropped"
+    /// (the program is not reading, 4 MB already held). nil (every fake): `send`, taken as delivered.
+    var checkedSend: (@Sendable (AgentSessionKey, String) -> Bool)? = nil
+
+    /// `send`; false only when dch said the text was dropped.
+    func sent(_ key: AgentSessionKey, _ text: String) -> Bool {
+        guard let checkedSend else { send(key, text); return true }
+        return checkedSend(key, text)
+    }
 }
 
 /// #798: a prompt as the Agents window drives it: the parse, plus where its caret is
@@ -229,7 +238,7 @@ extension AgentPromptScreen {
     }
 }
 
-enum AgentPromptAnswer: Equatable { case sent, changed }
+enum AgentPromptAnswer: Equatable { case sent, changed, dropped }
 
 extension AgentPrompt {
     // MARK: - Parse
@@ -751,8 +760,7 @@ extension AgentPrompt {
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked",
               stillOn()
         else { return .changed }
-        io.send(key, String(digit))
-        return .sent
+        return io.sent(key, String(digit)) ? .sent : .dropped
     }
 
     /// #784: the identity `answer` compares (the loop guard: `sameIdentity`, #791): the

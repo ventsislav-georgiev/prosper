@@ -284,6 +284,8 @@ enum AgentPlanForm {
 enum AgentWindowText {
     static let changed = "The prompt changed. Open in terminal"
     static let unconfirmed = "Couldn't confirm. Open in terminal"
+    /// #1171: dch dropped the typed text (exit 1, "input dropped").
+    static let notDelivered = "Not delivered: the session is not reading input"
     static let working = "Claude is working. Send when it's done, or interrupt it"
     static let blocked = "A prompt is waiting. Answer it first"
     static let noStatus = "dch didn't say what the session is doing. Open in terminal"
@@ -501,15 +503,15 @@ struct AgentWindowDriver: Sendable {
 
     // MARK: Prompt key sequences
 
-    enum Step: Equatable { case done, changed, unconfirmed }
+    enum Step: Equatable { case done, changed, unconfirmed, dropped }
 
     /// One key. Before it: a fresh read must parse and pass `ready` (the dialog's identity and
     /// the exact state the key was planned for) and dch must say blocked, else nothing is sent.
     /// After it: reads until `after` says done (true) or something else (false); nil waits.
-    /// An empty read (timed out) tells nothing.
-    func key(ready: (AgentPromptScreen) -> Bool, send: () -> Void, after: (AgentPromptScreen?) -> Bool?) -> Step {
+    /// An empty read (timed out) tells nothing. #1171: `send` false (dch dropped the text) ends it there.
+    func key(ready: (AgentPromptScreen) -> Bool, send: () -> Bool, after: (AgentPromptScreen?) -> Bool?) -> Step {
         guard let s = AgentPrompt.screen(io.read(key)), ready(s), status() == "blocked" else { return .changed }
-        send()
+        guard send() else { return .dropped }
         for _ in 0..<reads {
             pause(step)
             let text = io.read(key)
@@ -543,6 +545,7 @@ struct AgentWindowDriver: Sendable {
 
     static func outcome(_ s: Step) -> AgentWindowOutcome {
         switch s {
+        case .dropped: .failed(AgentWindowText.notDelivered)
         case .done: .done
         case .changed: .failed(AgentWindowText.changed)
         case .unconfirmed: .failed(AgentWindowText.unconfirmed)
@@ -564,7 +567,7 @@ struct AgentWindowDriver: Sendable {
         while i != t {
             let c = order[i], down = i < t, next = order[down ? i + 1 : i - 1]
             let r = key(ready: { holds($0) && $0.caret == c },
-                        send: { io.keys(key, [down ? "down" : "up"]) },
+                        send: { io.keys(key, [down ? "down" : "up"]); return true },
                         after: { s in
                             guard let s else { return nil }
                             guard holds(s) else { return false }
@@ -605,7 +608,7 @@ struct AgentWindowDriver: Sendable {
             want[d - 1].toggle()
             let now = checked
             let r = key(ready: { Self.same($0.prompt, p) && $0.checked == now && ($0.caret != input || input == nil) },
-                        send: { io.send(key, String(d)) },
+                        send: { io.sent(key, String(d)) },
                         after: { s in
                             guard let s else { return nil }
                             guard Self.same(s.prompt, p) else { return false }
@@ -622,7 +625,7 @@ struct AgentWindowDriver: Sendable {
             let w = walk(caret, to: o.digit, order: order, holds: { Self.same($0.prompt, p, other: k) && $0.checked == now })
             guard w == .done else { return Self.outcome(w) }
             let typed = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == now && $0.caret == o.digit && empty($0) },
-                            send: { io.send(key, o.text) },
+                            send: { io.sent(key, o.text) },
                             after: { s in
                                 guard let s else { return nil }
                                 guard Self.same(s.prompt, p, other: k), s.caret == o.digit else { return false }
@@ -636,7 +639,7 @@ struct AgentWindowDriver: Sendable {
         let holds = { (s: AgentPromptScreen) in Self.same(s.prompt, p, other: k) && s.checked == final && (k == nil || shows(s)) }
         let w = walk(caret, to: nil, order: order, holds: holds)
         guard w == .done else { return Self.outcome(w) }
-        return Self.outcome(key(ready: { holds($0) && $0.caret == nil }, send: { io.keys(key, ["enter"]) },
+        return Self.outcome(key(ready: { holds($0) && $0.caret == nil }, send: { io.keys(key, ["enter"]); return true },
                                 after: Self.left(p, other: k)))
     }
 
@@ -648,7 +651,7 @@ struct AgentWindowDriver: Sendable {
         let holds = { (s: AgentPromptScreen) in Self.same(s.prompt, p) && s.checked == boxes }
         let w = walk(e.caret, to: c, order: Self.order(e), holds: holds)
         guard w == .done else { return Self.outcome(w) }
-        return Self.outcome(key(ready: { holds($0) && $0.caret == c }, send: { io.keys(key, ["enter"]) }, after: Self.left(p)))
+        return Self.outcome(key(ready: { holds($0) && $0.caret == c }, send: { io.keys(key, ["enter"]); return true }, after: Self.left(p)))
     }
 
     /// #802: a plan approval's approve row (AgentPlanForm): its digit, only while the whole dialog
@@ -664,7 +667,7 @@ struct AgentWindowDriver: Sendable {
                                     s.prompt.sameDialog(p) && s.checked == nil && s.caret == c && s.footer == e.footer
                                         && AgentPlanForm.check(s, plan: plan).map { $0.approve.contains(d) && $0.plan == shown } == true
                                 },
-                                send: { io.send(key, String(d)) }, after: Self.left(p)))
+                                send: { io.sent(key, String(d)) }, after: Self.left(p)))
     }
 
     /// Preview form (#526): the digit moves the focus (and the preview), Enter answers.
@@ -673,7 +676,7 @@ struct AgentWindowDriver: Sendable {
         if e.caret != d {
             let c = e.caret
             let r = key(ready: { Self.same($0.prompt, p) && $0.checked == nil && $0.caret == c },
-                        send: { io.send(key, String(d)) },
+                        send: { io.sent(key, String(d)) },
                         after: { s in
                             guard let s else { return nil }
                             guard Self.same(s.prompt, p) else { return false }
@@ -682,7 +685,7 @@ struct AgentWindowDriver: Sendable {
             guard r == .done else { return Self.outcome(r) }
         }
         return Self.outcome(key(ready: { Self.same($0.prompt, p) && $0.checked == nil && $0.caret == d },
-                                send: { io.keys(key, ["enter"]) }, after: Self.left(p)))
+                                send: { io.keys(key, ["enter"]); return true }, after: Self.left(p)))
     }
 
     /// The Other row of a single-select form ("Type something."): the caret walks to it, the
@@ -702,7 +705,7 @@ struct AgentWindowDriver: Sendable {
             guard let c = caret, c != k else { break }
             let down = c < k, next = down ? c + 1 : c - 1
             let r = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == nil && $0.caret == c },
-                        send: { io.keys(key, [down ? "down" : "up"]) },
+                        send: { io.keys(key, [down ? "down" : "up"]); return true },
                         after: { s in
                             guard let s else { return nil }
                             guard Self.same(s.prompt, p, other: k) else { return false }
@@ -713,7 +716,7 @@ struct AgentWindowDriver: Sendable {
         }
         guard caret == k else { return .failed(AgentWindowText.unconfirmed) }
         let typed = key(ready: { Self.same($0.prompt, p, other: k) && $0.checked == nil && $0.caret == k && empty($0) },
-                        send: { io.send(key, text) },
+                        send: { io.sent(key, text) },
                         after: { s in
                             guard let s else { return nil }
                             guard Self.same(s.prompt, p, other: k), s.caret == k else { return false }
@@ -721,7 +724,7 @@ struct AgentWindowDriver: Sendable {
                         })
         guard typed == .done else { return Self.outcome(typed) }
         return Self.outcome(key(ready: { Self.same($0.prompt, p, other: k) && $0.caret == k && shows($0) },
-                                send: { io.keys(key, ["enter"]) }, after: Self.left(p, other: k)))
+                                send: { io.keys(key, ["enter"]); return true }, after: Self.left(p, other: k)))
     }
 
     /// The Other row `k`: empty (its placeholder, any whitespace), and showing `text` (once it is no
@@ -1006,7 +1009,11 @@ final class AgentWindowInteraction: ObservableObject {
         }
         let key = s.key, p = w.screen.prompt
         act(s, prompt: p) { io in
-            AgentPrompt.answer(key, digit: o.digit, expected: p, io: io) == .sent ? .done : .failed(AgentWindowText.changed)
+            switch AgentPrompt.answer(key, digit: o.digit, expected: p, io: io) {
+            case .sent: .done
+            case .dropped: .failed(AgentWindowText.notDelivered)
+            case .changed: .failed(AgentWindowText.changed)
+            }
         }
     }
 

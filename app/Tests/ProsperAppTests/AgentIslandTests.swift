@@ -943,7 +943,8 @@ final class AgentIslandTests: XCTestCase {
     func testLiveIOPassesTheSessionDirAndExactArgv() {
         final class Rec: @unchecked Sendable { var calls: [([String], [String: String])] = [] }
         let r = Rec(), key = AgentSessionKey(dir: "/x/dch dir", name: "my sess")
-        let io = AgentPromptIO.live { args, env in r.calls.append((args, env)); return Data("out".utf8) }
+        let io = AgentPromptIO.live(run: { args, env in r.calls.append((args, env)); return Data("out".utf8) },
+                                    send: { args, env in r.calls.append((args, env)); return ("", 0) })
         XCTAssertEqual(io.read(key), "out")
         XCTAssertEqual(io.status(key), "out")
         io.send(key, "2")
@@ -1763,14 +1764,14 @@ final class AgentIslandTests: XCTestCase {
         init(timeout: TimeInterval) { self.timeout = timeout }
         func terminate(_ pid: pid_t) { lock.withLock { killed.append(pid) }; released.signal() }
         var io: AgentPromptIO {
-            AgentPromptIO.live { args, _ in
+            AgentPromptIO.live(run: { args, _ in
                 self.lock.withLock { self.args.append(args) }
                 return DchCommand.bounded(self.timeout, terminate: self.terminate) { onPid, _ in
                     onPid(4242)
                     self.released.wait()
                     return Data("late".utf8)
                 } ?? Data()
-            }
+            }, send: { args, _ in self.lock.withLock { self.args.append(args) }; return nil })
         }
     }
 

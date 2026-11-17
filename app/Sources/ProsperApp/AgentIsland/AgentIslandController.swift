@@ -1570,6 +1570,7 @@ final class AgentIslandController {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.inFlight.remove(key)
+                    if r == .dropped { return self.setRow(key, AgentWindowText.notDelivered) }   // #1171
                     // sent: the next poll shows the new state
                     guard r == .changed else { return }
                     self.setCard(.changed, key, gen)
@@ -2450,25 +2451,42 @@ extension AgentPromptIO {
     /// its text as raw bytes with no Enter, after "--" (QA #629 F1: else dch parses a
     /// leading "-" as its own flag, and "-kl" kills every session). Each call is bounded
     /// (#477): a timed-out read or status is empty, so a card reads as changed and nothing is sent.
-    static let live = live { DchCommand.runIsland(args: $0, env: $1) ?? Data() }
+    static let live = live(run: { DchCommand.runIsland(args: $0, env: $1) ?? Data() }, send: liveSend)
 
-    /// `run` gets the argv and env; tests pass a recorder.
+    /// `run` gets the argv and env; tests pass a recorder. #1171: `send` (no default, so no test reaches a real
+    /// dch) runs `--send` and hands back dch's stderr and exit status; nil when it timed out.
     static func live(run: @escaping @Sendable ([String], [String: String]) -> Data,
                      say: @escaping @Sendable ([String], [String: String]) -> Data = liveSay,
-                     noMirror: @escaping @Sendable ([String], [String: String]) -> Bool = liveNoMirror) -> AgentPromptIO {
+                     noMirror: @escaping @Sendable ([String], [String: String]) -> Bool = liveNoMirror,
+                     send: @escaping @Sendable ([String], [String: String]) -> (err: String, status: Int32)?) -> AgentPromptIO {
         @Sendable func dch(_ args: [String], _ key: AgentSessionKey) -> String {
             String(decoding: run(args, AgentIsland.listEnv(dir: key.dir)), as: UTF8.self)
+        }
+        // #1171: dch 1.64.0+ exits 1 with "input dropped" on stderr when the program is not reading; a timeout is delivered, as before.
+        @Sendable func typed(_ key: AgentSessionKey, _ text: String) -> Bool {
+            guard let r = send(["--send", key.name, "--", text], AgentIsland.listEnv(dir: key.dir)) else { return true }
+            return !(r.status == 1 && r.err.contains("input dropped"))
         }
         return AgentPromptIO(
             read: { dch(["--read", $0.name], $0) },
             status: { dch(["--status", $0.name], $0) },
-            send: { _ = dch(["--send", $0.name, "--", $1], $0) },
+            send: { _ = typed($0, $1) },
             keys: { _ = dch(["--keys", $0.name] + $1, $0) },
             say: { key, text in
                 String(decoding: say(["--say", key.name, "--json", "--", text], AgentIsland.listEnv(dir: key.dir)),
                        as: UTF8.self)
             },
-            noMirror: { noMirror(["--read", $0.name], AgentIsland.listEnv(dir: $0.dir)) })
+            noMirror: { noMirror(["--read", $0.name], AgentIsland.listEnv(dir: $0.dir)) },
+            checkedSend: typed)
+    }
+
+    /// #1171: one `--send`, bounded as every island call; its stderr and status, nil when it timed out.
+    static func liveSend(_ args: [String], _ env: [String: String]) -> (err: String, status: Int32)? {
+        let path = DchCommand.dchPath   // on the caller's thread
+        return DchCommand.bounded(DchCommand.islandTimeout) { onPid, onExit in
+            let r = DchCommand.runCapturingBoth(args: args, env: env, path: path, onPid: onPid, onExit: onExit)
+            return (r.err, r.status)
+        }
     }
 
     /// QA #651 INFO-2: dch's `--read` exits 3 when the session has no terminal mirror; a

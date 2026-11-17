@@ -1041,7 +1041,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         let io = AgentPromptIO.live(run: { _, _ in Data() }, say: { _, _ in Data() }, noMirror: { args, env in
             XCTAssertEqual(env["DCH_SOCKET_DIR"], "/tmp/dch-test")
             r.lock.withLock { r.calls.append(args) }; return true
-        })
+        }, send: { _, _ in nil })
         XCTAssertTrue(io.noMirror(Self.key))
         XCTAssertEqual(r.calls, [["--read", "s"]])
     }
@@ -1077,7 +1077,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         }, say: { args, env in
             XCTAssertEqual(env["DCH_SOCKET_DIR"], "/tmp/dch-test")
             l.calls.append(args); return Data(#"{"result":"ok"}"#.utf8)
-        })
+        }, send: { _, _ in nil })
         io.keys(Self.key, ["esc"])
         XCTAssertEqual(io.say(Self.key, "-a\nb"), #"{"result":"ok"}"#)
         XCTAssertEqual(r.calls, [["--keys", "s", "esc"]])
@@ -1092,7 +1092,8 @@ final class AgentWindowInteractionTests: XCTestCase {
         final class Rec: @unchecked Sendable { let lock = NSLock(); var calls: [[String]] = [] }
         let r = Rec()
         let io = AgentPromptIO.live(run: { args, _ in r.lock.withLock { r.calls.append(args) }; return Data() },
-                                    say: { args, _ in r.lock.withLock { r.calls.append(args) }; return Data() })
+                                    say: { args, _ in r.lock.withLock { r.calls.append(args) }; return Data() },
+                                    send: { args, _ in r.lock.withLock { r.calls.append(args) }; return ("", 0) })
         for t in ["-kl", "--", "-m x", "3"] { io.send(Self.key, t) }
         io.keys(Self.key, ["down", "enter"])
         _ = io.say(Self.key, "-kl")
@@ -1110,11 +1111,14 @@ final class AgentWindowInteractionTests: XCTestCase {
             switch args[0] {
             case "--read": return Data(f.io.read(Self.key).utf8)
             case "--status": return Data(f.io.status(Self.key).utf8)
-            case "--send": f.io.send(Self.key, args.last ?? "")
             case "--keys": f.io.keys(Self.key, Array(args[2...]))
             default: break
             }
             return Data()
+        }, send: { args, _ in
+            r.lock.withLock { r.calls.append(args) }
+            f.io.send(Self.key, args.last ?? "")
+            return ("", 0)
         })
         XCTAssertEqual(driver(rec).other(try! screen(Self.singleScreen(caret: 4)), digit: 4, text: "-kl"), .done)
         XCTAssertEqual(r.calls.filter { $0[0] == "--send" || $0[0] == "--keys" }, [["--send", "s", "--", "-kl"], ["--keys", "s", "enter"]])
@@ -2000,5 +2004,117 @@ final class AgentWindowInteractionTests: XCTestCase {
                             reply: #"{"name":"s","result":"failed","reason":"not_foreground","detail":"s: claude is not in front"}"#)
         XCTAssertEqual(driver(f.io).send("hi"), .failed(AgentWindowText.notForeground))
         XCTAssertEqual(AgentWindowText.notForeground, "Claude is not in front in that session; nothing was typed. Open in terminal")
+    }
+
+    // MARK: - #1171: a send dch reports as dropped
+
+    /// dch 1.64.0+'s words on stderr (with exit 1) for a `--send` whose text the program never read.
+    static let droppedErr = "dch: s: input dropped: the program is not reading (4 MB held); the text's start may still be in its input\n"
+
+    /// #1171: `f` behind the live io, a recorder standing in for dch: `--send` exits `status` with `err` on stderr
+    /// and reaches `f` only on exit 0 (a drop types nothing). No call runs a dch.
+    func recorded(_ f: FormSim, status: Int32, err: String = AgentWindowInteractionTests.droppedErr) -> AgentPromptIO {
+        AgentPromptIO.live(run: { args, _ in
+            switch args.first {
+            case "--read": return Data(f.io.read(Self.key).utf8)
+            case "--status": return Data(f.io.status(Self.key).utf8)
+            case "--keys": f.io.keys(Self.key, Array(args.dropFirst(2)))
+            default: break
+            }
+            return Data()
+        }, say: { _, _ in Data() }, noMirror: { _, _ in false }, send: { args, _ in
+            if status == 0 { f.io.send(Self.key, args.last ?? "") }
+            return (status == 0 ? "" : err, status)
+        })
+    }
+
+    /// #1171: the live io's `sent` is false only for dch's exit 1 with "input dropped"; exit 0, another failure
+    /// and a timed-out call are delivered, as before. `send` (what the fakes override) runs the same call.
+    func testLiveSendSaysWhenDchDroppedTheText() {
+        final class Rec: @unchecked Sendable {
+            let lock = NSLock()
+            var calls: [[String]] = []
+            var answer: (err: String, status: Int32)?
+        }
+        let r = Rec()
+        let io = AgentPromptIO.live(run: { _, _ in Data() }, say: { _, _ in Data() }, noMirror: { _, _ in false }, send: { args, env in
+            XCTAssertEqual(env["DCH_SOCKET_DIR"], "/tmp/dch-test")
+            return r.lock.withLock { r.calls.append(args); return r.answer }
+        })
+        let cases: [(answer: (err: String, status: Int32)?, sent: Bool, name: String)] = [
+            ((Self.droppedErr, 1), false, "exit 1 with input dropped"),
+            (("", 0), true, "exit 0"),
+            ((Self.droppedErr, 0), true, "the exit decides, not the words alone"),
+            (("dch: s: no session\n", 1), true, "another failure is not a drop"),
+            (nil, true, "timed out: delivered, as before"),
+        ]
+        for c in cases {
+            r.lock.withLock { r.answer = c.answer }
+            XCTAssertEqual(io.sent(Self.key, "-kl"), c.sent, c.name)
+        }
+        io.send(Self.key, "x")
+        XCTAssertEqual(r.lock.withLock { r.calls.count }, cases.count + 1)
+        XCTAssertEqual(r.lock.withLock { r.calls.last }, ["--send", "s", "--", "x"])
+        XCTAssertTrue(AgentPromptIO(read: { _ in "" }, status: { _ in "" }, send: { _, _ in }).sent(Self.key, "x"),
+                      "a fake's send is delivered")
+    }
+
+    /// #1171: the island card's answer that dch drops says so on the row; one dch took says nothing.
+    @MainActor
+    func testIslandAnswerDroppedSaysNotDelivered() throws {
+        let p = try XCTUnwrap(AgentPrompt.parse(Self.modeSwitch))
+        let option = try XCTUnwrap(p.options.last)
+        for status: Int32 in [1, 0] {
+            let f = FormSim(.plain(Self.modeSwitch))
+            let c = controller(recorded(f, status: status), autoAllow: false)
+            c.store?.sessions = [session(.blocked)]
+            c.answer(session(.blocked), p, option)
+            until("answered, exit \(status)") { !c.heldByAutoAllow(Self.key) }
+            c.queue.sync {}
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            if status == 1 {
+                XCTAssertEqual(c.store?.actions[Self.key], AgentWindowText.notDelivered)
+                XCTAssertEqual(f.lock.withLock { f.log }, [], "a drop types nothing")
+            } else {
+                XCTAssertTrue(c.store?.actions[Self.key] == nil, "delivered: no line")
+                XCTAssertEqual(f.lock.withLock { f.log }, ["send 3"])
+            }
+        }
+        XCTAssertEqual(AgentWindowText.notDelivered, "Not delivered: the session is not reading input")
+    }
+
+    /// #1171: the window's single choice that dch drops says so in the notice; one dch took says nothing.
+    @MainActor
+    func testAgentWindowAnswerDroppedSaysNotDelivered() {
+        for status: Int32 in [1, 0] {
+            let f = FormSim(.plain(Self.modeSwitch))
+            let c = controller(recorded(f, status: status), autoAllow: false)
+            c.store?.sessions = [claudeSession(.blocked)]
+            let i = interaction(c)
+            i.follow(claudeSession(.blocked))
+            guard case .prompt(let w) = i.panel, w.buttons.count > 2 else { return XCTFail("\(i.panel)") }
+            i.answer(w.buttons[2])
+            until("answered, exit \(status)") { !i.busy }
+            if status == 1 {
+                XCTAssertEqual(i.notice, AgentWindowText.notDelivered)
+                XCTAssertEqual(f.lock.withLock { f.log }, [])
+            } else {
+                XCTAssertTrue(i.notice == nil, "delivered: no note")
+                XCTAssertEqual(f.lock.withLock { f.log }, ["send 3"])
+            }
+        }
+    }
+
+    /// #1171: the window's typed Other answer (a key sequence) stops at a drop and says so; Enter never follows.
+    func testAgentWindowOtherDroppedSaysNotDeliveredAndPressesNoEnter() throws {
+        let f = FormSim(.single)
+        f.caret = 4
+        XCTAssertEqual(driver(recorded(f, status: 1)).other(try screen(Self.singleScreen(caret: 4)), digit: 4, text: "Kiwi"),
+                       .failed(AgentWindowText.notDelivered))
+        XCTAssertEqual(f.lock.withLock { f.log }, [], "nothing typed, no Enter")
+        let g = FormSim(.single)
+        g.caret = 4
+        XCTAssertEqual(driver(recorded(g, status: 0)).other(try screen(Self.singleScreen(caret: 4)), digit: 4, text: "Kiwi"), .done)
+        XCTAssertEqual(g.lock.withLock { g.log }, ["send Kiwi", "enter"])
     }
 }

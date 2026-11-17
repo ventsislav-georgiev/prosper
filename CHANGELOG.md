@@ -1618,6 +1618,9 @@ tag from the now-released section and put it on the new top draft.
 - Installing, updating or resetting an extension no longer deletes the installed copy when the new
   copy fails: the old version stays in place and keeps working, and a half-finished copy left by a
   crash is ignored. (#1430)
+- Agent Sessions and the island now say "Not delivered: the session is not reading input" when you
+  answer a prompt and dch reports that the session dropped the keystroke or typed text because its
+  program is not reading input. (#1171)
 
 ## v2.174.0
 
