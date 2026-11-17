@@ -1709,6 +1709,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session's end text from dch (exit, signal or any other wording) now shows
   without control or direction characters and is cut when very long, in the form status, the dir
   line and the History rows. (#1313)
+- Agent Sessions and Agent Island: on light themes the amber of a session's "Needs input" badge and
+  of its PR chips is now a darker amber, so the text is readable (dark themes are unchanged).
+  (#1451)
 
 ## v2.174.0
 

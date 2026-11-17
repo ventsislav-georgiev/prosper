@@ -755,7 +755,8 @@ extension AgentWindowD1Tests {
 
     /// #881 (QA #735 INFO-2, mutant t2): a theme select reaches the window's CONTENT, not only the
     /// lifted pieces that observe the store themselves. In the live window (Themed root, never shown):
-    /// a rail row's PR chip (#1451: the Needs input badge's amber, whatever the accent) stays amber and takes no accent, and the terminal
+    /// a rail row's PR chip (#1451: the Needs input badge's amber, whatever the accent) stays amber, the open-PR count of a row
+    /// whose chips do not fit (Neon.blue, AgentSidebarRowView.ink(.blue)) takes the new accent, and the terminal
     /// pane's background (Neon.bgBottom) goes dark to light and back to dark. Areas in pt², backing 1 and 2.
     @MainActor
     func testChrome860ThemeChangeReachesTheContent() throws {
@@ -770,7 +771,10 @@ extension AgentWindowD1Tests {
         defer { reset(); (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost) = saved }
         ThemeRuntime.scale = 1
         let pr = DchSessionMeta.PR(url: "https://github.com/acme/repo/pull/1234567", repo: "acme/repo", num: 1234567, title: "t")
-        let m = windowModel(store([session("prosper", .working), session("notes", .idle, meta: DchSessionMeta(openPRs: [pr]))]))
+        // #1451 step b: twelve open PRs with long repo names: the row's chips cannot fit, so it draws the open-PR count (the accent).
+        let many = (1...12).map { DchSessionMeta.PR(url: "https://github.com/acme/long-repository-name/pull/\($0 + 1234560)", repo: "acme/long-repository-name", num: $0 + 1234560, title: "t") }
+        let m = windowModel(store([session("prosper", .working), session("notes", .idle, meta: DchSessionMeta(openPRs: [pr])),
+                                   session("docs", .idle, meta: DchSessionMeta(openPRs: many))]))
         m.setVisible(true)
         defer { m.close() }
         m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "prosper")))
@@ -793,10 +797,17 @@ extension AgentWindowD1Tests {
                 let tag = "\(step) x\(Int(backing))"
                 try saveTo860(rep, "881-content-\(step)-x\(Int(backing))")
                 let old = pt2(band(rep, dark ? pink : cyan, in: rows, size: size), rep, size)
-                let amber: (NSColor) -> Bool = { $0.redComponent > 0.9 && $0.greenComponent > 0.55 && $0.greenComponent < 0.85 && $0.blueComponent < 0.35 }
+                let new = pt2(band(rep, dark ? cyan : pink, in: rows, size: size), rep, size)
+                // #1451 step b: #FFB300 on a dark theme, the darker amber (#8A5A00) of the same hue on a light one.
+                let amber: (NSColor) -> Bool = { (c: NSColor) -> Bool in
+                    let (r, g, b) = (c.redComponent, c.greenComponent, c.blueComponent)
+                    if dark { return r > 0.9 && g > 0.55 && g < 0.85 && b < 0.35 }
+                    return r > 0.4 && r < 0.7 && g > 0.22 && g < 0.5 && b < 0.2
+                }
                 let chip = pt2(band(rep, amber, in: rows, size: size), rep, size)
                 XCTAssertGreaterThan(chip, 3, "the PR chip is the Needs input badge's amber on every theme (\(tag))")
-                XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(chip) amber pt² of the new)")
+                XCTAssertGreaterThan(new, 0.5, "the open-PR count wears the theme's accent (\(tag))")
+                XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(new) pt2 of the new)")
                 let bg = try XCTUnwrap(pixel(rep, terminal, in: size))
                 if dark {
                     XCTAssertLessThan(bg.redComponent, 0.3, "the terminal pane is the dark theme's (\(tag), \(rgba(bg)))")

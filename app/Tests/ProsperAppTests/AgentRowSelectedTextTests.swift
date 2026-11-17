@@ -104,11 +104,48 @@ final class AgentRowSelectedTextTests: XCTestCase {
             }
             // Nothing changes on an unselected row.
             for (kind, was) in [(AgentSidebarRowView.Ink.quiet, Neon.textSecondary), (.blue, Neon.blue),
-                                (.blocked, agentStateColor(.blocked))] {
+                                (.blocked, d.appearance == .light ? AgentSidebarRowView.darkAmber : agentStateColor(.blocked))] {
                 XCTAssertTrue(dist(rgba(AgentSidebarRowView.ink(kind, selected: false)), rgba(was)) < 0.001, "\(d.title): \(kind) unselected")
             }
         }
         XCTAssertEqual(pairs, 22 * 10)
+    }
+
+    /// #1451 step b: the amber as text. On every theme the unselected PR chip's ink over each surface it can sit on (the sidebar,
+    /// the header and card surfaces) plus the 0.14 wash is at least 3:1; a dark theme's is agentStateColor(.blocked) exactly, a
+    /// light theme's the darker amber (same hue); the Needs input badge's text is read back from its render over the header
+    /// and is that same ink. 22 themes, 8 light.
+    func testAmberInkClearsThreeToOneOnEveryTheme() throws {
+        var light = 0, dark = 0, badges = 0
+        try onEveryTheme { d, p in
+            let amber = agentStateColor(.blocked)
+            let chipInk = AgentSidebarRowView.prChipInk(selected: false)
+            if d.appearance == .light {
+                light += 1
+                XCTAssertTrue(dist(rgba(chipInk), rgba(AgentSidebarRowView.darkAmber)) < 0.001, "\(d.title): light ink is the darker amber")
+                XCTAssertTrue(dist(rgba(chipInk), rgba(amber)) > 0.3, "\(d.title): and not #FFB300")
+            } else {
+                dark += 1
+                XCTAssertTrue(dist(rgba(chipInk), rgba(amber)) < 0.001, "\(d.title): a dark theme keeps agentStateColor(.blocked)")
+            }
+            for (name, surface) in [("sidebar", p.sidebar), ("bgTop", p.bgTop), ("bgBottom", p.bgBottom), ("card", p.card), ("cardHi", p.cardHi)] {
+                let fill = over(rgba(surface), amber, AgentSidebarRowView.prChipFillOpacity)
+                let r = ThemeContrastTests.contrast(NSColor(chipInk), on: ns((fill.r, fill.g, fill.b, 1)))
+                XCTAssertGreaterThanOrEqual(r, 3, "\(d.title): the PR chip's text over \(name) plus the wash is \(r):1")
+            }
+            // The badge's own text, from its pixels over the header: the chip's ink, not the unfixed amber, on a light theme.
+            let top = rgba(p.bgTop), fill = over(top, amber, 0.14)
+            guard let (rep, k) = render(AgentStateChip(state: .blocked).padding(sz(4)), size: CGSize(width: sz(140), height: sz(28)),
+                                        background: Color(.sRGB, red: Double(top.r), green: Double(top.g), blue: Double(top.b))),
+                  let px = ink(rep, k: k, rect: CGRect(x: 0, y: 0, width: sz(140), height: sz(28)), bg: fill) else { return XCTFail("\(d.title): no badge") }
+            badges += 1
+            let want = rgba(chipInk)
+            XCTAssertLessThanOrEqual(miss(px, want, over: fill), miss(px, rgba(amber), over: fill), "\(d.title): badge text \(px)")
+            if d.appearance == .light {
+                XCTAssertLessThan(miss(px, want, over: fill), miss(px, rgba(amber), over: fill), "\(d.title): the badge text is not #FFB300: \(px)")
+            }
+        }
+        XCTAssertEqual([light, dark, badges], [8, 14, 22])
     }
 
     // MARK: Pixels

@@ -1292,7 +1292,7 @@ struct AgentLayoutRowView: View {
                 HStack(spacing: sz(2)) {
                     Circle().fill(agentStateColor(.blocked)).frame(width: sz(5), height: sz(5))
                     Text("\(row.blocked)").font(Neon.font(9.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(agentStateColor(.blocked)).fixedSize()
+                        .foregroundStyle(AgentSidebarRowView.amberInk).fixedSize()
                 }
                 .frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
                 .padding(.trailing, sz(10))
@@ -1610,13 +1610,21 @@ extension AgentSidebarRowView {
         switch ink {
         case .quiet: return Neon.textSecondary
         case .blue: return Neon.blue
-        case .blocked: return agentStateColor(.blocked)
+        case .blocked: return amberInk
         }
+    }
+    /// #1451 step b: the needs-input amber as TEXT. #FFB300 reads 1.4 to 1.6:1 on the light themes' surfaces (under the #1360
+    /// 3:1 bar), so where it is under 3:1 over the theme's sidebar the same hue, darker, is drawn (#8A5A00: 4.6 to 5.4:1 over the
+    /// light rows with the 0.14 wash); the dark themes read 8:1 and keep #FFB300 exactly. Fills and dots keep agentStateColor.
+    static let darkAmber = Color(red: 138 / 255, green: 90 / 255, blue: 0)
+    static var amberInk: Color {
+        ThemeRuntime.contrastRatio(agentStateColor(.blocked), Neon.sidebar) < 3 ? darkAmber : agentStateColor(.blocked)
     }
     /// #1451: a PR chip wears the "Needs input" badge's amber (AgentStateChip: the state colour as text, at 0.14 as the fill; the
     /// badge has no stroke), in Agent Sessions rows and the island's cards. Selected (or hovered), the text is `ink`'s textPrimary.
     static func prChipInk(selected: Bool) -> Color { ink(.blocked, selected: selected) }
-    static var prChipFill: Color { agentStateColor(.blocked).opacity(0.14) }
+    static let prChipFillOpacity = 0.14
+    static var prChipFill: Color { agentStateColor(.blocked).opacity(prChipFillOpacity) }
     /// #1360: the subagents count's outline: textPrimary, selected or not (3:1 over the row on all 22 themes, and stronger
     /// than the quiet ink of the counts beside it on an unselected row; AgentCountOutlineTests).
     static func outlineInk(selected: Bool) -> Color { Neon.textPrimary }
@@ -3095,18 +3103,19 @@ struct AgentStateChip: View {
             if ended {
                 chip(Self.endedGlyph, label, Neon.textSecondary).modifier(AgentHeaderRenameHidden(renaming: renaming))
             } else {
-                chip(state.glyph, label, agentStateColor(state)).modifier(AgentHeaderRenameHidden(renaming: renaming))
+                chip(state.glyph, label, agentStateColor(state), ink: state == .blocked ? AgentSidebarRowView.amberInk : nil).modifier(AgentHeaderRenameHidden(renaming: renaming))
             }
         }
         .fixedSize()
     }
 
-    func chip(_ glyph: String, _ label: String, _ color: Color) -> some View {
+    /// `ink`: the text's colour when it is not the fill's (#1451 step b: the readable amber of a light theme).
+    func chip(_ glyph: String, _ label: String, _ color: Color, ink: Color? = nil) -> some View {
         HStack(spacing: sz(4)) {
             Text(glyph).font(Neon.font(9, weight: .bold))
             Text(label).font(Neon.font(10, weight: .semibold))
         }
-        .foregroundStyle(color)
+        .foregroundStyle(ink ?? color)
         .padding(.horizontal, sz(7)).padding(.vertical, sz(2))
         .background(Capsule().fill(color.opacity(0.14)))
         .fixedSize()
