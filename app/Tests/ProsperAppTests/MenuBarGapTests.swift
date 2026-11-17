@@ -101,12 +101,35 @@ final class MenuBarLiveBarGuardTests: XCTestCase {
         return out.sorted()
     }
 
+    /// The two controller regexes, each behind the substring every match must contain (a plain scan is far
+    /// cheaper than a debug-build regex over every test line): "shared" for the first, "MenuBarManager" for the second.
+    private static func namesAController(_ line: Substring) -> Bool {
+        (line.contains("shared")
+            && line.contains(/(StatsController|CalendarBarController|MixerPanelController|MenuBarManager)\s*\.\s*shared\b/))
+            || (line.contains("MenuBar" + "Manager") && line.contains(/\bMenuBarManager\s*\(/))
+    }
+
+    /// The pre-checked predicate equals the plain regex predicate on each matching form and on near misses.
+    func testThePrecheckedPredicateEqualsThePlainRegexes() {
+        // Split names: this file must never match its own guard row.
+        let mgr = "MenuBar" + "Manager", cal = "CalendarBar" + "Controller", st = "Stats" + "Controller"
+        let mx = "MixerPanel" + "Controller", sh = "sha" + "red"
+        let samples = ["let m = \(mgr) (", "let m = \(mgr)()", "\(st) . \(sh)", "\(cal).\(sh)",
+                       "x.\(mx).\(sh)", "\(mgr).\(sh)", "\(mgr)X(", "X\(mgr)(", "\(sh)Foo",
+                       "\(st).\(sh)Foo", "\(st).", sh, "", "let x = 1"]
+        for s in samples {
+            let line = Substring(s)
+            let plain = line.contains(/(StatsController|CalendarBarController|MixerPanelController|MenuBarManager)\s*\.\s*shared\b/)
+                || line.contains(/\bMenuBarManager\s*\(/)
+            XCTAssertEqual(Self.namesAController(line), plain, s)
+        }
+        XCTAssertTrue(samples.filter { Self.namesAController(Substring($0)) }.count == 6, "six matching forms")
+    }
+
     func testNoTestReachesTheLiveMenuBar() throws {
         let sys = Self.sys, cal = "CalendarBar" + "Controller", mgr = "MenuBar" + "Manager"
         let hits = try lines(under: "Tests") { line in
-            line.contains(sys)
-                || line.contains(/(StatsController|CalendarBarController|MixerPanelController|MenuBarManager)\s*\.\s*shared\b/)
-                || line.contains(/\bMenuBarManager\s*\(/)
+            line.contains(sys) || Self.namesAController(line)
         }
         // Today's lines: assertions that an item is NOT on the system bar, its thickness (no item), a doc
         // comment, the calendar's hotkey seams (never reload()), and one bare manager never reconciled.
