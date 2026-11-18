@@ -360,6 +360,10 @@ enum LidSleepHelper {
         chainLock.unlock()
     }
 
+    /// The extension host's lid-override set/release (#1549). A test seam: rows swap in a fake so the live
+    /// caffeinateSetDisableLidSleep and resetResources run with no XPC or pmset. The app keeps setDisabled.
+    nonisolated(unsafe) static var applyExtensionOverride: @Sendable (Bool) async -> Bool = { await LidSleepHelper.setDisabled($0) }
+
     private static func makeConnection() -> NSXPCConnection {
         let c = NSXPCConnection(machServiceName: helperMachServiceName, options: .privileged)
         c.remoteObjectInterface = NSXPCInterface(with: ProsperHelperProtocol.self)

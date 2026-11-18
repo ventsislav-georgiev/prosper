@@ -1887,6 +1887,8 @@ tag from the now-released section and put it on the new top draft.
   deleted on disk shows "Deleted on disk" and Save writes it again. (#1545)
 - Added a "Show plan usage" checkbox in Settings > Agent Island (on by default) to hide the plan
   usage line on the island. (#1552)
+- Turning off an extension that had just asked to keep the Mac awake with the lid closed now always
+  lets the Mac sleep again, even when that request was still being applied. (#1549)
 
 ## v2.174.0
 

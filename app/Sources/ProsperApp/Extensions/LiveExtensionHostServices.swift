@@ -660,7 +660,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// also resets it if the app crashes (the XPC connection drops). Only records
     /// the override as held when the helper confirms it actually applied.
     func caffeinateSetDisableLidSleep(extensionID: String, on: Bool) async {
-        let ok = await LidSleepHelper.setDisabled(on)
+        let ok = await LidSleepHelper.applyExtensionOverride(on)
         if ok || !on {
             // On failure to turn ON, don't claim we hold it. Turning OFF always
             // clears our bookkeeping regardless (best-effort release).
@@ -967,12 +967,16 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func resetResources(extensionID: String) {
         let hadLid = ExtensionResources.shared.releaseAll(extID: extensionID)
-        if hadLid {
-            // Route through the SAME serial chain as set_disable_lid_sleep so this
-            // teardown release is ordered against the extension's own applies. On a
-            // settings-Apply reload (teardown then re-enable) a direct release could
-            // otherwise land AFTER the re-enable's set(true) and wedge sleep back on.
-            LidSleepHelper.enqueueApply { _ = await LidSleepHelper.setDisabled(false) }
+        // Route through the SAME serial chain as set_disable_lid_sleep so this
+        // teardown release is ordered against the extension's own applies. On a
+        // settings-Apply reload (teardown then re-enable) a direct release could
+        // otherwise land AFTER the re-enable's set(true) and wedge sleep back on.
+        // #1549: always enqueued, so an apply queued before this teardown has landed (and set
+        // the flag) when it runs; it releases only if THIS extension held the flag.
+        LidSleepHelper.enqueueApply {
+            let held = ExtensionResources.shared.holdsLidSleepDisabled(extID: extensionID)
+            ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: false)
+            if hadLid || held { _ = await LidSleepHelper.applyExtensionOverride(false) }
         }
         Task { @MainActor in
             ExtensionMenuBar.shared.removeAll(extensionID: extensionID)
