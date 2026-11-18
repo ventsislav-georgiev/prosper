@@ -108,6 +108,50 @@ final class ExtensionPrefKeyTests: XCTestCase {
         XCTAssertEqual(host.prefGet(extensionID: short, key: "y.k"), "short-value")
     }
 
+    /// #1596 row 1: migrated once with com.example.x loaded; once it is gone (uninstalled with prefs kept, or
+    /// refused) the next run must not hand its old "foo" or its post-update "bar" to com.example as "x.foo"/"x.bar".
+    func testMigrationDoesNotRunAgainAfterTheLongerIDIsUnloaded() {
+        let d = scratchDefaults("prefkey")
+        d.set("long-value", forKey: "ext.com.example.x.foo")
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: [short, long], in: d)
+        XCTAssertTrue(d.bool(forKey: LiveExtensionHostServices.dottedPrefsMigratedKey), "the first run set no marker")
+        let host = LiveExtensionHostServices(defaults: d)
+        host.prefSet(extensionID: long, key: "bar", value: "long-later")
+
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: [short], in: d)
+        XCTAssertTrue(host.prefGet(extensionID: short, key: "x.foo") == nil, "the shorter id read the unloaded id's key")
+        XCTAssertTrue(host.prefGet(extensionID: short, key: "x.bar") == nil, "the shorter id read the unloaded id's later write")
+        let copied = d.dictionaryRepresentation().keys.filter { $0.hasPrefix("ext.com.example.x%2E") }
+        XCTAssertEqual(copied, [], "a later run made new names")
+    }
+
+    /// #1596 row 2: with the marker set, a run copies nothing, even a fresh dotted key of a loaded id.
+    func testMigrationCopiesNothingOnceTheMarkerIsSet() {
+        let d = scratchDefaults("prefkey")
+        d.set(true, forKey: LiveExtensionHostServices.dottedPrefsMigratedKey)
+        d.set("fresh", forKey: "ext.com.example.y.k")
+        let before = d.dictionaryRepresentation().filter { $0.key.hasPrefix("ext.") }.mapValues { "\($0)" }
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: [short], in: d)
+        let after = d.dictionaryRepresentation().filter { $0.key.hasPrefix("ext.") }.mapValues { "\($0)" }
+        XCTAssertEqual(before, after)
+        XCTAssertTrue(d.object(forKey: "ext.com.example.y%2Ek") == nil, "a marked domain was migrated again")
+    }
+
+    /// #1596 row 3: the first run still migrates, never overwrites a new name already set, and an empty scan
+    /// (no id found) does not use up the one run.
+    func testFirstRunMigratesWithoutOverwritingAndAnEmptyScanSetsNoMarker() {
+        let d = scratchDefaults("prefkey")
+        d.set("old", forKey: "ext.com.example.y.k")
+        d.set("old", forKey: "ext.com.example.y.z")
+        d.set("newer", forKey: "ext.com.example.y%2Ez")
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: [], in: d)
+        XCTAssertFalse(d.bool(forKey: LiveExtensionHostServices.dottedPrefsMigratedKey), "an empty scan set the marker")
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: [short], in: d)
+        XCTAssertEqual(d.string(forKey: "ext.com.example.y%2Ek"), "old")
+        XCTAssertEqual(d.string(forKey: "ext.com.example.y%2Ez"), "newer", "the migration overwrote a newer value")
+        XCTAssertTrue(d.bool(forKey: LiveExtensionHostServices.dottedPrefsMigratedKey))
+    }
+
     /// discover() runs the migration on the registry's defaults, so an installed extension's old dotted key
     /// reads back on the next launch.
     @MainActor
@@ -125,6 +169,11 @@ final class ExtensionPrefKeyTests: XCTestCase {
         registry.discover()
         try XCTSkipIf(registry.record(id: "com.test.prefkeyprobe") == nil, "synthetic ext not discovered")
         XCTAssertEqual(d.string(forKey: "ext.com.test.prefkeyprobe.source%2Esafari"), "kept")
+
+        // #1596: a later discover (each launch, each uninstall) migrates nothing more.
+        d.set("fresh", forKey: "ext.com.test.prefkeyprobe.source.chrome")
+        registry.discover()
+        XCTAssertTrue(d.object(forKey: "ext.com.test.prefkeyprobe.source%2Echrome") == nil, "discover migrated again")
     }
 
     private static let manifest = """

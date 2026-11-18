@@ -286,7 +286,10 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
     /// Copies only where the new name is unset and removes nothing, so a second run changes nothing.
     /// shortcut: with ids A and A.x both loaded, an old "ext.A.x.y.k" is copied to both (it was both of theirs
     /// before the change and nothing tells the owner); A.x's later writes go to its new name, which A cannot reach.
+    /// #1596: runs once per defaults domain (marker below, outside "ext."): a later run would hand a not-loaded
+    /// A.x's keys (uninstalled with prefs kept, or refused), even its undotted post-update writes, to A.
     static func migrateDottedPrefKeys(ids: [String], in defaults: UserDefaults) {
+        guard !defaults.bool(forKey: dottedPrefsMigratedKey) else { return }
         let known = Set(ids)
         let old = defaults.dictionaryRepresentation().filter { $0.key.hasPrefix("ext.") }
         for id in known {
@@ -298,7 +301,11 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
                 if defaults.object(forKey: new) == nil { defaults.set(value, forKey: new) }
             }
         }
+        // An empty scan (no extension found) migrated nothing, so it does not use up the one run.
+        if !known.isEmpty { defaults.set(true, forKey: dottedPrefsMigratedKey) }
     }
+
+    static let dottedPrefsMigratedKey = "prosper.extPrefsDottedMigrated"
 
     // MARK: Privacy grants (read-only check for host.perms.has)
 
