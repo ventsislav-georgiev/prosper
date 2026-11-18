@@ -1,0 +1,132 @@
+{
+ "entry": 1569,
+ "filter": "XrayExtensionCardTests/testOneSpanNoMarkTwoSpansMarkNoHandlerNoMark|XrayExtensionCardTests/testOverlapsGoToTheDchMarkThenTheFirstRule|XrayExtensionCardTests/testCaps|XrayHoverTests/testExtensionCardArgHasNoTranscriptAndSpawnsNoDch|XrayExtensionCardTests/testTwoInFlightOldestDroppedSameJoined|XrayExtensionCardTests/testKeptSixtySecondsFailedTenLRU256|XrayExtensionCardTests/testReloadMidRequestShowsUnavailable|XrayExtensionCardTests/testLuaInfiniteLoopFailsTheCardAndTheLaneServesTheNext|XrayExtensionCardTests/testDropCancelsTheHostWait|XrayExtensionCardTests/testTimeoutFailsTheCardAndDropsTheCall|XrayExtensionCardTests/testHandlerTakesATableAndReturnsATable",
+ "mutants": [
+  {
+   "name": "m1_single_span_marked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "n[$0.mark.key, default: 0] >= 2",
+   "new": "n[$0.mark.key, default: 0] >= 1",
+   "expect": "killed"
+  },
+  {
+   "name": "m2_no_handler_marked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "for rule in rules where rule.handler != nil {",
+   "new": "for rule in rules {",
+   "expect": "killed"
+  },
+  {
+   "name": "m3_dch_overlap_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let over = (taken + out.map(\\.mark)).contains {",
+   "new": "let over = (out.map(\\.mark)).contains {",
+   "expect": "killed"
+  },
+  {
+   "name": "m4_title_uncapped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "OutsideText.shown(o[\"title\"] as? String ?? \"\", max: titleCap)",
+   "new": "OutsideText.shown(o[\"title\"] as? String ?? \"\", max: 300)",
+   "expect": "killed"
+  },
+  {
+   "name": "m5_arg_takes_the_screen_line",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "extMatches = Dictionary(ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })",
+   "new": "extMatches = Dictionary(ext.map { ($0.mark.key, XrayExtensionRefs.Match(rule: $0.match.rule, range: $0.match.range, text: lines[$0.mark.row], parts: $0.match.parts)) }, uniquingKeysWith: { a, _ in a })",
+   "expect": "killed"
+  },
+  {
+   "name": "m5b_arg_extra_key",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "\"text\": m.text, \"parts\": m.parts,",
+   "new": "\"text\": m.text, \"line\": m.text, \"parts\": m.parts,",
+   "expect": "killed"
+  },
+  {
+   "name": "m6_three_in_flight",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if flying.count >= Self.maxInFlight, let old = flying.first {",
+   "new": "if flying.count >= 3, let old = flying.first {",
+   "expect": "killed"
+  },
+  {
+   "name": "m7_no_join",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if let f = flying.first(where: { $0.key == key }) { return f.task }",
+   "new": "if false, let f = flying.first(where: { $0.key == key }) { return f.task }",
+   "expect": "killed"
+  },
+  {
+   "name": "m8_failed_kept_60s",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "k.outcome.isFailure ? Self.keepFailed : Self.keep",
+   "new": "k.outcome.isFailure ? Self.keep : Self.keep",
+   "expect": "killed"
+  },
+  {
+   "name": "m9_lru_257",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "while order.count > Self.maxKept {",
+   "new": "while order.count > Self.maxKept + 1 {",
+   "expect": "killed"
+  },
+  {
+   "name": "m10_reload_shows_answer",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if self.version() != started || started == nil {",
+   "new": "if started == nil {",
+   "expect": "killed"
+  },
+  {
+   "name": "m11_failure_reads_nothing",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "spec.lane?.fail(String(describing: error))",
+   "new": "_ = spec.lane",
+   "expect": "killed"
+  },
+  {
+   "name": "m12_drop_keeps_host_wait",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "let lane = LaneCall.current, token = lane?.watch { task.cancel() }",
+   "new": "let lane: LaneCall? = nil, token: Int? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "m14_timeout_not_said",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "lane.fail(XrayExtensionRefs.timedOut)",
+   "new": "_ = XrayExtensionRefs.timedOut",
+   "expect": "killed"
+  },
+  {
+   "name": "m15_ext_card_runs_dch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if extCard == nil { read = model?.hoverRead(e) }",
+   "new": "if true { read = model?.hoverRead(e) }",
+   "expect": "killed"
+  },
+  {
+   "name": "m16_six_actions",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": ".compactMap(action).prefix(maxActions)",
+   "new": ".compactMap(action).prefix(6)",
+   "expect": "killed"
+  },
+  {
+   "name": "m17_shim_passes_the_string",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "local r = f(host.json.decode(s))",
+   "new": "local r = f(s)",
+   "expect": "killed"
+  },
+  {
+   "name": "m18_shim_takes_a_string_answer",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if type(r) ~= \"table\" then error(",
+   "new": "if type(r) == \"boolean\" then error(",
+   "expect": "killed"
+  }
+ ]
+}

@@ -402,7 +402,7 @@ A `dynamic = true` section delivers every row event to `settings_action`, so a t
 Side-effecting host calls form two tiers above the open reads:
 
 - **Automation tier** — hotkeys/key-rules, app launch/hide/focus, `osascript`, keyboard-source set, default-browser set, `host.http`, file reads (`host.fs.read`, any path except the secret paths below), filesystem watches, power/caffeinate, menubar/dialog/alert. Granted to bundled **system extensions** *and* to marketplace/user extensions you have **trusted**.
-- **System-only tier** — `host.shell.run`, the coding agent, reading the secret paths below, `host.fallback.*`, and destructive file ops (trash). Reachable by a **system extension**, *or* **any extension you grant System Access** (§ below).
+- **System-only tier** — `host.shell.run`, `host.process.run`, the coding agent, reading the secret paths below, `host.fallback.*`, and destructive file ops (trash). Reachable by a **system extension**, *or* **any extension you grant System Access** (§ below).
 
 **Secret paths.** Below the system tier, `host.fs.read`, `host.fs.exists`, `host.fs.attributes`, `host.fs.list_dirs`, `host.fs.watch` and `host.files.search` treat these as missing, each with everything inside it: `~/.ssh`, `~/Library/Keychains`, `~/.ccpool`, `~/.config/mcpbridge`, `~/.claude/settings.json`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`, `~/.config/gh`, `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.claude.json`, `~/.claude/.credentials.json`, `~/.config/prosper/device.key`, `~/.config/prosper/supporter.dat`, and the folder named by `CCPOOL_HOME` when Prosper was started with it set (a relative value counts from Prosper's working directory, as ccpool reads it; a value starting with `~` is also protected under your home folder). The answer is the same as for a path that does not exist, also when the path goes there through a symlink, `..` or different letter case. A listing of a parent folder does not name them, and a watch on it does not report changes inside them. A refusal writes one line to Prosper's log, naming the extension and the call (never the path), once per path while the extension stays loaded. The list is `SecretPaths` in [`ExtensionFSWatch.swift`](app/Sources/ProsperApp/Extensions/ExtensionFSWatch.swift). It is not a sandbox: `host.osascript` can still run shell (see the warning below).
 
@@ -434,6 +434,38 @@ A background call still running when its extension is turned off, untrusted, res
 - `host.fs.read(path)` on the secret paths above
 - `host.fallback.*` — fallback-search provider list/save/mode/import ([`fallback-search`](app/Sources/ProsperApp/Resources/extensions/fallback-search/) owns the settings UI; per-keystroke row building is native)
 - the coding agent and destructive file ops (trash)
+
+### `host.process.run`
+
+Runs one program directly, with no shell. System tier only (§ above).
+
+```lua
+local r = host.process.run{ argv = { "/usr/bin/git", "status", "--short" }, timeout = 5, max_bytes = 65536 }
+if r.ok then host.log.info(r.stdout) else host.log.warn(r.error or ("exit " .. tostring(r.status))) end
+```
+
+**Takes** one table:
+
+| Key | Meaning |
+| --- | ------- |
+| `argv` | Required. A list of strings. `argv[1]` is the program, the rest are its arguments, passed as they are (no quoting, no globbing, no `~`). At most 1024 entries; a NUL byte in an entry is an error. |
+| `timeout` | Seconds. Default 5, at most 10 (a larger value is cut to 10, a negative one to 0). A value that is not a finite number means the default. |
+| `max_bytes` | Cap per stream, in bytes. Default and maximum 1 MiB; a larger value is cut to 1 MiB, a negative one to 0. |
+
+Any other key is a Lua error naming it, as is an `argv` that is not a list, an entry that is not a string, or an entry with a NUL byte.
+
+**Returns** `{ ok, status, stdout, stderr, timed_out, truncated [, error] }`. `ok` is true only when nothing refused the call, it did not time out, and `status` is 0. `status` is the exit code; a program killed by a signal reads as 128 plus the signal, as in a shell. `truncated` is true when either stream went past `max_bytes` (the rest is read and thrown away, so the program is never blocked on a full pipe). A refusal sets `error` (it starts with `host.process.run: `) and runs nothing.
+
+**What is refused** (in `error`, not raised): a missing `argv[1]`, a path that is not absolute, does not exist, is not a regular file or is not executable, a program that fails to start, a call from an extension below the system tier, an extension with no directory, and a third program while two are already running.
+
+**Limits, as the code has them:**
+
+- `argv[1]` must be an absolute path to an existing, regular, executable file. There is no `PATH` lookup. Run a shell (`/bin/sh`, `-c`) only if you want one; `host.shell.run` is the shell call.
+- The environment is fixed: `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `HOME`, `LANG=en_US.UTF-8`, and nothing else. Stdin is `/dev/null`. The working directory is the extension's own folder.
+- At most **two** programs run at once, for the whole app. A third is refused at once, it does not wait.
+- At the timeout, the program's whole process group gets SIGTERM, and SIGKILL one second later. `timed_out` is true. The call returns by about 2.5 seconds after the timeout at the latest, even if a child that left the group still holds a pipe.
+- The same group kill runs when the call is dropped (an X-ray ref card dropped for a newer one or timed out, § 13) and when Prosper quits. A program that ends by itself but leaves members of its group behind has them killed too.
+- A call that is still running when the extension is turned off, untrusted, reset, reinstalled or removed is answered with `ok = false` and `error = "host.process.run: this call was stopped"`.
 
 ### Managed config (`host.config`)
 
@@ -718,3 +750,95 @@ A kit's hooks and status line run as the person, in every Claude Code session, o
 2. Every script is plain text, executable, inside the kit folder, and the whole kit is under 256 KB.
 3. Nothing in the kit is personal or secret: it is public.
 4. Try it as a local install first (Settings > Extensions), then publish.
+
+---
+
+## 13. X-ray refs (`[[contributes.xrefs]]`)
+
+An extension can teach the Terminal's X-ray view a new kind of reference, like a ticket id. Prosper underlines each match in a Terminal pane. Hovering one, or pinning it, calls a Lua handler of the extension that returns a small card. Worked example: [`app/Examples/extensions/xref-example/`](app/Examples/extensions/xref-example/).
+
+```toml
+[[contributes.xrefs]]
+id       = "acme-ticket"
+template = "ACME-{n}"
+label    = "Acme ticket"
+handler  = "xref_card"
+timeout  = 3
+```
+
+The extension must be enabled and **trusted** for its rules to load. The rules are rebuilt whenever extensions reload, are enabled, disabled, trusted or untrusted.
+
+### The fields
+
+| Field | Rule |
+| ----- | ---- |
+| `id` | Required. A non-empty string, the rule's name in the log. |
+| `template` | Required. A non-empty string; see below. |
+| `label` | The card's source line. A non-empty string, shown up to 80 characters. Default: the `id`. |
+| `in_code` | `"never"` (default) or `"whole"`. Whether a match inside a code line counts: never, or only when it is the whole trimmed line. The Terminal underline does not use it yet; it reads each viewport line as text. |
+| `handler` | A Lua global of the extension. Without it the rule draws nothing: no underline, no card. |
+| `timeout` | Whole seconds, 1 to 10. Default 3. How long the card waits for the handler. |
+
+A field of the wrong type refuses the row (for example a `timeout` that is not an integer in 1..10).
+
+### The template
+
+Literal text plus placeholders. Literals match ignoring ASCII case (`acme-12` matches `ACME-{n}`).
+
+| Placeholder | Takes |
+| ----------- | ----- |
+| `{n}` | 1 to 7 digits |
+| `{id}` | a letter or digit, then up to 63 of letters, digits, `_`, `.`, `-` |
+| `{KEY}` | an uppercase letter, then 1 to 9 uppercase letters or digits (`API`, `ACME2`) |
+| `{repo}` | `name`, or `owner/name`: owner 1 to 39 of letters, digits, `-`; name 1 to 100 of letters, digits, `_`, `.`, `-` |
+
+Rules, each a refusal when broken:
+
+- At most **64 characters**.
+- At least 1 and at most **3** placeholders. Only the four above; a `}` with no `{`, an unclosed `{` or an unknown name is refused.
+- No two placeholders side by side: put a literal between them.
+- A literal right after a placeholder may not start with a character that placeholder could take (so `{n}0` and `{id}-{n}` are refused; `{KEY}-{n}` is fine). This is what keeps a match unambiguous.
+
+A match starts and ends at a word boundary: no letter, digit or `_` touches it on either side. Matches in one line never overlap, and a span over a built-in (dch) underline is dropped; between two rules, the first wins.
+
+### Refusals and caps
+
+A refused rule is skipped with one line in Prosper's log (`extension <id>: xref <name> refused (<reason>)`); the rest of the extension still loads. Reasons: not a table, an unreadable field, a missing or wrong field (above), a bad template (above), a template already used by a loaded rule (the first wins), more than **16** rules in one extension, more than **64** rules in all. If `contributes.xrefs` is not an array of tables the whole list is ignored, with one line.
+
+### What is drawn
+
+A span is underlined only when its rule has a handler **and** the same text appears **at least twice** on screen (in the visible rows of the focused, live Terminal pane). A single occurrence is left alone. Hover a span to read its card, or pin it.
+
+### The handler
+
+```lua
+function xref_card(a)           -- a = { text, parts, dir, session }
+  local n = a.parts[1]
+  if n ~= "12" then return nil end                 -- nil or {}: no card
+  return {
+    title = "Login retries",
+    subtitle = "ACME-" .. n,
+    body = "Owner: acme/api",
+    actions = {
+      { label = "Open", url = "https://example.com/acme/tickets/" .. n },
+      { label = "Copy id", copy = "ACME-" .. n },
+    },
+  }
+end
+```
+
+**In** (one table): `text` the matched text, `parts` each placeholder's text in template order, `dir` the pane's directory, `session` the session name (`""` when unknown). Never any other line of the screen or the transcript.
+
+**Out**: `nil` or an empty table (no card, "Nothing from <label>"); `{ error = "..." }` (the card shows the message, cut to 200 characters); or a card `{ title, subtitle, body, actions }`. Any other value, or a thrown error, fails the card. A card with every field empty is no card. The whole answer may be at most 64 KB.
+
+Caps: `title` 120 characters, `subtitle` 200, `body` 8 KB, 4 `actions` (extra ones are dropped). Every string the handler returns is treated as outside text and cleaned before it is shown. An action is data, never code: `{ label, url }` (an `http` or `https` URL with a host) opens the URL; `{ label, copy }` copies the text (up to 8 KB). `label` is up to 40 characters; an action with neither a usable `url` nor a `copy` is dropped.
+
+The handler runs on the extension's own call lane, one call at a time, with the usual `host.*` surface for its tier. A handler that waits in a host call (such as `host.process.run`) is cancelled when its card is dropped.
+
+### Requests in flight and caching
+
+- Per window, at most **2** handler calls run at once. A third drops the oldest (its card reads "Dropped for a newer card"; the next ask runs it again).
+- The same request (same extension, rule and argument) joins the call already running.
+- At `timeout` seconds the call is dropped and the card reads "The extension did not answer in time".
+- A reload, disable or untrust while a call runs turns its answer into "Extension unavailable: it was reloaded or turned off".
+- An answer is kept 60 seconds; a failure 10. At most 256 answers are kept (the oldest used goes first).
