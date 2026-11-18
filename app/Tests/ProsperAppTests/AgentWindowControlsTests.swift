@@ -459,9 +459,10 @@ extension AgentWindowInteractionTests {
 // MARK: 3.5 in the model (review round 1): the lock holds without the UI too
 
 extension AgentWindowInteractionTests {
-    /// Under every running text, every write path of the interaction model (send, interrupt, a
-    /// single choice, a preview option, multi Submit, Other, Chat about this, plan approve)
-    /// refuses: the notice is the lock's line and nothing reaches the pty. Cleared, each one goes.
+    /// Under every running text, send and interrupt refuse: the notice is the lock's line and nothing
+    /// reaches the pty. #1333: the prompt answers (a single choice, a preview option, multi Submit, Other,
+    /// Chat about this, plan approve) go under Restarting and Stopping only, as in a phone-started Restart,
+    /// and refuse under every other running text. Cleared, each one goes.
     /// Through the fakes only; the lock is read through the rowText seam.
     @MainActor
     func testAgentWindowInteractionRefusesEveryWriteWhileARunningTextShows() throws {
@@ -469,6 +470,7 @@ extension AgentWindowInteractionTests {
         struct NoPanel: Error { let why: String }   // thrown: the test fails, never skips
         struct Case {
             let name: String
+            var answers = false   // #1333: a prompt answer goes under Restarting and Stopping only
             let make: () throws -> (AgentWindowInteraction, () -> Int)
             let go: (AgentWindowInteraction) throws -> Void
         }
@@ -501,12 +503,12 @@ extension AgentWindowInteractionTests {
         let cases = [
             Case(name: "send", make: message(["idle", "working"], .idle)) { $0.send() },
             Case(name: "interrupt", make: message(["working", "idle"], .working)) { $0.interrupt() },
-            Case(name: "single choice", make: form(.single, ask: Self.singleAsk)) { $0.answer(try prompt($0).buttons[0]) },
-            Case(name: "preview", make: form(.preview, ask: Self.previewAsk)) { $0.choosePreview(try prompt($0).buttons[0]) },
-            Case(name: "multi submit", make: form(.multi, ask: Self.multiAsk)) { $0.picks = [1]; $0.submitPicks() },
-            Case(name: "other", make: form(.single, ask: Self.singleAsk)) { $0.otherText = "Teal"; $0.sendOther() },
-            Case(name: "chat", make: form(.single, ask: Self.singleAsk)) { $0.chat() },
-            Case(name: "plan approve", make: form(.plan, plan: Self.planInput)) { i in
+            Case(name: "single choice", answers: true, make: form(.single, ask: Self.singleAsk)) { $0.answer(try prompt($0).buttons[0]) },
+            Case(name: "preview", answers: true, make: form(.preview, ask: Self.previewAsk)) { $0.choosePreview(try prompt($0).buttons[0]) },
+            Case(name: "multi submit", answers: true, make: form(.multi, ask: Self.multiAsk)) { $0.picks = [1]; $0.submitPicks() },
+            Case(name: "other", answers: true, make: form(.single, ask: Self.singleAsk)) { $0.otherText = "Teal"; $0.sendOther() },
+            Case(name: "chat", answers: true, make: form(.single, ask: Self.singleAsk)) { $0.chat() },
+            Case(name: "plan approve", answers: true, make: form(.plan, plan: Self.planInput)) { i in
                 let w = try prompt(i)
                 i.answer(try XCTUnwrap(w.buttons.first { w.approve.contains($0.digit) }, "an approve row"))
             },
@@ -517,6 +519,12 @@ extension AgentWindowInteractionTests {
                 row = t
                 let (i, writes) = try c.make()
                 try c.go(i)
+                if c.answers, [AgentIsland.restartingText, AgentIsland.stoppingText].contains(t) {
+                    until("\(c.name) under \(t) goes") { writes() > 0 }
+                    XCTAssertTrue(i.notice != AgentWindowControls.lockPlaceholder(t), "\(c.name) under \(t): no lock notice")
+                    until("\(c.name) under \(t) done") { !i.busy }
+                    continue
+                }
                 XCTAssertFalse(i.busy, "\(c.name) under \(t): nothing in flight")
                 XCTAssertEqual(i.notice, AgentWindowControls.lockPlaceholder(t), "\(c.name) under \(t): the notice says why")
                 RunLoop.current.run(until: Date().addingTimeInterval(0.02))

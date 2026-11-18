@@ -1849,6 +1849,10 @@ tag from the now-released section and put it on the new top draft.
   that needs your input. (#1536)
 - Extensions whose ids share a beginning (for example com.example and com.example.x) can no longer
   read or change each other's settings; settings saved before the update keep their values. (#1542)
+- Window prompt answers (a choice, Submit, Other, plan approval) now work while a Restart or Stop
+  started from the island is running, as they already did for one started from the phone; typed
+  messages and Esc, and any answer while a session is resuming or a message is being sent, stay
+  blocked until it finishes. (#1333)
 
 ## v2.174.0
 

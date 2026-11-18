@@ -1297,15 +1297,18 @@ final class AgentWindowInteraction: ObservableObject {
     }
 
     /// Through the controller's human-click path; on a result, one fresh read refreshes the panel.
-    /// #829 (spec 3.5): every write (send, interrupt, each prompt answer) passes here, so while a
-    /// Restart or Stop's running text shows on the row (dch types into Claude's composer) nothing
-    /// reaches the pty and the notice says why.
+    /// #829 (spec 3.5): every write passes here, so while a Restart or Stop's running text shows on the row
+    /// (dch types into Claude's composer) a send or an interrupt reaches nothing and the notice says why.
+    /// #1333: a prompt answer (prompt != nil) is not locked under the Restarting or Stopping text only: dch's pause
+    /// waits on exactly that answer (dch.c:7972-8010 at v1.76.0), as it does for a phone-started Restart. Under
+    /// any other running text (Resuming, Sending...) it stays refused: the session is coming up or a message is mid-write.
     private func act(_ s: AgentSession, prompt: AgentPrompt?, run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome,
                      sent: (@MainActor () -> Void)? = nil, tell: (@MainActor (AgentWindowOutcome) -> Void)? = nil) {
         // #1469: `tell` (a switch from a menu, whose session need not be the followed one) gets every notice instead.
         func say(_ why: String) { if let tell { tell(.failed(why)) } else { notice = why } }
         let row = if let rowText { rowText(s.key) } else { controller?.store?.actions[s.key] }
-        if let lock = AgentWindowControls.lock(row) {
+        if let lock = AgentWindowControls.lock(row),
+           prompt == nil || ![AgentIsland.restartingText, AgentIsland.stoppingText].contains(lock) {
             say(AgentWindowControls.lockPlaceholder(lock))
             return
         }
