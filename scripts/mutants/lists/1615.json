@@ -1,0 +1,48 @@
+{
+ "entry": 1615,
+ "filter": "AgentTerminalTests/testRemountOfALiveScreenAttachesAgainOnTheNextTurn|AgentTerminalTests/testAFocusSwitchBetweenTwoPanesKeepsBothSurfacesDrawing|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-mount-count",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        screen.mounts += 1\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-remount-call",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if screen.mounts > 1 { owner?.remount(screen) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-fed-guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard fed else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-stale-screen-guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard let self, self.key != nil, self.screen === s, self.child != nil else { return }",
+   "new": "guard let self, self.key != nil, self.child != nil else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-child-guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard let self, self.key != nil, self.screen === s, self.child != nil else { return }",
+   "new": "guard let self, self.key != nil, self.screen === s else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "remount-in-update",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        after(0) { [weak self] in\n            guard let self, self.key != nil, self.screen === s, self.child != nil else { return }\n            self.detach()\n            self.begin()\n        }\n",
+   "new": "        ({ [weak self] in\n            guard let self, self.key != nil, self.screen === s, self.child != nil else { return }\n            self.detach()\n            self.begin()\n        })()\n",
+   "expect": "killed"
+  }
+ ]
+}
