@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { stripTypeScriptTypes } from "node:module";
 import { DatabaseSync } from "node:sqlite";
@@ -23,7 +23,7 @@ const now = () => Math.floor(Date.now() / 1000);
 // A D1 stand-in over node:sqlite that records the rows each write statement changed.
 function world({ lastSeen, expiresAt = null }) {
   const raw = new DatabaseSync(":memory:");
-  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql", "0009_push_kind_index.sql", "0010_sessions_expires_index.sql"]) {
+  for (const f of readdirSync(new URL("../migrations/", import.meta.url)).sort()) {
     raw.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"));
   }
   raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(EMAIL, MAC, "Studio");

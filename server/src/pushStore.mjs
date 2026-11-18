@@ -46,6 +46,7 @@ const ROW_KEY = `email = ?1 AND device_id = ?2 AND kind = ?3 AND activity_id = ?
 const MAC_COLS =
   "m.seq, m.last_seen, m.online, m.snapshot, m.last_push_at, m.last_alert, m.idle_since, m.started_at, m.blocked, m.rev";
 // Binds ?1 email, ?2 device_id, ?4 activity_id: that activity's card is being rotated out.
+const OFFLINE_RETRY_WINDOW_S = 3600;
 const ROTATING = `EXISTS (SELECT 1 FROM push_tokens x WHERE x.email = ?1 AND x.device_id = ?2
   AND x.kind = 'la_expired' AND x.activity_id = ?4)`;
 // QA #357: the row's session has expired (expires_at < now: requireSession still accepts
@@ -532,6 +533,8 @@ export async function runCron(deps) {
        WHERE e.kind = 'la_expired'`,
     ).bind(now),
   ]);
+  // An offline Mac is read only for OFFLINE_RETRY_WINDOW_S after its last heartbeat (#1283, 0012's
+  // idx_push_macs_online_seen); a failed end not retried by then is still ended by the 8 h rotation.
   // Rows read (#1022): each online Mac, its devices row and its cards once, through
   // idx_push_tokens_mac. +t.kind keeps the planner off idx_push_tokens_kind: without
   // sqlite_stat1 it took that index for the two COUNT subqueries this replaced, so every online
@@ -541,13 +544,13 @@ export async function runCron(deps) {
       `SELECT m.email, m.mac_id, ${MAC_COLS}, d.name AS mac_name,
          COUNT(t.mac_id) AS cards, COUNT(CASE WHEN t.due_at <= ?1 THEN 1 END) AS due,
          COUNT(CASE WHEN t.fails > 0 AND t.fails < ${SEND_TRIES} THEN 1 END) AS pending
-       FROM push_macs m LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
+       FROM push_macs m INDEXED BY idx_push_macs_online_seen LEFT JOIN devices d ON d.email = m.email AND d.device_id = m.mac_id
        LEFT JOIN push_tokens t ON t.email = m.email AND +t.kind = 'la_update' AND t.mac_id = m.mac_id
-       WHERE m.online = 1 OR (m.online = 0 AND EXISTS (SELECT 1 FROM push_tokens f WHERE f.email = m.email
+       WHERE m.online = 1 OR (m.online = 0 AND m.last_seen >= ?2 AND EXISTS (SELECT 1 FROM push_tokens f WHERE f.email = m.email
          AND f.mac_id = m.mac_id AND +f.kind = 'la_update' AND f.fails > 0 AND f.fails < ${SEND_TRIES}))
        GROUP BY m.email, m.mac_id`,
     )
-    .bind(now)
+    .bind(now, now - OFFLINE_RETRY_WINDOW_S)
     .all();
   // One invocation serves every account, so its subrequests are budgeted (a run past
   // the cap would fail everyone's pushes); what does not fit runs next minute.

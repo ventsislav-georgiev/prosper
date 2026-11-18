@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { sendApns, collapseId, LA_MAX_AGE_S, ROTATE_LEAD_S, RATE_PER_MIN } from "../src/pushLogic.mjs";
 import {
@@ -68,7 +68,7 @@ const putToken = (deps, email, body, hash = HASH[email]) => putTokenAs(deps, ema
 
 function setup() {
   const raw = new DatabaseSync(":memory:");
-  for (const f of ["0001_init.sql", "0006_push.sql", "0007_push_harden.sql", "0008_push_mode.sql", "0009_push_kind_index.sql", "0010_sessions_expires_index.sql"]) {
+  for (const f of readdirSync(new URL("../migrations/", import.meta.url)).sort()) {
     raw.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), "utf8"));
   }
   raw.prepare(`INSERT INTO devices VALUES (?, ?, ?, 0, 0)`).run(ALICE, MAC, "Studio");
@@ -2284,7 +2284,7 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
   const n = countSubrequests(t);
   await runCron(t.deps);
   assert.deepEqual(n, { d1: 2, apns: 0 }, "the purge batch and the online-Mac read; no step is due");
-  const sql = seen.find((s) => s.includes("WHERE m.online = 1"));
+  const sql = seen.find((s) => s.includes("INDEXED BY idx_push_macs_online_seen"));
   assert.ok(sql);
 
   raw("la_expired", ALICE, PHONE2, MAC, "6"); // a rotated card is not a card
@@ -2293,7 +2293,7 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
   t.raw.prepare(`UPDATE push_tokens SET due_at = ? WHERE token = ?`).run(t.clock.now + 1, tok("3")); // not yet due
   const got = t.raw
     .prepare(sql)
-    .all(t.clock.now)
+    .all(t.clock.now, t.clock.now - 3600)
     .map((r) => [r.email, r.mac_id, r.mac_name, r.cards, r.due])
     .sort();
   assert.deepEqual(got, [
@@ -2317,6 +2317,9 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
     const fSteps = plan.filter((d) => /^SEARCH f /.test(d));
     assert.ok(fSteps.length >= 1 && fSteps.every((d) => d.startsWith("SEARCH f USING INDEX idx_push_tokens_mac (email=? AND mac_id=?)")), why);
     assert.ok(!plan.some((d) => /^SCAN f\b/.test(d)), why);
+    // #1283: the offline arm is bounded in time through 0012's index (no SCAN m, found by the "SEARCH m" or MULTI-INDEX steps).
+    assert.ok(plan.some((d) => d.includes("idx_push_macs_online_seen")), why);
+    assert.ok(!plan.some((d) => /^SCAN m\b/.test(d)), why);
   };
   // D1 has no sqlite_stat1 unless someone ran ANALYZE.
   checkPlan("fixture, no sqlite_stat1");
@@ -2333,6 +2336,19 @@ test("#1022: the cron's online-Mac read counts each Mac's own cards once, throug
   checkPlan("1,000 Macs, no sqlite_stat1");
   t.raw.exec("ANALYZE");
   checkPlan("1,000 Macs, sqlite_stat1");
+});
+
+test("#1283: an offline Mac is read for an hour after its last heartbeat, then not at all", async () => {
+  for (const [late, sends] of [[0, ["3 end false"]], [1, []]]) {
+    const t = setup();
+    await endedCard(t, "offline", true);
+    assert.deepEqual(endCalls(t), ["3 end false"]);
+    const [{ last_seen }] = t.rows(`SELECT last_seen FROM push_macs`);
+    t.clock.now = last_seen + 3600 + late; // the window's last second, then one past it
+    await runCron(t.deps);
+    assert.deepEqual(endCalls(t), sends, `late ${late}: the retry is sent only inside the window`);
+    assert.deepEqual(cardFails(t), [["3", sends.length + 1]], `late ${late}: the card is kept either way`);
+  }
 });
 
 test("#1089: a Mac's lapse still fires from its own last_seen, which every heartbeat writes", async () => {
