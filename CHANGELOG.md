@@ -1909,6 +1909,9 @@ tag from the now-released section and put it on the new top draft.
   shared with ShellRunnerTests, instead of the real dotfiles. (#1557)
 - Remote Terminal: a device can keep at most two live xray follow streams on one session, as dch
   serve allows; opening a third ends that device's oldest one as a timeout. (#1556)
+- Agent Sessions: with dch 1.62.0 or later, sessions on other machines now update as soon as dch
+  sees a change, through one live list while the window is open, instead of a fresh lookup on each
+  refresh. (#1555)
 
 ## v2.174.0
 

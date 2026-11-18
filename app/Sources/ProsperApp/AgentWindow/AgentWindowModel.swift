@@ -1112,6 +1112,36 @@ final class AgentWindowModel: ObservableObject {
     /// #1324: the last good remote History records; a call that failed or timed out keeps them.
     private(set) var remoteHistory: [AgentSidebar.RemoteRecord] = []
     private var remoteHistoryAt: TimeInterval?
+    /// #1555: the client dch whose follow stream replaces the per-refresh list (README "Following the list"; dch 1.62.0).
+    static let remoteFollowDch = [1, 62, 0]
+    static let remoteFollowArgs = ["--ls-json", "--remote", "--follow"]
+    /// #1555: the client's version (AgentTerminal's probe, the binary runIsland runs); nil under XCTest: the per-refresh call.
+    var remoteFollowVersion: @Sendable () -> [Int]? = {
+        NSClassFromString("XCTestCase") == nil ? DchCommand.probedVersion(DchCommand.dchPath) : nil
+    }
+    /// #1555: starts the follow child (nil: it did not start, retried after the backoff); none under XCTest.
+    var remoteFollowStart: (_ args: [String], _ env: [String: String],
+                            _ onData: @escaping @MainActor @Sendable (Data) -> Void,
+                            _ onExit: @escaping @MainActor @Sendable (Int32) -> Void) -> AgentRemoteFollowHandle? = {
+        NSClassFromString("XCTestCase") == nil
+            ? AgentRemoteFollowChild.start(path: DchCommand.dchPath, args: $0, env: $1, onData: $2, onExit: $3) : nil
+    }
+    /// #1555: the follow child's restart delay, AgentTerminal's own `after` form.
+    var remoteAfter: (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated(work) }
+    }
+    /// #1555: nil until this showing's probe answered; true: the follow child lists, false: the per-refresh call.
+    private(set) var remoteFollows: Bool?
+    private var followProbing = false
+    private var follower: AgentRemoteFollowHandle?
+    private var followWaiting = false
+    private var followLines = AgentRemoteFollowLines()
+    /// Bumped by each start and by a stop, so a late line, exit, probe or restart of an earlier child is dropped.
+    private var followGen = 0
+    private var followRestarts = 0
+    private var followStartedAt: TimeInterval = 0
+    /// Counts follow children started (tests).
+    private(set) var remoteFollowStarts = 0
     /// #1324 (b): dch's DCH_AGENT_TIMEOUT_MS (600 s) plus margin, the #836 Round 2 bound for --revive; an idle bound
     /// (DchActionRunner: each NDJSON line restarts it).
     nonisolated static let remoteReviveBound: TimeInterval = 660
@@ -1561,6 +1591,7 @@ final class AgentWindowModel: ObservableObject {
         hasStore = store != nil
         subscription = nil
         guard let store else {
+            stopFollow()   // #1555: the island off lists no remote rows either way
             // QA #713 INFO-4: the island's runner drops every answer once its store is gone.
             if let k = newSession?.starting {
                 // R2 F5: answered and waiting for its row: it started, so the form goes; else no answer will come.
@@ -1640,22 +1671,27 @@ final class AgentWindowModel: ObservableObject {
 
     /// #836 (a): one `dch --ls-json --remote` per refresh (a store publish, the age tick, showing the window), at most one
     /// at a time and one per `remoteEvery`. Hidden, closed or the island off: none.
-    /// shortcut: a quiet island publishes nothing, so a remote change shows by the next age tick (30 s) at worst;
-    /// give the remote list a timer of its own (or --follow on its own connection) if that is too slow.
+    /// #1555: a client dch >= 1.62.0 lists through one follow child instead (startFollow); then this runs only the
+    /// remote History call, at its own spacing. Until the probe answers (and for an older client): the call as before.
     func pollRemote() {
-        guard visible, !closed, store != nil, !remoteInFlight else { return }
+        guard visible, !closed, store != nil else { return }
+        probeFollow()
+        let following = remoteFollows == true
+        if following { startFollow() }
+        guard !remoteInFlight else { return }
         let t = remoteClock()
-        if let at = remoteAt, t - at < Self.remoteEvery { return }
-        remoteAt = t
+        if !following, let at = remoteAt, t - at < Self.remoteEvery { return }
         // #1324 (a): History in the same job, at dch's own History spacing.
         let history = remoteHistoryAt.map { t - $0 >= Self.remoteHistoryEvery } ?? true
+        if following, !history { return }
+        if !following { remoteAt = t }
         if history { remoteHistoryAt = t }
         remoteInFlight = true
-        remoteCalls += 1
+        if !following { remoteCalls += 1 }
         let run = remoteRun, runHistory = remoteHistoryRun, env = AgentIsland.listEnv(dir: DchCommand.defaultSocketDir)
         let historyArgs = Self.remoteHistoryArgs
         let job: @Sendable () -> (Data?, Data?) = {
-            (run(["--ls-json", "--remote"], env), history ? runHistory(historyArgs, env) : nil)
+            (following ? nil : run(["--ls-json", "--remote"], env), history ? runHistory(historyArgs, env) : nil)
         }
         guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1) }
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -1682,6 +1718,84 @@ final class AgentWindowModel: ObservableObject {
         guard changed, let s = store else { return }
         refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
                 actions: s.actions)
+    }
+
+    /// #1555: once per showing, the client's version decides follow or call (off main in the app, inline under XCTest).
+    private func probeFollow() {
+        guard remoteFollows == nil, !followProbing else { return }
+        let probe = remoteFollowVersion, gen = followGen
+        guard remoteOffMain else { return followProbed(probe(), gen: gen) }
+        followProbing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let v = probe()
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.followProbed(v, gen: gen) } }
+        }
+    }
+
+    /// An unknown version is not a new one: the call, as before. A hide since the probe began drops its answer.
+    private func followProbed(_ v: [Int]?, gen: Int) {
+        guard gen == followGen else { return }
+        followProbing = false
+        remoteFollows = v.map { DchCommand.isAtLeast($0, Self.remoteFollowDch) } ?? false
+        if remoteFollows == true { startFollow() }
+    }
+
+    /// #1555: one follow child while shown: none while one runs or waits out its backoff, hidden, closed or island off.
+    private func startFollow() {
+        guard remoteFollows == true, follower == nil, !followWaiting, visible, !closed, store != nil else { return }
+        followGen += 1
+        let gen = followGen
+        followLines = AgentRemoteFollowLines()
+        followStartedAt = remoteClock()
+        remoteFollowStarts += 1
+        follower = remoteFollowStart(Self.remoteFollowArgs, AgentIsland.listEnv(dir: DchCommand.defaultSocketDir),
+                                     { [weak self] in self?.followRead($0, gen: gen) },
+                                     { [weak self] in self?.followExited($0, gen: gen) })
+        if follower == nil { followExited(-1, gen: gen) }   // it did not start: retried like an exit
+    }
+
+    /// Each complete line is the whole remote list, replaced as one call's answer is; a bad line keeps the last good rows.
+    private func followRead(_ chunk: Data, gen: Int) {
+        guard gen == followGen, !closed else { return }
+        var changed = false
+        for line in followLines.append(chunk) {
+            if let rows = AgentSidebar.parseRemote(line), rows != remoteSessions { remoteSessions = rows; changed = true }
+        }
+        guard changed, let s = store else { return }
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+                actions: s.actions)
+    }
+
+    /// The child ended on its own: restarted after AgentTerminal's backoff (a child that lived `reconnectSettled`
+    /// starts it over; past its last step every restart waits that last step). Exit 2 is dch's bad usage: this
+    /// client cannot follow, so the per-refresh call takes over for this showing.
+    private func followExited(_ status: Int32, gen: Int) {
+        guard gen == followGen else { return }
+        follower = nil
+        guard visible, !closed else { return }
+        if status == 2 { remoteFollows = false; return pollRemote() }
+        if remoteClock() - followStartedAt >= AgentTerminalController.reconnectSettled { followRestarts = 0 }
+        let steps = AgentTerminalController.reconnectBackoff
+        let delay = steps[min(followRestarts, steps.count - 1)]
+        followRestarts += 1
+        followWaiting = true
+        remoteAfter(delay) { [weak self] in
+            guard let self, gen == self.followGen else { return }
+            self.followWaiting = false
+            self.startFollow()
+        }
+    }
+
+    /// #1555: hide, close or island off: the child is stopped by its recorded pid and every late answer dropped;
+    /// the next showing probes again (a client updated meanwhile).
+    private func stopFollow() {
+        followGen += 1
+        follower?.stop()
+        follower = nil
+        followWaiting = false
+        followProbing = false
+        followRestarts = 0
+        remoteFollows = nil
     }
 
     /// #836: the focused pane's remote session while its row is listed; nil for anything else.
@@ -3001,6 +3115,7 @@ final class AgentWindowModel: ObservableObject {
         guard !closed, v != visible else { return }
         visible = v
         onVisible(v)
+        if !v { stopFollow() }   // #1555: none while hidden (close hides first)
         clock?.invalidate()
         clock = nil
         if v {
