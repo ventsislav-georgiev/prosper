@@ -1,0 +1,126 @@
+# Daily mutation checks (#1578): scripts/mutants/run.py runs every list in
+# scripts/mutants/lists/ (format in scripts/mutants/README.md). Per list the filter
+# runs once unmutated, then each mutant is applied, built, tested and restored.
+# A "killed" mutant that survives, or a broken or hung one, turns the job red;
+# red runs are fixed later (operator 2026-11-18: "we fix them retroactively").
+#
+# Same xcode-27 image, Xcode selection, SDKROOT and SpM dependency cache key as
+# test.yml, so the warm caches hit. Runs with --filter only, so test.yml's --skip
+# list does not apply. The debug build tree is restored, never saved: test.yml
+# owns that key.
+name: mutants
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # daily 03:30 UTC, off-peak, after heavy.yml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to check out
+        default: main
+      lists:
+        description: Glob under scripts/mutants/lists/ (e.g. 1567.json)
+        default: "*.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ inputs.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: ${{ github.repository == 'ventsislav-georgiev/prosper' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Shard the lists
+        id: plan
+        env:
+          LISTS: ${{ inputs.lists || '*.json' }}
+        run: |
+          # Up to 5 macOS jobs, balanced by mutant count.
+          m=$(python3 -I scripts/mutants/run.py --plan --shards 5 --lists "$LISTS")
+          echo "$m"
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          echo "count=$(python3 -I -c 'import json,sys; print(len(json.loads(sys.argv[1])["include"]))' "$m")" >> "$GITHUB_OUTPUT"
+
+  mutants:
+    needs: plan
+    if: ${{ needs.plan.outputs.count > 0 }}
+    runs-on: xcode-27 # same image as test.yml
+    # Under the 6 h job cap; run.py's --budget ends first so the summary is written.
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: mutants (shard ${{ matrix.shard }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+
+      - name: Select Xcode 27 (Swift 6.4 toolchain)
+        id: xcode
+        run: |
+          # Same selection as release.yml: pin the GA 27.0, not a 27.x beta.
+          XC=/Applications/Xcode_27.app
+          if [[ ! -d "$XC" ]]; then
+            echo "::error::$XC not found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          sudo xcode-select -s "$XC/Contents/Developer"
+          swift --version
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unset}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
+        with:
+          # Byte-identical to test.yml, release.yml and cache-warm.yml.
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}
+          restore-keys: |
+            spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-deps-v1-${{ runner.os }}-
+
+      - name: Cache debug build tree
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
+        with:
+          # test.yml's key family; restored as a warm start, saved only by test.yml.
+          path: app/.build
+          key: spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
+          restore-keys: |
+            spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
+
+      - name: Build
+        working-directory: app
+        timeout-minutes: 45
+        run: |
+          # Once per job; each mutant then rebuilds incrementally inside run.py.
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"; export SDKROOT
+          swift build --build-tests --disable-keychain --build-system native
+
+      - name: Mutants
+        # 250 min budget + one last mutant (2 x 15 min) stays inside the step limit,
+        # and build (<= 45) + step (290) + setup stays inside the job's 350.
+        timeout-minutes: 290
+        env:
+          NSUnbufferedIO: "YES"
+          LISTS: ${{ matrix.lists }}
+        run: |
+          # run.py sets SDKROOT and PROSPER_HEAVY_TESTS=1 for every swift run itself.
+          # shellcheck disable=SC2086 # LISTS is a space-separated list of repo paths
+          python3 -I scripts/mutants/run.py --timeout 900 --budget 15000 --logs "$RUNNER_TEMP/mutants-logs" $LISTS

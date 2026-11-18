@@ -1,0 +1,167 @@
+{
+ "entry": 1567,
+ "filter": "XrayRefResultsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M-ttl",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "entries.removeAll { t.timeIntervalSince($0.at) >= Self.keptFor }",
+   "new": "entries.removeAll { t.timeIntervalSince($0.at) >= Self.keptFor * 1000 }",
+   "expect": "killed"
+  },
+  {
+   "name": "M-hit",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if let hit = cache?.get(key) {",
+   "new": "if false, let hit = cache?.get(key) {",
+   "expect": "killed"
+  },
+  {
+   "name": "M-status",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if r.status == 0 { cache?.put(key, r.out) }",
+   "new": "cache?.put(key, r.out)",
+   "expect": "killed"
+  },
+  {
+   "name": "M-lru",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "let e = entries.remove(at: i)\n        entries.append(e)",
+   "new": "let e = entries[i]",
+   "expect": "killed"
+  },
+  {
+   "name": "M-keys",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "while entries.count > Self.maxKeys || bytes > Self.maxBytes",
+   "new": "while bytes > Self.maxBytes",
+   "expect": "killed"
+  },
+  {
+   "name": "M-bytes",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "while entries.count > Self.maxKeys || bytes > Self.maxBytes",
+   "new": "while entries.count > Self.maxKeys",
+   "expect": "killed"
+  },
+  {
+   "name": "M-big",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "guard out.count <= Self.maxBytes else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M-refdelta",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "entries.removeAll { $0.key.target == target && names.contains($0.key.ref) }",
+   "new": "_ = names",
+   "expect": "killed"
+  },
+  {
+   "name": "M-evict",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "o[\"evict\"] != nil || ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M-reset",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "[\"rotated\", \"shrunk\", \"cleared\"]",
+   "new": "[\"rotated\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "M-resetall",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": ".map(Self.resets.contains) == true",
+   "new": " != nil",
+   "expect": "killed"
+  },
+  {
+   "name": "M-lightpin",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "?? (k.light ? entries.firstIndex(where: { $0.key == k }) : nil)",
+   "new": "?? entries.firstIndex(where: { $0.key.target == k.target && $0.key.ref == k.ref && $0.key.scope == k.scope })",
+   "expect": "killed"
+  },
+  {
+   "name": "M-fullhover",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "guard let i = entries.firstIndex(where: { $0.key == full }) ??",
+   "new": "guard let i = (k.light ? nil : entries.firstIndex(where: { $0.key == full })) ??",
+   "expect": "killed"
+  },
+  {
+   "name": "M-spent",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if light, !cached { XrayPanels.spent",
+   "new": "if light { XrayPanels.spent",
+   "expect": "killed"
+  },
+  {
+   "name": "M-hide",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "guard let w, !w.occlusionState.contains(.visible) else { return }\n                windows[ObjectIdentifier(w)]?.clear()",
+   "new": "guard let w, !w.occlusionState.contains(.visible) else { return }\n                _ = w",
+   "expect": "killed"
+  },
+  {
+   "name": "M-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
+   "old": "                windows[ObjectIdentifier(w)] = nil\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M-followhook",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "            XrayRefResults.followed(target, o)",
+   "new": "            _ = o",
+   "expect": "killed"
+  },
+  {
+   "name": "M-wire",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "m.refResults = { XrayRefResults.on() ? Self.window(pane).map { XrayRefResults.of($0) } : nil }",
+   "new": "m.refResults = { nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "M-searching",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "        if !c.done {\n            out.append(searching)",
+   "new": "        if false {\n            out.append(searching)",
+   "expect": "killed"
+  },
+  {
+   "name": "M-click",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "} else if c.light, c.partial, let n = c.rawCounts {",
+   "new": "} else if c.partial, let n = c.rawCounts {",
+   "expect": "killed"
+  },
+  {
+   "name": "M-zero",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "if n.projectSessions > 0 {",
+   "new": "if true {",
+   "expect": "killed"
+  },
+  {
+   "name": "M-ge",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "let ge = c.partial ? \"\\u{2265}\" : \"\"",
+   "new": "let ge = \"\"",
+   "expect": "killed"
+  },
+  {
+   "name": "M-onscreen",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "self?.marks.filter { $0.key == k }.count ?? 0",
+   "new": "self?.marks.count ?? 0",
+   "expect": "killed"
+  }
+ ]
+}

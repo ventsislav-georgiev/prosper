@@ -1,0 +1,20 @@
+{
+ "entry": 1572,
+ "filter": "CCPoolThrottleRetryTests/testPooledDropOnAnAccountRemovedBeforeOnDoneIsNeverResent|CCPoolUsageRecordTests/testBadRequestPath400HasOneRowAndTheClientBytesAreUnchanged",
+ "mutants": [
+  {
+   "name": "token-before-removed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "        let removed = store.read { $0.label(ofID: accountID) } == nil\n        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {",
+   "new": "        let early = (try? secrets.token(id: accountID)) ?? nil\n        let removed = store.read { $0.label(ofID: accountID) } == nil\n        guard !removed, let token = early, !token.isEmpty else {",
+   "expect": "killed"
+  },
+  {
+   "name": "bad-path-row-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "            recordAnswer(400, acct: accountID)\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
