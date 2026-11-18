@@ -1,6 +1,6 @@
 {
  "entry": 1616,
- "filter": "AgentWindowD1Tests/testAgentWindowLayoutBandNameIsWholeAndEditLayoutFollowsIt|AgentWindowD1Tests/testAgentWindowLayoutBandNameSlotAtThreeScales|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowD1Tests/testAgentWindowLayoutBandNameIsWholeAndEditLayoutFollowsIt|AgentWindowD1Tests/testAgentWindowLayoutBandNameSlotAtThreeScales|AgentWindowD1Tests/testAgentWindowLayoutBandShortNameTierHoldsBetweenWholeNameAndNoLayout|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "name-always-cut",
@@ -29,8 +29,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "if model.layoutRows != nil { line(.shortName, chip: chip) }",
    "new": "",
-   "expect": "survives",
-   "note": "no tested width may land between noChip and noLayout; survivor expected (worker note)"
+   "expect": "killed"
   }
  ]
 }

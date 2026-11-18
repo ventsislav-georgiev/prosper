@@ -503,6 +503,53 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1619 (QA R1616, mutant no-short-tier): a saved layout with a 64-character name and a band between the noChip tier
+    /// with the whole name and the shortName tier (the name cut to `layoutWidth`): at 1.0, 0.85 and 0.7 the width is derived
+    /// from the measured parts (the fixed slots, "⌃1", the name, Edit layout), so the whole name provably does not fit and
+    /// the short one does. The tier is drawn: the name probe exists and is `layoutWidth` wide, Edit layout stays. Without
+    /// the tier ViewThatFits falls to noLayout and the name probe is gone. GUARD edit-layout-is-its-own-slot.
+    @MainActor
+    func testAgentWindowLayoutBandShortNameTierHoldsBetweenWholeNameAndNoLayout() throws {
+        let pixel = AXTreeSupport.devicePixel
+        _ = ThemeStore.shared
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
+        defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
+        Preferences.agentWindowSidebarHidden = true
+        gate(true)
+        let long = "Quarterly planning review of the api and docs workspaces on staging"   // 67 characters; the store cuts it to 64
+        func measure(_ s: String, _ pt: CGFloat, _ w: Font.Weight, mono: Bool = false) -> CGFloat {
+            NSHostingView(rootView: Text(s).font(mono ? Neon.font(pt, weight: w).monospacedDigit() : Neon.font(pt, weight: w))
+                .lineLimit(1).fixedSize()).fittingSize.width
+        }
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            let a = named(paneLayout([paneTarget("api"), paneTarget("docs")]), long), b = paneLayout([paneTarget("docs")])
+            let (m, _) = try sectionModel([a, b])
+            defer { m.close() }
+            let name = try XCTUnwrap(AgentWindowBand.layoutSlot(m)?.name, "\(scale)")
+            XCTAssertTrue(name.count >= 60, "a long name (\(scale)): \(name.count)")
+            let edit = measure("Edit layout", 11, .medium), num = measure("⌃1", 10.5, .medium, mono: true)
+            // The line's other parts: padding both sides, a spacing between each of the four children, sidebar glyph, All.
+            let fixed = 2 * sz(16) + 3 * sz(8) + AgentWindowBand.sidebarWidth + AgentWindowBand.allWidth
+            let whole = fixed + num + sz(6) + measure(name, 11, .medium) + sz(8) + edit
+            let short = fixed + num + sz(6) + AgentWindowBand.layoutWidth + sz(8) + edit
+            let want = short + 4   // measured sizes round up to a point: a little room over the short tier
+            XCTAssertTrue(want + 40 < whole, "the whole name needs clearly more than the short one (\(scale)): \(want) \(whole)")
+            let reference = bandSnapshot(m, CGSize(width: 1400, height: 800))
+            let delta = 1400 - (try XCTUnwrap(reference["band"], "\(scale)")).width
+            let s = bandSnapshot(m, CGSize(width: want + delta, height: 800))
+            let band = try XCTUnwrap(s["band"], "\(scale)")
+            XCTAssertEqual(band.width, want, accuracy: 2 * pixel, "the band is the derived width (\(scale))")
+            let shown = try XCTUnwrap(s["layoutName"], "shortName tier: the name stays (\(scale)) \(s)")
+            XCTAssertTrue(shown.width <= AgentWindowBand.layoutWidth + pixel, "cut to the slot (\(scale)): \(shown.width)")
+            XCTAssertEqual(shown.width, AgentWindowBand.layoutWidth, accuracy: 2 * pixel, "the cut name fills the slot (\(scale))")
+            let button = try XCTUnwrap(s["edit"], "\(scale)")
+            XCTAssertTrue(button.minX >= shown.maxX - pixel && button.maxX <= band.maxX + pixel, "Edit layout inside the band (\(scale))")
+        }
+    }
+
     /// R901-s4a-q1: automaticName joins cleaned titles with " + " (and "…" when long); a title that starts with `cap`
     /// combining marks would hang them on the separator's space or the "…". Every Character of the drawn name keeps at
     /// most `cap` scalars, both for the plain join and for one cut to "…" right before that title.
