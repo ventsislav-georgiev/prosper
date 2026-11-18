@@ -1796,6 +1796,8 @@ tag from the now-released section and put it on the new top draft.
   Claude Code answered. (#1469)
 - Agent Sessions and Agent Island: the sub-agents count is a soft filled pill, without the white
   outline. (#1531)
+- Agent Sessions splits: a remote pane's title switches its session too, like a local pane's.
+  (#1513)
 
 ## v2.174.0
 

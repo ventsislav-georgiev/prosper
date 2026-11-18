@@ -2049,14 +2049,17 @@ struct AgentRemoteHeader: View {
     static let todosReason = "No task list on that host"
     static let todosOpens = "Open the task list in X-ray"
     let pane: UUID
+    /// #1513: the title is the pane's session switcher (a remote pick arms the attach); nil: a plain title.
+    let switcher: AgentPaneSwitch?
     /// The row whose last chip click found no Tasks tab (a click on another session starts clean).
     @State private var none: AgentSidebar.RowID? = nil
 
     /// #1476: rows build the header too (the private @State keeps the memberwise init in this file).
-    init(row: AgentSidebar.Row, remote: AgentSidebar.Remote, pane: UUID) {
+    init(row: AgentSidebar.Row, remote: AgentSidebar.Remote, pane: UUID, switcher: AgentPaneSwitch? = nil) {
         self.row = row
         self.remote = remote
         self.pane = pane
+        self.switcher = switcher
     }
 
     static func todosHelp(noList: Bool) -> String { noList ? todosReason : todosOpens }
@@ -2071,7 +2074,10 @@ struct AgentRemoteHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+            let text = Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+            if let switcher {   // #1513: the host stays its own text beside it, so the tooltip is the title and the hint
+                AgentPaneSwitcherButton(text: text, size: 15, title: row.title, project: nil, help: row.title, switcher: switcher)
+            } else { text }
             Text(AgentSidebarRowView.hostLabel(remote.host)).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
             Spacer(minLength: sz(4))
             let noList = none == row.id
@@ -2232,7 +2238,8 @@ struct AgentDetailView: View {
         } else if let row = model.selectedRow, let r = row.remote {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
             VStack(spacing: 0) {
-                AgentRemoteHeader(row: row, remote: r, pane: model.layout.focused).modifier(AgentPaneProbe(kind: "header"))
+                AgentRemoteHeader(row: row, remote: r, pane: model.layout.focused,
+                                  switcher: AgentPaneSwitch(model: model, pane: model.layout.focused)).modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
@@ -3022,8 +3029,8 @@ struct AgentSlotWidth: Layout {
 }
 
 /// #1491: the switcher's list (the popover's state): the sidebar's rows, the filter (by name, case-insensitive) and the
-/// highlighted row. Keys go through `key` (a key down) and the search field's commands through `command`: Down and Up
-/// move, Return picks, Escape closes.
+/// highlighted row. The search field's commands go through `command` (doCommandBy): Down and Up move, Return picks,
+/// Escape closes.
 @MainActor
 final class AgentPaneSwitcherList: ObservableObject {
     struct Item: Identifiable, Equatable {
@@ -3084,19 +3091,6 @@ final class AgentPaneSwitcherList: ObservableObject {
         default: return false
         }
         return true
-    }
-
-    /// A key down by its key code (Down 125, Up 126, Return 36, keypad Enter 76, Escape 53); anything else: false.
-    func key(_ e: NSEvent) -> Bool {
-        guard e.type == .keyDown else { return false }
-        let s: Selector? = switch e.keyCode {
-        case 125: #selector(NSResponder.moveDown(_:))
-        case 126: #selector(NSResponder.moveUp(_:))
-        case 36, 76: #selector(NSResponder.insertNewline(_:))
-        case 53: #selector(NSResponder.cancelOperation(_:))
-        default: nil
-        }
-        return s.map(command) ?? false
     }
 }
 
