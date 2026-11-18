@@ -1959,6 +1959,8 @@ tag from the now-released section and put it on the new top draft.
   least twice on screen is underlined, and hovering or pinning it shows a card the extension fills
   in, with up to four open or copy actions. An example extension is in app/Examples/extensions/xref-
   example. (#1569)
+- Agent Sessions: trackpad scrolling in a terminal pane ends smoothly, because every momentum phase now reaches the
+  terminal (libghostty-spm fork 2.2.2026110702-prosper.2). (#1468)
 
 ## v2.174.0
 

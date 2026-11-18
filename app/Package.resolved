@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/ventsislav-georgiev/libghostty-spm",
       "state" : {
-        "revision" : "634ffdf77f22132fc502374c8fd1819241b5693f",
-        "version" : "2.2.2026110702-prosper.1"
+        "revision" : "6256c8cc49bc5d718c88ffb9987bee3e57cf56bb",
+        "version" : "2.2.2026110702-prosper.2"
       }
     },
     {

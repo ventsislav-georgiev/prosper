@@ -57,13 +57,14 @@ let package = Package(
         ),
         // #822: the Agent Sessions window's terminal (GhosttyTerminal over a static
         // libghostty xcframework, an 81 MB artifact). Our fork = upstream
-        // 2.2.2026110702 + Lakr233/libghostty-spm#105, which finds the resource
+        // 2.2.2026110702 + Lakr233/libghostty-spm#105 (prosper.2 adds #1468: every scroll
+        // momentum phase reaches ghostty), which finds the resource
         // bundle in Contents/Resources (SwiftPM's native Bundle.module looks only
         // at the .app root and traps). Exact: weekly builds of Ghostty main; bump
         // deliberately, and back to upstream once #105 ships in a release.
         .package(
             url: "https://github.com/ventsislav-georgiev/libghostty-spm",
-            exact: "2.2.2026110702-prosper.1"
+            exact: "2.2.2026110702-prosper.2"
         ),
         // NOTE: opt-out usage analytics POST directly to the Aptabase EU endpoint via
         // URLSession (Analytics/AnalyticsService.swift) — no SDK dependency. The SDK
