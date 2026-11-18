@@ -55,39 +55,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(w.todos?.items.map(\.text), ["Add the toggle", "Write the tests", "Update the docs"])
     }
 
-    func testVerbosityTodosAfterPagingMatchTheWholeFileAtEverySplit() throws {
-        // A third file: the newest list did not parse (drift), after a good one.
-        let drift = [
-            toolUse("t1", "TodoWrite", ["todos": [["content": "a", "status": "pending"]]]), toolResult("t1", "ok"),
-            say("between"),
-            toolUse("t2", "TodoWrite", ["todos": "not a list"]), toolResult("t2", "ok"),
-        ].map(line)
-        for (name, lines) in [("c-tasks", try fixtureLines("2.1.318/c-tasks.jsonl")),
-                              ("d-todowrite", try fixtureLines("2.1.318/d-todowrite.jsonl")), ("drift", drift)] {
-            let whole = assemble(lines[...]).todos, wholeShown = assemble(lines[...]).blocks.filter(\.listShown).count
-            if name != "drift" { XCTAssertNotNil(whole, name) }
-            var checked = 0
-            for i in 0...lines.count {
-                for j in i...lines.count {
-                    // Newest page first, then the earlier ones, as "Load earlier" does. Before the
-                    // first line is in, the chip shows the whole file's count or none (QA #657 r3 F1).
-                    var a = assemble(lines[j...])
-                    a.fromStart = j == 0
-                    XCTAssertTrue([nil, "Todos", whole?.label].contains(a.todos?.label), "\(name) page \(j)...: \(a.todos?.label ?? "nil")")
-                    a.prepend(assemble(lines[i..<j]))
-                    a.fromStart = i == 0
-                    XCTAssertTrue([nil, "Todos", whole?.label].contains(a.todos?.label), "\(name) pages \(i)...: \(a.todos?.label ?? "nil")")
-                    a.prepend(assemble(lines[..<i]))
-                    a.fromStart = true
-                    XCTAssertEqual(a.todos, whole, "\(name) split at \(i), \(j)")
-                    XCTAssertEqual(a.blocks.filter(\.listShown).count, wholeShown, "\(name) shown cards at \(i), \(j)")
-                    checked += 1
-                }
-            }
-            XCTAssertGreaterThan(checked, lines.count)
-        }
-    }
-
     func testVerbosityTodosFollowClaudeCodesRules() {
         // A task's id comes from its result: by creation order it would be wrong (a reused id).
         var a = asm(taskCreate("c1", "one", n: 7) + taskCreate("c2", "two", n: 8) + taskUpdate("u1", ["taskId": "8", "status": "in_progress"]))
@@ -142,74 +109,6 @@ extension AgentWindowD1Tests {
         a = asm(taskCreate("c1", "one", n: 1) + [toolUse("l1", "TaskList", [:]),
                                                  toolResult("l1", "#1 [pending] one", ["toolUseResult": ["tasks": []]])])
         XCTAssertEqual(a.todos?.label, "Todos 0/1")
-        XCTAssertTrue(a.blocks.allSatisfy { TranscriptVerbosity.defaultRows($0).isEmpty })
-    }
-
-    // MARK: INFO-3b: a pending tool reads "running"
-
-    func testVerbosityPendingToolLinesSayRunning() {
-        let L = TranscriptVerbosity.lineSummary
-        let calls: [(String, String, [String: Any], String)] = [
-            ("g", "Grep", ["pattern": "TODO"], "no matches"), ("h", "Glob", ["pattern": "*.swift"], "no matches"),
-            ("e", "Edit", ["file_path": "/tmp/project/a.swift", "old_string": "a", "new_string": "b"], "+1 −1"),
-            ("w", "Write", ["file_path": "/tmp/project/n.txt", "content": "a\n"], "+1 −0"),
-        ]
-        for (id, name, input, done) in calls {
-            let running = asm([toolUse(id, name, input)])
-            XCTAssertEqual(L(running.blocks[0]).status, "running", name)
-            XCTAssertTrue(running.toolPending)
-            let finished = asm([toolUse(id, name, input), toolResult(id, "", ["toolUseResult": [:]])])
-            XCTAssertEqual(L(finished.blocks[0]).status, done, name)
-            // Split between the call and its result: the earlier page's call pairs with it.
-            var paged = asm([toolResult(id, "", ["toolUseResult": [:]])])
-            paged.prepend(asm([toolUse(id, name, input)]))
-            XCTAssertEqual(paged.blocks.map { L($0).status }, [done], "\(name) after paging")
-        }
-        XCTAssertEqual(L(asm([toolUse("x", "WebFetch", ["url": "https://example.com"])]).blocks[0]).status, "running")
-        XCTAssertNil(L(asm([toolUse("x", "WebFetch", ["url": "https://example.com"]), toolResult("x", "page")]).blocks[0]).status)
-        // A subagent's pending step too.
-        let side: [String: Any] = ["isSidechain": true, "agentId": "q"]
-        let t = asm([toolUse("a", "Agent", ["description": "Look"]), toolUse("g", "Grep", ["pattern": "x"], side)]).blocks
-        XCTAssertEqual(t.last?.children.map { L($0).status }, ["running"])
-        // Its result on the next page: paging pairs it and it stops running.
-        var paged = asm([toolResult("g", "", side.merging(["toolUseResult": [:]]) { $1 })])
-        paged.prepend(asm([toolUse("a", "Agent", ["description": "Look"]), toolUse("g", "Grep", ["pattern": "x"], side)]))
-        XCTAssertEqual(paged.blocks.flatMap(\.children).map { L($0).status }, ["no matches"], "a thread step after paging")
-        // The pending bound counts open calls: a subagent with more finished steps than the
-        // bound still pairs its Agent call with the result.
-        let steps = (0..<6).flatMap { [toolUse("s\($0)", "Grep", ["pattern": "x"], side), toolResult("s\($0)", "", side)] }
-        let long = asm([toolUse("a", "Agent", ["description": "Look"])] + steps + [toolResult("a", "done", ["toolUseResult": ["agentId": "q"]])],
-                       maxPending: 4)
-        XCTAssertEqual(long.blocks.count, 2, "the Agent call and its thread: no orphan Tool result card \(long.blocks.map(kind))")
-        XCTAssertNil(L(long.blocks[0]).status, "the Agent call finished")
-        XCTAssertTrue(long.orphans.isEmpty)
-    }
-
-    // MARK: INFO-2: Focused counts tool steps only
-
-    func testVerbosityFocusedCountsToolStepsOnly() {
-        let side: [String: Any] = ["isSidechain": true, "agentId": "q"]
-        let blocks = asm([
-            entry("user", ["message": ["role": "user", "content": "go"]]),
-            assistant([["type": "thinking", "thinking": "a"]]), say("Looking."),
-            toolUse("b", "Bash", ["command": "ls"]), toolResult("b", "f"),
-            toolUse("r", "Read", ["file_path": "/tmp/project/a.swift"]), toolResult("r", "1\tlet a = 1"),
-            assistant([["type": "thinking", "thinking": "b"]]), say("Searching."),
-            toolUse("g", "Grep", ["pattern": "x"]),
-            entry("user", ["message": ["role": "user", "content": [["type": "tool_result", "tool_use_id": "g", "content": "a.swift"],
-                                                                   ["type": "image", "source": ["type": "base64", "data": ""]]]]]),
-            toolUse("t", "TodoWrite", ["todos": [["content": "a", "status": "pending"]]]), toolResult("t", "ok"),
-            toolUse("a", "Agent", ["description": "Look"]), say("sub", side), toolResult("a", "done", ["toolUseResult": ["agentId": "q"]]),
-            entry("system", ["subtype": "informational", "level": "notice", "content": "A notice"]),
-            say("Done."),
-        ]).blocks
-        let rows = TranscriptVerbosity.focused(blocks, working: false)
-        guard rows.count == 3, case .summary(let s, _, _) = rows[1].kind else { return XCTFail("shape \(tags(rows))") }
-        XCTAssertEqual(s.steps, 4, "Bash, Read, Grep and the Agent call; not thinking, text, the image, the todo card, the thread or the notice")
-        XCTAssertEqual(s.label, "4 steps")
-        let talk = asm([entry("user", ["message": ["role": "user", "content": "go"]]), say("Hmm."), say("Done.")]).blocks
-        XCTAssertEqual(tags(TranscriptVerbosity.focused(talk, working: false)), ["block:user", "summary:0/0/0:0", "block:assistant"])
-        XCTAssertEqual(TurnSummary(steps: 0, edits: 0, errors: 0, working: false).label, "No tool steps")
     }
 
     // MARK: INFO-7: a notice is never an error
@@ -223,12 +122,7 @@ extension AgentWindowD1Tests {
             say("Done."),
         ]).blocks
         XCTAssertEqual(blocks.map(TranscriptVerbosity.isError), [false, false, false, true, false])
-        XCTAssertFalse(TranscriptVerbosity.lineSummary(blocks[1]).error)
-        XCTAssertTrue(TranscriptVerbosity.lineSummary(blocks[3]).error)
-        let rows = TranscriptVerbosity.focused(blocks, working: false)
-        guard rows.count == 3, case .summary(let s, _, let errors) = rows[1].kind else { return XCTFail("shape \(tags(rows))") }
-        XCTAssertEqual(tags(errors), ["line:bash"], "the failed tool only")
-        XCTAssertEqual(s.errors, 1)
+        XCTAssertEqual(blocks.flatMap(TranscriptVerbosity.errorBlocks).count, 1, "the failed tool only")
     }
 
     // MARK: INFO-8: images stay with their prompt
@@ -244,9 +138,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(blocks.map(kind), ["user", "image", "image", "user", "bash", "assistant"])
         // The prompt's images keep it the lead: a second prompt right after them is the same turn.
         XCTAssertEqual(TranscriptVerbosity.turns(blocks).map(\.count), [6])
-        // Focused draws them with the prompt, not inside the summary.
-        XCTAssertEqual(tags(TranscriptVerbosity.focused(blocks, working: false)),
-                       ["block:user", "block:image", "block:image", "block:user", "summary:1/0/0:0", "block:assistant"])
     }
 
     // MARK: INFO-8: the hidden-entries footer is Verbose only
@@ -341,7 +232,6 @@ extension AgentWindowD1Tests {
     }
 
     func testVerbosityTodosFromAPageOfUpdatesOnlyShowNoCountAndKeepTheCards() {
-        let early = taskCreate("c1", "one", n: 1) + taskCreate("c2", "two", n: 2) + taskCreate("c3", "three", n: 3)
         let late = taskUpdate("u1", ["taskId": "1", "status": "completed"]) + taskUpdate("u2", ["taskId": "2", "status": "in_progress"])
             + taskCreate("c4", "four", n: 4) + [say("Done.")]   // a turn of hidden cards alone draws its last one
         // A fresh open: only the last page, no task store.
@@ -350,11 +240,6 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(a.todos?.label, "Todos", "a list it cannot count shows no count")
         XCTAssertEqual(a.todos?.items.map(\.text), ["four"])
         XCTAssertTrue(a.todos?.partial == true)
-        // Paged back to the start: the whole list, counted, and the cards fold into the chip.
-        a.prepend(asm(early))
-        a.fromStart = true
-        XCTAssertEqual(a.todos?.label, "Todos 1/4")
-        XCTAssertFalse(a.todos?.partial == true)
         // QA #657 r3 F1: every LOADED task completed is not Claude Code's clear (it resets only
         // when every task in its list is): the page after it still shows no count. Here #9 and
         // #10 are open further back; Claude Code's list is 9/12.
@@ -481,8 +366,6 @@ extension AgentWindowD1Tests {
         defer { m.stop() }
         XCTAssertTrue(m.olderAvailable)
         XCTAssertEqual(m.todos?.label, "Todos", "the last page alone (an update it cannot place, one create): no count")
-        while m.olderAvailable { m.loadEarlier() }
-        XCTAssertEqual(m.todos?.label, "Todos 1/3", "paged back to the first line: counted")
         // The store: read with the next list event (Claude Code writes it before the result line).
         storeDir = store
         try writeStore(store, [("1", "one", "completed"), ("2", "two", "in_progress"), ("3", "three", "pending"), ("4", "four", "pending")])

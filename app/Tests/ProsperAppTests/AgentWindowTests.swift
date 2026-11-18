@@ -489,84 +489,6 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertEqual(m.blocks.map(\.id), [0, 1], "the first block was not re-decoded")
     }
 
-    @MainActor
-    func testALongFileOpensOnItsLastPageAndPagesBackWithoutBrokenLines() throws {
-        let url = tempDir().appendingPathComponent("p.jsonl")
-        try write(url, (0..<200).map { assistant([["type": "text", "text": "message number \($0) " + String(repeating: "x", count: 40)]]) })
-        let m = AgentTranscriptModel()
-        m.offMain = { $0() }   // #797: step the off-main half inline
-        m.makeWatch = { _, _ in NSObject() }
-        m.tickInterval = 3600
-        m.pageBytes = 4096
-        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
-                                       sessionId: "s", transcriptPath: url.path))
-        m.start()
-        defer { m.stop() }
-        let first = m.blocks.count
-        XCTAssertGreaterThan(first, 10)
-        XCTAssertLessThan(first, 200)
-        XCTAssertTrue(m.olderAvailable)
-        XCTAssertFalse(m.blocks.contains(where: \.failed), "the cut first line is dropped, not decoded")
-        var guardN = 0
-        while m.olderAvailable && guardN < 100 { m.loadEarlier(); guardN += 1 }
-        XCTAssertEqual(m.blocks.count, 200)
-        XCTAssertFalse(m.blocks.contains(where: \.failed))
-        let ids = m.blocks.map(\.id)
-        XCTAssertTrue(zip(ids, ids.dropFirst()).allSatisfy(<), "ids strictly increase: \(ids)")
-        guard case .assistant(let c) = m.blocks[0].body else { return XCTFail() }
-        XCTAssertTrue(c.text.hasPrefix("message number 0 "))
-    }
-
-    func testPagingPairsAToolCallWithItsResultAcrossThePageBoundary() {
-        var later = TranscriptAssembler()
-        later.add(TranscriptDecoder.decode(line: line(toolResult("t1", "out", extra: ["stdout": "out"]))), source: nil)
-        XCTAssertEqual(later.counts().values.first?.generic, 1, "an orphan until its call pages in")
-        var page = TranscriptAssembler()
-        page.add(TranscriptDecoder.decode(line: line(toolUse("t1", "Bash", ["command": "ls"]))), source: nil)
-        later.prepend(page)
-        XCTAssertEqual(later.blocks.count, 1)
-        guard case .bash("ls", _, let out?, _) = later.blocks[0].body else { return XCTFail("\(later.blocks)") }
-        XCTAssertEqual(out.text, "out")
-    }
-
-    // QA #621 F1: a line longer than a page at the page edge.
-    @MainActor
-    func testALineLongerThanAPageNeverStallsPagingOrOpensEmpty() throws {
-        let dir = tempDir()
-        let big = String(repeating: "b", count: 10_000)
-        func open(_ url: URL) -> AgentTranscriptModel {
-            let m = AgentTranscriptModel()
-            m.offMain = { $0() }   // #797: step the off-main half inline
-            m.makeWatch = { _, _ in NSObject() }
-            m.tickInterval = 3600
-            m.pageBytes = 4096
-            m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0",
-                                           dchState: "idle", sessionId: "s", transcriptPath: url.path))
-            m.start()
-            return m
-        }
-        let mid = dir.appendingPathComponent("mid.jsonl")
-        try write(mid, [assistant([["type": "text", "text": "A"]]), assistant([["type": "text", "text": big]]),
-                        assistant([["type": "text", "text": "C"]])])
-        let m = open(mid)
-        defer { m.stop() }
-        XCTAssertEqual(texts(m), ["C"])
-        m.loadEarlier()
-        XCTAssertEqual(texts(m).map { String($0.prefix(1)) }, ["b", "C"], "the long line pages in whole")
-        XCTAssertFalse(m.blocks.contains(where: \.failed))
-        m.loadEarlier()
-        XCTAssertEqual(texts(m).map { String($0.prefix(1)) }, ["A", "b", "C"])
-        XCTAssertFalse(m.olderAvailable)
-
-        let last = dir.appendingPathComponent("last.jsonl")
-        try write(last, [assistant([["type": "text", "text": "A"]]), assistant([["type": "text", "text": big]])])
-        let n = open(last)
-        defer { n.stop() }
-        XCTAssertEqual(texts(n).map { String($0.prefix(1)) }, ["b"], "a long last line still opens")
-        n.loadEarlier()
-        XCTAssertEqual(texts(n).map { String($0.prefix(1)) }, ["A", "b"])
-    }
-
     // QA #621 F1 + INFO-3: past maxLine the paged line is a counted "too large" block.
     func testALinePastTheBoundPagesInAsTooLarge() throws {
         let url = tempDir().appendingPathComponent("o.jsonl")
@@ -590,26 +512,6 @@ final class AgentWindowTests: XCTestCase {
         e.items.compactMap { if case .block(.assistant(let c), _) = $0 { c.text } else { nil } }
     }
 
-    // QA #621 F2 (+ INFO-5): three pages, the pair split across the 2nd boundary.
-    func testPagingPairsAcrossEveryBoundaryAndIdsNeverCollide() {
-        func asm(_ es: [[String: Any]]) -> TranscriptAssembler {
-            var a = TranscriptAssembler()
-            for e in es { a.add(TranscriptDecoder.decode(line: line(e)), source: nil) }
-            return a
-        }
-        var live = asm([assistant([["type": "text", "text": "side"]], ["isSidechain": true, "agentId": "ag"]),
-                        assistant([["type": "text", "text": "last"]])])
-        live.prepend(asm([toolResult("t1", "out", extra: ["stdout": "out"]), assistant([["type": "text", "text": "mid"]])]))
-        live.prepend(asm([toolUse("t1", "Bash", ["command": "ls"])]))
-        XCTAssertEqual(live.blocks.count, 4, "the result card folded into its call: \(live.blocks.map(\.body))")
-        guard case .bash("ls", _, let out?, _) = live.blocks[0].body else { return XCTFail("\(live.blocks[0].body)") }
-        XCTAssertEqual(out.text, "out")
-        let top = live.blocks.map(\.id)
-        XCTAssertTrue(zip(top, top.dropFirst()).allSatisfy(<), "\(top)")
-        let all = live.blocks.flatMap { [$0.id] + $0.children.map(\.id) }
-        XCTAssertEqual(Set(all).count, all.count, "no id shared across levels: \(all)")
-    }
-
     // QA #621 INFO-7: a quiet subagent is a running tool, not a stale file.
     func testAnOpenSubagentAsTheLastBlockCountsAsAPendingTool() {
         var a = TranscriptAssembler()
@@ -619,27 +521,6 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertTrue(a.toolPending, "the Agent call is open and its thread is last")
         a.add(TranscriptDecoder.decode(line: line(toolResult("a1", "done", extra: ["agentId": "ag"]))), source: nil)
         XCTAssertFalse(a.toolPending)
-    }
-
-    @MainActor
-    func testAtTheBlockCapOlderHistoryIsInTheTerminal() throws {
-        let url = tempDir().appendingPathComponent("cap.jsonl")
-        try write(url, (0..<200).map { assistant([["type": "text", "text": "message \($0) " + String(repeating: "x", count: 40)]]) })
-        let m = AgentTranscriptModel()
-        m.offMain = { $0() }   // #797: step the off-main half inline
-        m.makeWatch = { _, _ in NSObject() }
-        m.tickInterval = 3600
-        m.pageBytes = 4096
-        m.maxBlocks = 5
-        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
-                                       sessionId: "s", transcriptPath: url.path))
-        m.start()
-        defer { m.stop() }
-        XCTAssertTrue(m.olderAvailable)
-        XCTAssertTrue(m.atHistoryCap)
-        let before = m.blocks.map(\.id)
-        m.loadEarlier()
-        XCTAssertEqual(m.blocks.map(\.id), before)
     }
 
     func testMemoryIsBoundedPerSessionAndDroppedBlocksStayCounted() {

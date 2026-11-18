@@ -381,10 +381,10 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertFalse(m.transcript.running)
     }
 
-    // MARK: - #797 (a): reads, decoding and paging run off main
+    // MARK: - #797 (a): reads and decoding run off main
 
     @MainActor
-    func testAgentWindowPollAndPagingRunOffMainAndPublishOnMain() throws {
+    func testAgentWindowPollRunsOffMainAndPublishesOnMain() throws {
         let url = tempDir().appendingPathComponent("o.jsonl")
         try write(url, (0..<60).map { say("message \($0) " + String(repeating: "x", count: 40)) })
         let m = AgentTranscriptModel()
@@ -415,62 +415,6 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertGreaterThan(m.blocks.count, 0, "published on main after the hop")
         XCTAssertEqual(jobs.count, 1, "the poll asked for meanwhile runs after it")
         runOffMain(jobs.removeFirst())
-        XCTAssertTrue(m.olderAvailable)
-
-        let before = m.blocks.count
-        m.loadEarlier()
-        XCTAssertEqual(m.blocks.count, before, "paging is read off main too")
-        XCTAssertEqual(jobs.count, 1)
-        runOffMain(jobs.removeFirst())
-        XCTAssertGreaterThan(m.blocks.count, before)
-    }
-
-    /// Review round 1 (e): "Load earlier" while a poll is in flight would hand off the
-    /// same tail and assembler; whichever landed last would undo the other (an old
-    /// offset, lines read twice, or a lost page). It waits instead.
-    @MainActor
-    func testAgentWindowLoadEarlierWaitsForAPollInFlight() throws {
-        let url = tempDir().appendingPathComponent("busy.jsonl")
-        try write(url, (0..<60).map { say("message \($0) " + String(repeating: "x", count: 40)) })
-        let m = AgentTranscriptModel()
-        var jobs: [@Sendable () -> Void] = []
-        m.offMain = { jobs.append($0) }
-        m.makeWatch = { _, _ in NSObject() }
-        m.tickInterval = 3600
-        m.pageBytes = 1024
-        m.update(AgentTranscriptSource(key: AgentSessionKey(dir: "/d", name: "s"), dchVersion: "1.30.0", dchState: "idle",
-                                       sessionId: "s", transcriptPath: url.path))
-        m.start()
-        defer { m.stop() }
-        func drain() { while !jobs.isEmpty { jobs.removeFirst()() } }
-        func texts() -> [String] { m.blocks.compactMap { if case .assistant(let c) = $0.body { c.text } else { nil } } }
-        drain()
-        XCTAssertTrue(m.olderAvailable)
-
-        try append(url, (60..<63).map { line(say("new \($0)")) }.reduce(Data(), +))
-        m.poll()
-        XCTAssertEqual(jobs.count, 1, "the poll's read is in flight")
-        m.loadEarlier()
-        XCTAssertEqual(jobs.count, 1, "no page read while a poll is in flight")
-        XCTAssertTrue(m.earlierAgain, "QA #626 INFO-3: the click is queued, never dropped")
-        jobs.removeFirst()()   // the poll lands (main inline), then the queued page is handed off
-        XCTAssertFalse(m.earlierAgain)
-        XCTAssertEqual(jobs.count, 1, "the queued page read runs after the poll, alone")
-        let afterPoll = m.blocks.count
-        drain()
-        XCTAssertGreaterThan(m.blocks.count, afterPoll, "the queued page landed")
-        let size = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber).uint64Value
-        XCTAssertEqual(m.tail?.offset, size, "the offset moved forward to the end")
-        XCTAssertEqual(Set(texts()).count, texts().count, "no line read twice: \(texts())")
-        XCTAssertEqual(texts().last, "new 62")
-
-        let before = m.blocks.count
-        m.loadEarlier()
-        XCTAssertEqual(jobs.count, 1, "once idle, paging runs")
-        drain()
-        XCTAssertGreaterThan(m.blocks.count, before)
-        XCTAssertEqual(Set(texts()).count, texts().count)
-        XCTAssertEqual(m.tail?.offset, size)
     }
 
     @MainActor
@@ -640,29 +584,6 @@ final class AgentWindowD1Tests: XCTestCase {
         XCTAssertTrue(a.toolPending, "a running step inside the last thread (no open Agent call in view)")
         a.add(TranscriptDecoder.decode(line: line(toolResult("b1", "", ["isSidechain": true, "agentId": "ag"]))), source: nil)
         XCTAssertFalse(a.toolPending)
-    }
-
-    func testAgentWindowAPageOrphanInsideAThreadPairsWhenItsCallPagesIn() {
-        let side: [String: Any] = ["isSidechain": true, "agentId": "ag"]
-        var later = asm([toolResult("t1", "out", side), say("after")])
-        XCTAssertNotNil(later.orphans["t1"]?.thread, "an orphan inside a thread")
-        let page = asm([toolUse("t1", "Bash", ["command": "ls"], side)])
-        later.prepend(page)
-        XCTAssertTrue(later.orphans.isEmpty)
-        XCTAssertEqual(later.blocks.count, 3, "the page's thread, the later thread, the reply")
-        guard case .thread = later.blocks[0].body, later.blocks[0].children.count == 1,
-              case .bash("ls", _, let out?, _) = later.blocks[0].children[0].body else { return XCTFail("\(later.blocks)") }
-        XCTAssertEqual(out.text, "out")
-        XCTAssertTrue(later.blocks[1].children.isEmpty, "the orphan card folded into its call")
-    }
-
-    func testAgentWindowPrependKeepsOrphansBounded() {
-        var later = asm((0..<3).map { toolResult("late\($0)", "x") }, maxPending: 4)
-        let page = asm((0..<6).map { toolResult("early\($0)", "x") }, maxPending: 100)
-        XCTAssertEqual(page.orphans.count, 6)
-        later.prepend(page)
-        XCTAssertLessThanOrEqual(later.orphans.count, 4, "paging never grows orphans past the bound")
-        XCTAssertEqual(later.blocks.count, 9, "the cards themselves all stay")
     }
 
     // MARK: - OQ-56 defaults: commands as chips, empty thinking hidden, cwd

@@ -2774,7 +2774,7 @@ final class AgentWindowModel: ObservableObject {
     /// layout but not shown (zoomed away, too-small hidden) is suspended, not stopped: blocks and offset kept, one
     /// catch-up poll when shown again. A pane that left the layout was already stopped by syncRuntimes.
     /// #822: the terminal attaches to a visible, focused, live session in Terminal mode and detaches on anything else.
-    /// The transcript runs in both modes: the header's cwd and todos come from it, so a toggle never changes the header.
+    /// The pane's transcript model still runs behind the terminal: the header's cwd and todos come from it.
     /// #847 D2.3, #1471 b: a first message the island could not send shows as the pane's notice (Terminal has no input
     /// box to seed). selectedOnly: only while `key` is the focused pane's live session of a visible window (follow()'s).
     private func showUnsentFirst(_ key: AgentSessionKey, selectedOnly: Bool) {

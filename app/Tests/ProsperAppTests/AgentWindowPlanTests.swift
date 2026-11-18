@@ -794,13 +794,6 @@ final class AgentWindowPlanTests: XCTestCase {
         let e = TranscriptDecoder.decode(line: d.line(mode(a)))
         XCTAssertEqual(e.planFile, a)
         guard case .hidden("attachment")? = e.items.first, e.items.count == 1 else { return XCTFail("\(e.items)") }
-        // Paging: an earlier page's attachment counts when this one has none.
-        var late = d.asm([call])
-        late.prepend(d.asm([mode(a)]))
-        XCTAssertEqual(late.pendingPlan?.file, a)
-        var both = d.asm([mode(b), call])
-        both.prepend(d.asm([mode(a)]))
-        XCTAssertEqual(both.pendingPlan?.file, b, "the later page's is the newer")
     }
 
     /// #1092: the window gives a plan kept in a file the focused session's config_dir from dch's live record (the

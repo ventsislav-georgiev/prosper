@@ -71,8 +71,6 @@ struct TranscriptAssembler {
     var fromStart = true
     private var lastVersion = "unknown"
     private(set) var nextID = 0
-    /// R1269-a: the first line here is an image-only entry (add()'s test): prepend() gives it the "[image]" card.
-    private var leadsWithImageOnly = false
 
     private struct Pending { var block: Int; var thread: Int?; var name: String; var input: [String: Any] }
     private var pending: [String: Pending] = [:]
@@ -111,7 +109,6 @@ struct TranscriptAssembler {
         // starts only at a prompt). After a prompt or image already leading, it stays that lead's image.
         let imageOnly = e.sidechain == nil && !e.items.isEmpty
             && e.items.allSatisfy({ if case .block(.image, _) = $0 { true } else { false } })
-        if blocks.isEmpty { leadsWithImageOnly = imageOnly }
         if imageOnly, let last = blocks.last, Self.endsLead(last) {
             append(TranscriptBlock(id: take(), body: .user(Clip("[image]", cap: 16)), tier: .specific, version: v, source: source), sidechain: nil)
         }
@@ -236,77 +233,6 @@ struct TranscriptAssembler {
         }
     }
 
-    /// Paging: put an earlier page's blocks in front, pairing its tool calls with
-    /// results that arrived here as orphans; the page's own orphans carry over for
-    /// the page before it.
-    mutating func prepend(_ page: TranscriptAssembler) {
-        // Below every id here, children included (a thread's first child takes its id before the thread).
-        let floor = blocks.first.map { min($0.id, $0.children.first?.id ?? $0.id) } ?? nextID
-        // R1269-a: a first line that is an image-only entry gets its card once the page above ends a lead; the page
-        // then ends one lower and the card takes the id just below the floor.
-        let lead = leadsWithImageOnly && page.blocks.last.map(Self.endsLead) == true ? blocks.first : nil
-        let shift = floor - page.nextID - (lead == nil ? 0 : 1)
-        func renumber(_ b: TranscriptBlock) -> TranscriptBlock {
-            var b = TranscriptBlock(id: b.id + shift, body: b.body, tier: b.tier, version: b.version,
-                                    source: b.source, children: b.children, droppedChildren: b.droppedChildren, pending: b.pending,
-                                    listShown: b.listShown)
-            b.children = b.children.map(renumber)
-            return b
-        }
-        var front = page.blocks.map(renumber)
-        if let l = lead {
-            front.append(TranscriptBlock(id: floor - 1, body: .user(Clip("[image]", cap: 16)), tier: .specific, version: l.version, source: l.source))
-        }
-        if !page.blocks.isEmpty { leadsWithImageOnly = page.leadsWithImageOnly }
-        var pairedIDs = Set<String>()
-        for (id, p) in page.pending {
-            guard let o = orphans.removeValue(forKey: id) else { continue }   // no result here: still open, carried below
-            let (body, tier) = ToolRenderer.render(name: p.name, input: p.input, result: o.result)
-            if let i = front.firstIndex(where: { $0.id == (p.thread ?? p.block) + shift }) {
-                if p.thread != nil, let j = front[i].children.firstIndex(where: { $0.id == p.block + shift }) {
-                    front[i].children[j].body = body
-                    front[i].children[j].tier = tier
-                    front[i].children[j].pending = false
-                } else if p.thread == nil {
-                    front[i].body = body
-                    front[i].tier = tier
-                    front[i].pending = false
-                }
-            }
-            remove(o.block, thread: o.thread)
-            pairedIDs.insert(id)
-        }
-        blocks = front + blocks
-        asides = page.asides.map(renumber) + asides
-        // The page's calls still open (no result on the page, none seen after it) take the live results.
-        // Bound: at most page.pending (<= maxPending); the oldest go first past maxPending, as in add().
-        // R1269-b: an id the page's order holds twice (one call id used twice) is carried once, the first slot kept.
-        var seen = Set<String>()
-        let carried = page.pendingOrder.filter { id in
-            page.pending[id] != nil && pending[id] == nil && !pairedIDs.contains(id) && seen.insert(id).inserted
-        }
-        for id in carried {
-            guard let p = page.pending[id] else { continue }
-            pending[id] = Pending(block: p.block + shift, thread: p.thread.map { $0 + shift }, name: p.name, input: p.input)
-        }
-        pendingOrder = carried + pendingOrder
-        while pendingOrder.count > maxPending { pending[pendingOrder.removeFirst()] = nil }
-        for (id, o) in page.orphans where orphans[id] == nil {
-            orphans[id] = (o.block + shift, o.thread.map { $0 + shift }, o.result)
-        }
-        // ponytail: same arbitrary eviction as add(); only paging uses orphans.
-        while orphans.count > maxPending { orphans.remove(at: orphans.startIndex) }
-        for (v, n) in page.hiddenCounts { hiddenCounts[v, default: 0] += n }
-        if planFile == nil { planFile = page.planFile }
-        todoEvents = page.todoEvents + todoEvents
-        todosTrimmed = todosTrimmed || page.todosTrimmed
-        trimTodos()
-        for (id, b) in page.todoCards { todoCards[id] = b + shift }
-        // Always re-marked: the page's cards carry what the page alone could place.
-        folded = AgentTodos.fold(todoEvents)
-        markTodoCards()
-    }
-
     // MARK: private
 
     private mutating func addTodo(_ e: AgentTodos.Event) {
@@ -372,8 +298,6 @@ struct TranscriptAssembler {
     private mutating func trim() {
         while blocks.count > maxBlocks {
             let gone = blocks.removeFirst()
-            // R1269-c-q1: the first line the flag described is gone; prepend() must not card the line now first.
-            leadsWithImageOnly = false
             dropped += 1
             account(gone)
             if case .thread(let agent, _) = gone.body { threads[agent] = nil }
@@ -503,10 +427,6 @@ final class AgentTranscriptModel: ObservableObject {
     /// One read in flight per generation; a poll asked for meanwhile runs after it.
     private(set) var busy = false
     private var pollAgain = false
-    /// QA #626 INFO-3: a "Load earlier" asked for while a read is in flight runs after it.
-    private(set) var earlierAgain = false
-    /// #1352: run once the next earlier page is in (or at once when none can load); a new file or session drops them.
-    private var earlierWaiters: [@MainActor () -> Void] = []
 
     // Seams.
     var now: () -> Date = Date.init
@@ -578,7 +498,6 @@ final class AgentTranscriptModel: ObservableObject {
         assembler = fresh()
         bump()
         publish()
-        flushEarlier()   // #1381: after the new state (see bump)
     }
 
     /// #831 B1 (11.2, 4.4 M1): the watch and the timer stop and the blocks and the tail offset stay (an Ended pane's
@@ -693,40 +612,6 @@ final class AgentTranscriptModel: ObservableObject {
         if r.more || pollAgain {
             pollAgain = false
             poll()
-        } else if earlierAgain {
-            earlierAgain = false
-            loadEarlier()
-        }
-    }
-
-    /// Rule 9 paging: decode the page before the earliest loaded line, while the
-    /// per-session block bound has room. Read, decoded and prepended off main.
-    func loadEarlier(then done: (@MainActor () -> Void)? = nil) {
-        if let done { earlierWaiters.append(done) }
-        guard running, let t = tail, !atHistoryCap else { return flushEarlier() }
-        guard !busy else { earlierAgain = true; return }
-        busy = true
-        let gen = generation
-        let job = TranscriptHandoff(value: (t, assembler, fresh()))
-        offMain { [weak self] in
-            var (t, a, page) = job.value
-            for l in t.previousPage() { page.add(TranscriptDecoder.decode(l), source: l.range) }
-            a.prepend(page)
-            a.fromStart = t.earliestLoaded == 0
-            let done = TranscriptHandoff(value: (t, a))
-            Self.onMain { self?.finishEarlier(done, gen) }
-        }
-    }
-
-    private func finishEarlier(_ h: TranscriptHandoff<(TranscriptTail, TranscriptAssembler)>, _ gen: Int) {
-        guard gen == generation else { return }
-        busy = false
-        (tail, assembler) = (h.value.0, h.value.1)
-        publish()
-        flushEarlier()
-        if pollAgain {
-            pollAgain = false
-            poll()
         }
     }
 
@@ -742,10 +627,6 @@ final class AgentTranscriptModel: ObservableObject {
         return gen == generation ? text : nil
     }
 
-    /// The block bound is full: older history stays in the terminal. QA r1153 INFO: also once a block was dropped for
-    /// the bound, so a page is never joined above the hole the drop left (loadEarlier's guard and the view's line).
-    var atHistoryCap: Bool { assembler.blocks.count >= maxBlocks || assembler.dropped > 0 }
-
     /// Runs `f` on main: inline when already there (the inline test seam), else queued.
     nonisolated static func onMain(_ f: @escaping @MainActor @Sendable () -> Void) {
         if Thread.isMainThread { MainActor.assumeIsolated { f() } }
@@ -760,21 +641,10 @@ final class AgentTranscriptModel: ObservableObject {
         return a
     }
 
-    /// A new tail or assembler: whatever is in flight belongs to the old one.
-    private func flushEarlier() {
-        let w = earlierWaiters
-        earlierWaiters = []
-        w.forEach { $0() }
-    }
-
-    /// #1381 (R1352-i2): the loadEarlier waiters stay; the caller flushes them once the new tail is in place, so a jump
-    /// that spans the bump re-enters on that tail and is refused (no tail inode yet or another file), or reads `.older`
-    /// when there is no tail at all (close), and its caller shows the card. Dropping them left the click doing nothing.
     private func bump() {
         generation += 1
         busy = false
         pollAgain = false
-        earlierAgain = false
     }
 
     private func open(_ path: String) {
@@ -786,7 +656,6 @@ final class AgentTranscriptModel: ObservableObject {
         lastGrowth = now()
         watch = nil
         publish()
-        flushEarlier()   // #1381: on the fresh tail, before its first poll
         if running { poll() }
     }
 
@@ -798,7 +667,6 @@ final class AgentTranscriptModel: ObservableObject {
         missing = false
         assembler = fresh()
         publish()
-        flushEarlier()   // #1381: no tail now
     }
 
     private func arm(_ path: String) {

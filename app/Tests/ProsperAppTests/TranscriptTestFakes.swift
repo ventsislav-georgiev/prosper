@@ -87,17 +87,6 @@ final class FakeCardPresenter: XrayCardPresenter {
 }
 
 extension AgentWindowD1Tests {
-    func tags(_ rows: [TranscriptRow]) -> [String] {
-        rows.map { r in
-            switch r.kind {
-            case .block(let b): "block:" + kind(b)
-            case .line(let b): "line:" + kind(b)
-            case .thread(_, let earlier, let kids): "thread:\(earlier):\(kids.count)"
-            case .summary(let s, _, let errors): "summary:\(s.steps)/\(s.edits)/\(s.errors):\(errors.count)"
-            }
-        }
-    }
-
     func kind(_ b: TranscriptBlock) -> String {
         switch b.body {
         case .user: "user"
