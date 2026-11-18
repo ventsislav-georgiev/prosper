@@ -1804,11 +1804,12 @@ tag from the now-released section and put it on the new top draft.
 - After reinstalling Prosper on a Mac whose clock had run fast, the iPhone's Live Activity card
   updates again right away instead of showing old data for up to an hour. (#1074)
 - Agent island: Message all now checks screens again when reading them was slow, never types a
-  message after its job was cancelled, says which "-" sessions it left out, and refuses a message
+  message after its job was cancelled, says how many "-" sessions it left out and why, and refuses a message
   over 256 KB with a clear reason instead of "Message failed (exit -1)". (#1104)
 - Agent Sessions: a group of sessions (a main and its sidekicks) now takes one Command number, which
   selects the session you used last in it, and Control-Tab / Control-Shift-Tab move between the
-  group's sessions. (#1111)
+  group's sessions. Inside a group these keys no longer switch to the previous layout or reach the
+  terminal; outside a group they work as before. (#1111)
 - After the overheat cut-off hands the fans back to macOS, a new manual speed is taken only at each
   fan's maximum while the Mac is still at 95 °C or above; anything lower waits, and the popup and
   the phone say "Too hot: only maximum speed until it cools.". (#1077)
@@ -1890,7 +1891,7 @@ tag from the now-released section and put it on the new top draft.
 - Turning off an extension that had just asked to keep the Mac awake with the lid closed now always
   lets the Mac sleep again, even when that request was still being applied. (#1549)
 - Agent Sessions: the task list note for a partly loaded session now reads "Partial list: tasks from
-  earlier in the session are not loaded, so some may be missing or out of date.". (#1270)
+  earlier in the session are not loaded, so some may be missing or out of date." (#1270)
 - Extensions: host.shell.run now also tells how the command ended (exit code, signal, or timed out),
   so the Hammerspoon example's hs.execute returns a real success flag, type and exit code. (#1055)
 - Uninstalling an extension no longer stops on a block of it in your config file that Prosper has no
