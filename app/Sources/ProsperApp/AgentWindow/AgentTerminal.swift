@@ -1129,7 +1129,6 @@ extension AgentTerminalCard where Buttons == EmptyView {
 /// ⌘F: the needle, the match count, previous / next (⇧⌘G / ⌘G, Return) and close (Esc).
 struct AgentTerminalFindBar: View {
     @ObservedObject var controller: AgentTerminalController
-    @FocusState private var focused: Bool
 
     var count: String {
         guard !controller.findText.isEmpty, let total = controller.findTotal else { return " " }
@@ -1140,11 +1139,11 @@ struct AgentTerminalFindBar: View {
     var body: some View {
         HStack(spacing: sz(6)) {
             Image(systemName: "magnifyingglass").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
-            TextField("Find", text: $controller.findText)
-                .textFieldStyle(.plain).font(Neon.font(11.5)).frame(width: sz(160))
-                .focused($focused)
-                .onSubmit { controller.findNext() }
-                .onExitCommand { controller.closeFind() }
+            // #1450: our own field (a SwiftUI TextField could keep the last UI scale's height).
+            ScaledTextField(placeholder: "Find", text: $controller.findText, onSubmit: { controller.findNext() },
+                            fontSize: 11.5, plain: true, focusOnAppear: true, onCancel: { controller.closeFind() })
+                .frame(width: sz(160))
+                .accessibilityLabel("Find")
                 .onChange(of: controller.findText) { _, t in controller.search(t) }
             ZStack(alignment: .trailing) {   // the widest count's slot, so a count never moves the buttons
                 Text("No matches").hidden()
@@ -1162,6 +1161,5 @@ struct AgentTerminalFindBar: View {
         .padding(.horizontal, sz(8)).padding(.vertical, sz(5))
         .background(RoundedRectangle(cornerRadius: sz(7)).fill(Neon.card))
         .overlay(RoundedRectangle(cornerRadius: sz(7)).stroke(Neon.stroke, lineWidth: 1))
-        .onAppear { focused = true }
     }
 }

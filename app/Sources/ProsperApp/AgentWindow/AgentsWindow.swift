@@ -1280,7 +1280,6 @@ struct AgentLayoutNameField: View {
     let placeholder: String
     @State var text: String
     let end: (String?) -> Void
-    @FocusState private var focused: Bool
     @State private var ended = false
 
     init(placeholder: String, text: String, end: @escaping (String?) -> Void) {
@@ -1296,14 +1295,10 @@ struct AgentLayoutNameField: View {
     }
 
     var body: some View {
-        TextField(placeholder, text: $text).textFieldStyle(.plain).font(Neon.font(12.5, weight: .medium))
-            .foregroundStyle(Neon.textPrimary).lineLimit(1)
+        // #1450: our own field (a SwiftUI TextField could keep the last UI scale's height); Return, Escape and the focus leaving as before.
+        ScaledTextField(placeholder: placeholder, text: $text, onSubmit: { finish(text) }, fontSize: 12.5, weight: .medium,
+                        plain: true, focusOnAppear: true, onCancel: { finish(nil) }, onEndEditing: { finish(nil) })
             .accessibilityLabel("Layout name")
-            .focused($focused)
-            .onSubmit { finish(text) }
-            .onExitCommand { finish(nil) }
-            .onAppear { focused = true }
-            .onChange(of: focused) { was, now in if was, !now { finish(nil) } }
             .onDisappear { finish(nil) }
     }
 }

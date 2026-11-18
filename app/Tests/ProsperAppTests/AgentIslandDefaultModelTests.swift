@@ -355,13 +355,13 @@ final class AgentIslandDefaultModelTests: XCTestCase {
     /// #1250: the pane's Command and Default model fields are ScaledTextField's (their delegate is its coordinator), so
     /// their heights come from the measure above, not from a SwiftUI TextField's placement.
     @MainActor
-    func testThePanesCommandAndDefaultModelFieldsAreScaledTextFields() {
+    func testThePanesCommandDefaultModelAndSuffixFieldsAreScaledTextFields() {
         _ = ThemeStore.shared
         let size = CGSize(width: sz(560), height: sz(900))
         let (win, host) = AXTreeSupport.hosted(AgentIslandPane().frame(width: size.width), size)
         defer { win.close() }
         let ours = nativeFields(host).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString)
-        XCTAssertEqual(ours.sorted(), ["Claude Code's default", "claude"])
+        XCTAssertEqual(ours.sorted(), ["-qa", "Claude Code's default", "claude"], "#1450: the Sidekick suffix field too")
     }
 
     /// #1250: ScaledTextField looks and measures as the stock SwiftUI TextField it replaced (itself an NSTextField
@@ -430,6 +430,78 @@ final class AgentIslandDefaultModelTests: XCTestCase {
         }
         XCTAssertEqual(heights.count, 6, "both fields at the six scales")
         XCTAssertGreaterThanOrEqual(compared, 4, "the heights were compared at most scales")
+    }
+
+    /// #1450: the Sidekick suffix, the Layouts row's name field and the terminal's Find field (once stock SwiftUI
+    /// TextFields with a scaled font, the same fault as #1250's) are ScaledTextField's, and each matches the stock field
+    /// it replaced in font size and height at the six scales (read offscreen side by side; a stock read equal to ours at
+    /// another scale is the fault itself in the reference and is skipped and said, as above).
+    @MainActor
+    func testTheOtherScaledFieldsMatchTheirStockHeightsAtEveryScale() {
+        _ = ThemeStore.shared
+        let savedScale = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = savedScale }
+        let pixel = AXTreeSupport.devicePixel
+        let size = CGSize(width: 400, height: 120)
+        for site in ["suffix", "layout", "find"] {
+            var heights: [(scale: CGFloat, ours: CGFloat, stock: CGFloat)] = []
+            for scale in [0.7, 0.85, 1.0, 1.15, 1.3, 1.45] as [CGFloat] {
+                ThemeRuntime.scale = scale
+                let stock: AnyView, ours: AnyView
+                switch site {
+                case "suffix":
+                    stock = AnyView(TextField("-qa", text: .constant("-qa")).font(Neon.font(.body, design: .monospaced))
+                        .lineLimit(1).frame(width: sz(80)))
+                    ours = AnyView(ScaledTextField(placeholder: "-qa", text: .constant("-qa")).frame(width: sz(80)))
+                case "layout":
+                    stock = AnyView(TextField("api", text: .constant("api")).textFieldStyle(.plain)
+                        .font(Neon.font(12.5, weight: .medium)).lineLimit(1).frame(width: sz(160)))
+                    ours = AnyView(ScaledTextField(placeholder: "api", text: .constant("api"), fontSize: 12.5, weight: .medium, plain: true)
+                        .frame(width: sz(160)))
+                default:
+                    stock = AnyView(TextField("Find", text: .constant("api")).textFieldStyle(.plain)
+                        .font(Neon.font(11.5)).frame(width: sz(160)))
+                    ours = AnyView(ScaledTextField(placeholder: "Find", text: .constant("api"), fontSize: 11.5, plain: true)
+                        .frame(width: sz(160)))
+                }
+                let (stockWin, stockHost) = AXTreeSupport.hosted(stock.preferredColorScheme(.dark), size)
+                defer { stockWin.close() }
+                let (ourWin, ourHost) = AXTreeSupport.hosted(ours.preferredColorScheme(.dark), size)
+                defer { ourWin.close() }
+                guard let s = nativeFields(stockHost).first, let o = nativeFields(ourHost).first else {
+                    XCTFail("both hosted NSTextFields for \(site) at \(scale)"); continue
+                }
+                XCTAssertEqual(o.font?.pointSize, s.font?.pointSize, "\(site) font size at \(scale)")
+                XCTAssertEqual(o.isBezeled, s.isBezeled, "\(site) bezel at \(scale)")
+                XCTAssertEqual(o.drawsBackground, s.drawsBackground, "\(site) background at \(scale)")
+                XCTAssertEqual(o.frame.height, ScaledTextField.size(of: o, width: nil).height, accuracy: pixel, "\(site): the measure at \(scale)")
+                heights.append((scale, o.frame.height, s.frame.height))
+            }
+            var compared = 0
+            for (scale, ourHeight, stockHeight) in heights {
+                if heights.contains(where: { $0.scale != scale && abs($0.ours - stockHeight) < pixel }) {
+                    print("#1450 stock \(site) reference stale at \(scale): \(stockHeight); not compared")
+                    continue
+                }
+                XCTAssertEqual(ourHeight, stockHeight, accuracy: pixel, "\(site): the stock field's height at \(scale)")
+                compared += 1
+            }
+            XCTAssertEqual(heights.count, 6, "\(site) at the six scales")
+            XCTAssertGreaterThanOrEqual(compared, 4, "\(site): the heights were compared at most scales")
+        }
+    }
+
+    /// #1450: the real Find bar and Layouts name field host ScaledTextField's (their delegate is its coordinator).
+    @MainActor
+    func testTheFindBarAndLayoutNameFieldAreScaledTextFields() {
+        _ = ThemeStore.shared
+        let size = CGSize(width: 420, height: 60)
+        let (barWin, bar) = AXTreeSupport.hosted(AgentTerminalFindBar(controller: AgentTerminalController()), size)
+        defer { barWin.close() }
+        XCTAssertEqual(nativeFields(bar).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString), ["Find"])
+        let (nameWin, name) = AXTreeSupport.hosted(AgentLayoutNameField(placeholder: "api", text: "api", end: { _ in }), size)
+        defer { nameWin.close() }
+        XCTAssertEqual(nativeFields(name).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString), ["api"])
     }
 }
 

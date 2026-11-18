@@ -12,9 +12,22 @@ struct ScaledTextField: NSViewRepresentable {
     let placeholder: String
     @Binding var text: String
     var onSubmit: () -> Void = {}
+    /// #1450: nil is the monospaced body (the settings fields); else Neon.font(fontSize, weight:) as an NSFont.
+    var fontSize: CGFloat?
+    var weight: NSFont.Weight = .regular
+    /// #1450: textFieldStyle(.plain): no bezel, border or background, Neon.textPrimary text (the Layouts and Find fields).
+    var plain = false
+    /// #1450: takes the keyboard focus once it is in a window (SwiftUI's focused + onAppear); Escape and the focus leaving.
+    var focusOnAppear = false
+    var onCancel: (() -> Void)?
+    var onEndEditing: (() -> Void)?
 
     /// Neon.font(.body, design: .monospaced) as an NSFont: the 13 pt body times the UI scale.
     static var monospacedBody: NSFont { .monospacedSystemFont(ofSize: 13 * ThemeRuntime.scale, weight: .regular) }
+
+    private var font: NSFont {
+        fontSize.map { NSFont.systemFont(ofSize: $0 * ThemeRuntime.scale, weight: weight) } ?? Self.monospacedBody
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -26,6 +39,12 @@ struct ScaledTextField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit)
+        if plain {
+            field.isBezeled = false
+            field.isBordered = false
+            field.drawsBackground = false
+        }
+        if focusOnAppear { DispatchQueue.main.async { field.window?.makeFirstResponder(field) } }
         update(field)
         return field
     }
@@ -37,7 +56,8 @@ struct ScaledTextField: NSViewRepresentable {
     }
 
     private func update(_ field: NSTextField) {
-        let font = Self.monospacedBody
+        if plain { field.textColor = NSColor(Neon.textPrimary) }
+        let font = self.font
         if field.font != font {
             field.font = font
             field.invalidateIntrinsicContentSize()   // tells SwiftUI to measure again (sizeThatFits) in a live field
@@ -70,5 +90,19 @@ struct ScaledTextField: NSViewRepresentable {
 
         /// Return in the field (an NSTextField sends its action on Return only), as SwiftUI's onSubmit.
         @objc func submit() { parent.onSubmit() }
+
+        /// Escape, where the field has an onCancel (SwiftUI's onExitCommand).
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.cancelOperation(_:)), let cancel = parent.onCancel else { return false }
+            cancel()
+            return true
+        }
+
+        /// The focus leaving. Return ends the editing too and then sends the action: that is a submit, not a leave.
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let end = parent.onEndEditing,
+                  (notification.userInfo?["NSTextMovement"] as? Int) != NSTextMovement.return.rawValue else { return }
+            end()
+        }
     }
 }
