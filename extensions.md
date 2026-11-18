@@ -365,7 +365,7 @@ placement = "sidebar"     # "sidebar" (own entry, default) | "inline" (within Ex
 dynamic   = true          # deliver row events to settings_action so you can react live
 ```
 
-The section id `kit` is reserved: an Agent Kit extension's own Settings tab uses it. A section with that exact id is ignored and a warning is logged, and the rest of the extension loads.
+The section id `kit` is reserved: an Agent Kit extension's own Settings tab uses it. See [Agent Kits](#12-agent-kits). A section with that exact id is ignored and a warning is logged, and the rest of the extension loads.
 
 **Tier-A** — static `[[contributes.settings_sections.controls]]` rows, no Lua. **Tier-B** — Lua renders the rows:
 
@@ -541,4 +541,177 @@ The conversion engines keep a **native fallback**, so a disabled or edited exten
 
 - **From GitHub** — paste a repo/subdir URL into **Settings → Extensions** (`github.com/owner/repo`, `…/tree/<ref>/<subdir>`, `.git`, `git@` forms all parse). Prosper fetches the tarball, validates `extension.toml`, installs. ([`RemoteInstaller.swift`](app/Sources/ProsperApp/Extensions/RemoteInstaller.swift))
 - **Marketplace** — browse and one-click-install published extensions, or **Publish** your own, from **Settings → Extensions**. Manifests are signed (Ed25519) and verified on download; a freshly installed extension lands **untrusted** and runs only after you grant trust (install-then-trust gate), so privileged host APIs stay opt-in. ([`MarketClient.swift`](app/Sources/ProsperApp/Extensions/MarketClient.swift))
+- **Agent Kits** — a packaged Claude Code setup (instructions, tools, hooks, status line, permissions, agents) installs the same ways but untrusted, is applied only after consent, and is listed under its own **Agent Kits** filter. See [Agent Kits](#12-agent-kits).
 - **Hidden files stay out** — a file or folder whose name starts with a dot (`.DS_Store`, `.git`, a coding tool's state folder, macOS `._` metadata) is never published, and a GitHub or Marketplace install leaves out any that a download still carries. `*.test.lua` files and `tests` folders are not published either. A download that contains a symbolic link is refused.
+
+## 12. Agent Kits
+
+An **Agent Kit** is an ordinary extension that packages a Claude Code setup: instruction text, tools, hooks, a status line, permissions and agents. It carries a `[contributes.kit]` table next to `[extension]`, ships the same stub `init.lua` a theme does (`return {}`), and runs **no Lua**. Prosper's native Kit runtime reads the table and writes the pieces into the person's Claude Code files, after they say yes. A kit never edits `~/.claude` itself: every write goes through Prosper's managed-config layer and is undone by Remove.
+
+A worked example lives in the repository: [`app/Examples/kits/hello-kit`](app/Examples/kits/hello-kit) (one rule, one hook, one tool, one setting).
+
+### Layout
+
+```
+extension.toml      # [extension] + [contributes.kit]
+init.lua            # stub, `return {}`
+README.md           # required, see "The README contract"
+CLAUDE.md           # instruction text, imported by a claude-md piece
+tools/<name>        # executables, reached through Prosper-generated shims
+hooks/<name>        # executables wired as Claude Code hooks
+statusline/<name>   # executable wired as the statusLine
+agents/<name>.md    # agent files
+seed/<file>         # templates copied to ~/.config/<slug>/ once, never overwritten
+```
+
+### The manifest
+
+Top-level keys of `[contributes.kit]`: `schema` (the integer `1`), `homepage` (optional, an `https://` link), `requires` (executables looked up on PATH, never run; at most 32), `pieces` (at most 64) and `settings` (at most 32). An unknown key anywhere is refused. The example's manifest, byte for byte:
+
+```toml
+[extension]
+id          = "com.example.kit.hello"
+name        = "hello-kit"
+title       = "Hello Kit"
+description = "A minimal Agent Kit: one rule, one hook, one tool and one setting."
+version     = "1.0.0"
+author      = "Example Org"
+license     = "MIT"
+
+[extension.host]
+min_version = "2.175.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[contributes.kit]
+schema   = 1
+homepage = "https://example.com/hello-kit"
+requires = ["sh"]
+
+[[contributes.kit.pieces]]
+id       = "rules"
+kind     = "claude-md"
+source   = "CLAUDE.md"
+position = "bottom"
+
+[[contributes.kit.pieces]]
+id    = "greet"
+kind  = "hook"
+event = "SessionStart"
+run   = "hooks/hello-hook.sh"
+
+[[contributes.kit.pieces]]
+id   = "tools"
+kind = "tools"
+dir  = "tools"
+
+[[contributes.kit.settings]]
+key     = "greeting"
+title   = "Greeting"
+kind    = "string"
+default = "Hello from hello-kit"
+```
+
+`name` is the kit's slug (`[a-z0-9-]+`) and names its config folder `~/.config/<slug>`; a second kit with the same slug is refused, and so is the reserved slug `prosper`.
+
+### Piece kinds
+
+Every piece has an `id` (`[a-z0-9-]+`, unique in the kit), a `kind`, the keys of its kind, and an optional `needs = ["<piece-id>"]`: the pieces it cannot work without (ids must exist, no cycle). Switching a piece off switches its dependents off, and the list is shown first.
+
+| kind | Keys | Becomes | Off switch removes |
+| --- | --- | --- | --- |
+| `claude-md` | `source` (a `.md` file), `position` (`top` or `bottom`, default `bottom`) | a managed block in `~/.claude/CLAUDE.md` that imports the file | the block |
+| `tools` | `dir` | one shim per executable file, in Prosper's own folder `~/.config/prosper/kits/<ext-id>/bin/` | the shims |
+| `hook` | `event`, `matcher`, `run`, `timeout` (1 to 3600 s), `interpreter` | one hook group appended under `hooks.<event>` in `~/.claude/settings.json` | that group |
+| `statusline` | `run`, `interpreter` (at most one per kit) | the `statusLine` slot in `settings.json` | the slot, restored to what it was |
+| `permissions` | `allow`, `deny`, `ask` (at least one rule, at most 64 in each) | the rules, added to `permissions.*` in `settings.json` | the rules this kit added |
+| `seed` | `from` | files copied into `~/.config/<slug>/` when missing | nothing: seeded files are the person's after the copy |
+| `agents` | `dir` (default `agents`) | `<name>.md` files in `~/.claude/agents/`, byte for byte | the files, while they still hash as written |
+
+Rules the validator enforces on every kit, local or Marketplace, with the reason shown on refusal:
+
+- **Env-free.** No piece writes `env`, `model`, `apiKeyHelper` or any other settings key; there is no `env` kind and no `secret` setting kind. A tool that needs a credential names a Keychain item in the README and reads it itself.
+- Every `run`, `source`, `dir` and `from` path stays inside the kit folder, goes through no symlink, and names a file or folder of the right kind. Files carrying a setuid or setgid bit are refused.
+- `hook.event` must be one of the hook events Claude Code documents. An unknown name is a refusal in Prosper.
+- `interpreter`, when given, must be listed in `requires`.
+- An agent file is `<name>.md` with a `---` frontmatter whose single `name:` equals the file name; it may not hold a placeholder, because it is installed byte for byte.
+- A `settings.json` hook runs in parallel with the person's own hooks and with other kits' hooks: nothing promises an order between them.
+
+### Settings and placeholders
+
+`[[contributes.kit.settings]]` entries (`key`, `title`, `kind` = `string`, `path`, `bool` or `choice`, `default`, and `values` for a choice) become a form on the kit's Settings page. Each value reaches the kit's scripts as the environment variable `KIT_<KEY>` (the key upper-cased: `greeting` gives `KIT_GREETING`). Saving the form writes only Prosper's own file inside the kit's config folder and changes no Claude Code file.
+
+Prosper renders these placeholders into the `*.md` files of a staged copy of the kit before it goes live, and into the command strings it builds. Scripts are never rewritten; they get the same values as environment variables from the runner.
+
+| Placeholder | Environment variable | Value |
+| --- | --- | --- |
+| `{{kit_dir}}` | `KIT_DIR` | the kit's folder |
+| `{{kit_bin}}` | `KIT_BIN` | the shim folder |
+| `{{kit_config}}` | `KIT_CONFIG` | `~/.config/<slug>`, as an absolute path |
+| `{{home}}` | | the home folder |
+
+The runner also sets `KIT_STATE_DIR`, a folder that survives kit updates. Because an update replaces the kit folder whole, a tool that keeps files between runs must keep them there (or in `KIT_CONFIG`), never next to its own code.
+
+### The README contract
+
+`README.md` at the kit root is required. Install refuses a kit without it, or without these level-2 headings (any order, case-insensitive):
+
+| Heading | Must say |
+| --- | --- |
+| `## What it changes` | every piece in plain words: which file, which hook event, what the status line shows |
+| `## Requirements` | the `requires` executables and how to install them, any macOS permission, any account |
+| `## Customise` | which `local.md` lines make sense, which tools have `.pre` / `.post` points, the kit settings |
+| `## Remove` | that Remove undoes the wiring, and what it leaves on purpose (seeded config, the tools' own data) |
+
+Prosper also generates a "What will change" summary from the manifest. That one is authoritative: it is what the consent sheet applies. When the README disagrees, the generated summary wins.
+
+A `local.md` line that contradicts the kit text gives undefined behaviour: Claude Code reads `local.md` last, and which instruction wins is not guaranteed. To change a kit rule, switch that piece off and write your own.
+
+### Layers and customisation
+
+| Layer | Where | Who writes it | On update |
+| --- | --- | --- | --- |
+| Generic | the kit folder, the shim folder | Prosper | replaced whole |
+| Wiring | managed blocks in `CLAUDE.md`, elements in `settings.json` | Prosper, after consent | re-planned; asks again when the change is not a noop |
+| Personal | the person's own text outside blocks, `local.md`, `~/.config/<slug>/hooks/*`, seeded files | the person | never touched |
+
+Hand edits inside the kit folder are lost on update; the pane shows "kit files edited" when it no longer matches what was installed. Three customisation points belong to the person:
+
+1. **`local.md`.** The kit's `CLAUDE.md` must end with the line `@{{kit_config}}/local.md` (exactly one `claude-md` piece carries it, and that piece stays on while another `claude-md` piece is on). Prosper seeds `~/.config/<slug>/local.md` on first apply so the import resolves. The import chain below the kit's `CLAUDE.md` is at most 2 deep.
+2. **`.pre` and `.post`.** Every hook, status line and tool runs through one runner script that Prosper owns. If `~/.config/<slug>/hooks/<name>.pre` or `.post` exists it runs before or after the target; a non-zero `.pre` exit stops the run (exit 2 blocks a `PreToolUse` call). `.post` sees `KIT_STATUS` and cannot change the output. A file is run only if it is a regular, executable file owned by the user and not group- or world-writable.
+3. **A switch per piece.** Each piece has a toggle in the pane, remembered across updates. A kit author sets the granularity: one `tools` piece per group of tools a person may want separately.
+
+### The Settings page
+
+Each installed kit has its own page under its row in Settings (the section id `kit` is reserved for it). It shows the header (title, version, source, trust, "Update available"), the README, each `requires` entry as found or not found (lookup only, nothing is executed), and one row per piece with its state, target file and switch. Apply, Repair and Remove, for all pieces or one, go through a consent sheet that lists every change. Apply is allowed with a missing requirement, with a warning.
+
+`settings.json` changes (hooks, permissions) reach open Claude Code sessions through Claude Code's file watcher; `CLAUDE.md` changes reach new sessions only. The page says so under the pieces.
+
+### Updates and rollback
+
+A kit never takes the silent auto-update path of other extensions. A newer version is staged and shown as "Update available"; Update opens a sheet with the changed executables and the wiring diff. Apply swaps the staged copy in, regenerates the shims and applies the wiring, and a failure swaps back. One previous version is kept, and "Roll back" returns to it through the same sheet. Trust survives an update; consent does not, whenever the wiring diff is not a noop or an executable changed.
+
+### Several kits
+
+Two `claude-md` blocks both stay live, in apply order. Hooks on one event are appended as separate groups and all run. Permissions are a union, and a `deny` from one kit against an `allow` from another is shown as a warning, never resolved. The `statusLine` is a single slot: the second kit's piece shows `conflict` until the person chooses it. Two kits with the same tool name do not clash on disk (each has its own shim folder); on the PATH of Prosper-started sessions the first-installed kit wins, and the user's own earlier PATH entries win over both.
+
+### Trust
+
+A kit's hooks and status line run as the person, in every Claude Code session, outside Prosper's sandbox. So a kit **installs untrusted**: its README, summary and files can be read, but there is no Apply until the person trusts it. Consent is asked per change, and the sheet names every command Claude Code will run. Nothing applies by itself, and a kit is never auto-applied or auto-updated.
+
+### Publishing and installing from the Marketplace
+
+- **Kind.** A kit is listed with kind `kit`. **Settings > Extensions > Marketplace** has an **Agent Kits** filter, and every kit row carries a **KIT** badge and the line "Unreviewed - runs shell commands in your Claude Code sessions". The Marketplace has no review in v1.
+- **Publish checks.** The publish flow validates the packed kit as an install would (manifest, README contract, scripts only) and refuses before uploading. A Marketplace kit is **scripts only**: a Mach-O or other non-text executable is refused (a local install shows a warning instead). The whole package stays under the **256 KB** cap.
+- **Listing preview.** Publish computes a preview from the kit itself: the generated "What will change" lines and the first section of the README (at most 2048 bytes). A kit is published with its preview; the server refuses a kit without one (`kit_preview_missing`).
+- **Install-time recheck.** After download, Prosper recomputes the summary and README section from the archive and installs only if the kind is `kit`, the version is still the listed one, the listing is active, the preview equals the recomputed one, and the validator accepts the kit. A listing therefore cannot under-describe what the package does.
+- **Before installing**, a kit shows a sheet with its README and the generated summary. The install lands untrusted.
+
+### Checklist
+
+1. The manifest passes the rules above, and the README has the four headings.
+2. Every script is plain text, executable, inside the kit folder, and the whole kit is under 256 KB.
+3. Nothing in the kit is personal or secret: it is public.
+4. Try it as a local install first (Settings > Extensions), then publish.
