@@ -1,0 +1,34 @@
+{
+ "entry": 1618,
+ "filter": "AgentWindowD1Tests/testPaneFocusSwitchKeepsBothTerminalViews|AgentTerminalTests/testAFocusSwitchBetweenTwoPanesKeepsBothSurfacesDrawing|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "slot-inline",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if hoisted {\n            Color.clear.anchorPreference",
+   "new": "        if false {\n            Color.clear.anchorPreference",
+   "expect": "killed"
+  },
+  {
+   "name": "no-hoist-env",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        .environment(\\.agentTerminalHoisted, true)\n",
+   "new": "        .environment(\\.agentTerminalHoisted, false)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-offset",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                        .offset(x: f.minX, y: f.minY)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-frame",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                        .frame(width: f.width, height: f.height)\n                        .offset(x: f.minX, y: f.minY)\n",
+   "new": "                        .offset(x: f.minX, y: f.minY)\n",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1999,9 +1999,7 @@ tag from the now-released section and put it on the new top draft.
 - Edit layout / Done now sits right after the layout name in the band, on its baseline, and the name
   only gets shortened when the window is really narrow. (#1616)
 - Layouts: switching focus between two panes no longer leaves both terminals blank except for the
-  cursor; each pane reconnects and redraws its session. (#1615)
-- Layouts: switching focus between panes no longer reconnects their terminals, so each pane keeps
-  its screen and an ended session keeps its last frame. (#1618)
+  cursor; each pane keeps its terminal and screen, without reconnecting. (#1615, #1618)
 
 ## v2.174.0
 
