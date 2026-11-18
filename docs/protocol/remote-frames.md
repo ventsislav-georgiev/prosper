@@ -166,7 +166,8 @@ Every frame, in both directions:
   escape (`\ud800` with no low half), is no readable value: that one key reads as of the wrong type
   (json.c:288-384, rframe.c:301-322), as each frame's section says.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
-  exit means the session ended; every other close is a refusal, a dropped link or the
+  exit means the session's client ended (the session too, unless it carries `"why": "detach"`);
+  every other close is a refusal, a dropped link or the
   client's own FIN. Prosper closes:
   - on a length prefix over the receive guard (0x13 `frame too large` first);
   - after 0x12 exit (the FIN follows the frame);
@@ -422,16 +423,20 @@ The connection then carries one session:
   what it has. 0x09 never answers 0x13
   (a frame-too-large 0x13 aside, see [Framing](#framing)): a server with no screen to offer
   sends an empty 0x19.
-- 0x12 exit `{"code": int}`: the session's client exited; the server then closes (the FIN
+- 0x12 exit `{"code": int, "why"?: "detach"}`: the session's client exited; the server then closes (the FIN
   follows the frame). `code` is the exit status of the dch client the server ran, not of the
   session's program: a create of `exit 3` can report 0. No golden fixture asserts a code (the
-  format cannot express it). `dch serve` 1.60.0+ may add `"why": "detach"` (dch #217) when its
-  client exited 0 and the session is still there: 1.60.0 when `<sockdir>/<name>.sock` is a socket
-  (stat), 1.61.0 only when a connect to it succeeds and the master then sends nothing for 100 ms
-  (sock_live, serve.c:1878-1906 at v1.61.0, on every OS: a dying master's socket can still take the
-  connect on Linux; a SIGKILLed one's refuses it). A client must not rely on it: Prosper sends
-  `{"code"}` only (#951: no client reads `why`, the phone ends the attach on 0x12 whatever its payload,
-  and the probe would hold the exit frame up to 100 ms). An older client ignores the key.
+  format cannot express it). `"why": "detach"` (dch #217; Prosper since #1119), after `code`, when
+  the client exited 0 (a signal is never 0), the attach or create named its session, and that session is
+  still there: the session lives on (a `dch -d <name>` on the host, or `dch -d host:name`). "Still
+  there" is dch 1.61.0's: a connect to `<sockdir>/<name>.sock` succeeds and the master then sends
+  nothing for 100 ms (sock_live, serve.c:1962-1981 at v1.99.0, dch #230/#271; a SIGKILLed master's
+  socket file refuses the connect, a dying master's resets it). dch 1.60.0 decided by a stat of the
+  file, so it called a killed master a detach. The probe holds the exit frame up to 100 ms. Prosper
+  does not count dch's macOS stuck master (a refused connect to a full backlog) as there. Absent in
+  every other case: the session ended, the client exited non-zero or by a signal, a nameless create. A
+  refused attach (0x13) sends no 0x12 at all. A client tells a detach by the key, never by its
+  absence: a server older than dch 1.60.0 or Prosper #1119 never sends it. An older client ignores it.
 - The client detaches by closing the TCP connection. The session lives on.
 - One client per session: the newest attach to a session retires the server's older
   connections attached to it (Prosper).

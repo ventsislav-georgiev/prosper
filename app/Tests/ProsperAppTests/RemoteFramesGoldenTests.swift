@@ -28,6 +28,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
     private let ran = Recorder()
     /// #777: the addresses the setUp server's owner check asked whois about.
     private let asked = Recorder()
+    /// #1119: the sessions' socket dir every connection's exit frame probes, never the Mac's own.
+    private var sockDir = ""
 
     /// #777: an owner check whose whois fake answers `peer` (a throw: whois unavailable) for every
     /// address, the host being user 1. The default is the phone on a personal tailnet: user 1 too.
@@ -55,12 +57,14 @@ final class RemoteFramesGoldenTests: XCTestCase {
             .write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         DchCommand.dchPathOverride = script.path
-        let ran = ran, rows = Self.rows
+        sockDir = tempDir("x1119").path
+        let ran = ran, rows = Self.rows, sockDir = sockDir
         server = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {},
                                   allowPeer: { _ in true },
                                   owner: Self.owner(asked: asked),
                                   configure: { c in
                                       c.listSessions = { rows }
+                                      c.sessionSocketDir = { sockDir }
                                       c.kill = { ran.add(["-k", $0]) }
                                       c.rename = { ran.add(["-m", $0, $1]); return nil }
                                       c.clipboard.enabled = { false }
@@ -739,6 +743,109 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(f.0, DchFrame.exit)
         XCTAssertEqual((try JSONSerialization.jsonObject(with: f.1) as? [String: Any])?["code"] as? Int, 0)
         XCTAssertTrue(try c.closed(), "then the FIN")
+    }
+
+    // MARK: - #1119: the exit frame's "why":"detach"
+
+    /// A create whose fake child runs `command` under `name`; the 0x12 payload's literal bytes, after the close.
+    private func exitPayload(_ name: String, _ command: [String]) throws -> [UInt8] {
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.create, json: ["name": name, "command": command, "cols": 80, "rows": 24]))
+        var f = try c.frame()
+        while f.0 == DchFrame.data { f = try c.frame() }
+        XCTAssertEqual(f.0, DchFrame.exit, name)
+        XCTAssertTrue(try c.closed(), "then the FIN")
+        return [UInt8](f.1)
+    }
+
+    /// A unix listener at `<sockDir>/<file>` that never accepts: a connect lands in its backlog and then reads
+    /// nothing, as a live dch master's socket. Closed at teardown unless `keep` is false (then the caller closes it);
+    /// its file stays either way (the tempDir goes).
+    @discardableResult
+    private func listener(_ file: String, keep: Bool = true) throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let p = Array("\(sockDir)/\(file)".utf8CString)
+        guard p.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
+            Darwin.close(fd)
+            XCTFail("\(sockDir)/\(file) does not fit sun_path")
+            throw Client.Failure.connect
+        }
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in p.withUnsafeBytes { raw.copyMemory(from: $0) } }
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard fd >= 0, bound == 0, listen(fd, 8) == 0 else { Darwin.close(fd); throw Client.Failure.connect }
+        if keep { addTeardownBlock { Darwin.close(fd) } }
+        return fd
+    }
+
+    private static let detach = Array(#"{"code":0,"why":"detach"}"#.utf8)
+    private static let exit0 = Array(#"{"code":0}"#.utf8)
+
+    /// The client exited 0 and the session's master still takes a connect: a detach (a `dch -d api` on the Mac).
+    /// Parent: {"code":0} for every exit (the payload was ["code": code]).
+    func testExitWithTheSessionStillThereIsADetach() throws {
+        try listener("api.sock")
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "exit 0"]), Self.detach)
+    }
+
+    /// The session ended: its master unlinked the socket before its client saw the close.
+    func testExitWithNoSocketIsNoDetach() throws {
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "exit 0"]), Self.exit0)
+    }
+
+    /// dch #230: a SIGKILLed master leaves its socket file and refuses the connect: an exit, not a detach (dch
+    /// 1.60.0's stat said detach).
+    func testKilledMasterWithItsSocketFileLeftIsNoDetach() throws {
+        Darwin.close(try listener("api.sock", keep: false))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(sockDir)/api.sock"), "the file outlives the listener")
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "exit 0"]), Self.exit0)
+    }
+
+    /// dch #271: a dying master takes the connect and then closes it within 100 ms: no detach.
+    func testMasterThatClosesTheProbeIsNoDetach() throws {
+        let fd = try listener("api.sock")
+        let accepted = expectation(description: "the probe was accepted and closed")
+        DispatchQueue.global().async {
+            var pf = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&pf, 1, 10_000) > 0 else { return }
+            let a = accept(fd, nil, nil)
+            if a >= 0 { Darwin.close(a); accepted.fulfill() }
+        }
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "exit 0"]), Self.exit0)
+        wait(for: [accepted], timeout: 5)
+    }
+
+    /// The client exited non-zero (dch refused the attach, or the session's program set it): never a detach,
+    /// even with the master still there.
+    func testNonZeroExitIsNoDetach() throws {
+        try listener("api.sock")
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "exit 3"]), Array(#"{"code":3}"#.utf8))
+    }
+
+    /// A killed child (SIGKILL: 128+9) is never a detach, even with the master still there.
+    func testKilledChildIsNoDetach() throws {
+        try listener("api.sock")
+        XCTAssertEqual(try exitPayload("api", ["/bin/sh", "-c", "kill -9 $$"]), Array(#"{"code":137}"#.utf8))
+    }
+
+    /// A create with an empty name (dch picks one) has no socket to probe: never `<dir>/.sock`, live here.
+    func testNamelessCreateIsNoDetach() throws {
+        try listener(".sock")
+        XCTAssertEqual(try exitPayload("", ["/bin/sh", "-c", "exit 0"]), Self.exit0)
+    }
+
+    /// A refused attach (0x13) runs no child and sends no 0x12 at all, the master being there or not.
+    func testRefusedAttachSendsNoExit() throws {
+        try listener("-x.sock")
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.attach, json: ["name": "-x", "cols": 80, "rows": 24]))
+        XCTAssertEqual(try c.frame().0, DchFrame.error)
+        XCTAssertThrowsError(try c.frame(timeout: 1), "no 0x12 follows the refusal") {
+            XCTAssertEqual($0 as? Client.Failure, .timeout)
+        }
     }
 
     /// #803: a create's command reaches dch after "--", so ["-kl"] is a command, never dch's

@@ -62,7 +62,7 @@ enum DchFrame {
     static let data: UInt8    = 0x10  // raw pty bytes
     // server → client
     static let listResp: UInt8 = 0x11 // [{name, alias?, state?, agents?, cwd?, meta?, meta_epoch?}]
-    static let exit: UInt8     = 0x12 // {code}
+    static let exit: UInt8     = 0x12 // {code, why?} (#1119: why "detach" when the session lives on)
     static let error: UInt8    = 0x13 // {message}
     static let ok: UInt8       = 0x14 // (empty) ack for kill, rename, putClipboard; {names} for #591's verbs
     static let machineInfoResp: UInt8 = 0x18 // {device_id, hostname, wakeId?, ops, server, os, name, proto}
@@ -319,6 +319,9 @@ final class DchConnection: @unchecked Sendable {
     var spawn: (String, [String], Int, Int, @escaping ([UInt8]) -> Void, @escaping (Int32) -> Void) throws -> PtyChild = {
         try PtyChild(exe: $0, args: $1, env: DchCommand.childEnv(), cols: $2, rows: $3, onOutput: $4, onExit: $5)
     }
+    /// #1119: the socket dir the spawned client's session lives in (the exit frame's detach probe); tests point it
+    /// at a tempDir.
+    var sessionSocketDir: () -> String = { DchCommand.socketDir }
     /// #765 J16: the list frame's dch fork when the island has no list; tests count it.
     var listSessions: () -> [DchListRow] = { DchCommand.listSessions() }
     /// #838: the ctl request's dch, its timeout and cap; tests point it at a fake.
@@ -933,7 +936,9 @@ final class DchConnection: @unchecked Sendable {
                     // it the final message so the FIN follows the data. cancel() right
                     // after send() could drop the unflushed frame — the client then
                     // saw a link drop, reattached, and resurrected the dead session.
-                    self.conn.send(content: DchFrame.encode(DchFrame.exit, json: ["code": code]),
+                    // #1119: probed here, on the pump thread, so its up to 100 ms never holds the queue.
+                    let detach = DchCommand.exitIsDetach(code: code, name: name, dir: self.sessionSocketDir())
+                    self.conn.send(content: DchFrame.encode(DchFrame.exit, DchCommand.exitPayload(code: code, detach: detach)),
                                    contentContext: .finalMessage,
                                    completion: .contentProcessed { _ in self.close() })
                     // Failsafe: if the completion never fires (client stalled or gone
@@ -2494,6 +2499,39 @@ enum DchCommand {
             let m = (try? fm.attributesOfItem(atPath: "\(dir)/\(s.name).sock.act"))?[.modificationDate] as? Date
             return (s.name, s.alias, up && (m.map { $0 >= cutoff } ?? false))
         }
+    }
+
+    /// #1119: dch serve's 0x12 payload (v1.99.0 serve.c:2242-2254), its keys in that order: `"why":"detach"` only
+    /// when the client exited 0 (a signal is 128+n, never 0) for a named session that is still there.
+    static func exitIsDetach(code: Int32, name: String?, dir: String) -> Bool {
+        guard code == 0, let name, !name.isEmpty else { return false }
+        return sessionLive("\(dir)/\(name).sock")
+    }
+
+    static func exitPayload(code: Int32, detach: Bool) -> [UInt8] {
+        Array("{\"code\":\(code)\(detach ? ",\"why\":\"detach\"" : "")}".utf8)
+    }
+
+    /// #1119: dch serve's sock_live (v1.99.0 serve.c:1962-1981, dch #230/#271): a live master takes the connect and
+    /// then sends nothing for 100 ms. A killed master's socket file refuses the connect, so the file alone never
+    /// counts; a dying one's accepted connection is reset or closed (an event) within the 100 ms.
+    /// shortcut: dch on macOS also counts a refused connect to a stuck master (full backlog, stuck_master) as live;
+    /// here that reads as an exit. Upgrade if a stuck master is ever seen behind a detach.
+    static func sessionLive(_ path: String) -> Bool {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let p = Array(path.utf8CString)
+        guard p.count <= MemoryLayout.size(ofValue: addr.sun_path) else { return false }
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in p.withUnsafeBytes { raw.copyMemory(from: $0) } }
+        let r = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard r == 0 else { return false }
+        var pf = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        return poll(&pf, 1, 100) <= 0   // an EINTR: as connected, as serve
     }
 
     static func kill(_ name: String) {
