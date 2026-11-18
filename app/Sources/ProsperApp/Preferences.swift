@@ -479,6 +479,8 @@ enum Preferences {
         static let agentTerminalColours = "agentTerminalColours"
         // #1463: the X-ray window's last chosen tab (XrayTab raw value); per Mac, not in SyncedKeys.
         static let xrayLastTab = "xrayLastTab"
+        // #1473: the X-ray drawer's width in points at UI scale 1.0, shared by every pane; per Mac, not in SyncedKeys.
+        static let xrayDrawerWidth = "xrayDrawerWidth"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1400,6 +1402,20 @@ enum Preferences {
     static var xrayLastTab: XrayTab {
         get { XrayTab(rawValue: defaults.string(forKey: Keys.xrayLastTab) ?? "") ?? .prompts }
         set { defaults.set(newValue.rawValue, forKey: Keys.xrayLastTab) }
+    }
+
+    /// #1473: the X-ray drawer's width in points at UI scale 1.0, nil when unset (the default). Outside data (another build
+    /// or a hand edit): anything but a finite positive number reads as unset; the drawer clamps the rest. nil removes the key.
+    static var xrayDrawerWidth: Double? {
+        get {
+            guard let n = defaults.object(forKey: Keys.xrayDrawerWidth) as? NSNumber,
+                  CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite, n.doubleValue > 0 else { return nil }
+            return n.doubleValue
+        }
+        set {
+            if let newValue { defaults.set(newValue, forKey: Keys.xrayDrawerWidth) }
+            else { defaults.removeObject(forKey: Keys.xrayDrawerWidth) }
+        }
     }
 
     /// OQ-66: Agent Sessions' "Let sessions set the clipboard while you're viewing them"; on when unset.

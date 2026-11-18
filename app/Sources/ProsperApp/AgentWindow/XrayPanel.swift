@@ -815,21 +815,83 @@ struct XrayTaskRow: Equatable {
 
 // MARK: - Views
 
+/// #1473: the drawer's width, one for every pane and window, remembered per Mac (Preferences.xrayDrawerWidth) in points at
+/// UI scale 1.0 and drawn times the scale. Dragging the drawer's leading edge resizes it; a double-click there resets it.
+@MainActor
+final class XrayDrawerWidth: ObservableObject {
+    static let shared = XrayDrawerWidth()
+    /// The default fits every tab's name at UI scale 0.7 to 1.0 (XrayDrawerWidthTests measures the strip); the narrowest
+    /// usable width; the largest share of the space offered.
+    static let standard: CGFloat = 420, minimum: CGFloat = 300, share: CGFloat = 0.6
+    @Published private(set) var points: CGFloat = Preferences.xrayDrawerWidth.map { CGFloat($0) } ?? XrayDrawerWidth.standard
+    /// The drawn width when the drag began; nil between drags.
+    private var start: CGFloat?
+    var dragging: Bool { start != nil }
+
+    /// The drawn width: the stored points times the scale, at most `share` of `offered` but not under the minimum, and
+    /// never past `offered` (R1351-n1: the overlay is offered the pane's width, or the pane area's in splits).
+    static func width(stored: CGFloat, offered: CGFloat, scale: CGFloat = ThemeRuntime.scale) -> CGFloat {
+        max(0, min(offered, max(minimum * scale, min(stored * scale, offered * share))))
+    }
+
+    /// The leading edge moved `dx` points since the drag began (left is negative: wider). Stored as drawn, clamped.
+    func dragged(by dx: CGFloat, offered: CGFloat, scale: CGFloat = ThemeRuntime.scale) {
+        let from = start ?? Self.width(stored: points, offered: offered, scale: scale)
+        start = from
+        points = Self.width(stored: (from - dx) / scale, offered: offered, scale: scale) / scale
+        Preferences.xrayDrawerWidth = Double(points)
+    }
+
+    func ended() { start = nil }
+
+    func reset() {
+        start = nil
+        points = Self.standard
+        Preferences.xrayDrawerWidth = nil
+    }
+}
+
 /// The drawer over `pane`, drawn only while its panel is open for the session the pane shows.
 struct XrayDrawer: View {
     @ObservedObject var panels = XrayPanels.shared
+    @ObservedObject var width = XrayDrawerWidth.shared
     let pane: UUID
     let target: XrayTarget?
 
     var body: some View {
         if let p = panels.open[pane], p.target == target {
-            XrayPanelView(panel: p)
-                .frame(maxWidth: sz(340))   // R1351-n1: min(340, the pane's width): the overlay is offered the pane's width
-                .frame(maxHeight: .infinity)
-                .modifier(AgentPaneProbe(kind: "xray"))   // tests only (nil probe: nothing)
-                .background(Neon.card)
-                .overlay(alignment: .leading) { Rectangle().fill(Neon.stroke).frame(width: 1) }
+            GeometryReader { g in
+                XrayPanelView(panel: p)
+                    .frame(width: XrayDrawerWidth.width(stored: width.points, offered: g.size.width))
+                    .frame(maxHeight: .infinity)
+                    .modifier(AgentPaneProbe(kind: "xray"))   // tests only (nil probe: nothing)
+                    .background(Neon.card)
+                    .overlay(alignment: .leading) { Rectangle().fill(Neon.stroke).frame(width: 1) }
+                    .overlay(alignment: .leading) { handle(offered: g.size.width) }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
+    }
+
+    /// #1473: a few points of hit area on the leading edge (the 1 pt line stays the visual). The cursor is set while the
+    /// pointer moves over it, as the split dividers do (no push or pop to unbalance when the drawer closes under it).
+    func handle(offered: CGFloat) -> some View {
+        Color.clear.frame(width: sz(5)).contentShape(Rectangle())
+            .onContinuousHover { phase in
+                if case .active = phase { NSCursor.resizeLeftRight.set() } else if !width.dragging { NSCursor.arrow.set() }
+            }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { width.dragged(by: $0.translation.width, offered: offered) }
+                .onEnded { _ in width.ended() })
+            .onTapGesture(count: 2) { width.reset() }
+            .accessibilityElement()
+            .accessibilityLabel("X-Ray width")
+            // the drawn width (bounded by the space offered), never the stored value: that is outside data and Int( could trap
+            .accessibilityValue("\(Int(XrayDrawerWidth.width(stored: width.points, offered: offered) / ThemeRuntime.scale)) points")
+            .accessibilityAdjustableAction { d in
+                width.dragged(by: d == .increment ? -sz(20) : sz(20), offered: offered)
+                width.ended()
+            }
     }
 }
 

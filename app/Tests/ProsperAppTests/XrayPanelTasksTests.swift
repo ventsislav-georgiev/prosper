@@ -497,13 +497,16 @@ final class XrayPanelTasksTests: XCTestCase {
         defer { ThemeRuntime.scale = saved }
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
-            for paneWidth: CGFloat in [300, 500] {
+            for paneWidth: CGFloat in [300, 500, 700] {
                 let host = Color.clear.frame(width: paneWidth, height: 400)
                     .overlay(alignment: .trailing) { XrayDrawer(pane: pane, target: target) }
                     .frame(width: 700, height: 400, alignment: .topLeading)
                 let d = frames(host, size: CGSize(width: 700, height: 400), kinds: ["xray"])["xray"]
                 XCTAssertTrue(d != nil, "the drawer is drawn")
-                XCTAssertEqual(d?.width ?? 0, min(sz(340), paneWidth), accuracy: AXTreeSupport.devicePixel, "min(sz(340), the pane) at \(scale), pane \(paneWidth)")
+                // #1473: the remembered width, clamped to the pane (was min(sz(340), the pane))
+                let want = XrayDrawerWidth.width(stored: XrayDrawerWidth.shared.points, offered: paneWidth)
+                XCTAssertEqual(ThemeRuntime.scale, scale)
+                XCTAssertEqual(d?.width ?? 0, want, accuracy: AXTreeSupport.devicePixel, "the clamped width at \(scale), pane \(paneWidth)")
                 XCTAssertLessThanOrEqual(d?.maxX ?? 1000, paneWidth + AXTreeSupport.devicePixel, "no drawer pixel past the pane at \(scale), pane \(paneWidth)")
             }
         }
