@@ -1,0 +1,21 @@
+{
+ "entry": 1603,
+ "filter": "AudioInputDeviceManagerTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "owed-not-cleared-on-mute",
+   "file": "app/Sources/ProsperApp/AudioMixer/AudioInputDeviceManager.swift",
+   "old": "        owedMuteUIDs = []\n        lastError = nil\n        micMuted = true",
+   "new": "        lastError = nil\n        micMuted = true",
+   "expect": "killed"
+  },
+  {
+   "name": "refresh-ignores-micMuted",
+   "file": "app/Sources/ProsperApp/AudioMixer/AudioInputDeviceManager.swift",
+   "old": "guard !micMuted, !owedMuteUIDs.isDisjoint(with: listedUIDs)",
+   "new": "guard !owedMuteUIDs.isDisjoint(with: listedUIDs)",
+   "expect": "survives",
+   "note": "equivalent while the owed clear holds: micMuted implies owedMuteUIDs is empty (#1603 report)"
+  }
+ ]
+}
