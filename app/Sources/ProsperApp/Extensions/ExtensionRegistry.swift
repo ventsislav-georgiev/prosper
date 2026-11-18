@@ -1111,6 +1111,24 @@ final class ExtensionRegistry: ObservableObject {
         // "kept awake" state, pasteplain's rules). Replay that one-shot to this
         // extension alone; deliverEvent skips it unless it is live (trusted too).
         if enabled && !wasEnabled { replayLaunch(id: id) }
+        if !enabled && wasEnabled && id == Self.openLidID { suspendRemoteWake(id: id) }
+    }
+
+    static let openLidID = "com.prosper.openlid"
+
+    /// #1072: Remote Wake outlives quit by design, so no teardown disarms it; turning OpenLid off does,
+    /// only when its saved setting (openlid's `remote_wake` pref, kept as is) has it on. Re-enable needs
+    /// nothing here: the launch replay above runs openlid's on_launch, which re-arms it from that setting.
+    /// The same serial chain as the extension's own calls, so a queued arm cannot land after this disarm.
+    private func suspendRemoteWake(id: String) {
+        guard services.prefGet(extensionID: id, key: "remote_wake") == "true" else { return }
+        let host = services
+        let device = host.prefGet(extensionID: id, key: "rw_device_id") ?? ""
+        // shortcut: cadence is the host's defaults (unused by a disarm; only the off meta report carries it).
+        LidSleepHelper.enqueueApply {
+            await host.caffeinateSetRemoteWake(extensionID: id, enabled: false, deviceID: device,
+                                                   intervalAC: 60, intervalBatt: 300, batteryFloor: 20)
+        }
     }
 
     /// #930/#1038: re-run `id`'s system.launch handler after a teardown that leaves it live (re-enable, reset).

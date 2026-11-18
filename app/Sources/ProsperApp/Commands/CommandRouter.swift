@@ -214,6 +214,10 @@ enum CommandRouter {
     static let menusID = "com.prosper.menus"
     static let shellID = "com.prosper.shell"
     static let openID = "com.prosper.open"
+    /// #1072: the answer extensions; their native fallbacks below answer only while they are live.
+    static let calcID = "com.prosper.calc"
+    static let unitsID = "com.prosper.units"
+    static let currencyID = "com.prosper.currency"
 
     /// Whether extension `id` is live (enabled + trusted). No registry (tests and
     /// direct callers; the app sets one at launch) = ungated.
@@ -224,6 +228,7 @@ enum CommandRouter {
 
     /// Calc via the `calc.eval` system extension, falling back to native `Calc`.
     private static func calcResult(_ query: String) async -> String? {
+        guard await MainActor.run(body: { extensionLive(calcID) }) else { return nil }
         if let viaExtension = await MainActor.run(body: {
             registry?.invokeSync(commandID: "calc.eval", query: query)
         }) {
@@ -238,6 +243,7 @@ enum CommandRouter {
     /// "<from>\t<to>\t<formatted>" triple; native returns the same fields.
     private static func unitResult(_ query: String)
         async -> (title: String, value: String, detail: String)? {
+        guard await MainActor.run(body: { extensionLive(unitsID) }) else { return nil }
         if let raw = await MainActor.run(body: {
             registry?.invokeSync(commandID: "unit.convert", query: query)
         }) {
@@ -259,6 +265,7 @@ enum CommandRouter {
     /// extension returns a TAB-delimited "<formatted>\t<detail>" pair.
     private static func currencyResult(_ query: String)
         async -> (value: String, detail: String)? {
+        guard await MainActor.run(body: { extensionLive(currencyID) }) else { return nil }
         if let registry = await MainActor.run(body: { registry }),
            let raw = await registry.invokeAsync(commandID: "currency.convert", query: query) {
             let parts = raw.components(separatedBy: "\t")
@@ -472,8 +479,8 @@ enum CommandRouter {
         }
 
         // 1. Calc (must contain an operator). System extension first, native
-        //    fallback (so a disabled/edited calc extension never loses the
-        //    feature). See docs/ADR-002-extensibility.md.
+        //    fallback (so an edited calc extension never loses the feature); a
+        //    disabled one answers nothing (#1072). See docs/ADR-002-extensibility.md.
         if let value = await calcResult(trimmed) {
             return .calc(expression: trimmed, value: value)
         }
