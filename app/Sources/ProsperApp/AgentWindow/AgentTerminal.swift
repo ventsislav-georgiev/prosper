@@ -94,6 +94,8 @@ protocol AgentTerminalScreen: AnyObject {
 @MainActor
 final class AgentGhosttyScreen: AgentTerminalScreen {
     let session: InMemoryTerminalSession
+    /// #1615: the surfaces this screen went into. A second is a fresh, empty grid on a session the first one parsed.
+    var mounts = 0
 
     init(_ events: AgentTerminalScreenEvents) {
         session = InMemoryTerminalSession(write: events.write,
@@ -657,6 +659,21 @@ final class AgentTerminalController: ObservableObject {
         if phase != .idle { phase = .idle }
     }
 
+    /// #1615: `s` went into a second surface: SwiftUI remade the pane's view (a focus switch between two layout panes
+    /// swaps each pane's branch, AgentPaneArea.pane), and the new surface's grid starts empty while dch sends only new
+    /// output, so both panes drew nothing but the cursor. A fresh attach has dch replay the screen and scrollback into a
+    /// fresh screen. Only a screen that was fed (an unfed one lost nothing, and two views over one fresh screen never loop),
+    /// on the next main turn (the call comes from inside a view update), and only while `s` is still this attach's
+    /// screen with its client running: a parked or ended pane has no client to replay.
+    func remount(_ s: AgentTerminalScreen) {
+        guard fed else { return }
+        after(0) { [weak self] in
+            guard let self, self.key != nil, self.screen === s, self.child != nil else { return }
+            self.detach()
+            self.begin()
+        }
+    }
+
     /// #1477 (11.2 "detached, last frame kept"): zoomed away, too small, over the cap of attached clients or the same
     /// session's second pane: the client goes as in a detach, the screen (its last frame) stays; the next attach
     /// replaces it with a fresh one.
@@ -876,6 +893,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         guard window != nil, let screen, screen !== installed else { return }
         AgentTerminalLook.refresh(look())
         installed = screen
+        screen.mounts += 1
         viewportText = { [weak screen] in screen?.session.readViewportText() }
         // The backend first: a controller set while the options still name `.exec` (the default)
         // would build a surface that runs a login shell.
@@ -883,6 +901,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         configuration = TerminalSurfaceOptions(backend: .inMemory(screen.session),
                                                fontSize: Float(AgentTerminalController.fontSize), context: .window)
         if controller !== look() { controller = look() }
+        if screen.mounts > 1 { owner?.remount(screen) }
     }
 
     /// #891: the theme generation and the font size this view last took (nil before its first update).

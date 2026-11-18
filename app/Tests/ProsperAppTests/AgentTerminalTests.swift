@@ -754,6 +754,94 @@ final class AgentTerminalTests: XCTestCase {
         XCTAssertFalse(v.window.isKeyWindow)
     }
 
+    /// #1615: a live screen that went into a second surface attaches again on the next main turn (never inside the
+    /// view update), so dch replays into a fresh screen. A screen another attach replaced, or a parked one (no client),
+    /// changes nothing.
+    @MainActor
+    func testRemountOfALiveScreenAttachesAgainOnTheNextTurn() throws {
+        let rig = Rig()
+        rig.grid(80, 24)
+        rig.c.attach(Self.key)
+        XCTAssertEqual(rig.children.count, 1)
+        let old = try XCTUnwrap(rig.c.screen)
+        rig.c.remount(old)
+        rig.clock.advance(0)
+        XCTAssertEqual(rig.children.count, 1, "unfed: the new surface lost nothing, no attach")
+        rig.ios.last?.output(Array("frame".utf8))
+        wait("fed") { rig.screen?.fed.isEmpty == false }
+        rig.c.remount(old)
+        XCTAssertEqual(rig.children.count, 1, "nothing inside the view update")
+        XCTAssertTrue(rig.c.screen === old)
+        rig.clock.advance(0)
+        XCTAssertEqual(rig.children.first?.terminated, 1, "the old client went")
+        XCTAssertEqual(rig.children.count, 2, "a fresh attach: dch replays the screen")
+        XCTAssertTrue(rig.c.screen !== old, "into a fresh screen")
+        XCTAssertEqual(rig.c.phase, .live)
+        XCTAssertFalse(rig.c.revealed, "the background until the replay's first bytes, never the empty grid")
+        XCTAssertEqual(rig.requests.last?.args, rig.requests.first?.args, "the same session")
+
+        rig.ios.last?.output(Array("replay".utf8))
+        wait("the replay fed") { rig.screen?.fed.isEmpty == false }
+        rig.c.remount(old)
+        rig.clock.advance(0)
+        XCTAssertEqual(rig.children.count, 2, "a stale screen: no attach")
+
+        let replaced = try XCTUnwrap(rig.c.screen)
+        rig.c.remount(replaced)
+        rig.c.attach(nil)
+        rig.c.attach(Self.key)   // another attach before the next turn: its screen is fresh
+        XCTAssertEqual(rig.children.count, 3)
+        rig.clock.advance(0)
+        XCTAssertEqual(rig.children.count, 3, "replaced in the meantime: no second attach")
+        XCTAssertEqual(rig.children.last?.terminated, 0)
+
+        rig.ios.last?.output(Array("again".utf8))
+        wait("the new attach fed") { rig.screen?.fed.isEmpty == false }
+        let kept = try XCTUnwrap(rig.c.screen)
+        rig.c.park()
+        rig.c.remount(kept)
+        rig.clock.advance(0)
+        XCTAssertEqual(rig.children.count, 3, "parked: no client to replay, none started")
+        XCTAssertTrue(rig.c.screen === kept)
+    }
+
+    /// #1615: a focus switch between two layout panes swaps each pane's SwiftUI branch (AgentPaneArea.pane), so BOTH
+    /// get a new host view, and so a new libghostty surface, over their unchanged screen: an empty grid that drew only the
+    /// cursor. Offscreen (the windows are never ordered in), real surfaces: each pane's second view attaches again and
+    /// draws what its program prints next; its first client goes.
+    @MainActor
+    func testAFocusSwitchBetweenTwoPanesKeepsBothSurfacesDrawing() {
+        let panes = [startedView(), startedView()]
+        defer { panes.forEach { $0.tearDown() } }
+        for (i, v) in panes.enumerated() {
+            v.output("pane \(i) before\r\n", self)
+            XCTAssertTrue(v.session?.readViewportText()?.contains("pane \(i) before") == true)
+        }
+        // The swap, as SwiftUI does it: a new view per pane, updateNSView (owner, view, show), then into the window.
+        var remade: [AgentTerminalHostView] = []
+        for v in panes {
+            let h = AgentTerminalHostView(frame: v.host.frame)
+            h.look = { [app = v.app] in app }
+            h.pasteboard = { [pb = v.pb] in pb }
+            h.owner = v.rig.c
+            v.rig.c.view = h
+            h.show(v.rig.c.screen as? AgentGhosttyScreen)
+            v.window.contentView = h
+            remade.append(h)
+        }
+        XCTAssertEqual(remade.count, panes.count)
+        for (i, (v, h)) in zip(panes, remade).enumerated() {
+            v.rig.clock.advance(0)
+            XCTAssertEqual(v.rig.children.first?.terminated, 1, "pane \(i): its first client went")
+            h.show(v.rig.c.screen as? AgentGhosttyScreen)   // updateNSView on the published screen
+            wait("pane \(i) attaches again") { v.rig.children.count == 2 }
+            v.output("pane \(i) after\r\n", self)
+            XCTAssertTrue(v.session?.readViewportText()?.contains("pane \(i) after") == true, "pane \(i) draws")
+            XCTAssertTrue((h.accessibilityValue() as? String)?.contains("pane \(i) after") == true, "in its new view")
+            XCTAssertFalse(v.window.isVisible, "never shown")
+        }
+    }
+
     @MainActor
     func testKeysReachTheProgramAndShiftReturnFollowsItsKeyboardMode() {
         let v = startedView()
