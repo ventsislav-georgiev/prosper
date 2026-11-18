@@ -1194,10 +1194,11 @@ final class AgentTerminalTests: XCTestCase {
     @MainActor
     func testEchoThroughARealPty() throws {
         let rig = Rig()
+        let cwd = tempDir().path
         nonisolated(unsafe) var pty: PtyChild?
         rig.c.spawn = { req, io in
             let p = try PtyChild(exe: "/bin/cat", args: [], env: ["TERM": "xterm-256color", "HOME": NSHomeDirectory()],
-                                 cols: req.cols, rows: req.rows, cwd: NSTemporaryDirectory(),
+                                 cols: req.cols, rows: req.rows, cwd: cwd,
                                  onOutput: io.output, onExit: io.exit)
             pty = p
             return p

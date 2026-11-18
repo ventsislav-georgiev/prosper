@@ -204,8 +204,8 @@ final class ProcessGroupKillTests: XCTestCase {
     /// `initialize`) is registered once spawned and gone from the registry once shutdown's
     /// escalate ends.
     func testStartRegistersTheCodexGroupAndShutdownUnregistersIt() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-tests/pgkill-\(UUID().uuidString)", isDirectory: true)
+        let dir = testTempRoot
+            .appendingPathComponent("pgkill-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let exe = dir.appendingPathComponent("codex"), pidFile = dir.appendingPathComponent("pid")
@@ -241,8 +241,8 @@ final class ProcessGroupKillTests: XCTestCase {
     /// registered through handleTermination's 3 s grace (so a quit then still kills it
     /// inline) and leaves the registry once the escalate has SIGKILLed the child.
     func testHandleTerminationKeepsTheGroupRegisteredUntilEscalateEnds() async throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("prosper-tests/pgkill-exit-\(UUID().uuidString)", isDirectory: true)
+        let dir = testTempRoot
+            .appendingPathComponent("pgkill-exit-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let exe = dir.appendingPathComponent("codex")
