@@ -15,7 +15,16 @@ struct MixerInputDevice: Identifiable, Equatable {
     let uid: String
     let name: String
     let isDefault: Bool
-    fileprivate let audioObjectID: AudioObjectID
+    let audioObjectID: AudioObjectID
+}
+
+/// The HAL reads and writes Mute All and its unmute make. Tests pass fake
+/// devices here so no real microphone's mute or level is ever touched.
+struct MicMuteHAL {
+    var inputDevices: () -> [MixerInputDevice]
+    var setMuteSwitch: (Bool, AudioObjectID) -> Bool
+    var inputVolume: (AudioObjectID) -> Float?
+    var setInputVolume: (Float, AudioObjectID) -> Bool
 }
 
 private struct InputSnapshot {
@@ -47,7 +56,7 @@ final class AudioInputDeviceManager: ObservableObject {
 
     /// Recorded microphones the last unmute could not reach; the device list
     /// listener finishes the restore when one of them shows up.
-    private var owedMuteUIDs: Set<String> = []
+    private(set) var owedMuteUIDs: Set<String> = []
     private var listenerInstalled = false
     private var globalListeners: [AudioObjectPropertySelector] = []
     private var refresh = MixerRefreshCoordinator()
@@ -57,7 +66,20 @@ final class AudioInputDeviceManager: ObservableObject {
     /// long as the audio daemon holds its lock, so none of them happen on main.
     private let halQueue = DispatchQueue(label: "com.prosper.mixer.input.hal", qos: .userInitiated)
 
-    private init() {}
+    private let muteHAL: MicMuteHAL
+
+    private init() {
+        muteHAL = MicMuteHAL(inputDevices: { Self.inputDevices(defaultUID: nil) },
+                             setMuteSwitch: { Self.setMuteSwitch($0, of: $1) },
+                             inputVolume: { Self.inputVolume(of: $0) },
+                             setInputVolume: { Self.setInputVolume($0, of: $1) })
+    }
+
+    /// Tests only: a manager whose mute path sees fake devices. It installs no
+    /// listener, so the refresh never reads the real HAL.
+    init(muteHAL: MicMuteHAL) {
+        self.muteHAL = muteHAL
+    }
 
     // MARK: - Lifecycle
 
@@ -236,7 +258,14 @@ final class AudioInputDeviceManager: ObservableObject {
         }
         let error = snapshot.applyStatus.map { "Could not switch microphone: OSStatus \($0)" }
         if lastError != error { lastError = error }
-        if !owedMuteUIDs.isDisjoint(with: snapshot.devices.map(\.uid)) { unmuteRecordedInputs() }
+        finishOwedRestore(listedUIDs: snapshot.devices.map(\.uid))
+    }
+
+    /// An owed microphone that shows up again gets the restore its unmute
+    /// promised, but only while unmuted: a Mute All since then owns it.
+    func finishOwedRestore(listedUIDs: [String]) {
+        guard !micMuted, !owedMuteUIDs.isDisjoint(with: listedUIDs) else { return }
+        unmuteRecordedInputs()
     }
 
     // MARK: - Mute every input
@@ -259,15 +288,15 @@ final class AudioInputDeviceManager: ObservableObject {
     private func muteAllInputs() {
         var recorded: [String] = []
         var savedVolumes: [String: Double] = [:]
-        for device in Self.inputDevices(defaultUID: nil) {
-            if Self.setMuteSwitch(true, of: device.audioObjectID) {
+        for device in muteHAL.inputDevices() {
+            if muteHAL.setMuteSwitch(true, device.audioObjectID) {
                 recorded.append(device.uid)
                 continue
             }
             // A saved zero would make the unmute restore silence, so a device
             // that is already down is left alone rather than recorded.
-            guard let volume = Self.inputVolume(of: device.audioObjectID), volume > 0.01,
-                  Self.setInputVolume(0, of: device.audioObjectID) else { continue }
+            guard let volume = muteHAL.inputVolume(device.audioObjectID), volume > 0.01,
+                  muteHAL.setInputVolume(0, device.audioObjectID) else { continue }
             savedVolumes[device.uid] = Double(volume)
             recorded.append(device.uid)
         }
@@ -283,6 +312,8 @@ final class AudioInputDeviceManager: ObservableObject {
         }
         Preferences.defaults.set(recorded, forKey: MixerDefaultsKey.micMutedDevices)
         Preferences.defaults.set(savedVolumes, forKey: MixerDefaultsKey.micSavedInputVolumes)
+        // The owed mics now live in this record; left owed, their return would undo this mute.
+        owedMuteUIDs = []
         lastError = nil
         micMuted = true
     }
@@ -296,13 +327,13 @@ final class AudioInputDeviceManager: ObservableObject {
         let recorded = defaults.stringArray(forKey: MixerDefaultsKey.micMutedDevices)
         let savedVolumes = defaults.dictionary(forKey: MixerDefaultsKey.micSavedInputVolumes)
             as? [String: Double] ?? [:]
-        let devices = Self.inputDevices(defaultUID: nil)
+        let devices = muteHAL.inputDevices()
         let plan = MixerRoutingSupport.micUnmutePlan(recorded: recorded, presentUIDs: devices.map(\.uid))
         for device in devices where plan.restore.contains(device.uid) {
             if let volume = savedVolumes[device.uid] {
-                _ = Self.setInputVolume(Float(volume), of: device.audioObjectID)
+                _ = muteHAL.setInputVolume(Float(volume), device.audioObjectID)
             }
-            _ = Self.setMuteSwitch(false, of: device.audioObjectID)
+            _ = muteHAL.setMuteSwitch(false, device.audioObjectID)
         }
         // A microphone the read did not list keeps its record and saved level
         // until it is seen, silently.
