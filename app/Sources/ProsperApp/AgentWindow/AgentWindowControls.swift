@@ -1019,8 +1019,11 @@ struct AgentUnsentFirstLine: View {
     let copy: () -> Void
     let send: () -> Void
     let dismiss: () -> Void
+    /// R1471b-m1: false while the terminal has no live client for this session: Send is off and says so.
+    var canSend = true
 
     static let title = "Your first message was not sent"
+    static let notConnected = "Not connected yet"
     static let maxShown = 80
 
     /// One line: newlines folded to spaces, cut by Characters (a grapheme stays whole) to `maxShown` with an ellipsis, then
@@ -1043,7 +1046,9 @@ struct AgentUnsentFirstLine: View {
             .accessibilityElement(children: .ignore).accessibilityLabel(Self.title).accessibilityValue(line)
             Spacer(minLength: 0)
             Button("Copy", action: copy).accessibilityLabel("Copy first message")
-            Button("Send", action: send).accessibilityLabel("Send first message to the terminal")
+            Button("Send", action: send).disabled(!canSend).help(canSend ? "" : Self.notConnected)
+                .accessibilityLabel("Send first message to the terminal")
+                .accessibilityHint(canSend ? "" : Self.notConnected)
             Button("Dismiss", action: dismiss).accessibilityLabel("Dismiss")
         }
         .buttonStyle(.link)
@@ -1053,6 +1058,19 @@ struct AgentUnsentFirstLine: View {
         .background(Neon.card)
         .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
         .modifier(AgentPaneProbe(kind: "unsentFirst"))
+    }
+}
+
+/// Reads the terminal's phase so Send enables when the client comes up (the pane's overlay does not observe it).
+struct AgentUnsentFirstHost: View {
+    @ObservedObject var model: AgentWindowModel
+    @ObservedObject var terminal: AgentTerminalController
+
+    var body: some View {
+        if let u = model.unsentFirst {
+            AgentUnsentFirstLine(text: u.text, copy: { model.copyUnsentFirst() }, send: { model.sendUnsentFirst() },
+                                 dismiss: { model.dismissUnsentFirst() }, canSend: model.canSendUnsentFirst)
+        }
     }
 }
 

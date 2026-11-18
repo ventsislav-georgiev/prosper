@@ -2179,8 +2179,7 @@ struct AgentDetailView: View {
                 VStack(spacing: 0) {
                     overTop(row, s)
                     if let u = model.unsentFirst, u.key == s.key, !model.focusedEnded {
-                        AgentUnsentFirstLine(text: u.text, copy: { model.copyUnsentFirst() }, send: { model.sendUnsentFirst() },
-                                             dismiss: { model.dismissUnsentFirst() })
+                        AgentUnsentFirstHost(model: model, terminal: model.terminal)
                     }
                     if transcript.todosOpen, let todos = transcript.todos {
                         AgentTodosList(todos: todos)

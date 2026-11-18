@@ -42,7 +42,8 @@ extension AgentWindowD1Tests {
 
     /// api selected, live and focused in a visible model; its first message failed while it was selected.
     @MainActor
-    func withUnsentFirst(_ body: (AgentWindowModel, AgentIslandStore, AgentIslandController, AgentSession,
+    func withUnsentFirst(terminalSetup: (AgentWindowModel, AgentSession) -> Void = { _, _ in },
+                         _ body: (AgentWindowModel, AgentIslandStore, AgentIslandController, AgentSession,
                                   () -> [UInt8]) throws -> Void) rethrows {
         try withNewSessionPrefs {
             let a = session("api", .idle), st = store([a])
@@ -53,6 +54,7 @@ extension AgentWindowD1Tests {
             m.interaction.controller = island
             m.setVisible(true)
             m.select(.live(a.key))
+            terminalSetup(m, a)
             let done = expectation(description: "the first message fails")
             m.sayFirst(a.key, Self.unsentRaw) { done.fulfill() }
             wait(for: [done], timeout: 10)
@@ -110,6 +112,68 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(writes.count, 1, "no notice: nothing more")
             XCTAssertEqual(written(), before, "the recorder took it: the pty saw nothing")
         }
+    }
+
+    /// R1471b-m1: Send on a terminal with no live client writes nothing and keeps the notice and the record (input() would
+    /// drop the bytes silently and Send would then forget the text). .attaching: the screen never reports its grid.
+    @MainActor
+    func testUnsentFirstSendWhileAttachingKeepsBoth() throws {
+        try withUnsentFirst(terminalSetup: { m, a in
+            m.terminal.attach(nil)   // a fresh attach under the row's seams (the model's first row is already live)
+            m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+            m.terminal.attach(a.key)
+        }) { m, _, island, a, _ in
+            XCTAssertTrue(m.terminal.phase == .attaching, "control: attaching, got \(m.terminal.phase)")
+            assertSendKeepsBoth(m, island, a)
+        }
+    }
+
+    /// The same for a failed attach (the spawn throws).
+    @MainActor
+    func testUnsentFirstSendAfterAFailedAttachKeepsBoth() throws {
+        struct Boom: Error {}
+        try withUnsentFirst(terminalSetup: { m, a in
+            m.terminal.attach(nil)
+            m.terminal.spawn = { _, _ in throw Boom() }
+            m.terminal.attach(a.key)
+        }) { m, _, island, a, _ in
+            if case .failed = m.terminal.phase {} else { XCTFail("control: failed, got \(m.terminal.phase)") }
+            assertSendKeepsBoth(m, island, a)
+        }
+    }
+
+    /// Live, but attached to another session: Send writes nothing and keeps both.
+    @MainActor
+    func testUnsentFirstSendWhileAttachedToAnotherSessionKeepsBoth() throws {
+        try withUnsentFirst { m, st, island, a, written in
+            let w = session("web", .idle)
+            st.sessions = [a, w]
+            m.terminal.attach(w.key)
+            _ = written()
+            XCTAssertTrue(m.terminal.phase == .live && m.terminal.key == w.key, "control: live on web, got \(m.terminal.phase)")
+            assertSendKeepsBoth(m, island, a)
+        }
+    }
+
+    /// Live and attached to the notice's session: the control (Send is on, and the write goes).
+    @MainActor
+    func testUnsentFirstCanSendWhenLiveAndAttached() throws {
+        try withUnsentFirst { m, _, _, a, written in
+            _ = written()
+            XCTAssertTrue(m.terminal.phase == .live && m.terminal.key == a.key, "control: live on api")
+            XCTAssertTrue(m.canSendUnsentFirst)
+            XCTAssertEqual(AgentUnsentFirstLine.notConnected, "Not connected yet")
+        }
+    }
+
+    @MainActor
+    private func assertSendKeepsBoth(_ m: AgentWindowModel, _ island: AgentIslandController, _ a: AgentSession) {
+        XCTAssertFalse(m.canSendUnsentFirst, "the view's Send is off")
+        var writes: [[UInt8]] = []
+        m.sendUnsentFirst { writes.append($0) }
+        XCTAssertEqual(writes.count, 0, "0 bytes written")
+        XCTAssertEqual(m.unsentFirst, AgentWindowModel.UnsentFirst(key: a.key, text: Self.unsentRaw), "the notice stays")
+        XCTAssertEqual(island.unsentFirst[a.key], Self.unsentRaw, "the record stays")
     }
 
     /// Dismiss: the notice goes and the island forgets the message, so selecting the session again shows nothing.

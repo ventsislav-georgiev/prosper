@@ -2799,10 +2799,17 @@ final class AgentWindowModel: ObservableObject {
         if let put { put(t) } else { Pasteboard.general.clearContents(); Pasteboard.general.setString(t, forType: .string) }
     }
 
+    /// R1471b-m1: Send acts only when the focused terminal is live and attached to the notice's session (input() drops
+    /// bytes with no client, and Send then forgets the text). Otherwise the notice and the record stay.
+    var canSendUnsentFirst: Bool {
+        guard let u = unsentFirst else { return false }
+        return terminal.phase == .live && terminal.key == u.key
+    }
+
     /// The notice's Send: the whole text as one bracketed paste, sanitized as the terminal's own paste, no Return (the
     /// person reads it in the prompt and sends it). Then as Dismiss. `write` is the focused terminal's input (tests: a recorder).
     func sendUnsentFirst(_ write: (([UInt8]) -> Void)? = nil) {
-        guard let t = unsentFirst?.text else { return }
+        guard canSendUnsentFirst, let t = unsentFirst?.text else { return }
         let bytes = Self.bracketedPaste(t)
         if let write { write(bytes) } else { terminal.input(bytes) }
         dismissUnsentFirst()
