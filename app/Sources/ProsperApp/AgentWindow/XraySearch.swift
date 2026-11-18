@@ -182,13 +182,17 @@ extension XrayPanelModel {
     /// A remote host answers by its own release (dch README "host answers by its own release"): an older host's dch
     /// refuses `--scope` with exit 1, so a remote scoped read that exits 1 runs once more unscoped, and this panel stays
     /// unscoped after (`unscopedHost`). Exit 1 for another cause (no corpus, no --search) answers 1 again: as before.
+    /// #1621: the one scope decision: the read and the field's accessibility label both use it.
+    var searchScoped: Bool { XraySearch.scoped(XrayPanels.probed?.version) && !unscopedHost }
+    var searchFieldLabel: String { searchScoped ? "Search this project" : "Search this session" }
+
     func runSearch() {
         guard DchCtl.searchOK(query) else { searchNote = XraySearch.badQuery; return }
         guard let dch, let run else { return }
         cancel()
         searchNote = nil
         let env = target.env, (text, input) = target.viaStdin(query, version: XrayPanels.probed?.version)
-        let scoped = XraySearch.scoped(XrayPanels.probed?.version) && !unscopedHost
+        let scoped = searchScoped
         let a = target.searchArgs(text, scope: scoped ? "project" : nil), plain = target.searchArgs(text), remote = target.dir == nil
         reading = Task { [weak self] in
             var r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }

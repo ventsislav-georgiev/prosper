@@ -2006,6 +2006,8 @@ tag from the now-released section and put it on the new top draft.
   their hits appear under "also discussed in <session>, <age>" headers, a header opens that session
   to the side, and with dch 1.111.0 the tab shows where it was first mentioned and most recently,
   and marks the hit that answered it. (#1611)
+- The X-ray Search field is now announced as "Search this project" when the search covers the whole
+  project. (#1621)
 
 ## v2.174.0
 

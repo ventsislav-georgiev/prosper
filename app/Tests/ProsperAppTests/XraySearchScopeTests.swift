@@ -69,6 +69,17 @@ final class XraySearchScopeTests: XCTestCase {
         }
     }
 
+    /// #1621: the field's accessibility label says the scope the read uses. Red at TIP: always "Search this session".
+    func testSearchFieldLabelFollowsTheScope() async {
+        XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 109, 0])
+        let p = await opened(XraySearchTabTests.local, XraySearchTabTests.Run().run)
+        XCTAssertEqual(p.searchFieldLabel, "Search this session")
+        XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 110, 0])
+        XCTAssertEqual(p.searchFieldLabel, "Search this project")
+        p.unscopedHost = true
+        XCTAssertEqual(p.searchFieldLabel, "Search this session", "a host that refused --scope reads the session")
+    }
+
     /// A remote host whose dch refuses --scope (exit 1): one unscoped read follows and the panel stays unscoped; its
     /// hits land. Red under the mutant scope-no-retry (the tab goes, "cannot search").
     func testRemoteHostRefusingScopeRetriesUnscopedOnce() async {

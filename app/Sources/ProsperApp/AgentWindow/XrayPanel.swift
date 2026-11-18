@@ -1059,7 +1059,7 @@ struct XrayPanelView: View {
                 .font(Neon.font(11))
                 .focused($filterFocus)
                 .onSubmit { panel.runSearch() }
-                .accessibilityLabel("Search this session")
+                .accessibilityLabel(panel.searchFieldLabel)
             if let n = panel.searchNote { faint(n) }
             if let s = panel.search {
                 if s.hits.isEmpty && s.others.isEmpty { faint("No hits") }
