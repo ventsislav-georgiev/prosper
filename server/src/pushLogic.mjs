@@ -243,7 +243,8 @@ const noPush = () => ({ start: false, update: false, priority: 5, end: null, ale
 
 /**
  * Apply one validated POST /push/sessions to the stored Mac state. Returns null for
- * a stale seq (at or below the stored one), else {mac, push}: the next state and
+ * a stale seq (at or below the stored one; postSessions answers it 409 stale_seq, #1074),
+ * else {mac, push}: the next state and
  * what to send. push.end = {dismissal} ends every card of the Mac; push.start asks
  * for push-to-start where a phone has no card; push.alerts are "needs you" alerts.
  */

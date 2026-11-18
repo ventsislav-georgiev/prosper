@@ -68,9 +68,12 @@ final class LiveStatusPublisher {
         }
         return { task.cancel() }
     }
-    /// The POST; `done` gets the HTTP status on main, nil on a network error.
-    var post: @MainActor (Data, String, @escaping @MainActor (Int?) -> Void) -> Void = { body, bearer, done in
-        Task { @MainActor in done(await SupporterClient.postSessions(body, bearer: bearer)) }
+    /// The POST; `done` gets the HTTP status and the response body on main, nil on a network error.
+    var post: @MainActor (Data, String, @escaping @MainActor (Int?, Data?) -> Void) -> Void = { body, bearer, done in
+        Task { @MainActor in
+            let r = try? await SupporterClient.send("POST", "/push/sessions", session: bearer, body: body)
+            done(r?.1, r?.0)
+        }
     }
     /// Sleep and quit: the same POST, waited on briefly, as the Mac or the process stops next.
     var postAndWait: @MainActor (Data, String) -> Void = { SupporterClient.postSessionsAndWait($0, bearer: $1) }
@@ -121,6 +124,9 @@ final class LiveStatusPublisher {
     private var cancelHeartbeat: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var loggedBadRequest = false
+    /// #1074: the one repost a 409 stale_seq jump gets; cleared by the next 2xx, so a
+    /// Worker that keeps answering stale costs one extra post, not a loop.
+    private var staleReposted = false
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "livestatus")
 
     init() {}
@@ -263,15 +269,20 @@ final class LiveStatusPublisher {
 
     private func send(_ data: Data, _ bearer: String) {
         let gen = generation
-        post(data, bearer) { [weak self] in self?.handle($0, gen) }
+        post(data, bearer) { [weak self] in self?.handle($0, gen, $1) }
     }
 
     /// 2xx: fine. 401/403: stop until activation. 429, 5xx, 400, 413 and network errors:
     /// no retry of our own; the next change or heartbeat sends the full list again.
-    /// A post from before the last sign-out or activation: ignored, whatever it got.
-    private func handle(_ code: Int?, _ gen: Int) {
+    /// 409 stale_seq (#1074): see staleSeq. A post from before the last sign-out or
+    /// activation: ignored, whatever it got.
+    private func handle(_ code: Int?, _ gen: Int, _ reply: Data? = nil) {
         guard gen == generation else { return }
         switch code {
+        case .some(200..<300):
+            staleReposted = false
+        case 409:
+            staleSeq(reply)
         case 401, 403:
             halted = true
             bearerCache = nil
@@ -291,6 +302,27 @@ final class LiveStatusPublisher {
             break
         }
     }
+
+    private struct StaleReply: Decodable { let error: String; let seq: Int64 }
+
+    /// #1074: the Worker holds a higher seq than this post's (a reinstall restarted the seq
+    /// from a clock that had run fast) and answered 409 `{error: "stale_seq", seq}`. Jump
+    /// past it and post the list again at once, so the card is not stale until the clock
+    /// catches up (up to 1 h). A Worker before #1074 answers a bare 204: nothing to do.
+    /// Only a seq above our last one is a jump (a reordered older post of ours is not); its
+    /// range is checked before the + 1 in body(). One repost until a 2xx (staleReposted).
+    private func staleSeq(_ reply: Data?) {
+        guard let reply, let r = try? JSONDecoder().decode(StaleReply.self, from: reply), r.error == "stale_seq",
+              (1...Self.maxWorkerSeq).contains(r.seq), r.seq > lastSeq else { return }
+        lastSeq = r.seq
+        saveSeq(r.seq)
+        guard !staleReposted, isLive else { return }
+        staleReposted = true
+        postList()
+    }
+
+    /// The Worker's seq is a JS safe integer (Number.isSafeInteger, pushLogic parseSessionsBody).
+    nonisolated static let maxWorkerSeq: Int64 = 9_007_199_254_740_991
 
     /// `{mac_id, seq, sessions}`, or `{mac_id, seq, offline: true}` for nil. seq is
     /// wall-clock ms, strictly increasing across relaunches: max(now, last + 1).

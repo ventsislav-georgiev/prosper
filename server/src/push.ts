@@ -28,7 +28,8 @@ const route = (h: Handler) => async (c: Ctx) => {
   const b = await readBody(c.req.raw); // capped at 32 KB before the JSON parse
   if (b.tooLarge) return c.json({ error: "payload_too_large" }, 413);
   const r = await h(pushDeps(c), c.get("email"), b.value, c.get("tokenHash"));
-  return r.status === 204 ? c.body(null, 204) : c.json({ error: r.error }, r.status);
+  if (r.status === 204) return c.body(null, 204);
+  return c.json("seq" in r ? { error: r.error, seq: r.seq } : { error: r.error }, r.status);
 };
 
 export const push = new Hono<Env>();

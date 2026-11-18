@@ -440,7 +440,9 @@ export async function postSessions(deps, email, body) {
         )
         .bind(email, v.mac_id, win)
         .run();
-      return NO_CONTENT;
+      // #1074: 409 with the stored seq, so a Mac whose seq restarted below it (a reinstall
+      // after a fast clock) jumps past it at once. A Mac build before #1074 takes it like a 5xx.
+      return { status: 409, error: "stale_seq", seq: stored.mac.seq };
     }
     const m = r.mac;
     // rl_count counts in SQL: a stale post's increment bumps no rev, so the guard below does not see it.

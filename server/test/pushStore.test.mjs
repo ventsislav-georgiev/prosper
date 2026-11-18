@@ -198,6 +198,26 @@ test("sessions: a stale seq changes nothing", async () => {
   assert.deepEqual(t.rows(`SELECT seq, snapshot FROM push_macs`), [{ seq: 200, snapshot: JSON.stringify([S("a", "working")]) }]);
 });
 
+test("#1074: a stale seq (below or equal) answers 409 stale_seq with the stored seq; the accept path stays 204", async () => {
+  const t = setup();
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(200, [S("a", "working")])), { status: 204 }, "first post");
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(150, [S("a", "idle")])), { status: 409, error: "stale_seq", seq: 200 });
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(200, [S("a", "idle")])), { status: 409, error: "stale_seq", seq: 200 }, "equal is stale");
+  assert.deepEqual(await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 150, offline: true }), { status: 409, error: "stale_seq", seq: 200 }, "a stale offline too");
+  assert.deepEqual(t.rows(`SELECT seq, online, snapshot FROM push_macs`), [{ seq: 200, online: 1, snapshot: JSON.stringify([S("a", "working")]) }]);
+  // The new Mac jumps to stored + 1; an old Mac's later wall-clock post above it: both plain accepts.
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(201, [S("a", "idle")])), { status: 204 }, "the jump is accepted");
+  assert.deepEqual(await postSessions(t.deps, ALICE, sessions(5000, [S("a", "working")])), { status: 204 }, "a later post too");
+  assert.deepEqual(t.rows(`SELECT seq, snapshot FROM push_macs`), [{ seq: 5000, snapshot: JSON.stringify([S("a", "working")]) }]);
+});
+
+test("#1074: the stale answer carries the posting Mac's own stored seq, not another account's", async () => {
+  const t = setup();
+  await postSessions(t.deps, ALICE, sessions(200, [S("a", "working")]));
+  assert.deepEqual(await postSessions(t.deps, BOB, { mac_id: BOB_MAC, seq: 100 }), { status: 204 }, "Bob's first post: no row, accepted");
+  assert.deepEqual(await postSessions(t.deps, BOB, { mac_id: BOB_MAC, seq: 50 }), { status: 409, error: "stale_seq", seq: 100 }, "Bob's own stored seq, not Alice's");
+});
+
 test("sessions: 60 posts per Mac per minute, then 429", async () => {
   const t = setup();
   t.clock.now = 1_800_000_040; // 20 s left in this minute window
@@ -1824,7 +1844,7 @@ test("#1001 QA #357: two stale posts that load the same row before either writes
   await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 5 });
   t.clock.now += 60; // a new window: both stale posts below load a count of 0
   interpose(t, "UPDATE push_macs SET rl_", () => postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4 }));
-  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 })).status, 204);
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 3 })).status, 409);
   assert.deepEqual(t.rows(`SELECT seq, rl_window, rl_count FROM push_macs`), [{ seq: 5, rl_window: Math.floor(t.clock.now / 60), rl_count: 2 }]);
 });
 
@@ -1953,7 +1973,7 @@ test("#1001 R3: the post counter rolls over per minute window, on an accepted po
   assert.deepEqual(counter(), { rl_window: win(), rl_count: 1 }, "an accepted post opens the new window at 1");
   await fill(RATE_PER_MIN - 1);
   t.clock.now += 60;
-  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 1 })).status, 204); // stale
+  assert.equal((await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 1 })).status, 409); // stale
   assert.deepEqual(counter(), { rl_window: win(), rl_count: 1 }, "a stale post opens the new window at 1");
   await fill(RATE_PER_MIN - 1);
 });

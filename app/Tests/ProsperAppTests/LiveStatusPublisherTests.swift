@@ -22,7 +22,14 @@ final class LiveStatusPublisherTests: XCTestCase {
         var reply: Int? = 204
         /// Holding: posts stay in flight until the test answers them through `pending`.
         var hold = false
-        var pending: [@MainActor (Int?) -> Void] = []
+        var pending: [@MainActor (Int?, Data?) -> Void] = []
+        /// #1074: a fake Worker's stored seq. When set it answers instead of `reply`: a seq at
+        /// or below it gets 409 stale_seq with it (while `staleAnswers` lasts, then 204),
+        /// anything above is stored and gets 204.
+        var workerSeq: Int64?
+        var staleAnswers = Int.max
+        /// Added to the stored seq after each stale answer: a Worker that keeps moving ahead.
+        var staleDrift: Int64 = 0
         /// The persisted seq (Preferences.liveStatusSeq stand-in); a new Rig given the
         /// old one's value is a relaunch.
         var savedSeq: Int64 = 0
@@ -41,7 +48,13 @@ final class LiveStatusPublisherTests: XCTestCase {
             }
             p.post = { [unowned self] body, bearer, done in
                 self.posts.append(Post(json: String(decoding: body, as: UTF8.self), bearer: bearer, waited: false))
-                if self.hold { self.pending.append(done) } else { done(self.reply) }
+                if self.hold { self.pending.append(done); return }
+                guard let stored = self.workerSeq else { done(self.reply, nil); return }
+                let seq = Self.parse(String(decoding: body, as: UTF8.self))["seq"] as? Int64 ?? 0
+                if seq > stored || self.staleAnswers <= 0 { self.workerSeq = max(seq, stored); done(204, nil); return }
+                self.staleAnswers -= 1
+                self.workerSeq = stored + self.staleDrift   // another poster moves it on after answering
+                done(409, Data(#"{"error":"stale_seq","seq":\#(stored)}"#.utf8))
             }
             p.postAndWait = { [unowned self] body, bearer in
                 self.posts.append(Post(json: String(decoding: body, as: UTF8.self), bearer: bearer, waited: true))
@@ -640,6 +653,142 @@ final class LiveStatusPublisherTests: XCTestCase {
         XCTAssertEqual(relaunched.seq, ms)
     }
 
+    // MARK: - Stale seq (#1074)
+
+    /// #1074: reinstalled after a fast clock, the Mac's seq restarts below the Worker's. The new
+    /// Worker answers 409 stale_seq with its seq; the Mac jumps past it and posts the list again.
+    func testAStaleSeqAnswerJumpsPastTheStoredSeqAndRepostsTheListOnce() {
+        let r = Rig()
+        r.workerSeq = ms + 1_800_000   // stored 30 min ahead, before the reinstall
+        r.p.sessionsChanged([s("a", .working)])
+        XCTAssertEqual(r.posts.count, 2, "the stale post and one repost")
+        XCTAssertEqual(r.seq, ms + 1_800_001, "the repost is just past the stored seq")
+        XCTAssertEqual(r.names, ["a"])
+        XCTAssertEqual(r.workerSeq, ms + 1_800_001, "the Worker took it")
+        XCTAssertEqual(r.savedSeq, ms + 1_800_001, "persisted, so a relaunch stays past it too")
+        r.p.sessionsChanged([s("a", .working), s("b")])
+        r.advance(25)
+        XCTAssertEqual(r.posts.count, 3)
+        XCTAssertEqual(r.seq, ms + 1_800_002, "the next change goes out above it, accepted")
+        XCTAssertEqual(r.workerSeq, ms + 1_800_002)
+    }
+
+    /// No loop: a Worker that answers stale with an ever higher seq gets one repost, then only the
+    /// heartbeat; a 2xx lets the next stale answer repost again.
+    func testStaleAnswersRepostOnceUntilA2xx() {
+        let r = Rig()
+        r.workerSeq = ms + 1_000_000
+        r.staleDrift = 1_000_000
+        r.staleAnswers = 5   // bounded, so a looping build fails the count instead of hanging
+        r.p.sessionsChanged([s("a", .working)])
+        XCTAssertEqual(r.posts.count, 2, "one repost, though the repost was stale too")
+        XCTAssertEqual(r.savedSeq, ms + 2_000_000, "each stale answer still moves the seq to it")
+        r.advance(60)
+        XCTAssertEqual(r.posts.count, 3, "the heartbeat, and no repost of its own")
+        XCTAssertEqual(r.seq, ms + 2_000_001)
+        XCTAssertEqual(r.savedSeq, ms + 3_000_000)
+        r.staleAnswers = 0
+        r.advance(60)
+        XCTAssertEqual(r.posts.count, 4, "accepted (204)")
+        r.staleAnswers = 1
+        r.workerSeq = (r.seq ?? 0) + 50_000   // stale once more (another Mac build posted ahead)
+        r.staleDrift = 0
+        r.p.sessionsChanged([s("a", .working), s("b")])
+        r.advance(25)
+        XCTAssertEqual(r.posts.count, 6, "after a 2xx a stale answer reposts again")
+        XCTAssertEqual(r.seq, r.workerSeq)
+    }
+
+    /// New Mac, old Worker: a stale seq gets a bare 204 (pushStore before #1074), so nothing jumps
+    /// and nothing reposts, as before.
+    func testAnOldWorkersBare204OnAStaleSeqChangesNothing() {
+        let r = Rig()
+        r.reply = 204
+        r.p.sessionsChanged([s("a", .working)])
+        r.advance(59)
+        XCTAssertEqual(r.posts.count, 1)
+        XCTAssertEqual(r.savedSeq, ms)
+    }
+
+    /// Only a well-formed stale_seq answer above our last seq moves the seq; any other 409 body is
+    /// treated like a 5xx (no jump, no repost; the heartbeat retries).
+    func testA409WithoutAUsableStaleSeqIsLikeA5xx() {
+        let bodies: [String?] = [
+            nil, "", "{}", "not json", #"{"error":"stale_seq"}"#, #"{"error":"other","seq":\#(ms + 9000)}"#,
+            #"{"error":"stale_seq","seq":0}"#, #"{"error":"stale_seq","seq":-5}"#,
+            #"{"error":"stale_seq","seq":9007199254740992}"#, #"{"error":"stale_seq","seq":\#(ms + 9000).5}"#,
+            #"{"error":"stale_seq","seq":"\#(ms + 9000)"}"#, #"{"error":"stale_seq","seq":\#(ms)}"#,
+            #"{"error":"stale_seq","seq":\#(ms - 1)}"#,
+        ]
+        for body in bodies {
+            let r = Rig()
+            r.hold = true
+            r.p.sessionsChanged([s("a", .working)])
+            XCTAssertEqual(r.pending.count, 1)
+            r.pending.first?(409, body.map { Data($0.utf8) })
+            XCTAssertEqual(r.posts.count, 1, "\(body ?? "nil"): no repost")
+            XCTAssertEqual(r.savedSeq, ms, "\(body ?? "nil"): no jump")
+            r.advance(60)
+            XCTAssertEqual(r.posts.count, 2, "\(body ?? "nil"): the heartbeat retries")
+            XCTAssertEqual(r.seq, ms + 60_000, "\(body ?? "nil"): on wall time")
+        }
+    }
+
+    /// The largest seq the Worker can hold is a jump (its + 1 cannot overflow Int64).
+    func testTheLargestWorkerSeqStillJumps() {
+        let r = Rig()
+        r.hold = true
+        r.p.sessionsChanged([s("a", .working)])
+        r.pending.first?(409, Data(#"{"error":"stale_seq","seq":9007199254740991}"#.utf8))
+        XCTAssertEqual(r.seq, 9_007_199_254_740_992, "the repost is past it")
+        XCTAssertEqual(r.posts.count, 2)
+    }
+
+    /// A reordered answer: our older post lands after our newer one, so the Worker's seq is our
+    /// own last one. That is no jump and no repost.
+    func testAStaleAnswerNamingOurOwnLastSeqIsNoJump() {
+        let r = Rig()
+        r.hold = true
+        r.p.sessionsChanged([s("a", .working)])
+        r.clock += 1
+        r.p.sessionsChanged([s("a", .blocked)])
+        r.advance(2)
+        XCTAssertEqual(r.pending.count, 2)
+        let newer = r.seq ?? 0
+        r.pending.last?(204, nil)
+        r.pending.first?(409, Data(#"{"error":"stale_seq","seq":\#(newer)}"#.utf8))
+        XCTAssertEqual(r.posts.count, 2, "no repost")
+        XCTAssertEqual(r.savedSeq, newer)
+    }
+
+    /// A stale answer to an offline post (toggled off) jumps but posts nothing: not live.
+    func testAStaleAnswerToAnOfflinePostJumpsWithoutPosting() {
+        let r = Rig()
+        r.p.sessionsChanged([s("a", .working)])
+        r.workerSeq = ms + 1_800_000
+        r.clock += 5
+        r.enabled = false
+        r.p.refresh()
+        XCTAssertEqual(r.posts.count, 2)
+        XCTAssertTrue(r.isOffline)
+        XCTAssertEqual(r.savedSeq, ms + 1_800_000, "jumped")
+        r.workerSeq = ms + 3_600_000   // still ahead when it goes live again
+        r.enabled = true
+        r.p.refresh()
+        XCTAssertEqual(r.posts.count, 4, "going live posts, and its stale answer still gets the one repost")
+        XCTAssertEqual(r.seq, ms + 3_600_001)
+    }
+
+    /// A stale answer to a post sent before a sign-out is ignored like any other late answer.
+    func testAStaleAnswerFromBeforeASignOutIsIgnored() {
+        let r = Rig()
+        r.hold = true
+        r.p.sessionsChanged([s("a", .working)])
+        _ = r.p.signOut()
+        r.pending.first?(409, Data(#"{"error":"stale_seq","seq":\#(ms + 1_800_000)}"#.utf8))
+        XCTAssertTrue(r.savedSeq < ms + 1_800_000, "no jump")
+    }
+
     // MARK: - Responses
 
     func testBackoffOn429And5xx400AndNetworkError() {
@@ -691,8 +840,8 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.p.deviceActivated()   // the next sign-in
         XCTAssertEqual(r.posts.count, 2)
         XCTAssertEqual(r.posts[1].bearer, "tok2")
-        r.pending[0](401)   // the old session's answer lands late
-        r.pending[1](204)
+        r.pending[0](401, nil)   // the old session's answer lands late
+        r.pending[1](204, nil)
         XCTAssertFalse(r.p.halted)
         XCTAssertTrue(r.p.isLive)
         r.hold = false
@@ -710,13 +859,13 @@ final class LiveStatusPublisherTests: XCTestCase {
         r.hold = true
         r.p.sessionsChanged([s("a")])
         r.p.deviceActivated()
-        r.pending[0](403)
+        r.pending[0](403, nil)
         XCTAssertFalse(r.p.halted, "sent before the activation")
         r.p.sessionsChanged([s("b")])
         r.advance(25)
         XCTAssertEqual(r.pending.count, 2, "the change posted")
         guard r.pending.count == 2 else { return }
-        r.pending[1](403)
+        r.pending[1](403, nil)
         XCTAssertTrue(r.p.halted, "sent after it: stops as before")
     }
 
