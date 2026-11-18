@@ -307,8 +307,7 @@ struct XrayRefPopover: View {
     /// last_active, else its newest mention, as the turn headers' age); nil on every other turn.
     static func sessionHeader(_ t: XrayRefContext.Turn, now: Date) -> String? {
         guard t.opens, let name = t.session else { return nil }
-        let age = XrayTaskRow.age(t.lastActive ?? t.mentions.compactMap(\.at).max(), now: now)?.short
-        return "also discussed in " + OutsideText.shown(name, max: 64) + (age.map { ", " + $0 } ?? "")
+        return XraySearch.alsoDiscussed(name, at: t.lastActive ?? t.mentions.compactMap(\.at).max(), now: now)
     }
 
     /// #1528: who said it, dch's words to the card's (README "--ref": You, Reply or the tool); nil from an older dch.

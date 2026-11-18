@@ -3,8 +3,8 @@ import Foundation
 
 // #1561 (Phase H, X-R b): the warm `dch --xray host:name --requests --json` connection (dch README v1.99.0:1278-1323,
 // dch.1 :2567). A remote pane's --json, --ref, --chapter and --clear reads go to the host as NDJSON requests on one
-// child, one at a time, instead of one dch per read. --tasks, --memory, --search and the follow stay cold spawns: dch
-// takes only those four forms there.
+// child, one at a time, instead of one dch per read. --tasks, --memory and the follow stay cold spawns: dch takes
+// only the request forms there. #1611: --search (with --scope) is one since dch 1.110.0 (#501), sent warm from there on.
 
 /// The `--requests` child: one NDJSON line out, one line in. The product's is XrayRequestProcess; rows put a fake.
 protocol XrayRequestChild: AnyObject, Sendable {
@@ -35,9 +35,9 @@ final class XrayRequests: NSObject {
         guard target.dir == nil, let spawn else { return cold }
         let line = lines[target.name] ?? XrayRequestLine(name: target.name, spawn: spawn)
         lines[target.name] = line
-        let name = target.name
+        let name = target.name, search = XraySearch.scoped(XrayPanels.probed?.version)   // #1611: dch 1.110.0 takes --search
         return { path, args, env in
-            guard XrayPanels.stdin.get() == nil, let argv = XrayRequests.form(args, name: name),
+            guard XrayPanels.stdin.get() == nil, let argv = XrayRequests.form(args, name: name, search: search),
                   let r = await line.request(path, argv, env) else { return await cold(path, args, env) }
             return r
         }
@@ -45,12 +45,16 @@ final class XrayRequests: NSObject {
 
     /// dch's request forms (README v1.99.0:1287-1289): the flags after `--xray <name>`, for --json alone, --ref,
     /// --chapter and --clear; nil for anything else (it runs cold).
-    nonisolated static func form(_ args: [String], name: String) -> [String]? {
+    /// #1611 (README v1.110.0:1299-1302): with `search` (the local dch is 1.110.0+), `--search <text> [--scope <s>] --json` too.
+    nonisolated static func form(_ args: [String], name: String, search: Bool = false) -> [String]? {
         guard args.count >= 3, args.first == "--xray", args.dropFirst().first == name else { return nil }
         let rest = Array(args.dropFirst(2))
         switch rest.first {
         case "--json": return rest == ["--json"] ? rest : nil
         case "--ref", "--chapter", "--clear": return rest
+        case "--search":
+            guard search, rest.last == "--json", rest.count == 3 || (rest.count == 5 && rest.dropFirst(2).first == "--scope") else { return nil }
+            return rest
         default: return nil
         }
     }

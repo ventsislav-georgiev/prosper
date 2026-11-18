@@ -2002,6 +2002,10 @@ tag from the now-released section and put it on the new top draft.
   cursor; each pane keeps its terminal and screen, without reconnecting. (#1615, #1618)
 - The X-ray card says "Missing" for a file reference whose file is gone, instead of the raw word
   "missing". (#1612)
+- X-ray Search now also finds the text in this project's other sessions (with dch 1.110.0 or later):
+  their hits appear under "also discussed in <session>, <age>" headers, a header opens that session
+  to the side, and with dch 1.111.0 the tab shows where it was first mentioned and most recently,
+  and marks the hit that answered it. (#1611)
 
 ## v2.174.0
 

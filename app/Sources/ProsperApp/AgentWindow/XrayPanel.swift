@@ -34,7 +34,10 @@ struct XrayTarget: Equatable {
     /// #1389: dch README "dch --xray <n> --json  # a session's chapters (prompts / commands) as one JSON object".
     var chaptersArgs: [String] { ["--xray", name, "--json"] }
     /// #1355: dch README "dch --xray <n> --search <text> --json"; the text is checked by DchCtl.searchOK first.
-    func searchArgs(_ text: String) -> [String] { ["--xray", name, "--search", text, "--json"] }
+    /// #1611: `scope` "project" (dch 1.110.0, #498) adds the other sessions' hits, grouped; nil: one session, as before.
+    func searchArgs(_ text: String, scope: String? = nil) -> [String] {
+        ["--xray", name, "--search", text] + (scope.map { ["--scope", $0] } ?? []) + ["--json"]
+    }
     /// #1472 b: dch.1 "dch --xray <n> --chapter <anchor> --json" (host:name for remote); the anchor is checked first.
     func chapterArgs(_ anchor: String) -> [String] { ["--xray", name, "--chapter", anchor, "--json"] }
     /// #1410: a local name takes the text on stdin ("-" in argv), so it never shows in ps; a remote one keeps
@@ -107,6 +110,12 @@ final class XrayPanels: ObservableObject {
         m.openURL = { Self.model(pane)?.openURL($0) }
         m.cwd = { Self.cwd(pane, target) }
         m.refResults = { XrayRefResults.on() ? Self.window(pane).map { XrayRefResults.of($0) } : nil }   // #1567
+        // #1611: a local panel's group opens its session to the side; a remote one's sessions are the host's: none
+        m.openSession = { g in
+            guard target.dir != nil, let w = Self.model(pane), let id = XraySearch.row(g, in: w.rows) else { return false }
+            w.openToTheSide(id)
+            return true
+        }
     }
 
     /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
@@ -219,6 +228,10 @@ final class XrayPanelModel: ObservableObject {
     @Published var query = ""
     @Published var search: XraySearch?
     @Published var searchNote: String?
+    /// #1611: this panel's remote host refused `--scope` once (exit 1): its later searches run unscoped (runSearch).
+    var unscopedHost = false
+    /// #1611: "open that session" for a Search group (XrayPanels.wire); rows put a recorder. false: no row matched.
+    var openSession: @MainActor (XraySearch.Group) -> Bool = { _ in false }
     /// #1355 (R1355-i1): why the Search tab went (exit 1 or 6), said where the strip lands; a new panel has none.
     @Published var searchGone: String?
     @Published private(set) var loaded = false
@@ -1049,11 +1062,28 @@ struct XrayPanelView: View {
                 .accessibilityLabel("Search this session")
             if let n = panel.searchNote { faint(n) }
             if let s = panel.search {
-                if s.hits.isEmpty { faint("No hits") }
+                if s.hits.isEmpty && s.others.isEmpty { faint("No hits") }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: sz(4)) {
+                        ForEach(s.moments(now: panel.now()), id: \.self) { faint($0) }   // #1611: first mentioned, latest
                         ForEach(Array(s.hits.enumerated()), id: \.offset) { _, h in
                             XraySearchRowView(row: XraySearchRow(h, now: panel.now()))
+                        }
+                        // #1611: the other sessions' groups in dch's order, each under its "also discussed in" header
+                        ForEach(Array(s.others.enumerated()), id: \.offset) { _, g in
+                            let head = XraySearch.header(g, now: panel.now())
+                            Button { _ = panel.openSession(g) } label: {
+                                Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, sz(4))
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityLabel(head)
+                            .accessibilityHint("Opens that session to the side")
+                            ForEach(Array(g.hits.enumerated()), id: \.offset) { _, h in
+                                XraySearchRowView(row: XraySearchRow(h, now: panel.now()))
+                            }
                         }
                     }
                 }
@@ -1224,6 +1254,7 @@ struct XraySearchRowView: View {
             HStack(spacing: sz(6)) {
                 Text(verbatim: row.who).foregroundStyle(Neon.textSecondary).lineLimit(1)
                 if let a = row.age { Text(verbatim: a).foregroundStyle(Neon.textSecondary).fixedSize() }
+                if row.answer { Text(verbatim: XraySearchRow.answerMark).foregroundStyle(Neon.blue).fixedSize() }   // #1611
             }
             Text(verbatim: row.snippet).foregroundStyle(Neon.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }
