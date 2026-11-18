@@ -5,6 +5,7 @@ import SwiftUI
 // so Esc and a click outside close it the same way). With gate B on, the refs in the response link to the ref card.
 
 struct XrayChapterCard: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let chapter: TranscriptOutline.Chapter
     /// #1472 b: the card's `--chapter` read (XrayPanelModel.openChapterCard); none: the capped text alone.
     @ObservedObject var read = XrayChapterRead()

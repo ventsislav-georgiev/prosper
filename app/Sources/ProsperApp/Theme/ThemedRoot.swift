@@ -21,14 +21,23 @@ import SwiftUI
 /// subtree down (only a size change still does) — fixes #078: switching themes
 /// in Settings → Appearance was resetting the theme list's scroll position on
 /// every tap, because it sat inside this `.id()`'d subtree like everything else.
+///
+/// #891 `keepsViews` (the Agent Sessions window): no `.id` at all, so no theme, accent, appearance or size change
+/// tears a view down (scroll offsets, an open field's text and focus, the terminal's surface survive). The content's
+/// views observe `ThemeStore` themselves (`liveTheme`), so their bodies re-read `Neon.*` in place.
 struct Themed<Content: View>: View {
     @ObservedObject private var theme = ThemeStore.shared
     var rebuildOnSizeChangeOnly: Bool = false
+    var keepsViews: Bool = false
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        content()
-            .preferredColorScheme(theme.appearance.colorScheme)
-            .id(rebuildOnSizeChangeOnly ? AnyHashable(theme.scale) : AnyHashable(theme.generation))
+        if keepsViews {
+            content().preferredColorScheme(theme.appearance.colorScheme)
+        } else {
+            content()
+                .preferredColorScheme(theme.appearance.colorScheme)
+                .id(rebuildOnSizeChangeOnly ? AnyHashable(theme.scale) : AnyHashable(theme.generation))
+        }
     }
 }

@@ -1899,6 +1899,9 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: a session list too large for the iPhone now drops the longest session titles from
   the list frame instead of making the phone disconnect, and the Mac now refuses oversized control
   requests from a remote client the same way dch serve does. (#1136)
+- Agent Sessions: changing the theme, accent, light or dark, opacity or UI size now re-themes the
+  open window in place: the sidebar keeps its scroll position, an open Rename field keeps its text
+  and focus, and the terminal keeps its screen and scrollback. (#891)
 
 ## v2.174.0
 

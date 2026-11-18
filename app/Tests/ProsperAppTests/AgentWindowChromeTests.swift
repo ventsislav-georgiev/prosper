@@ -238,6 +238,9 @@ extension AgentWindowD1Tests {
     }
 
     /// Pixels of `rep` (inside `rect`, view points) within `tolerance` of `color` per channel.
+    /// #891 (QA #735 INFO-8): 0.06 is the rail's wash (Neon.blue at 0.06 over the sidebar, line 121 and
+    /// NeonSidebarSurface.washOpacity): it moves a channel by at most 0.06 x |accent - sidebar| < 0.06, so no narrower
+    /// default keeps the washed pixels, and nothing wider is needed.
     func count(_ rep: NSBitmapImageRep, near color: NSColor, in rect: CGRect, size: CGSize, tolerance: CGFloat = 0.06) -> Int {
         guard let want = color.usingColorSpace(.sRGB) else { return 0 }
         let sx = CGFloat(rep.pixelsWide) / size.width, sy = CGFloat(rep.pixelsHigh) / size.height

@@ -827,9 +827,30 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         viewportText = { [weak screen] in screen?.session.readViewportText() }
         // The backend first: a controller set while the options still name `.exec` (the default)
         // would build a surface that runs a login shell.
+        fontShown = AgentTerminalController.fontSize
         configuration = TerminalSurfaceOptions(backend: .inMemory(screen.session),
                                                fontSize: Float(AgentTerminalController.fontSize), context: .window)
         if controller !== look() { controller = look() }
+    }
+
+    /// #891: the theme generation and the font size this view last took (nil before its first update).
+    private var themed: Int?
+    private(set) var fontShown: Double?
+
+    /// #891: a theme, accent, appearance or UI-size change on the open window, from updateNSView. The surface stays (no
+    /// new configuration, no attach, no detach): an installed one re-takes the look's colours (the reconfigure show
+    /// runs), and a changed font size (12 x scale unless the user zoomed) goes as one "set_font_size", the action
+    /// Command-plus sends, so libghostty resizes the grid through its normal resize path, once. The first call only
+    /// records; nothing installed: no colours (the next show reads them).
+    func retheme(_ generation: Int = ThemeStore.shared.generation) {
+        defer { themed = generation }
+        if fontShown == nil { fontShown = AgentTerminalController.fontSize }
+        guard let last = themed, last != generation else { return }
+        if installed != nil { AgentTerminalLook.refresh(look()) }
+        let size = AgentTerminalController.fontSize
+        guard size != fontShown else { return }
+        fontShown = size
+        owner?.fontAction(self, "set_font_size:\(Float(size))")
     }
 
     override func viewDidMoveToWindow() {
@@ -1142,6 +1163,7 @@ enum AgentTerminalLook {
 // MARK: - SwiftUI
 
 struct AgentTerminalRepresentable: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let controller: AgentTerminalController
     let screen: AgentTerminalScreen?
 
@@ -1157,12 +1179,14 @@ struct AgentTerminalRepresentable: NSViewRepresentable {
         v.dropModel = context.environment.agentPaneModel   // #1492
         v.dropPane = context.environment.agentPaneID
         v.show(screen as? AgentGhosttyScreen)
+        v.retheme()   // #891: no rebuild on a theme change: the live surface re-themes here
     }
 }
 
 /// The Terminal mode's pane: the terminal to the window's bottom, with the state over it (never
 /// beside or under it, so its frame changes only with the window or the mode).
 struct AgentTerminalPane: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var controller: AgentTerminalController
     let open: () -> Void
 
@@ -1225,6 +1249,7 @@ struct AgentTerminalPane: View {
 }
 
 struct AgentTerminalCard<Buttons: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let icon: String
     let text: String
     @ViewBuilder var buttons: Buttons
@@ -1248,6 +1273,7 @@ extension AgentTerminalCard where Buttons == EmptyView {
 
 /// ⌘F: the needle, the match count, previous / next (⇧⌘G / ⌘G, Return) and close (Esc).
 struct AgentTerminalFindBar: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var controller: AgentTerminalController
 
     var count: String {

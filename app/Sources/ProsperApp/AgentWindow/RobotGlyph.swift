@@ -34,6 +34,7 @@ enum RobotGeometry {
 }
 
 struct RobotGlyph: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let size: CGFloat
 
     var body: some View {

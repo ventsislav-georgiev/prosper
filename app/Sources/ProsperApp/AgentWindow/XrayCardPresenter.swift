@@ -52,6 +52,7 @@ final class XrayPopoverPresenter: NSObject, XrayCardPresenter, NSPopoverDelegate
 /// The header's "..." in each pane, as an AppKit view the popover can hang from (a background of the button). The
 /// pane id comes from the pane area's environment; a pane drawn without one (the gate off) registers as `nil`.
 struct XrayCardAnchor: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @Environment(\.agentPaneID) private var pane
 
     /// The anchors by pane; weak, so a closed pane's goes with its view.

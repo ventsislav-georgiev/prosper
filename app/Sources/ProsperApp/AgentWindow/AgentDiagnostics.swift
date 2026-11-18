@@ -41,6 +41,7 @@ enum AgentDiagnostics {
 
 /// The small read-only pane the sidebar "..." Diagnostics item pops over.
 struct AgentDiagnosticsView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let text: String
     var copy: (String) -> Void = { AgentDiagnostics.copy($0) }
 

@@ -634,6 +634,7 @@ extension AgentWindowControls {
 /// The menu's items, for a SwiftUI Menu or a context menu. Observes the store, so a gate
 /// that changes while the menu's row is drawn is read afresh.
 struct AgentSessionMenuItems: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let session: AgentSession
     let ask: (AgentWindowVerb) -> Void
@@ -665,6 +666,7 @@ struct AgentSessionMenuItems: View {
 /// #1469: the Model and Effort submenus from AgentModelSwitch.menus (a value, tested without a menu); an item runs
 /// `.switchTo` through the row's `ask`.
 struct AgentSwitchMenus: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let menus: [AgentModelSwitch.Submenu]
     let act: (AgentWindowVerb) -> Void
 
@@ -685,6 +687,7 @@ struct AgentSwitchMenus: View {
 
 /// #829 Phase 2: a History row's context menu.
 struct AgentHistoryMenuItems: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let record: DchHistoryRecord
     /// #909 (R909-1): the sidebar's groups, read once per its draw.
@@ -697,6 +700,7 @@ struct AgentHistoryMenuItems: View {
 }
 
 struct AgentMenuEntries: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let entries: [AgentWindowMenuEntry]
     let act: (AgentWindowVerb) -> Void
     var open: () -> Void = {}
@@ -730,6 +734,7 @@ struct AgentMenuEntries: View {
 /// The header's "⋯": always there, one fixed size, the title line's last control. #1103: Open in terminal is its
 /// first item, so it is off only for an ended session (whose item is off too).
 struct AgentSessionMenuButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let store: AgentIslandStore?
     let session: AgentSession
     let ask: (AgentWindowVerb) -> Void
@@ -835,6 +840,7 @@ struct AgentSessionMenuButton: View {
 /// #1540: redraws its content whenever the store publishes (a gate the "⋯" reads may have changed); the StableMenu
 /// inside decides whether the menu itself is rebuilt.
 struct AgentSessionMenuReader<Content: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     @ViewBuilder let content: () -> Content
     var body: some View { content() }
@@ -848,6 +854,7 @@ struct AgentSessionMenuReader<Content: View>: View {
 /// vertical centre); when it does not, the question wraps whole on its own lines and the buttons sit under it,
 /// left-aligned with its start (ViewThatFits): nothing is squeezed at the narrowest pane.
 struct AgentConfirmStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let text: String
     let action: String
     let confirm: () -> Void
@@ -924,6 +931,7 @@ struct AgentConfirmProbe: ViewModifier {
 /// #897 (G9): the store's list-wide question (Restart all, Stop all, Kill all, Clear unpinned) at the top of the
 /// sidebar, the island's own line and verb; the answer goes through the island's confirm call. Nothing while none is up.
 struct AgentStoreQuestionStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let answer: (Bool) -> Void
 
@@ -936,6 +944,7 @@ struct AgentStoreQuestionStrip: View {
 
 /// R897-q1: the Always allow question (Turn on / Cancel) while the model asks; nothing otherwise.
 struct AgentAlwaysAllowStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
 
     var body: some View {
@@ -948,6 +957,7 @@ struct AgentAlwaysAllowStrip: View {
 
 /// #897 (G9): the sidebar title row's "...": AgentWindowControls.sidebarMenu, re-read as the store changes.
 struct AgentSidebarMenuButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let run: (AgentSidebarVerb) -> Void
     /// StableMenuProbe.bodies key.
@@ -972,6 +982,7 @@ struct AgentSidebarMenuButton: View {
 }
 
 struct AgentSidebarMenuEntries: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let entries: [AgentSidebarMenuEntry]
     let run: (AgentSidebarVerb) -> Void
 
@@ -1002,6 +1013,7 @@ struct AgentSidebarMenuEntries: View {
 /// a fixed slot under the list (QA #665 INFO-4/5: not over it, so the last row and a row the
 /// keys scroll to stay above it); shown or not, the slot is the same height, so no row moves.
 struct AgentDirStatusStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
 
     var body: some View {
@@ -1030,6 +1042,7 @@ struct AgentDirStatusStrip: View {
 /// QA #665 INFO-6: an answer the window refused wins. QA #665 INFO-1: drawn over the
 /// conversation's top (with the confirm strip), never in the column, so it moves nothing.
 struct AgentNoticeLine: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let key: AgentSessionKey
     var refusal: String?
@@ -1061,6 +1074,7 @@ struct AgentNoticeLine: View {
 /// notice line's look: the text cut for display only (Copy and Send take the raw text), Copy, Send (one bracketed
 /// paste, no Return) and Dismiss. Nothing reaches the terminal before Send.
 struct AgentUnsentFirstLine: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let text: String
     let copy: () -> Void
     let send: () -> Void
@@ -1109,6 +1123,7 @@ struct AgentUnsentFirstLine: View {
 
 /// Reads the terminal's phase so Send enables when the client comes up (the pane's overlay does not observe it).
 struct AgentUnsentFirstHost: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     @ObservedObject var terminal: AgentTerminalController
 
@@ -1143,6 +1158,7 @@ final class AgentRenameEdit {
 /// ends it once. An NSTextField, so the keys are its own: the window's shortcuts stand down while
 /// the field editor has them (AgentsNSWindow.route), and nothing reaches the terminal or the composer.
 struct AgentRenameField: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let name: String
     let edit: AgentRenameEdit
     /// The edit and Return's text or nil (Esc, the focus left); true: the edit goes on (a Return refused while a job runs).
@@ -1231,6 +1247,7 @@ final class AgentRenameTextField: NSTextField {
 /// #797: the one "Open in terminal" look (the terminal-first state, the failed-attach card, a notice that names it;
 /// #1103: the header's moved into its "..." menu, AgentWindowControls.sessionMenu).
 struct OpenInTerminalButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let action: () -> Void
     /// Icon only (beside a notice or a card's other button).
     var compact = false

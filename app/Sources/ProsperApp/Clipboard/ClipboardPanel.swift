@@ -1395,6 +1395,7 @@ private struct SlotLadderOverlay: View {
 /// A position keycap: the modifier glyphs and the digit. #1111 (R1111-1): shared with the Agent Sessions sidebar's
 /// Command-number chip (AgentDigitChip), which passes its own glyphs, accent and border.
 struct PositionKeyCap: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: the Agents window's chips re-theme in place
     let digit: String
     let active: Bool
     /// The glyphs before the digit; nil: Clipboard History's, read from its ⌘ / ⌃ setting at draw time.

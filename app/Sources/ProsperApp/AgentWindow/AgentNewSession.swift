@@ -254,6 +254,7 @@ enum AgentNewSession {
 
 /// #1540: the New session form's Recent folders menu: a StableMenu, rebuilt only when its folders change.
 struct AgentRecentFoldersMenu: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let recents: [AgentNewSession.Recent]
     let choose: (String) -> Void
 
@@ -310,6 +311,7 @@ final class AgentNewSessionPoolWatch: ObservableObject {
 
 /// The form, in place of the detail pane's content while `model.newSession` is set.
 struct AgentNewSessionView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     let form: AgentNewSessionForm
     @FocusState private var focus: Field?
@@ -516,6 +518,7 @@ struct AgentNewSessionView: View {
 /// The sidebar title row's two icons: [>_] New shell and [+] New session…. Always there, one size; dimmed with
 /// the gate's reason while it refuses.
 struct AgentNewSessionButtons: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     @ObservedObject var store: AgentIslandStore
 

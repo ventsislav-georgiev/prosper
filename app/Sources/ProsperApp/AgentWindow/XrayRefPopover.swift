@@ -6,6 +6,7 @@ import SwiftUI
 /// text only (every string is outside data, cleaned by the parses), never Markdown. Esc closes; the card's close
 /// cancels the read (XrayPanelModel.openRef).
 struct XrayRefPopover: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     enum Tab: String, CaseIterable { case definition = "Definition", mentions = "Mentions", tasks = "Tasks", memory = "Memory" }
 
     @ObservedObject var panel: XrayPanelModel

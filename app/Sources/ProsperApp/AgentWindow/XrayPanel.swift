@@ -863,6 +863,7 @@ final class XrayDrawerWidth: ObservableObject {
 
 /// The drawer over `pane`, drawn only while its panel is open for the session the pane shows.
 struct XrayDrawer: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panels = XrayPanels.shared
     @ObservedObject var width = XrayDrawerWidth.shared
     let pane: UUID
@@ -909,6 +910,7 @@ struct XrayDrawer: View {
 }
 
 struct XrayPanelView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panel: XrayPanelModel
     @FocusState private var filterFocus: Bool
 
@@ -1096,6 +1098,7 @@ struct XrayPanelView: View {
 
 /// The #821 capsule-button strip: only the tabs that exist, "Name N".
 struct XrayTabStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panel: XrayPanelModel
     let counts: Bool
 
@@ -1125,6 +1128,7 @@ struct XrayTabStrip: View {
 }
 
 struct XrayTaskRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayTaskRow
     let open: () -> Void
 
@@ -1156,6 +1160,7 @@ struct XrayTaskRowView: View {
 /// #1354: a Prompts or Responses row; a click (or Return / Space with VoiceOver) jumps to its chapter (#1472: or,
 /// with no transcript, opens its card).
 struct XrayPromptRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayPromptRow
     let open: () -> Void
 
@@ -1187,6 +1192,7 @@ struct XrayPromptRowView: View {
 
 /// #1355: one Search hit; not a button yet (P8/P9 open the hit's prompt).
 struct XraySearchRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XraySearchRow
 
     var body: some View {
@@ -1206,6 +1212,7 @@ struct XraySearchRowView: View {
 
 /// #1415: one Refs row: bold when defined or mentioned twice, the title faint, the count at the right.
 struct XrayRefRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayRefRow
     let open: () -> Void
 
@@ -1230,6 +1237,7 @@ struct XrayRefRowView: View {
 }
 
 struct XrayMemoryRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayMemoryRow
     let open: () -> Void
 
@@ -1256,6 +1264,7 @@ struct XrayMemoryRowView: View {
 /// its combining marks capped (OutsideText.capMarks); the cut and unreadable notes; "Read the prompt" when the memory
 /// was written or loaded in this session at a known prompt.
 struct XrayMemoryCard: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let item: XrayMemory.Item
     var now = Date()
     var note: String?
@@ -1316,6 +1325,7 @@ struct XrayMemoryCard: View {
 /// The task card (design 3.2): title in full, status and label, doing, note, times, blocked by, group, URL; Open
 /// (http/https only, the raw url, and only when it is the shown one) and Copy (Pasteboard.swift).
 struct XrayTaskCard: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let task: XrayTasks.Task
     let now: Date
     let open: (URL) -> Void

@@ -92,7 +92,7 @@ final class AgentsWindow {
     /// The window, built but not shown (tests render it offscreen from here; #860: they pass a nil
     /// `autosave`, so no frame is read from or written to the defaults).
     static func makeWindow(_ model: AgentWindowModel, autosave: String? = "ProsperAgentsWindow") -> AgentsNSWindow {
-        let hosting = NSHostingController(rootView: Themed { AgentWindowRootView(model: model) })
+        let hosting = NSHostingController(rootView: Themed(keepsViews: true) { AgentWindowRootView(model: model) })   // #891: in place
         // #1378: no title bar safe area for SwiftUI. Under No title bar's .fullSizeContentView it would pad the content
         // by the hidden bar, and a list touching that band grows under the title row (Standard has no such band).
         hosting.safeAreaRegions = []
@@ -729,6 +729,7 @@ func agentGlyphColor(_ s: AgentState?, sidebar: Color = Neon.sidebar, accent: Co
 }
 
 struct AgentWindowRootView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     /// False for offscreen evidence only (the transcript without its ScrollView).
     var scrolls = true
@@ -844,6 +845,7 @@ enum AgentSidebarMode: String, CaseIterable {
 /// given is narrower than the row; dimmed until the pointer is over it. A click is the model's setter, which Settings and
 /// the Go menu use too.
 struct AgentSidebarModeSwitch: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     @State private var hover = false
 
@@ -897,6 +899,7 @@ struct AgentSidebarModeSwitch: View {
 /// move (true) and exit (false) go to the model's dwell and hide (#1458); else behind the slid-in sidebar, whose exit
 /// slides it out. Tests call the handlers directly.
 struct AgentSlideTracker: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let edge: Bool
     /// #1461: a sidebar menu's tracking began (true) or ended (false).
     var onMenu: @MainActor (Bool) -> Void = { _ in }
@@ -961,6 +964,7 @@ final class AgentSlideTrackerView: NSView {
 }
 
 struct AgentSidebarView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     /// #1455: the store's Row details; a toggle the Rows do not carry (model, effort, state, age, shortcut) leaves the
     /// sections equal (no publish), so the rows read the store's own value to redraw at once.
@@ -1092,6 +1096,7 @@ struct AgentSidebarView: View {
 /// #1342: a group's one sidebar row: its live members' lines, each today's row (its own button, number, selection and
 /// menu) stacked with no gap, framed together; VoiceOver reads "Group <stem>, N sessions" around the lines.
 struct AgentSidebarGroupRow<Lines: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let stem: String
     let count: Int
     let lines: Lines
@@ -1137,6 +1142,7 @@ enum AgentWindowStyle: String, CaseIterable {
 /// #1378: behind the sidebar title row and the session header, so their empty parts drag the window in every style (the
 /// controls drawn over it keep their clicks: SwiftUI hit-tests them first). Adds no accessibility element.
 struct AgentWindowDragArea: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     var toolTip: String? = nil
     func makeNSView(context: Context) -> AgentWindowDragView { AgentWindowDragView() }
     func updateNSView(_ nsView: AgentWindowDragView, context: Context) { nsView.toolTip = toolTip }
@@ -1164,6 +1170,7 @@ final class AgentWindowDragView: NSView {
 /// The sidebar's title row: the window's name, the count, then #847's [>_] New shell and [+] New session in fixed
 /// sz(18) slots. The count gives way first (lineLimit 1, lowest priority); the buttons never move or resize.
 struct AgentSidebarTitleRow: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     /// #923: the Diagnostics pane's text while it is up (read once when the item is chosen).
     @State private var diagnostics: String?
@@ -1279,6 +1286,7 @@ struct AgentSidebarTitleRow: View {
 /// unchanged); each row's context menu draws AgentWindowControls.layoutMenu (Rename opens the inline field in place of
 /// the name, Duplicate, Delete); the row being renamed is drawn without its Button, the field over the name's own slot.
 struct AgentLayoutsSection: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     let rows: [AgentWindowModel.LayoutRow]
     static let title = "Layouts"
@@ -1345,6 +1353,7 @@ struct AgentLayoutsSection: View {
 /// #901 B3 step 4b: a Layouts row's inline name field: Return ends with the text (the model cleans it), Escape, the focus
 /// leaving and the field going away end with nil; each ends once (the model ignores a second end). Main actor.
 struct AgentLayoutNameField: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let placeholder: String
     @State var text: String
     let end: (String?) -> Void
@@ -1373,6 +1382,7 @@ struct AgentLayoutNameField: View {
 
 /// #901 B3 step 4a: one Layouts row ("⌃N  name" and the attention slot).
 struct AgentLayoutRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentWindowModel.LayoutRow
     /// Step 4b: the inline rename field's first text; nil: no field.
     var edit: String?
@@ -1413,6 +1423,7 @@ struct AgentLayoutRowView: View {
 }
 
 struct AgentSectionHeader: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let title: String
     let count: Int
     /// #828: folded (rows hidden; the count stays).
@@ -1453,6 +1464,7 @@ struct AgentSectionHeader: View {
 }
 
 struct AgentSidebarRowView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentSidebar.Row
     let selected: Bool
     /// #1110: the row's number (1...18: Command-1...9, then Option-Command-1...9), nil for no chip.
@@ -1644,6 +1656,7 @@ struct AgentMiniTipAnchors: PreferenceKey {
 /// #1457: the tooltip's label in the window's own overlay (never a window or panel of its own), beside the hovered Mini
 /// row, one line cut to the window's width. Not hit-tested (the row keeps its hover) and not read (the row's label is).
 struct AgentMiniTipLabel: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var tip: AgentMiniTip
     let anchors: [AgentSidebar.RowID: Anchor<CGRect>]
 
@@ -1705,6 +1718,7 @@ private struct AgentIdealWidths: Layout {
 /// this chord's glyphs (always ⌘, or ⌥⌘ for rows 10-18) instead of the clipboard's ⌘/⌃ setting. Brighter on the selected row.
 /// Neon.blue, not the keycap's blueBright: a theme that sets only its accent leaves blueBright at the default cyan.
 struct AgentDigitChip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let number: Int
     var active = false
 
@@ -2057,6 +2071,7 @@ extension AgentSidebarRowView {
 /// #1476: every pane header's X-ray button, just before the "...": open, the accent on a subtle fill and read as
 /// selected; off (dimmed, the tooltip says why) where the "..." has no X-ray item. One slot in every state.
 struct AgentXrayButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panels = XrayPanels.shared
     let pane: UUID
     let target: XrayTarget?
@@ -2097,6 +2112,7 @@ struct AgentXrayButton: View {
 /// #836 (b): a remote session's header: its title and host, then the transcript controls drawn disabled with their
 /// reason (a remote session has no transcript or todo list here).
 struct AgentRemoteHeader: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentSidebar.Row
     let remote: AgentSidebar.Remote
 
@@ -2150,6 +2166,7 @@ struct AgentRemoteHeader: View {
 /// #1115: a session's count groups (the sidebar row and the header): symbol plus number, a wider gap between groups.
 /// Each reads its words as help and to VoiceOver; the open PRs' group wears the chips' blue. Never cut (fixedSize).
 struct AgentCountGroups: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let counts: [(AgentSidebar.Count, Int)]
     let size: CGFloat
     /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
@@ -2191,6 +2208,7 @@ struct AgentCountGroups: View {
 
 /// The sidebar with no session and no record. #887 (QA #747 INFO-7): + and ⌘N are named only while they work.
 struct AgentNoSessionsState: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
 
     var body: some View {
@@ -2206,6 +2224,7 @@ struct AgentNoSessionsState: View {
 }
 
 struct AgentEmptyState<Extra: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let icon: String
     let title: String
     let detail: String
@@ -2229,6 +2248,7 @@ extension AgentEmptyState where Extra == EmptyView {
 }
 
 struct AgentDetailView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     @ObservedObject var transcript: AgentTranscriptModel
     /// False for offscreen evidence (no ScrollView).
@@ -2438,6 +2458,7 @@ let agentBandSpace = "agentWindowBand"
 /// level picker is gone with the transcript. Fixed slots: each slot's size comes from the UI scale alone. A narrow band
 /// gives way in `Tier` order: the chip slot first, then the layout slot; the All slot never goes.
 struct AgentWindowBand: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     /// #900 B2 step 3: the pane area under the band (the root's geometry); nil: the model's paneArea.
     var area: CGRect?
@@ -2625,6 +2646,7 @@ struct AgentPaneProbe: ViewModifier {
 /// focused pane alone at the whole area, so a person sees the one-pane window. More than one pane shown: the compact
 /// headers (9.2); more than one row of panes: the 44·s composer row (5.1). A layout property, never focus or state.
 struct AgentPaneArea: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     var scrolls = true
     /// Tests only: (part, pane, frame in the area) as "pane", "header" and "composer" are laid out.
@@ -2838,6 +2860,7 @@ struct AgentRowDrag: ViewModifier {
 /// 7.6: an unfocused pane's dim. It takes no hits (the window's first-click rule decides) and is hidden from
 /// accessibility (13).
 struct AgentPaneDim: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     var body: some View {
         Neon.bgBottom.opacity(0.25).allowsHitTesting(false).accessibilityHidden(true)
     }
@@ -2850,6 +2873,7 @@ struct AgentPaneDim: View {
 /// stores plain values and the two closures; the closures run on the main actor from an accessibility call (AppKit
 /// delivers those on the main thread), never inside a view update.
 private struct AgentDividerAXElement: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let label: String, value: String?
     let increment: @MainActor () -> Void, decrement: @MainActor () -> Void
 
@@ -2890,6 +2914,7 @@ struct AgentPaneContainer: ViewModifier {
 /// header, the pane's own transcript and the inert composer slot (5.1); its History card without buttons (a press on
 /// an unfocused pane focuses it first: step 5); the 4.2 placeholders.
 struct AgentUnfocusedPane: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     @ObservedObject var runtime: AgentPaneRuntime
     @ObservedObject var transcript: AgentTranscriptModel
@@ -2961,6 +2986,7 @@ struct AgentUnfocusedPane: View {
 /// #831 4.2: the pane holds a target whose session is not running, or whose record was removed: it says so by name,
 /// with Pick Another (focus the pane, the sidebar gets the keys) and, with more than one pane, Close Pane.
 struct AgentPanePlaceholder: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let title: String
     var close: (() -> Void)?
     let pick: () -> Void
@@ -2998,6 +3024,7 @@ struct AgentPanePlaceholder: View {
 /// first (cut in the middle; its whole text and the folder in the help); the state chip keeps its widest-variant slot
 /// (#828), the mode toggle (icon pair) and the "⋯" keep their size.
 struct AgentCompactHeader: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let title: String
     var project: String?
     var chip: AgentStateChip?
@@ -3058,6 +3085,7 @@ struct AgentPaneSwitch {
 /// #1491: a pane title as a menu button: the title (its own font and truncation) and a chevron; a click opens the
 /// pane's session list in a popover hung from the title. VoiceOver: the title, the folder as value, the hint.
 struct AgentPaneSwitcherButton<T: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let text: T
     let size: CGFloat
     let title: String
@@ -3171,6 +3199,7 @@ final class AgentPaneSwitcherList: ObservableObject {
 
 /// #1491: the popover: the search field on top, then the rows (a row shown in another pane says which).
 struct AgentPaneSwitcherView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var list: AgentPaneSwitcherList
 
     static func mark(_ n: Int) -> String { "in pane \(n)" }
@@ -3216,6 +3245,7 @@ struct AgentPaneSwitcherView: View {
 
 /// #1491: the switcher's search field: its text is the list's filter; Down, Up, Return and Escape go to the list.
 struct AgentPaneSwitcherField: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let list: AgentPaneSwitcherList
 
     func makeCoordinator() -> Coordinator { Coordinator(list) }
@@ -3258,6 +3288,7 @@ final class AgentPaneSwitcherTextField: NSSearchField {
 /// #1191, R1191-1: a header title: the folder is its tooltip and accessibility value only when there is one, so a title
 /// with none keeps its own words as value; the words stay its label.
 struct AgentProjectTitle<T: View>: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let text: T
     let label: String
     let project: String?
@@ -3281,6 +3312,7 @@ struct AgentHeaderRenameHidden: ViewModifier {
 }
 
 struct AgentSessionHeader: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentSidebar.Row
     let session: AgentSession
     let cwd: String?
@@ -3494,6 +3526,7 @@ struct AgentWidthFloor: Layout {
 
 /// #821 (Q4): Default's one-line todo chip; a click opens the list under the header.
 struct AgentTodosChip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let todos: AgentTodos
     @Binding var open: Bool
     var body: some View {
@@ -3515,6 +3548,7 @@ struct AgentTodosChip: View {
 }
 
 struct AgentTodosList: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let todos: AgentTodos
     /// About 8 one-line rows; a longer list scrolls, so it never pushes the prompt pane off-screen.
     static var maxHeight: CGFloat { sz(8 * 16) }
@@ -3549,6 +3583,7 @@ struct AgentTodosList: View {
 }
 
 struct AgentStateChip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let state: AgentState
     /// QA #668 INFO-4: the session ended (the window's held row): "Ended", not its last live state.
     var ended = false
@@ -3589,6 +3624,7 @@ struct AgentStateChip: View {
 }
 
 struct AgentHistoryDetail: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentSidebar.Row
     let record: DchHistoryRecord
     let store: AgentIslandStore?
@@ -3618,6 +3654,7 @@ struct AgentHistoryDetail: View {
 /// #1324 (b): a remote record's one verb, Resume on its host (no pin, remove or no-message: those would run here),
 /// and the status line in AgentHistoryButtons' fixed two-line slot.
 struct AgentRemoteResumeButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let record: DchHistoryRecord
     let host: String
@@ -3645,6 +3682,7 @@ struct AgentRemoteResumeButton: View {
 /// (its gates, its status line). Every button is always drawn, in a fixed slot (off while its gate
 /// refuses, its reason in the help), so a gate or a pin never moves a neighbour.
 struct AgentHistoryButtons: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var store: AgentIslandStore
     let record: DchHistoryRecord
     var refusal: String?
@@ -3703,6 +3741,7 @@ struct AgentHistoryButtons: View {
 // MARK: - #798: the pill button and the composer field (#1471 b: the Send column and the prompt panel went with the transcript)
 
 struct AgentPillButton: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let title: String
     let icon: String
     let tint: Color
@@ -3730,6 +3769,7 @@ struct AgentPillButton: View {
 /// The input box: an NSTextView, so Return sends and Shift-Return adds a line, and the
 /// window's sidebar keys never reach it (`firstResponder is NSText`).
 struct AgentComposerField: NSViewRepresentable {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @Binding var text: String
     var onSubmit: () -> Void
     /// QA #668 INFO-3: false for an ended session (NSTextView ignores SwiftUI's .disabled).
