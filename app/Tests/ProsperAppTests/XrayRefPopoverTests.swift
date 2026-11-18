@@ -99,6 +99,20 @@ final class XrayRefPopoverTests: XCTestCase {
         XCTAssertEqual(cards.sizes.count, 1)
         XCTAssertEqual(p.refNote, XrayPanelModel.refNotARef)
         XCTAssertEqual(run.calls.count, 0)
+        // #1419 (R1410-i1): a local text over dch's stdin cap says why, at 255 bytes (runs) and 256 (refused); "-x" keeps its note.
+        var long = try entry("#12")
+        long.text = String(repeating: "a", count: 256)
+        let r256 = XrayRefRunTests.Run(), c256 = Cards(), n256 = XrayPanels(), p256 = panel(r256, c256, n256)
+        p256.openRef(long)
+        XCTAssertEqual(p256.refNote, XrayPanelModel.refTooLong, "256 + newline is over dch's 256")
+        XCTAssertEqual(r256.calls.count, 0)
+        long.text = String(repeating: "a", count: 255)
+        let r255 = XrayRefRunTests.Run(), c255 = Cards(), n255 = XrayPanels(), p255 = panel(r255, c255, n255)
+        p255.openRef(long)
+        XCTAssertTrue(p255.refNote == nil, "255 + newline runs")
+        await n255.refReading?.value
+        XCTAssertEqual(r255.calls.count, 1)
+        XCTAssertNotEqual(p256.refNote, XrayPanelModel.refNotARef)
         XCTAssertEqual(XrayRefPopover.header(try entry("#12"), complete: true, home: "/Users/example", cwd: nil),
                        ["Issue #12", "Login retries", "2 mentions"], "the header from the row, before any --ref line")
         XCTAssertEqual(XrayRefPopover.header(try entry("#12"), complete: false, home: "/Users/example", cwd: nil).last, "\u{2265}2 mentions")

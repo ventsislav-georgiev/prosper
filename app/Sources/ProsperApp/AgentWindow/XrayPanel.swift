@@ -588,7 +588,7 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// #1472: a link in the chapter card (XrayRefScope's rule for the transcript's): a ref of this panel's read opens
-    /// its ref card; http/https go to the system; anything else is dropped.
+    /// its ref card; http, https and mailto: go to the system; anything else is dropped.
     func openLink(_ url: URL) -> XrayRefLink.Outcome {
         XrayRefLink.open(url, refs: refs) { [weak self] in self?.openRef($0) }
     }
@@ -660,7 +660,9 @@ final class XrayPanelModel: ObservableObject {
         let panels = panels
         // #1489: dch keys a term by its bare text; --ref wants it in backticks (a text holding one is no ref).
         let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text
-        if panels?.runRef(sent, shown: e.text, for: self) != true { refNote = Self.refNotARef }   // refused: nothing runs
+        if panels?.runRef(sent, shown: e.text, for: self) != true {   // refused: nothing runs
+            refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef
+        }
         let read = panels?.refReading
         presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true)), XrayRefPopover.size) { [weak panels] in
             panels?.closeRef(started: read)

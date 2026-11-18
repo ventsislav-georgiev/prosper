@@ -4,12 +4,12 @@ import SwiftUI
 // #1418 (#1356 step 4, spec 5.1): clickable refs in Transcript mode. dch's `--json` refs (XrayRefs) are read on pane
 // focus into a per-window cache; each ref dch marks `underline` gets a dotted underline and a prosper-xray link in the
 // user and assistant prose clips; a click opens the ref card (XrayRefPopover) through the window's presenter.
-// Gate B (XrayRefLink.decorate) is off until the operator's click check: while off, no read, no underline, no link.
+// Gate B (XrayRefLink.decorate) ships on (#1419); while off, no read, no underline, no link.
 
 @MainActor
 enum XrayRefLink {
-    /// Gate B. The flip (#1356 step 5) is this one line; rows set `decorate` and restore it.
-    static let ships = false
+    /// Gate B. On since #1419 (#1356 step 5); rows set `decorate` and restore it.
+    static let ships = true
     static var decorate: @MainActor () -> Bool = { ships }
 
     nonisolated static let scheme = "prosper-xray"
@@ -37,11 +37,12 @@ enum XrayRefLink {
 
     enum Outcome: Equatable { case handled, system, discarded }
 
-    /// The transcript's OpenURLAction: prosper-xray shows the ref's card (`show`); http/https go to the system as
-    /// before; any other scheme, or a refused link, is dropped.
+    /// The transcript's OpenURLAction: prosper-xray shows the ref's card (`show`); http, https and mailto: go to the
+    /// system; every other scheme (file:, ssh:, tel:, javascript:, the app's own prosper:...), a missing scheme and a
+    /// refused prosper-xray link are dropped (allowlist: transcript prose is untrusted, #1419).
     static func open(_ url: URL, refs: XrayRefs?, show: (XrayRefs.Entry) -> Void) -> Outcome {
         switch url.scheme?.lowercased() {
-        case "http", "https": return .system
+        case "http", "https", "mailto": return .system
         case scheme:
             guard let k = key(from: url, in: refs), let e = refs?.entries.first(where: { $0.key == k }) else { return .discarded }
             show(e)

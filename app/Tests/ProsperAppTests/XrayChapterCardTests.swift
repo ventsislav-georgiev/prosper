@@ -159,7 +159,8 @@ final class XrayChapterCardTests: XCTestCase {
         XCTAssertEqual(cards.views.count, 1)
         XCTAssertEqual(cards.sizes.first, XrayRefPopover.size)
         XCTAssertEqual(p.refCard?.key, "issue:#12")
-        XCTAssertEqual(p.openLink(try XCTUnwrap(URL(string: "file:///Users/example/notes.md"))), .discarded)
+        XCTAssertEqual(p.openLink(try XCTUnwrap(URL(string: "file:///Users/example/notes.md"))), .discarded, "#1419: allowlist")
+        XCTAssertEqual(p.openLink(try XCTUnwrap(URL(string: "javascript:alert(1)"))), .discarded)
         XCTAssertEqual(cards.views.count, 1, "no second card")
         cards.close()
         await p.panels?.refReading?.value

@@ -245,7 +245,7 @@ extension XrayPanels {
     @discardableResult
     func runRef(_ text: String, shown: String? = nil, for m: XrayPanelModel) -> Bool {
         let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
-        guard DchCtl.refOK(text), !text.hasPrefix("-"), input.map({ $0.count <= 256 }) ?? true, let dch = m.dch,
+        guard DchCtl.refOK(text), !text.hasPrefix("-"), !Self.overStdin(input), let dch = m.dch,
               let run = m.run else { return false }
         closeRef()
         m.refContext = nil
@@ -257,6 +257,14 @@ extension XrayPanels {
             m.takeRef(r, text: shown ?? text)
         }
         return true
+    }
+
+    /// #1419 (R1410-i1): dch's stdin cap, newline included.
+    private static func overStdin(_ input: Data?) -> Bool { input.map { $0.count > 256 } ?? false }
+
+    /// #1419 (R1410-i1): runRef refuses `text` for its length alone (a local ref over 255 bytes), so the card can say so.
+    func refTooLong(_ text: String, for m: XrayPanelModel) -> Bool {
+        DchCtl.refOK(text) && !text.hasPrefix("-") && Self.overStdin(m.target.viaStdin(text, version: XrayPanels.probed?.version).stdin)
     }
 
     /// The card closed (or a new ref asked): the read in flight is cancelled.
@@ -275,6 +283,7 @@ extension XrayPanels {
 extension XrayPanelModel {
     static let refNoCorpus = "No X-ray history for this session"
     static let refNotARef = "dch did not read this as a ref"
+    static let refTooLong = "Too long to look up here"
     static let refFailed = "The ref read failed"
 
     /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; else failed.
