@@ -703,6 +703,31 @@ func agentStateColor(_ s: AgentState?) -> Color {
     return s.color
 }
 
+/// #1339: the sidebar row's state glyph. The fixed amber, orange and green read 1.2 to 2.3:1 on the light themes' sidebar
+/// and selected row (graphics need 3:1); where either is under 3:1 the same hue is mixed toward black (toward white on a
+/// dark sidebar) in 5% steps until both reach it. Dark themes already clear it and keep agentStateColor exactly.
+func agentGlyphColor(_ s: AgentState?, sidebar: Color = Neon.sidebar, accent: Color = Neon.blue) -> Color {
+    func rgb(_ c: Color) -> [Double] {
+        let n = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(c)
+        return [Double(n.redComponent), Double(n.greenComponent), Double(n.blueComponent)]
+    }
+    func color(_ v: [Double]) -> Color { Color(red: v[0], green: v[1], blue: v[2]) }
+    let side = rgb(sidebar), tint = rgb(accent)
+    let selected = color(zip(side, tint).map { $0 * 0.86 + $1 * 0.14 })   // NeonSelectedRowFill: the accent at 0.14
+    let base = agentStateColor(s)
+    func reach(_ c: Color) -> Double { min(ThemeRuntime.contrastRatio(c, sidebar), ThemeRuntime.contrastRatio(c, selected)) }
+    guard reach(base) < 3 else { return base }
+    let end = ThemeRuntime.contrastRatio(sidebar, .white) > ThemeRuntime.contrastRatio(sidebar, .black) ? 1.0 : 0.0
+    let from = rgb(base)
+    var shade = base
+    for step in 1...20 {
+        let t = Double(step) * 0.05
+        shade = color(from.map { $0 * (1 - t) + end * t })
+        if reach(shade) >= 3.05 { break }
+    }
+    return shade
+}
+
 struct AgentWindowRootView: View {
     @ObservedObject var model: AgentWindowModel
     /// False for offscreen evidence only (the transcript without its ScrollView).
@@ -1695,7 +1720,7 @@ extension AgentSidebarRowView {
                 Text(row.state?.glyph ?? "\u{25CB}")
                     .font(Neon.font(11, weight: .bold))
                     .foregroundStyle(inks.map { row.state?.color ?? $0.mark }   // #1452 b: off, AgentState's own colours
-                                     ?? (row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state)))
+                                     ?? (row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(row.state)))
             }
         }
         .frame(width: sz(14))

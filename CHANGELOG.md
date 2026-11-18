@@ -1853,6 +1853,8 @@ tag from the now-released section and put it on the new top draft.
   started from the island is running, as they already did for one started from the phone; typed
   messages and Esc, and any answer while a session is resuming or a message is being sent, stay
   blocked until it finishes. (#1333)
+- The Agent Sessions sidebar's state glyphs (needs input, working, done) are now darker on light
+  themes so they stand out from the sidebar. (#1339)
 
 ## v2.174.0
 
