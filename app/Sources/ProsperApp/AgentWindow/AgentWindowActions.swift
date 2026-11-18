@@ -440,9 +440,16 @@ enum AgentModelSwitch {
     /// answer at all (spec d: effort is confirmed only by the next answer).
     /// shortcut: Claude Code's answer wording is not documented (spec N4): "Set ..." naming the value; re-check on a live capture.
     static func verdict(_ c: Command, _ answer: String?) -> AgentWindowOutcome {
-        let flat = (answer ?? "").lowercased().filter { !$0.isWhitespace }
+        // R1526: fold curly apostrophes (U+2018/U+2019) so "can\u{2019}t" is a marker; the asked value is matched as a token.
+        let low = (answer ?? "").lowercased().replacingOccurrences(of: "\u{2018}", with: "'").replacingOccurrences(of: "\u{2019}", with: "'")
+        let flat = low.filter { !$0.isWhitespace }
+        let tokens = low.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        // Runs of 1 to 3 adjacent tokens joined ("opus plan" is "opusplan"); a longer known value that holds the asked one refuses.
+        let runs = Set(tokens.indices.flatMap { i in (1...3).filter { i + $0 <= tokens.count }.map { tokens[i..<i + $0].joined() } })
+        let known = c.isModel ? AgentModelEffort.aliases : AgentModelEffort.levelOrder
+        let named = runs.contains(c.value) && !known.contains { $0 != c.value && $0.contains(c.value) && runs.contains($0) }
         let said = answer.map { _ in c.isModel ? flat.contains("setmodelto") : flat.hasPrefix("set") } ?? false
-        let refusal = refusalMarkers.contains { flat.contains($0) } || (said && !flat.contains(c.value))
+        let refusal = refusalMarkers.contains { flat.contains($0) } || (said && !named)
         if c.isModel {
             guard let answer else { return .failed(unconfirmed) }
             return refusal ? .failed(refused(answer)) : .answered(switched(answer))

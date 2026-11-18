@@ -247,6 +247,28 @@ final class AgentModelSwitchTests: XCTestCase {
         XCTAssertEqual(AgentModelSwitch.verdict(e, "Set effort level to low"), .failed(AgentModelSwitch.refused("Set effort level to low")))
     }
 
+    func testCurlyApostropheIsARefusalAndTheAskedValueIsMatchedAsAToken() throws {
+        let m = try XCTUnwrap(AgentModelSwitch.Command.model("opus"))
+        let e = try XCTUnwrap(AgentModelSwitch.Command.effort("high"))
+        for (c, a) in [(m, "I can\u{2019}t switch to that"), (e, "Can\u{2018}t set that"), (m, "Set model to opusplan"), (e, "Set effort level to xhigh")] {
+            XCTAssertEqual(AgentModelSwitch.verdict(c, a), .failed(AgentModelSwitch.refused(a)), a)
+        }
+        let op = try XCTUnwrap(AgentModelSwitch.Command.model("opusplan"))
+        XCTAssertEqual(AgentModelSwitch.verdict(op, "Set model to Opus Plan Mode"), .answered(AgentModelSwitch.switched("Set model to Opus Plan Mode")))
+        XCTAssertEqual(AgentModelSwitch.verdict(m, "Set model to Opus Plan Mode"), .failed(AgentModelSwitch.refused("Set model to Opus Plan Mode")))
+        XCTAssertEqual(AgentModelSwitch.verdict(e, "Set effort level to x-high"), .failed(AgentModelSwitch.refused("Set effort level to x-high")))
+        XCTAssertEqual(AgentModelSwitch.verdict(m, "Set model to Opus 4.7 (claude-opus-4-7)"), .answered(AgentModelSwitch.switched("Set model to Opus 4.7 (claude-opus-4-7)")))
+        for al in AgentModelEffort.aliases {
+            let c = try XCTUnwrap(AgentModelSwitch.Command.model(al))
+            XCTAssertEqual(AgentModelSwitch.verdict(c, "Set model to \(al)"), .answered(AgentModelSwitch.switched("Set model to \(al)")), al)
+        }
+        for l in AgentModelEffort.levelOrder {
+            let c = try XCTUnwrap(AgentModelSwitch.Command.effort(l))
+            let a = "Set effort level to \(l)"
+            XCTAssertEqual(AgentModelSwitch.verdict(c, a), .answered(AgentModelSwitch.requestedText(l) + ". " + AgentModelSwitch.switched(a)), l)
+        }
+    }
+
     /// A transcript of `bytes` read through a recording fake: every read length is kept.
     final class Window: @unchecked Sendable {
         let data: Data
