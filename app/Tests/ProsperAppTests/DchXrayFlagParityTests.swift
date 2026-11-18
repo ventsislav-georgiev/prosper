@@ -205,7 +205,7 @@ final class DchXrayFlagParityTests: XCTestCase {
     /// takes both). Who may send it is the connection's owner gate (RemoteFramesGoldenTests), not this list.
     func testClearMatrixWithIdentityForms() {
         func w(_ name: String, _ a: [String]) -> String? { DchCtl.refusal(["--xray", name] + a, create: false) }
-        for id in ["api", "api-qa", "m0123456789abcdef", "M0123456789ABCDEF", "caf\u{E9}", String(repeating: "n", count: 255)] {
+        for id in ["api", "api-qa", "m0123456789abcdef", "M0123456789ABCDEF", "caf\u{E9}", String(repeating: "n", count: 255)] { // gitleaks:allow (fake session ids)
             XCTAssertTrue(w(id, ["--clear", "--json"]) == nil, id)
             XCTAssertTrue(w(id, ["--json", "--clear"]) == nil, id)
         }
