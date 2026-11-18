@@ -1240,6 +1240,11 @@ final class ExtensionRegistry: ObservableObject {
         // copy changes nothing, and before discover. Enabled, trusted and privileged stay (discover reads them by id).
         let old = record(id: loaded.id)
         if let old { teardown(old) }
+        // #1495: an id that changes kind (kit or not) in either direction does not inherit trust or privilege: same
+        // store calls as untrust, before discover reads them.
+        if let old, (old.loaded.manifest.contributes?.kit != nil) != (loaded.manifest.contributes?.kit != nil) {
+            try untrust(id: loaded.id)
+        }
         discover()
         guard let record = record(id: loaded.id) else { throw ExtensionError.notFound(loaded.id) }
         if old != nil {

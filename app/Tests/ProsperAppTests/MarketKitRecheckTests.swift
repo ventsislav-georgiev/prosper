@@ -226,6 +226,7 @@ final class MarketKitRecheckTests: XCTestCase {
             try f.write("init.lua", "return {}\n")
         }
         try registry.trust(id: extID)
+        try registry.grantPrivilege(id: extID)
         market.detail = MarketClient.PackageDetail(kind: "extension", latest_version: "1.1.0", preview: nil, status: "active")
         await registry.checkForUpdates(force: true)
         XCTAssertEqual(registry.record(id: extID)?.manifest.extension.version, "1.0.0")
@@ -244,6 +245,47 @@ final class MarketKitRecheckTests: XCTestCase {
         XCTAssertTrue(ExtensionRegistry.RefusedUpdates.isRefusal(error))
         let manual = try await registry.installFromMarket(id: extID, version: "1.1.0")
         XCTAssertEqual(manual.manifest.extension.version, "1.1.0")
+        // R1539 s1: the one-click install of the plain archive does not hand the kit's trust or privilege to it.
+        let after = try XCTUnwrap(registry.record(id: extID))
+        XCTAssertFalse(after.trusted, "a trusted kit became a trusted extension")
+        XCTAssertFalse(after.privileged, "a privileged kit became a privileged extension")
+        XCTAssertFalse(after.isLive)
+    }
+
+    /// R1539 s1, the reverse: a trusted, privileged plain extension reinstalled as a kit keeps neither.
+    func testReinstallingATrustedExtensionAsAKitDropsTrustAndPrivilege() throws {
+        let root = tempDir()
+        let registry = makeRegistry(root.appendingPathComponent("user", isDirectory: true))
+        let old = root.appendingPathComponent("old", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data(KitFixture.head.utf8).write(to: old.appendingPathComponent("extension.toml"))
+        try Data("return {}\n".utf8).write(to: old.appendingPathComponent("init.lua"))
+        _ = try registry.installLocal(from: old)
+        try registry.trust(id: extID)
+        try registry.grantPrivilege(id: extID)
+        let new = try kitFolder(under: root.appendingPathComponent("new", isDirectory: true))
+        let after = try registry.installLocal(from: new.kit)
+        XCTAssertTrue(after.manifest.contributes?.kit != nil)
+        XCTAssertFalse(after.trusted, "a trusted extension became a trusted kit")
+        XCTAssertFalse(after.privileged)
+        XCTAssertFalse(after.isLive)
+        XCTAssertFalse(registry.isTrusted(id: extID))
+        // A later re-trust is an explicit step: it must not bring the old privilege back.
+        try registry.trust(id: extID)
+        registry.discover()   // reads the stored privilege ids against trust
+        XCTAssertFalse(registry.record(id: extID)?.privileged ?? true, "the old privilege came back on re-trust")
+    }
+
+    /// R1539 s1: a same-kind reinstall (kit over kit) keeps trust and privilege, as before.
+    func testSameKindReinstallKeepsTrustAndPrivilege() async throws {
+        let (registry, market, _) = try updating(newVersion: "1.1.0") { _ in }
+        try registry.trust(id: extID)
+        try registry.grantPrivilege(id: extID)
+        market.detail = try detail(summary: expectedListing().summary, readme: expectedListing().readme, version: "1.1.0")
+        let after = try await registry.installFromMarket(id: extID, version: "1.1.0")
+        XCTAssertEqual(after.manifest.extension.version, "1.1.0")
+        XCTAssertTrue(after.trusted)
+        XCTAssertTrue(after.privileged)
     }
 
     /// The reverse: an installed plain extension whose next archive is a kit (its listing matches): refused the same way.
