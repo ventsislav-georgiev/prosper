@@ -1907,6 +1907,8 @@ tag from the now-released section and put it on the new top draft.
   rules or file watch the newly running extension just set up. (#1550)
 - Tests: the zsh shells that BookmarksExtensionTests spawns now read a test-made ZDOTDIR and HOME,
   shared with ShellRunnerTests, instead of the real dotfiles. (#1557)
+- Remote Terminal: a device can keep at most two live xray follow streams on one session, as dch
+  serve allows; opening a third ends that device's oldest one as a timeout. (#1556)
 
 ## v2.174.0
 

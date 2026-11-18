@@ -686,9 +686,15 @@ for an agent, and a client shows it as it comes.
   that device's oldest as a timeout would (#202, serve.c:41-45, MAX_FOLLOW_PER_DEV :97; :100 at
   v1.99.0). Since 1.60.0 serve counts one session by its socket's inode and device as well as by
   name (kids_note, serve.c:2414-2460 at v1.61.0, :2498-2540 at v1.99.0: `svf` and `SVF` on a
-  case-insensitive volume are one session, one count; QA 1.58.0 LOW-R6). Prosper's xray gate opens
-  at dch 1.91.0 (#1357), and Prosper has no such count yet (#1136, a known gap): every `--xray
-  --follow` a device sends runs. A cap added there keys sessions the same way.
+  case-insensitive volume are one session, one count; QA 1.58.0 LOW-R6). Prosper counts the same
+  (#1556): at most 2 `--xray --follow` of one session per device (the peer's address, as serve's),
+  across its connections. A third cuts that device's oldest as a timeout does: its dch is killed and
+  it ends with `0x33 {"exit": 2, "why": "timeout"}`, its connection warm (serve.c:2198-2208 at
+  v1.99.0); the newer two run on. The session is its socket's inode and device, so `svf` and `SVF`
+  are one and a session re-created under its name is a new one (serve also matches by name, so
+  there the re-created one counts with the old); with no socket, its path. A follow that ends (dch
+  exits, the client closes, a 0x34) frees its slot. A plain `--follow` is not counted, as in serve.
+  Prosper does not run a cut-for follow's "dch: busy" first run once more (serve's ctl_busy).
 - **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
   its real exit code) or the client closes the connection (below). The server reads dch's pipe
   only as fast as the socket takes the frames, so a slow client slows dch rather than filling the

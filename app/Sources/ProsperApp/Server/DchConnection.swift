@@ -348,6 +348,8 @@ final class DchConnection: @unchecked Sendable {
     var listSessions: () -> [DchListRow] = { DchCommand.listSessions() }
     /// #838: the ctl request's dch, its timeout and cap; tests point it at a fake.
     var ctl = DchCtlOps()
+    /// #1556: the per-device `--xray --follow` count every connection shares; tests give their rigs one of their own.
+    var follows = DchFollows.shared
     /// #838: the one gate 0x02 create and ctl's --spawn and --revive share, and "create" in ops. This Mac always
     /// allows create (no setting); a seam so tests can serve as a dch serve without --allow-create does.
     var createAllowed: @Sendable () -> Bool = { true }
@@ -762,15 +764,27 @@ final class DchConnection: @unchecked Sendable {
         armIdle(after: ctlIdle)
         let job = DchCtlJob()
         ctlJob = job
+        let follows = self.follows
+        var device = ""   // #1556: serve counts follows per peer address (kids[i].ip)
+        if case let .hostPort(host, _) = conn.endpoint { device = "\(host)" }
         DispatchQueue.global(qos: .userInitiated).async {
             let (path, why) = vetted ?? vet()
             guard let path else { return self.ctlFinal(DchControlOps.error(why ?? "")) }
-            let follow = DchCtl.follows(argv), timeout = ctl.timeout(of: argv[0])
+            let follow = DchCtl.follows(argv), timeout = ctl.timeout(of: argv[0]), env = ctl.env()
             // #1013: serve's ctl_end (serve.c:1512-1514@v1.73.0): none for a follow.
             let end: DispatchTime? = follow ? nil : .now() + timeout
-            job.run(path: path, argv: argv, env: ctl.env(), cwd: cwd, follow: follow, cap: ctl.cap,
+            // #1556: only --xray --follow is counted (serve's CTL_NOCAP, serve.c:1515-1518@v1.99.0), not --follow.
+            // shortcut: an older follow still between this add and its spawn is taken out uncut (cutTimeout needs a
+            // pid; serve notes a follow only once forked); upgrade if two follows of one device ever start together.
+            let counted = follow && argv.first == "--xray"
+            if counted {
+                let key = DchFollows.key(device: device, dir: DchCommand.socketDir(env: env), name: argv.dropFirst().first ?? "")
+                for old in follows.add(job, key) { old.cutTimeout() }
+            }
+            job.run(path: path, argv: argv, env: env, cwd: cwd, follow: follow, cap: ctl.cap,
                     timeout: timeout, grace: ctl.grace(of: argv[0]), after: ctl.after,
                     send: { self.sendStreamed($0, stall: ctl.stall, end: end) }, reply: { self.ctlFinal($0) })
+            if counted { follows.remove(job) }   // ended (reaped, or never ran): its slot is free
             // #1013: reaped: the slot is free. Only this job's: a 0x33 that found it reaped freed it, and a newer one may hold it.
             self.queue.async { if self.ctlJob === job { self.ctlJob = nil } }
         }

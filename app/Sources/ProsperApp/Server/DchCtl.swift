@@ -356,6 +356,52 @@ enum DchCtl {
 /// whole process group (Foundation makes it the leader), SIGKILL to the group DchCtl.cancelGrace (2 s) later (#852).
 /// QA #729 F1: a dch is SIGTERMed once per request, whatever comes after the cut: dch's ty_on_sig _exits on a
 /// second signal (dch.c:6256-6272@v1.54.0) and so would skip its take-back; serve's conn_end cuts only an uncut ctl.
+/// #1556: dch serve's MAX_FOLLOW_PER_DEV (serve.c:100@v1.99.0): one device runs at most 2 `--xray --follow` of one
+/// session, across its connections; a third cuts that device's oldest as a timeout (kids_note, serve.c:2526-2544).
+/// The device is the peer's address, as serve's `kids[i].ip`. The session is its socket's st_dev and st_ino
+/// (serve's fino/fdev: `svf` and `SVF` on a case-insensitive volume are one), so a session re-created under the
+/// same name is a new one; with no socket to stat, its path. A job leaves when its run ends (serve's "F <pid> ").
+final class DchFollows: @unchecked Sendable {
+    static let shared = DchFollows()
+    static let perDevice = 2
+
+    struct Key: Hashable {
+        let device: String
+        let path: String   // "" once the socket was stat'ed
+        let dev: UInt64
+        let ino: UInt64
+    }
+
+    private let lock = NSLock()
+    private var live: [(key: Key, job: DchCtlJob)] = []   // oldest first
+
+    /// `name`'s session in socket dir `dir`, as `device` follows it.
+    static func key(device: String, dir: String, name: String) -> Key {
+        let path = "\(dir)/\(name).sock"
+        var st = stat()
+        guard stat(path, &st) == 0 else { return Key(device: device, path: path, dev: 0, ino: 0) }
+        return Key(device: device, path: "", dev: UInt64(UInt32(bitPattern: st.st_dev)), ino: UInt64(st.st_ino))
+    }
+
+    /// Adds `job` under `key`; returns the jobs it puts past the cap, oldest first, taken out (serve clears their
+    /// follow before the SIGUSR1, so a cut one is not counted again). `job` itself is never one: it is the newest.
+    func add(_ job: DchCtlJob, _ key: Key) -> [DchCtlJob] {
+        lock.withLock {
+            live.append((key, job))
+            var cut: [DchCtlJob] = []
+            while live.filter({ $0.key == key }).count > Self.perDevice, let i = live.firstIndex(where: { $0.key == key }) {
+                cut.append(live.remove(at: i).job)
+            }
+            return cut
+        }
+    }
+
+    func remove(_ job: DchCtlJob) { lock.withLock { live.removeAll { $0.job === job } } }
+
+    /// The jobs counted under `key` (tests).
+    func count(_ key: Key) -> Int { lock.withLock { live.filter { $0.key == key }.count } }
+}
+
 final class DchCtlJob: @unchecked Sendable {
     enum Stop { case none, term, killGroup }
 
@@ -369,7 +415,8 @@ final class DchCtlJob: @unchecked Sendable {
     private var sent = 0
     /// The SIGKILL grace after a SIGTERM (DchCtlOps.grace of the verb). Set in run(), before the pid.
     private var grace = DchCtl.cancelGrace
-    /// The timeout's 0x33 goes here, so the timer holds nothing but a weak job (QA #688 F1). Set in run().
+    /// The timeout's 0x33 goes here, so the timer holds nothing but a weak job (QA #688 F1). Set in run(), before the
+    /// spawn: #1556's cut (cutTimeout) may come from another connection as soon as the pid is set.
     private var timeoutReply: (@Sendable (Data) -> Void)?
 
     /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
@@ -393,6 +440,16 @@ final class DchCtlJob: @unchecked Sendable {
     }
 
     func cancel() { _ = end(.term) }
+
+    /// The timeout's cut, and #1556's: a newer `--xray --follow` of the session from this device ends this one as
+    /// a timeout does (serve.c:2198-2208@v1.99.0: ctl_cut "timeout", 0x33 {"exit": 2, "why": "timeout"}, the
+    /// connection stays warm). Only while dch runs (serve: an unreaped, uncut ctl); the end and its 0x33 under
+    /// one sendLock, as the cap's: between the two the reap could end run(), whose defer clears timeoutReply.
+    func cutTimeout() {
+        sendLock.withLock {
+            if end(.killGroup, running: true) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
+        }
+    }
 
     /// #1013: no dch of this job is left to reap (never spawned, or reaped). Until then a cut's early 0x33 leaves
     /// the connection's ctl slot taken, as dch serve's ctl stays c->ctl > 0 until its reap (serve.c:1603, :1632@v1.73.0).
@@ -466,6 +523,7 @@ final class DchCtlJob: @unchecked Sendable {
         // A closed connection keeps its ctlJob, and `reply` holds the connection: clear it, or the two hold each other.
         defer { sendLock.withLock { timeoutReply = nil } }
         for fd in wake { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }   // no forkpty child inherits them
+        sendLock.withLock { timeoutReply = reply }
         let exited = DispatchSemaphore(value: 0), poke = wake[1]
         // Cleared once reaped: a late kill must not signal a recycled pid.
         p.terminationHandler = { [lock] _ in
@@ -490,16 +548,8 @@ final class DchCtlJob: @unchecked Sendable {
         pid = p.processIdentifier
         lock.unlock()
         if !follow {
-            timeoutReply = reply
             // QA #688 F1: weak, so a finished job (and what it holds) goes now, not when the timer fires.
-            after(timeout) { [weak self] in
-                guard let self else { return }   // gone: it ended
-                // #856: the end and its 0x33 under one sendLock, as the cap's: between the two the reap could
-                // end run(), whose defer clears timeoutReply, and the request never got its final.
-                self.sendLock.withLock {
-                    if self.end(.killGroup, running: true) { self.timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
-                }
-            }
+            after(timeout) { [weak self] in self?.cutTimeout() }   // gone: it ended
         }
         pump([(out.fileHandleForReading, DchFrame.ctlStdout), (err.fileHandleForReading, DchFrame.ctlStderr)],
              woken: wake[0], follow: follow, cap: cap, send: send, reply: reply)

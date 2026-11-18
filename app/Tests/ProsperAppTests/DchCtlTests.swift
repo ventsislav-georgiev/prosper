@@ -79,13 +79,15 @@ final class DchCtlTests: XCTestCase {
     }
 
     private func rig(_ script: String? = nil, timeout: TimeInterval = 60, agentTimeout: TimeInterval = 660,
-                     cap: Int = 8 << 20, reached: Recorder? = nil, timers: Timers? = nil) -> Rig {
+                     cap: Int = 8 << 20, reached: Recorder? = nil, timers: Timers? = nil,
+                     host: String = "127.0.0.1", sock: String? = nil, follows: DchFollows? = nil) -> Rig {
         let queue = DispatchQueue(label: "test.dchconn.ctl")
         let frames = Frames(), closes = Recorder()
-        let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
+        let conn = DchConnection(conn: NWConnection(host: .init(host), port: 9, using: .tcp), queue: queue,
                                  log: Logger(subsystem: "test", category: "dch"), onClose: { @Sendable _ in closes.add() })
         conn.sendOverride = { f in frames.lock.withLock { frames.all.append(f) } }
-        let sock = tempDir("ctl-sock").path
+        let sock = sock ?? tempDir("ctl-sock").path
+        if let follows { conn.follows = follows }
         conn.ctl.path = { reached?.add(); return script }
         conn.ctl.env = { ["DCH_SOCKET_DIR": sock, "PATH": "/usr/bin:/bin"] }
         conn.ctl.timeout = timeout
@@ -461,6 +463,103 @@ final class DchCtlTests: XCTestCase {
         XCTAssertTrue(dead(script))
         XCTAssertEqual(try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8), "term\n")
         XCTAssertEqual(finals(r).count, 0)
+    }
+
+    // MARK: - #1556: at most 2 --xray --follow of one session per device (serve.c:100, kids_note :2526-2544@v1.99.0)
+
+    /// A follow rig: its own fake dch that loops until a signal, an own registry the rows share, one socket dir.
+    private func followRig(_ follows: DchFollows, sock: String, host: String = "127.0.0.1") throws -> (rig: Rig, dir: URL) {
+        let f = try fake("echo $$ > \"$D/pid\"; trap 'exit 0' TERM; while :; do /bin/sleep 0.05; done")
+        let r = rig(f.path, host: host, sock: sock, follows: follows)
+        r.conn.ctl.xray = { true }
+        return (r, f.dir)
+    }
+
+    private func follow(_ r: (rig: Rig, dir: URL), _ argv: [String] = ["--xray", "api", "--follow", "--json"]) -> pid_t? {
+        send(r.rig, Self.ctl(argv))
+        return pid(r.dir, "pid")
+    }
+
+    /// A stand-in session socket in `sock` (stat'ed only, never connected): a plain file, a new inode each call
+    /// (the new one is made beside the old, then renamed over it, so the two numbers cannot be one).
+    private func session(_ sock: String, _ name: String = "api") throws {
+        let path = "\(sock)/\(name).sock"
+        try Data().write(to: URL(fileURLWithPath: path + ".new"))
+        XCTAssertEqual(Darwin.rename(path + ".new", path), 0)
+    }
+
+    /// The third --xray --follow of one session from one device cuts that device's oldest as a timeout does: its
+    /// 0x33 {"exit": 2, "why": "timeout"}, its dch killed, its connection warm (serve.c:2198-2208@v1.99.0). The two
+    /// newer ones run on.
+    func testAThirdXrayFollowOfASessionFromOneDeviceCutsTheOldestAsATimeout() throws {
+        let reg = DchFollows(), sock = tempDir("ctl-follow").path
+        try session(sock)
+        let a = try followRig(reg, sock: sock), b = try followRig(reg, sock: sock), c = try followRig(reg, sock: sock)
+        let first = follow(a), second = follow(b)
+        XCTAssertEqual(finals(a.rig).count, 0, "two run")
+        XCTAssertNotNil(follow(c))
+        XCTAssertTrue(wait(5) { finals(a.rig).count == 1 }, "the oldest is cut")
+        XCTAssertEqual(Self.object(finals(a.rig).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
+        XCTAssertTrue(dead(first), "its dch is killed")
+        XCTAssertEqual(a.rig.closes.count, 0, "its connection stays warm")
+        usleep(200_000)
+        XCTAssertEqual(finals(b.rig).count + finals(c.rig).count, 0, "the newer two run on")
+        XCTAssertTrue(second.map { Darwin.kill($0, 0) == 0 } ?? false)
+        XCTAssertEqual(reg.count(DchFollows.key(device: "127.0.0.1", dir: sock, name: "api")), 2)
+    }
+
+    /// Another device's follow of the session is its own count, and a plain --follow is never counted (serve counts
+    /// only CTL_NOCAP, an --xray with --follow, serve.c:1515-1518@v1.99.0).
+    func testAnotherDevicesFollowAndAPlainFollowAreNotCounted() throws {
+        let reg = DchFollows(), sock = tempDir("ctl-follow").path
+        try session(sock)
+        let a = try followRig(reg, sock: sock), b = try followRig(reg, sock: sock)
+        let other = try followRig(reg, sock: sock, host: "127.0.0.2"), plain = try followRig(reg, sock: sock)
+        XCTAssertNotNil(follow(a))
+        XCTAssertNotNil(follow(b))
+        XCTAssertNotNil(follow(other))
+        XCTAssertNotNil(follow(plain, ["--follow", "api"]))
+        usleep(300_000)
+        XCTAssertEqual(finals(a.rig).count + finals(b.rig).count + finals(other.rig).count + finals(plain.rig).count, 0, "nothing cut")
+        XCTAssertEqual(reg.count(DchFollows.key(device: "127.0.0.1", dir: sock, name: "api")), 2)
+        XCTAssertEqual(reg.count(DchFollows.key(device: "127.0.0.2", dir: sock, name: "api")), 1)
+    }
+
+    /// A follow that ended (its connection closed, its dch reaped) frees its slot: the next one cuts nothing.
+    func testAnEndedXrayFollowFreesItsSlot() throws {
+        let reg = DchFollows(), sock = tempDir("ctl-follow").path
+        try session(sock)
+        let key = DchFollows.key(device: "127.0.0.1", dir: sock, name: "api")
+        let a = try followRig(reg, sock: sock), b = try followRig(reg, sock: sock), c = try followRig(reg, sock: sock)
+        XCTAssertNotNil(follow(a))
+        let second = follow(b)
+        b.rig.queue.sync { b.rig.conn.close() }
+        XCTAssertTrue(dead(second))
+        XCTAssertTrue(wait(5) { reg.count(key) == 1 }, "its slot is free")
+        XCTAssertNotNil(follow(c))
+        usleep(300_000)
+        XCTAssertEqual(finals(a.rig).count + finals(c.rig).count, 0, "nothing cut")
+        XCTAssertEqual(reg.count(key), 2)
+    }
+
+    /// A session re-created under its name (a new socket inode) is a new key: the old one's two follows do not
+    /// count against a follow of the new one. With no socket the key is the path, so it is one count by name.
+    func testASessionReCreatedUnderItsNameIsANewKey() throws {
+        let reg = DchFollows(), sock = tempDir("ctl-follow").path
+        XCTAssertEqual(DchFollows.key(device: "d", dir: sock, name: "api"), DchFollows.key(device: "d", dir: sock, name: "api"), "no socket: by path")
+        try session(sock)
+        let old = DchFollows.key(device: "127.0.0.1", dir: sock, name: "api")
+        let a = try followRig(reg, sock: sock), b = try followRig(reg, sock: sock), c = try followRig(reg, sock: sock)
+        XCTAssertNotNil(follow(a))
+        XCTAssertNotNil(follow(b))
+        try session(sock)
+        let new = DchFollows.key(device: "127.0.0.1", dir: sock, name: "api")
+        XCTAssertNotEqual(old, new, "a new inode, a new key")
+        XCTAssertNotNil(follow(c))
+        usleep(300_000)
+        XCTAssertEqual(finals(a.rig).count + finals(b.rig).count + finals(c.rig).count, 0, "nothing cut")
+        XCTAssertEqual(reg.count(old), 2)
+        XCTAssertEqual(reg.count(new), 1)
     }
 
     /// An unstubbed test never reaches a real dch: under XCTest the default path is a test's override or nil.
