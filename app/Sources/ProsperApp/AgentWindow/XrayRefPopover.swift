@@ -17,6 +17,17 @@ struct XrayRefPopover: View {
     @State var tab: Tab = .definition
     /// #1560: the Mentions tab's Other projects row, collapsed until clicked.
     @State var othersOpen = false
+    /// #1565 (X-T b): the grid's hover that opened this card unpinned (Pin, the pointer on the card); nil: today's card.
+    var hover: XrayHover? = nil
+
+    /// #1565: the context as this card may show it: unpinned, XrayRefContext.guarded's (no other session's line; a shell's
+    /// titles and counts alone); today's card all of it.
+    var context: XrayRefContext? {
+        panel.refContext.map { c in hover.map { c.guarded(pinned: false, shell: $0.shell) } ?? c }
+    }
+
+    /// #1565: Pin: the light read is killed and today's full card opens (XrayHover.pin).
+    func pin() { hover?.pin() }
 
     /// OQ-164 not ruled: the memory card's 380x360, scaled.
     static var size: CGSize { CGSize(width: sz(380), height: sz(360)) }
@@ -96,12 +107,14 @@ struct XrayRefPopover: View {
                 if Self.canSearch(panel, entry) {
                     Button("Search", action: search).accessibilityLabel("Search this session for \(entry.text)")
                 }
+                if hover != nil { Button("Pin", action: pin).accessibilityLabel("Pin the card for \(entry.text)") }
             }
             .font(Neon.font(11))
         }
         .padding(sz(12))
         .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
         .onExitCommand(perform: escape)
+        .onHover { inside in hover?.onCard(inside) }   // #1565: the pointer on the card keeps it open
     }
 
     /// The #821 capsule strip, as the panel's: a tab group for VoiceOver, the shown tab selected.
@@ -131,7 +144,7 @@ struct XrayRefPopover: View {
     }
 
     @ViewBuilder var tabBody: some View {
-        if let c = panel.refContext {
+        if let c = context {
             switch tab {
             case .definition: definition(c)
             case .mentions: mentions(c)
@@ -200,7 +213,7 @@ struct XrayRefPopover: View {
         } else {
             flatMentions(c.groups, c)
         }
-        if let title = Self.othersTitle(panel) { others(title, c) }
+        if hover == nil, let title = Self.othersTitle(panel) { others(title, c) }   // #1565: unpinned, no other project
     }
 
     /// #1560: the collapsed row; opening it runs the one `--scope all` read (XrayPanelModel.openOthers), then lists the

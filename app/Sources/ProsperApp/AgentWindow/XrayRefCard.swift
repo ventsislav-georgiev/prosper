@@ -9,6 +9,8 @@ struct XrayRefStream: Equatable {
         var key: String
         var shape: String
         var text: String
+        /// #1565 (6.3): dch's own ms from its start to this line (`elapsed_ms`, xray.c:4983 at v1.99.0); nil: not sent.
+        var elapsed: Int? = nil
     }
 
     struct Definition: Equatable {
@@ -138,7 +140,8 @@ struct XrayRefStream: Equatable {
             guard let o = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], o["schema"] as? Int == 1 else { continue }
             if let f = o["first"] as? [String: Any] {
                 s.first = First(session: text(f["session"], 64) ?? "", key: text(f["key"], XrayRefs.maxRefBytes) ?? "",
-                                shape: text(f["shape"], wordCap) ?? "", text: text(f["text"], XrayRefs.maxRefBytes) ?? "")
+                                shape: text(f["shape"], wordCap) ?? "", text: text(f["text"], XrayRefs.maxRefBytes) ?? "",
+                                elapsed: int(f["elapsed_ms"]))
             } else if let d = o["definition"] as? [String: Any] {
                 let passage = (d["passage"] as? String).map {
                     String(XrayMemory.cleanBody(String($0.unicodeScalars.prefix(passageCap * 4))).text.unicodeScalars.prefix(passageCap))
@@ -198,15 +201,15 @@ struct XrayRefContext: Equatable {
     let shape: XrayRefs.Shape?
     let resolved: XrayRefStream.Resolved?
     /// Newest first (a define_command line has no time: after the dated ones, in dch's order).
-    let definitions: [XrayRefStream.Definition]
+    var definitions: [XrayRefStream.Definition]   // var: guarded(pinned:shell:) trims a copy
     let heading: String
     /// When there is no definition and no define_warn: the first mention ("First mention").
-    let firstMention: XrayRefStream.Mention?
+    var firstMention: XrayRefStream.Mention?
     /// This session in file order, then the other sessions, each newest first, the newest group first.
-    let groups: [Group]
+    var groups: [Group]
     /// #1528: dch 1.100.0's shape (a mention carries a sentence): this session's turns newest first, each in `groups`'
     /// order, then one Earlier block (no turn, or another session's). nil from an older dch: the flat `groups` stay.
-    let turns: [Turn]?
+    var turns: [Turn]?
     let counts: [String]
     /// #1560: "Other projects": the groups a `--scope all` read added (sessions this context has no group of) and its
     /// "All projects" count line; nil until that read lands.
@@ -291,6 +294,38 @@ struct XrayRefContext: Equatable {
         return c
     }
 
+    /// #1565 (6.2 unpinned guard, S18, K4.2): what an unpinned hover card may show. Pinned: all of it. Unpinned: no
+    /// other session's line or passage (pinned || sameSession) and no Other projects; a shell session's card titles and
+    /// counts alone (the guard is `pinned` alone there): no mention line, no passage, no first mention.
+    func guarded(pinned: Bool, shell: Bool) -> XrayRefContext {
+        guard !pinned else { return self }
+        var c = self
+        (c.others, c.othersCount) = (nil, nil)
+        let own = session
+        c.definitions = definitions.map { d in
+            var d = d
+            if shell || d.session != own { d.passage = "" }
+            return d
+        }
+        func mine(_ m: XrayRefStream.Mention) -> Bool { !shell && m.session == own }
+        c.groups = groups.compactMap { g in
+            let ms = g.mentions.filter(mine)
+            return ms.isEmpty ? nil : Group(session: g.session, mentions: ms)
+        }
+        c.turns = turns.map { $0.compactMap { t in
+            let ms = t.mentions.filter(mine)
+            return ms.isEmpty ? nil : Turn(turn: t.turn, mentions: ms)
+        } }
+        c.firstMention = firstMention.flatMap { mine($0) ? $0 : nil }
+        return c
+    }
+
+    /// #1565: a live shell session's id (dch README v1.99.0 "session_id": the ring's id, `m` + 16 hex).
+    static func shell(_ sessionID: String?) -> Bool {
+        guard let id = sessionID, id.count == 17, id.first == "m" else { return false }
+        return id.dropFirst().allSatisfy { $0.isHexDigit }
+    }
+
     /// #1560 (dch README v1.99.0 "--ref" :1775-1893, resolved states): one plain line for a state that is not `ok` (nil:
     /// draw the resolver's title and lines as before). A word Prosper does not know is shown as itself (cleaned by the parse).
     static func stateLine(_ r: XrayRefStream.Resolved) -> String? {
@@ -324,6 +359,11 @@ extension XrayTarget {
     /// #1416: dch README "dch --xray <n> --ref <ref> --scope project --full --json"; the text is checked first (runRef).
     /// #1560: `scope` "all" for the card's Other projects row.
     func refArgs(_ text: String, scope: String = "project") -> [String] { ["--xray", name, "--ref", text, "--scope", scope, "--full", "--json"] }
+
+    /// #1565 (6.2, dch README v1.99.0 :394, :1704-1742): the hover card's light read: no --full, a budget in 50...300.
+    func lightArgs(_ text: String, budget: Int) -> [String] {
+        ["--xray", name, "--ref", text, "--scope", "project", "--budget-ms", "\(min(max(budget, 50), 300))", "--json"]
+    }
 }
 
 extension XrayPanels {
@@ -333,7 +373,8 @@ extension XrayPanels {
     /// shortcut: one --ref for the app, not per window; the card is a transient popover (a click or key in another
     /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
     @discardableResult
-    func runRef(_ text: String, shown: String? = nil, scope: String = "project", for m: XrayPanelModel) -> Bool {
+    /// #1565: `budget` set: the hover card's light read (lightArgs), whose `first.elapsed_ms` goes to spawnCosts.
+    func runRef(_ text: String, shown: String? = nil, scope: String = "project", budget: Int? = nil, for m: XrayPanelModel) -> Bool {
         let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
         guard DchCtl.refOK(text), !text.hasPrefix("-"), !Self.overStdin(input), let dch = m.dch,
               let run = m.run else { return false }
@@ -342,14 +383,31 @@ extension XrayPanels {
         closeRef()
         if scope == "project" { m.refContext = nil }   // Other projects adds to the card's context, never clears it
         m.refNote = nil
-        let a = m.target.refArgs(arg, scope: scope), env = m.target.env
+        let a = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope), env = m.target.env
         refReading = Task { [weak m] in
             let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
-            m.takeRef(r, text: shown ?? text, scope: scope)
+            m.takeRef(r, text: shown ?? text, scope: scope, light: budget != nil)
         }
         Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
         return true
+    }
+
+    /// #1565 (6.3): dch's own start-up ms (`first.elapsed_ms`) of the last 8 light reads, oldest first.
+    static var spawnCosts: [Int] = []
+    static let costsKept = 8
+
+    /// #1565: one light read's cost (nil: dch sent none, nothing kept). The parse bounded it to 0...Int32.max.
+    static func spent(_ ms: Int?) {
+        guard let ms else { return }
+        spawnCosts = Array((spawnCosts + [ms]).suffix(costsKept))
+    }
+
+    /// #1565 (6.3): the light read's budget, B = max(50, 300 - p75 of spawnCosts) (nearest rank); 250 with none yet.
+    static func budget() -> Int {
+        let s = spawnCosts.sorted()
+        guard !s.isEmpty else { return 250 }
+        return max(50, 300 - s[(s.count * 3 + 3) / 4 - 1])
     }
 
     /// #1560: the Other projects read in flight and the card read it stands in for (one --ref read for the app).
@@ -384,10 +442,13 @@ extension XrayPanelModel {
 
     /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; else failed.
     /// #1560: a `scope` "all" read adds its extra groups to the card's context (XrayRefContext.with(others:)).
-    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project") {
+    /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent).
+    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project", light: Bool = false) {
         switch r.status {
         case 0:
-            let c = XrayRefContext(XrayRefStream.parse(r.out), ref: text, tasks: tasks, memory: memory)
+            let s = XrayRefStream.parse(r.out)
+            if light { XrayPanels.spent(s.first?.elapsed) }
+            let c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
             refContext = scope == "project" ? c : refContext?.with(others: c)
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef

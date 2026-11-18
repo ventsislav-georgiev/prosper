@@ -1946,6 +1946,8 @@ tag from the now-released section and put it on the new top draft.
   example "Shell · last 500 rows"). (#1566)
 - The account pool no longer forwards a client's Trailer or Proxy-Connection header upstream.
   (#1576)
+- In a Terminal pane, resting the pointer on an underlined ref for half a second now opens a quick
+  card with its title and counts. Pin it to open the full card. (#1565)
 
 ## v2.174.0
 

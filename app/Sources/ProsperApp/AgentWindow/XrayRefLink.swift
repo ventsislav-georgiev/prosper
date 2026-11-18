@@ -84,11 +84,40 @@ enum XrayRefLink {
         return true
     }
 
+    /// #1565 (X-T b): the panel a hover card shows in and the focused pane's refs (terminalRefs' rules: the window's
+    /// focused pane, this session, gate B on). Nil: no card.
+    static func hoverPanel(_ w: AgentsNSWindow?, key: AgentSessionKey?) -> (panel: XrayPanelModel, refs: XrayRefs)? {
+        guard let r = terminalRefs(w, key) else { return nil }
+        return (panel(r.pane, r.target, r.refs), r.refs)
+    }
+
     /// #1357: a prosper-xray link a program printed (OSC 8) in a Terminal pane: the Transcript's allowlist and key check
     /// (open), so only a key in this session's refs opens a card; anything else is dropped.
     static func openTerminalLink(_ url: URL, _ w: AgentsNSWindow?, key: AgentSessionKey?) {
         guard let r = terminalRefs(w, key) else { return }
         _ = open(url, refs: r.refs) { panel(r.pane, r.target, r.refs).openRef($0) }
+    }
+}
+
+extension XrayPanelModel {
+    /// #1565 (X-T b, 6.2): the hover card, unpinned: the ref's header at once from the cached row (kind, text, title,
+    /// count), no read yet (XrayHover starts the light one). `closed` runs once when it goes, whoever closed it.
+    func hoverRef(_ e: XrayRefs.Entry, hover: XrayHover, closed: @escaping @MainActor () -> Void) {
+        (refContext, refNote) = (nil, nil)
+        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true, hover: hover)),
+                   XrayRefPopover.size, closed)
+    }
+
+    /// #1565 (6.2, 6.3): the hover card's one light read (XrayPanels.budget()); a refused text says why as openRef's
+    /// does. The read in flight, nil when none ran.
+    @discardableResult
+    func hoverRead(_ e: XrayRefs.Entry) -> Task<Void, Never>? {
+        let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text   // as openRef sends it
+        guard panels?.runRef(sent, shown: e.text, budget: XrayPanels.budget(), for: self) == true else {
+            refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef
+            return nil
+        }
+        return panels?.refReading
     }
 }
 
