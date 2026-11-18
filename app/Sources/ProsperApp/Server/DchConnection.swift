@@ -1537,6 +1537,7 @@ struct DchControlOps: Sendable {
         }
         let ended = bin.map { DchCommand.isAtLeast($0.version, AgentIsland.reviveEndedHoldMinimum) } ?? false
         let taken = AgentIsland.reviveAllTaken(all, now: t, held: held, endedHolds: ended, live: Set(live.map(\.key)))
+        // cappedHistory's live-key exclusion is case-sensitive: a mixed-case record of a live name stays listed while it runs, and reviveAllTaken (case-insensitive) still counts it.
         reply(DchFrame.encode(DchFrame.historyResp,
                               json: AgentIsland.cappedHistory(all, live: Set(live.map(\.key))).map { Self.historyWire($0, now: t, taken: taken) }))
     }

@@ -895,6 +895,20 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(rows.filter { $0["takes"] as? Bool == true }.count, 0, "the other dir's name is free: dch refuses it")
     }
 
+    /// #1534: cappedHistory's live exclusion is case-sensitive, reviveAllTaken's is not: a mixed-case record of a live
+    /// name stays listed and takes (dch starts it as <name>-2); the same record in the dir without that live session does not.
+    func testHistoryRespTakesAMixedCaseRecordOfALiveNameOnlyInItsDir() {
+        let f = Fake()
+        let row: [String: Any] = ["name": "M0123456789ABCDEF", "started": Self.now - 3600, "updated": Self.now - 60, "ended": Self.now - 60, "end": "signal 9"]
+        f.hist["/d"] = Self.hist([row])
+        f.hist["/e"] = Self.hist([row])
+        f.ls["/d"] = Self.ls([("m0123456789abcdef", "1.24.1")])
+        let rows = call(ops(f, dirs: ["/d", "/e"]), DchFrame.history, raw: Data()).json as? [[String: Any]] ?? []
+        XCTAssertEqual(rows.count, 2, "both listed: the exclusion is case-sensitive")
+        XCTAssertEqual(rows.filter { $0["takes"] as? Bool == true }.count, 1, "only the /d copy takes")
+        XCTAssertEqual(rows.filter { $0["takes"] as? Bool == false }.count, 1, "the /e copy is free")
+    }
+
     /// #1364: the phone's list is the tab's: a record whose name is live in its socket dir (here the aside one a cold
     /// start leaves, pin copied) is left out while it runs, and comes back pinned when it ends.
     func testHistoryRespLeavesOutALiveNamesRecordUntilItEnds() {
