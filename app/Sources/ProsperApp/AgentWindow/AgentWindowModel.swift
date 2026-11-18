@@ -1895,7 +1895,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// #1492: row `id` dropped on pane `pane`. The centre (or any drop with the split gate off) is the title switcher's
     /// choose (put: a session shown in another pane swaps). An edge splits `pane` on that side with the row in the new
-    /// pane (PaneLayout.split(_:side:); a session already shown focuses its pane, as Open to the Side does); a refusal
+    /// pane (PaneLayout.split(_:side:); a session already shown elsewhere moves: its pane closes); a refusal
     /// is the split verbs' notice and nothing else changes. The pane the drop lands in takes the focus and the keys.
     @discardableResult
     func drop(_ id: AgentSidebar.RowID, into pane: UUID, zone: PaneDropZone) -> Bool {

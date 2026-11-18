@@ -79,7 +79,7 @@ extension AgentWindowD1Tests {
     }
 
     /// Red at base: no PaneLayout.split(_:side:). Mutant edge-as-centre (an edge drop replaces) fails the count and the
-    /// "new pane" lines. A session already shown elsewhere: Open to the Side's rule 1 (its pane takes the focus, no split).
+    /// "new pane" lines.
     @MainActor
     func testPaneDropEdgeSplitsOnThatSideWithTheSessionInTheNewPane() throws {
         try paneSwitcherModel(["api", "web", "db", "log"], targets: ["api", "web"]) { m, panes in
@@ -104,10 +104,80 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(paneSwitcherName(m, low), "log")
             XCTAssertEqual(fl.minY, fa.maxY, accuracy: 0.5, "under pane 1")
             XCTAssertEqual(fl.minX, fa.minX, accuracy: 0.5, "in pane 1's column")
-            // web is shown in pane 2: an edge drop of it on pane 1 focuses pane 2 and splits nothing.
-            let before = m.layout.order
-            XCTAssertTrue(m.drop(dropKey("web"), into: a, zone: .edge(.right)))
-            XCTAssertEqual(m.layout.order, before, "no split, nothing moves")
+        }
+    }
+
+    /// Red at the part a line (an already-shown session on an edge only focused its pane, no move): pane 1's session
+    /// dropped on the left edge of pane 2 closes pane 1 and splits pane 2 with it. Mutants edge-no-move, move-leaves-old-pane.
+    @MainActor
+    func testPaneDropEdgeOfASessionShownElsewhereMovesIt() throws {
+        try paneSwitcherModel(["api", "web", "db"], targets: ["api", "web", "db"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.dropFirst().first), c = try XCTUnwrap(panes.last)
+            m.paneArea = Self.wideArea
+            XCTAssertTrue(m.drop(dropKey("api"), into: b, zone: .edge(.left)))
+            let new = m.layout.focused
+            XCTAssertFalse(m.layout.order.contains(a), "the old pane is gone")
+            XCTAssertEqual(m.layout.order, [new, b, c], "order: the moved session left of pane 2")
+            XCTAssertEqual(paneSwitcherName(m, new), "api", "in the new pane, which has the focus")
+            XCTAssertEqual(m.layout.panes.compactMap { paneSwitcherName(m, $0.id) }, ["api", "web", "db"])
+            XCTAssertEqual(m.selectedRow?.title, "api")
+        }
+    }
+
+    /// At the cap the close frees the slot: the move succeeds, the count stays. Mutant move-leaves-old-pane (no close) is refused at the cap.
+    @MainActor
+    func testPaneDropMoveAtTheCapSucceedsWithTheCountUnchanged() throws {
+        try paneSwitcherModel(["a1", "a2", "a3", "a4", "a5", "a6"], targets: ["a1", "a2", "a3", "a4", "a5", "a6"]) { m, panes in
+            let last = try XCTUnwrap(panes.last)
+            m.paneArea = Self.wideArea
+            XCTAssertEqual(m.layout.order.count, PaneLayout.maxPanes, "control: at the cap")
+            XCTAssertTrue(m.drop(dropKey("a1"), into: last, zone: .edge(.right)))
+            XCTAssertTrue(m.paneRefusal == nil, "no refusal")
+            XCTAssertEqual(m.layout.order.count, PaneLayout.maxPanes, "the count is unchanged")
+            XCTAssertFalse(m.layout.order.contains(try XCTUnwrap(panes.first)), "pane 1 closed")
+            XCTAssertEqual(paneSwitcherName(m, m.layout.focused), "a1")
+            XCTAssertEqual(m.layout.order.last, m.layout.focused, "right of the last pane")
+        }
+    }
+
+    /// An edge drop on the session's own pane changes nothing but the focus.
+    @MainActor
+    func testPaneDropOnAnEdgeOfTheSessionsOwnPaneOnlyFocusesIt() throws {
+        try paneSwitcherModel(["api", "web"], targets: ["api", "web"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.last)
+            m.paneArea = Self.wideArea
+            m.adopt(try m.layout.focus(b).get())
+            XCTAssertEqual(m.layout.focused, b, "control: pane 2 focused")
+            XCTAssertTrue(m.drop(dropKey("api"), into: a, zone: .edge(.right)))
+            XCTAssertEqual(m.layout.order, [a, b], "no split, no close")
+            XCTAssertEqual(m.layout.focused, a)
+            XCTAssertTrue(m.paneRefusal == nil)
+        }
+    }
+
+    /// A move whose split is refused (no room) is refused whole: the old pane stays, the layout is unchanged, the notice shows.
+    /// Mutant move-not-atomic (the close kept when the split is refused) fails the layout line.
+    @MainActor
+    func testPaneDropMoveRefusedAtTheMinimumChangesNothing() throws {
+        try paneSwitcherModel(["api", "web", "db"], targets: ["api", "web", "db"]) { m, panes in
+            let b = try XCTUnwrap(panes.dropFirst().first)
+            m.paneArea = CGRect(x: 0, y: 0, width: 100, height: 100)
+            let before = m.layout
+            XCTAssertTrue(m.drop(dropKey("api"), into: b, zone: .edge(.left)))
+            XCTAssertEqual(m.paneRefusal, .noRoom, "the split verbs' notice")
+            XCTAssertEqual(m.layout, before, "nothing changes: the old pane is still there")
+        }
+    }
+
+    /// Open to the Side keeps its rule 1: a session already shown only focuses its pane (nothing moves). Mutant side-also-moves.
+    @MainActor
+    func testOpenToTheSideOfAShownSessionStillOnlyFocuses() throws {
+        try paneSwitcherModel(["api", "web"], targets: ["api", "web"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.last)
+            m.paneArea = Self.wideArea
+            XCTAssertEqual(m.layout.focused, a, "control")
+            m.openToTheSide(dropKey("web"))
+            XCTAssertEqual(m.layout.order, [a, b], "nothing moves")
             XCTAssertEqual(m.layout.focused, b, "the pane showing it takes the focus")
         }
     }

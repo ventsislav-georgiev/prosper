@@ -775,12 +775,20 @@ extension PaneLayout {
         }
     }
 
-    /// An edge drop of `target` on pane `id`: the browse rule's `.side` rule 1 first (a session already shown in a pane
-    /// focuses that pane; nothing moves or splits), else `id` splits on `side` with `target` in the new pane, which takes
-    /// focus. Refused as `split` is (the cap, no room).
+    /// An edge drop of `target` on pane `id`: `id` splits on `side` with `target` in the new pane, which takes focus.
+    /// A session already shown in another pane MOVES (#1492): that pane is closed first, on a copy, so a refused split
+    /// (the cap cannot refuse it: the close frees the slot; no room can) refuses the whole drop and changes nothing. Dropped
+    /// on an edge of its own pane it only focuses it. Refused as `split` is. (Open to the Side, `show`, still only focuses.)
     func split(_ id: UUID, side: Direction, target: PaneTarget, minimum: CGSize, in area: CGRect) -> Result<PaneLayout, PaneRefusal> {
-        if let shown = pane(showing: target) { return focus(shown) }
-        guard case let .success(base) = focus(id) else { return .failure(.noSuchPane) }
+        var rest = self
+        if let shown = pane(showing: target) {
+            if shown == id { return focus(id) }
+            switch close(shown) {
+            case let .success(closed): rest = closed
+            case let .failure(r): return .failure(r)
+            }
+        }
+        guard case let .success(base) = rest.focus(id) else { return .failure(.noSuchPane) }
         return base.split(axis: side == .left || side == .right ? .columns : .rows, target: target,
                           before: side == .left || side == .up, minimum: minimum, in: area)
     }
