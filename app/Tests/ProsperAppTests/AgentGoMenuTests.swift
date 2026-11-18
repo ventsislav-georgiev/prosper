@@ -98,6 +98,23 @@ final class AgentGoMenuTests: XCTestCase {
         }
     }
 
+    /// #1367: the Command-W item is "Close Pane" (the pane close) only with splits on and more than one pane; else "Close Window".
+    func testCloseItemFollowsTheRoute() {
+        func close(_ splits: Bool, _ panes: Int) -> AgentGoMenu.Entry? {
+            AgentGoMenu.entries(splits: splits, panes: panes).compactMap { $0 }.first { $0.key == "w" }
+        }
+        for (splits, panes) in [(true, 2), (true, 3)] {
+            XCTAssertTrue(close(splits, panes)?.title == "Close Pane" && close(splits, panes)?.action == .pane(.closePane), "\(splits) \(panes)")
+        }
+        for (splits, panes) in [(true, 1), (true, 0), (false, 2), (false, 1)] {
+            XCTAssertTrue(close(splits, panes)?.title == "Close Window" && close(splits, panes)?.action == .key(.close), "\(splits) \(panes)")
+        }
+        let c = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 2, splitsEnabled: true)
+        if let e = AgentsNSWindow.keyEvent("w", .command, 13) {
+            XCTAssertEqual(PaneKeys.action(for: e, context: c), .closePane, "the key does what the item says")
+        } else { XCTFail("event") }
+    }
+
     /// The menu goes right after Edit in a built main menu (never the app's), once, and comes out again.
     func testGoMenuGoesRightAfterEdit() {
         XCTAssertEqual(AgentGoMenu.insertionIndex(["Prosper", "Edit"]), 2)

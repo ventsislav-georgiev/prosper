@@ -27,8 +27,9 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
-    /// The menu as values: nil is a separator. Pane items only with the split gate on.
-    static func entries(splits: Bool) -> [Entry?] {
+    /// The menu as values: nil is a separator. Pane items only with the split gate on. #1367: with the gate on and
+    /// more than one pane, the Command-W item reads "Close Pane" and closes the pane, as the key does (PaneKeys).
+    static func entries(splits: Bool, panes: Int = 1) -> [Entry?] {
         let c: NSEvent.ModifierFlags = .command, sc: NSEvent.ModifierFlags = [.command, .shift]
         let oc: NSEvent.ModifierFlags = [.command, .option]
         var e: [Entry?] = [
@@ -53,7 +54,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             Entry("New Session", "n", c, .key(.newSession)),
             Entry("New Shell", "n", sc, .key(.newShell)),
             Entry("Stop or Remove", "\u{8}", c, .key(.stopOrRemove)),
-            Entry("Close Window", "w", c, .key(.close)),
+            splits && panes > 1 ? Entry("Close Pane", "w", c, .pane(.closePane)) : Entry("Close Window", "w", c, .key(.close)),
         ]
         guard splits else { return e }
         return e + [
@@ -108,7 +109,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let list = Self.entries(splits: AgentPaneLayout.splitsEnabled) + Self.layoutEntries(splits: AgentPaneLayout.splitsEnabled)
+        let list = Self.entries(splits: AgentPaneLayout.splitsEnabled, panes: window?.model?.layout.panes.count ?? 1) + Self.layoutEntries(splits: AgentPaneLayout.splitsEnabled)
             + Self.modeEntries
         let mode = window?.model?.sidebarMode
         shown = list.compactMap { $0 }

@@ -1961,6 +1961,8 @@ tag from the now-released section and put it on the new top draft.
   app/Examples/extensions/xref-example. (#1569)
 - Agent Sessions: trackpad scrolling in a terminal pane ends smoothly, because every momentum phase now reaches the
   terminal (libghostty-spm fork 2.2.2026110702-prosper.2). (#1468)
+- The Go menu's Command-W item now reads "Close Pane" and closes the pane when split panes are on
+  and more than one pane is open, matching the key. (#1367)
 
 ## v2.174.0
 
