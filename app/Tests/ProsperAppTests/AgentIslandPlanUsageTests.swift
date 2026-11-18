@@ -95,6 +95,53 @@ final class AgentIslandPlanUsageTests: XCTestCase {
         }
     }
 
+    // MARK: - #1552: the Show plan usage setting (Preferences.defaults is a scratch suite under XCTest)
+
+    private static let key = "agentIslandShowPlanUsage"
+
+    @MainActor func testShowPlanUsageIsOnByDefault() {
+        let saved = Preferences.defaults.object(forKey: Self.key)
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: Self.key) } else { Preferences.defaults.removeObject(forKey: Self.key) } }
+        Preferences.defaults.removeObject(forKey: Self.key)
+        XCTAssertFalse(Preferences.defaults === UserDefaults.standard, "a private defaults store")
+        XCTAssertTrue(Preferences.agentIslandShowPlanUsage, "unset reads on")
+        Preferences.agentIslandShowPlanUsage = false
+        XCTAssertFalse(Preferences.agentIslandShowPlanUsage)
+    }
+
+    @MainActor func testOffHidesTheLineEvenWithDataAndDoesNotKeepTheTabRow() throws {
+        let saved = Preferences.defaults.object(forKey: Self.key)
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: Self.key) } else { Preferences.defaults.removeObject(forKey: Self.key) } }
+        let t = Date().timeIntervalSince1970
+        let usage = AgentPlanUsage(util: ["five_hour": 0.42], at: t, reset: [:], now: t)
+        Preferences.agentIslandShowPlanUsage = false
+        let c = controller(usage)
+        let store = try XCTUnwrap(c.store)
+        c.setExpanded(true)
+        XCTAssertTrue(store.planUsage == nil, "off: not drawn with data present")
+        XCTAssertFalse(store.showsTabRow, "off: the row is not kept for the usage line alone")
+        Preferences.agentIslandShowPlanUsage = true
+        let on = controller(usage)
+        on.setExpanded(true)
+        XCTAssertEqual(on.store?.planUsage, usage, "on: drawn")
+    }
+
+    @MainActor func testOnWithNoDataHidesTheLine() throws {
+        let saved = Preferences.defaults.object(forKey: Self.key)
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: Self.key) } else { Preferences.defaults.removeObject(forKey: Self.key) } }
+        Preferences.agentIslandShowPlanUsage = true
+        let c = controller(nil)
+        let store = try XCTUnwrap(c.store)
+        c.setExpanded(true)
+        XCTAssertTrue(store.planUsage == nil)
+        XCTAssertFalse(store.showsTabRow)
+    }
+
+    func testSettingsRowTextAndPlacement() throws {
+        XCTAssertEqual(AgentIslandLookSection.usageLabel, "Show plan usage")
+        XCTAssertEqual(AgentIslandLookSection.usageSubtitle, "Your Claude plan usage, from the account pool, when it has a recent figure.")
+    }
+
     // MARK: - The island
 
     @MainActor func testOpeningTheIslandShowsTheUsageRowAndGrowsByIt() throws {

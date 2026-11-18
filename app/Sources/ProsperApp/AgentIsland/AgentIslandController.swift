@@ -1516,7 +1516,7 @@ final class AgentIslandController {
     /// #1537: the plan usage line, re-read with the clock now (a value past its reset drops); assigned only on a change.
     private func readPlanUsage() {
         guard let store else { return }
-        let u = planUsage(Date().timeIntervalSince1970)
+        let u = Preferences.agentIslandShowPlanUsage ? planUsage(Date().timeIntervalSince1970) : nil   // #1552: off, never read
         if store.planUsage != u { store.planUsage = u }
     }
 

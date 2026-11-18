@@ -456,6 +456,7 @@ enum Preferences {
         static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         static let agentIslandFollowsTheme = "agentIslandFollowsTheme"   // #1452, per Mac
+        static let agentIslandShowPlanUsage = "agentIslandShowPlanUsage"   // #1552, per Mac
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
@@ -1471,6 +1472,12 @@ enum Preferences {
     static var agentIslandFollowsTheme: Bool {
         get { defaults.bool(forKey: Keys.agentIslandFollowsTheme) }
         set { defaults.set(newValue, forKey: Keys.agentIslandFollowsTheme) }
+    }
+
+    /// #1552: the island's plan usage line (#1537); on when unset.
+    static var agentIslandShowPlanUsage: Bool {
+        get { defaults.object(forKey: Keys.agentIslandShowPlanUsage) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.agentIslandShowPlanUsage) }
     }
 
     /// MCP servers configured for the coding agent. Stored JSON-encoded; an unreadable

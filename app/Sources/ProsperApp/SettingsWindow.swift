@@ -1031,12 +1031,17 @@ struct AgentIslandRowDetailsSection: View {
 struct AgentIslandLookSection: View {
     static let label = "Follow theme"
     static let subtitle = "Off: the island keeps its own colours."
+    static let usageLabel = "Show plan usage"   // #1552
+    static let usageSubtitle = "Your Claude plan usage, from the account pool, when it has a recent figure."
     @State private var follows = Preferences.agentIslandFollowsTheme
+    @State private var showUsage = Preferences.agentIslandShowPlanUsage
 
     var body: some View {
         NeonSection("Look") {
             NeonRow(Self.label, subtitle: Self.subtitle) { Toggle("", isOn: $follows).labelsHidden().accessibilityLabel(Self.label) }
+            NeonRow(Self.usageLabel, subtitle: Self.usageSubtitle) { Toggle("", isOn: $showUsage).labelsHidden().accessibilityLabel(Self.usageLabel) }
         }
+        .onChange(of: showUsage) { _, v in Preferences.agentIslandShowPlanUsage = v }
         .onChange(of: follows) { _, v in Preferences.agentIslandFollowsTheme = v; ThemeStore.shared.objectWillChange.send() }
     }
 }

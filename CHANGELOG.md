@@ -1885,6 +1885,8 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer: when a file you are editing changes on disk, a "Changed on disk" banner offers Reload
   (take the file, drop your edits) or Keep Mine (Save then asks before writing over it); a file
   deleted on disk shows "Deleted on disk" and Save writes it again. (#1545)
+- Added a "Show plan usage" checkbox in Settings > Agent Island (on by default) to hide the plan
+  usage line on the island. (#1552)
 
 ## v2.174.0
 
