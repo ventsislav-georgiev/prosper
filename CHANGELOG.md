@@ -1432,11 +1432,12 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
-- Ships dch 1.97.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
-  large transcripts, a quick search's time budget also ends a slow folder lookup, and the X-ray view
-  keeps more of a prompt's title on narrow terminals when an agent's name is long; X-ray Refs also
-  list the terms a session keeps coming back to, no longer counting code in backticks as terms, and a
-  mention in a tool's output names the tool. (#1327) Resume
+- Ships dch 1.99.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
+  large transcripts, a capped search keeps every whole turn, a quick search's time budget also ends
+  a slow folder lookup, and the X-ray view keeps more of a prompt's title on narrow terminals when
+  an agent's name is long; X-ray Refs also list the terms a session keeps coming back to, no longer
+  counting code in backticks or file names such as README.md as terms, and a mention in a tool's
+  output names the tool. (#1327) Resume
   under a new name also renames the Claude session, a session started while the system is out of
   terminals retries for up to 2 s instead of failing at once, and a reference lookup in a light shell
   keeps the definition of an older block. X-ray can define a reference with a command of your own
