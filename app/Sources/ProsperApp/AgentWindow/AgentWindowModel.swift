@@ -2331,8 +2331,11 @@ final class AgentWindowModel: ObservableObject {
 
     /// The groups running in the spawn dir: the #1116 rule over the live sessions only (nothing stored); none for
     /// another Mac.
-    var newSessionGroups: [AgentGroup] {
-        guard let store, newSession?.host == nil else { return [] }
+    var newSessionGroups: [AgentGroup] { newSession?.host == nil ? spawnGroups : [] }
+
+    /// The groups running in the spawn dir, whatever Mac an open form is on.
+    private var spawnGroups: [AgentGroup] {
+        guard let store else { return [] }
         let dir = island().spawnDir()
         return AgentIsland.groups(store.sessions.map(\.key).filter { $0.dir == dir }, suffix: store.pairSuffix)
     }
@@ -2351,11 +2354,15 @@ final class AgentWindowModel: ObservableObject {
         f.groupPrompt = nil
         guard let stem, let g = newSessionGroups.first(where: { $0.stem == stem }) else {
             f.group = nil
+            // #1400 (R1214-i1): the name typed before the choice, unless one was typed since.
+            if let typed = f.groupTypedName, !f.nameEdited { f.name = typed; f.nameEdited = true }
+            f.groupTypedName = nil
             newSession = f
             return
         }
         f.group = AgentNewSessionForm.GroupPick(stem: stem, sidekick: sidekick)
         f.sidekick = false
+        if f.nameEdited { f.groupTypedName = f.name }   // #1400: kept aside as groupPrompt keeps the prompt
         f.name = ""
         f.nameEdited = false
         if let cwd = live(g.mains + g.sidekicks, in: g).first(where: { !$0.cwd.isEmpty })?.cwd {
@@ -2373,6 +2380,24 @@ final class AgentWindowModel: ObservableObject {
             f.groupPrompt = f.prompt
         }
         newSession = f
+    }
+
+    static let addToGroupItem = "Add session to this group"
+
+    /// #1400: the stem a group row's "Add session to this group" chooses: the row's group running in the spawn dir;
+    /// nil (no group row, or its group no longer runs here): no item.
+    func addableGroup(_ item: AgentSidebar.Item) -> String? {
+        guard let stem = item.stem, let dir = item.rows.first?.session?.key.dir,
+              spawnGroups.contains(where: { $0.stem == stem && $0.dir == dir }) else { return nil }
+        return stem
+    }
+
+    /// #1400: the form (opened, or the open one) on this Mac with group `stem` chosen as a main: its folder and harness
+    /// filled; the person picks the role.
+    func addSession(toGroup stem: String) {
+        openNewSession()
+        setNewSessionHost(nil)   // groups are this Mac's; a no-op on this Mac
+        setNewSessionGroup(stem, sidekick: false)
     }
 
     /// The chosen group's next name; nil: no group chosen. "" when none fits (newSessionGroupError says why).

@@ -1005,9 +1005,11 @@ struct AgentSidebarView: View {
                                     ForEach(items) { item in
                                         Group {
                                             if let stem = item.stem {
+                                                let add = model.addableGroup(item)   // #1400: once per group row
                                                 AgentSidebarGroupRow(stem: stem, count: item.rows.count) {
                                                     ForEach(item.rows) {
-                                                        line($0, number: numbers[$0.id], mini: mini, inView: inView, groups: groups)
+                                                        line($0, number: numbers[$0.id], mini: mini, inView: inView, groups: groups,
+                                                             addTo: add)
                                                     }
                                                 }
                                             } else if let row = item.rows.first {
@@ -1051,7 +1053,9 @@ struct AgentSidebarView: View {
     }
 
     /// One session's row (#1342: a group's member line too): its click, its number and its context menu, as before.
-    func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?) -> some View {
+    /// #1400: `addTo`, a group row's running group: its lines' menus end with "Add session to this group".
+    func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?,
+              addTo: String? = nil) -> some View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: number, inView: inView.contains(row.id),
@@ -1068,6 +1072,12 @@ struct AgentSidebarView: View {
                                       side: { model.openToTheSide(row.id) }, groups: groups)
             } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
                 AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
+            }
+            if let stem = addTo {
+                Divider()
+                Button { model.addSession(toGroup: stem) } label: {
+                    Label(AgentWindowModel.addToGroupItem, systemImage: AgentMenuSymbol.newSession)
+                }
             }
         }
     }

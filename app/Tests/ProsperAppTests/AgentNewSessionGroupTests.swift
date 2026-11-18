@@ -233,6 +233,105 @@ final class AgentNewSessionGroupTests: XCTestCase {
         }
     }
 
+    // MARK: #1400 Add session to this group
+
+    /// A group row's "Add session to this group" opens the form with that group chosen as a main, its folder and harness
+    /// filled; the person picks the role. On an open form it chooses the group there, and a form on another Mac comes
+    /// back to this one. A row alone has no item.
+    func testAddSessionToGroupPrefillsGroupFolderAndHarness() throws {
+        try d1.withNewSessionPrefs {
+            let st = store([live("api", cwd: "/Users/example/api"), live("api-qa", cwd: "/Users/example/api"),
+                            live("web", cwd: "/Users/example/web"), live("web-qa", cwd: "/Users/example/web"),
+                            live("solo", cwd: "/Users/example/solo")])
+            let spawns = AgentWindowD1Tests.SpawnCalls(), m = model(st, spawns)
+            defer { m.close() }
+            let items = AgentSidebar.items(m.sections) { st.groups }.values.flatMap { $0 }
+            let web = try XCTUnwrap(items.first { $0.stem == "web" }, "\(items.map(\.stem))")
+            XCTAssertEqual(m.addableGroup(web), "web", "a running group's row has the item")
+            XCTAssertFalse(items.filter { $0.stem == nil }.isEmpty, "solo is a row alone")
+            XCTAssertTrue(items.filter { $0.stem == nil }.allSatisfy { m.addableGroup($0) == nil }, "a row alone has none")
+
+            XCTAssertTrue(m.newSession == nil)
+            m.addSession(toGroup: "web")
+            XCTAssertEqual(m.newSession?.group, AgentNewSessionForm.GroupPick(stem: "web", sidekick: false), "the group, as a main")
+            XCTAssertEqual(m.newSession?.folder, "~/web", "the group's folder")   // red if the group is ignored: the default folder
+            XCTAssertEqual(m.newSession?.command, "claude --verbose", "the group's harness")
+            XCTAssertEqual(m.newSessionName, "web-2")
+            m.setNewSessionGroup("web", sidekick: true)
+            XCTAssertEqual(m.newSession?.command, "claude --debug", "the person picks the role")
+
+            m.addSession(toGroup: "api")
+            XCTAssertEqual(m.newSession?.group, AgentNewSessionForm.GroupPick(stem: "api", sidekick: false), "the open form")
+            XCTAssertEqual(m.newSession?.folder, "~/api")
+
+            m.setNewSessionHost("example-host")
+            XCTAssertTrue(m.newSession?.group == nil)
+            m.addSession(toGroup: "web")
+            XCTAssertTrue(m.newSession?.host == nil, "groups are this Mac's")
+            XCTAssertEqual(m.newSession?.group, AgentNewSessionForm.GroupPick(stem: "web", sidekick: false))
+            XCTAssertEqual(m.newSession?.folder, "~/web")
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
+    /// No group running: a group row whose group stopped, and a group of one live member (a plain row), have no item;
+    /// the action on a stopped group opens the form with no group chosen.
+    func testNoRunningGroupHasNoAddSessionItem() throws {
+        try d1.withNewSessionPrefs {
+            let st = store([live("api", cwd: "/Users/example/api"), live("api-qa", cwd: "/Users/example/api"),
+                            live("web", cwd: "/Users/example/web")], history: [d1.record("web-qa")])
+            let spawns = AgentWindowD1Tests.SpawnCalls(), m = model(st, spawns)
+            defer { m.close() }
+            let items = AgentSidebar.items(m.sections) { st.groups }.values.flatMap { $0 }
+            XCTAssertEqual(items.compactMap(\.stem), ["api"], "web has one live member: a plain row")
+            let api = try XCTUnwrap(items.first { $0.stem == "api" })
+            XCTAssertEqual(m.addableGroup(api), "api")
+            XCTAssertTrue(items.filter { $0.stem == nil }.allSatisfy { m.addableGroup($0) == nil })
+            st.sessions.removeAll { $0.name == "api-qa" }
+            XCTAssertTrue(m.addableGroup(api) == nil, "its group stopped: no item")
+            m.addSession(toGroup: "api")
+            XCTAssertTrue(m.newSession != nil && m.newSession?.group == nil, "no group to choose")
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
+    /// R1214-i1: a group choice clears a typed name; None (and another Mac) brings it back unless a name was typed
+    /// since. (Old code: None left the name empty.)
+    func testNoneRestoresTheNameTypedBeforeTheGroupChoice() throws {
+        try d1.withNewSessionPrefs {
+            let st = store([live("api", cwd: "/Users/example/api"), live("api-qa", cwd: "/Users/example/api")])
+            let spawns = AgentWindowD1Tests.SpawnCalls(), m = model(st, spawns)
+            defer { m.close() }
+            m.openNewSession()
+            m.setNewSessionName("mine")
+            m.setNewSessionGroup("api", sidekick: false)
+            XCTAssertEqual(m.newSession?.name, "", "the choice clears it")
+            XCTAssertEqual(m.newSessionName, "api-2")
+            m.setNewSessionGroup("api", sidekick: true)
+            m.setNewSessionGroup(nil, sidekick: false)
+            XCTAssertEqual(m.newSession?.name, "mine", "None brings it back")   // red before the fix: ""
+            XCTAssertEqual(m.newSession?.nameEdited, true)
+            XCTAssertEqual(m.newSessionName, "mine")
+
+            m.setNewSessionGroup("api", sidekick: false)
+            m.setNewSessionName("other")
+            m.setNewSessionGroup(nil, sidekick: false)
+            XCTAssertEqual(m.newSession?.name, "other", "a name typed since stays")
+
+            m.setNewSessionGroup("api", sidekick: false)
+            m.setNewSessionHost("example-host")
+            XCTAssertEqual(m.newSession?.name, "other", "another Mac takes the group back as None does")
+            m.cancelNewSession()
+
+            m.openNewSession()
+            m.setNewSessionGroup("api", sidekick: false)
+            m.setNewSessionGroup(nil, sidekick: false)
+            XCTAssertEqual(m.newSession?.name, "", "none typed: none brought back")
+            XCTAssertEqual(m.newSession?.nameEdited, false)
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
     // MARK: UI scale
 
     /// At 1.0, 0.85 and 0.7 the choice and the role sit on one line inside the form's column, overlap neither each other,

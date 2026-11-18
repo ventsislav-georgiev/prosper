@@ -35,6 +35,8 @@ struct AgentNewSessionForm: Equatable {
     var openedOn: String?
     /// #1214: the first prompt the group choice filled in, so another choice can take it back.
     var groupPrompt: String?
+    /// #1400 (R1214-i1): the name typed before a group choice cleared it, so None can bring it back.
+    var groupTypedName: String?
 
     struct GroupPick: Equatable {
         var stem: String

@@ -1863,6 +1863,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: the open island shows your Claude plan usage (session and weekly limit) from the
   account pool, with the reset times in its tooltip; nothing is shown when the pool has no fresh
   figure. (#1537)
+- Agent Sessions: right-click a group in the sidebar and choose "Add session to this group" to open
+  the New session form with that group, its folder and its command already filled in; picking None
+  in the form's group choice now brings back a name you had typed. (#1400)
 
 ## v2.174.0
 
