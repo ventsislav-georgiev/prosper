@@ -1412,26 +1412,18 @@ struct StatsPopupView: View {
         HStack {
             Text("Headline").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             Spacer(minLength: sz(8))
-            Menu {
-                Picker("", selection: Binding(
-                    get: { headlineSensor ?? "" },
-                    set: { sel in
-                        let v = sel.isEmpty ? nil : sel
-                        headlineSensor = v
-                        Preferences.sensorsHeadlineSensor = v
-                    })) {
-                        Text("Auto (hottest)").tag("")
-                        ForEach(Array(temps.enumerated()), id: \.offset) { _, t in
-                            Text(t.name).tag(t.name)
-                        }
-                    }
-                    .labelsHidden().pickerStyle(.inline)
-            } label: {
-                Text(headlineSensor ?? "Auto (hottest)")
-                    .font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+            StatsChoiceMenu(id: StatsChoiceMenu.headlineID, choices: Self.headlineChoices(temps, headlineSensor)) { sel in
+                let v = sel.isEmpty ? nil : sel
+                headlineSensor = v
+                Preferences.sensorsHeadlineSensor = v
             }
-            .menuStyle(.borderlessButton).fixedSize()
         }
+    }
+
+    /// #1540: the Headline menu's snapshot: "" is Auto.
+    static func headlineChoices(_ temps: [TempSensor], _ pinned: String?) -> StatsChoiceMenu.Choices {
+        .init(options: [.init(title: "Auto (hottest)", tag: "")] + temps.map { .init(title: $0.name, tag: $0.name) },
+              selected: pinned ?? "", label: pinned ?? "Auto (hottest)")
     }
 
     /// Temperature list order: hottest-first (ours) or the named resolve order
@@ -1440,23 +1432,17 @@ struct StatsPopupView: View {
         HStack {
             Text("Order").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
             Spacer(minLength: sz(8))
-            Menu {
-                Picker("", selection: Binding(
-                    get: { namedOrder },
-                    set: { v in
-                        namedOrder = v
-                        Preferences.sensorsNamedOrder = v
-                    })) {
-                        Text("Hottest first").tag(false)
-                        Text("By name").tag(true)
-                    }
-                    .labelsHidden().pickerStyle(.inline)
-            } label: {
-                Text(namedOrder ? "By name" : "Hottest first")
-                    .font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+            StatsChoiceMenu(id: StatsChoiceMenu.orderID, choices: Self.orderChoices(namedOrder)) { sel in
+                namedOrder = sel == "name"
+                Preferences.sensorsNamedOrder = namedOrder
             }
-            .menuStyle(.borderlessButton).fixedSize()
         }
+    }
+
+    /// #1540: the Order menu's snapshot.
+    static func orderChoices(_ named: Bool) -> StatsChoiceMenu.Choices {
+        .init(options: [.init(title: "Hottest first", tag: "hottest"), .init(title: "By name", tag: "name")],
+              selected: named ? "name" : "hottest", label: named ? "By name" : "Hottest first")
     }
 
     private func kv(_ k: String, _ v: String) -> some View {
@@ -1678,5 +1664,32 @@ private struct StackedBar: View {
         }
         .frame(height: sz(height))
         .clipShape(RoundedRectangle(cornerRadius: sz(height / 2)))
+    }
+}
+
+/// #1540: a sensors dropdown (Headline, Order) with an inline Picker. The stats store publishes on every sample, so
+/// the menu is a StableMenu: rebuilt only when its choices change, never by a sample.
+struct StatsChoiceMenu: View {
+    struct Choices: Equatable {
+        struct Option: Equatable { var title: String; var tag: String }
+        var options: [Option]
+        var selected: String
+        var label: String
+    }
+    static let headlineID = "stats.headline", orderID = "stats.order"
+    let id: String
+    let choices: Choices
+    let choose: (String) -> Void
+
+    var body: some View {
+        StableMenu(id, entries: choices, run: choose) { c, run in
+            Picker("", selection: Binding(get: { c.selected }, set: { run($0) })) {
+                ForEach(Array(c.options.enumerated()), id: \.offset) { _, o in Text(o.title).tag(o.tag) }
+            }
+            .labelsHidden().pickerStyle(.inline)
+        } label: { c in
+            Text(c.label).font(Neon.font(.caption, weight: .semibold)).lineLimit(1)
+        }
+        .menuStyle(.borderlessButton).fixedSize()
     }
 }

@@ -58,6 +58,20 @@ enum AgentNewSession {
     /// description, and a bare chevron.down symbol's is "go down" (VoiceOver read it after the title). The button
     /// draws the symbol at its default configuration (the label's font never reached it), so this is that symbol,
     /// unconfigured, described by the menu's title; the pixel row compares it with the old Image(systemName:).
+    /// #1540: a Recent folders item: what it shows and what it sets.
+    struct Recent: Equatable { var shown: String; var set: String }
+    static let recentsMenuID = "agent.newSession.recents"
+
+    /// #1540: this Mac's folders are shown and set abbreviated; #1323: another Mac's path is shown through
+    /// OutsideText and set raw.
+    static func recents(_ folders: [String], remote: Bool, home: String) -> [Recent] {
+        folders.map { f in
+            if remote { return Recent(shown: OutsideText.shown(f), set: f) }
+            let shown = abbreviate(f, home: home)
+            return Recent(shown: shown, set: shown)
+        }
+    }
+
     static func recentFoldersChevron() -> NSImage {
         NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Recent folders") ?? NSImage()
     }
@@ -236,6 +250,20 @@ enum AgentNewSession {
     }
 }
 
+/// #1540: the New session form's Recent folders menu: a StableMenu, rebuilt only when its folders change.
+struct AgentRecentFoldersMenu: View {
+    let recents: [AgentNewSession.Recent]
+    let choose: (String) -> Void
+
+    var body: some View {
+        StableMenu(AgentNewSession.recentsMenuID, entries: recents, run: choose) { rs, run in
+            ForEach(Array(rs.enumerated()), id: \.offset) { _, r in Button(r.shown) { run(r.set) } }
+        } label: { _ in
+            AgentNewSession.recentFoldersLabel(Image(nsImage: AgentNewSession.recentFoldersChevron()))
+        }
+    }
+}
+
 extension View {
     /// The Recent folders menu's style, size and names (#887), shared with the #1429 pixel row.
     func recentFoldersMenuStyle(disabled: Bool) -> some View {
@@ -313,20 +341,10 @@ struct AgentNewSessionView: View {
                     TextField(form.host == nil ? "~" : "/Users/you/project", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
                         .focused($focus, equals: .folder)
                         .accessibilityLabel("Folder")   // #887 (QA #747 INFO-6): VoiceOver read the placeholder
-                    Menu {
-                        ForEach(model.newSessionRecents, id: \.self) { f in
-                            if form.host == nil {
-                                let shown = AgentNewSession.abbreviate(f, home: model.home)
-                                Button(shown) { model.setNewSessionFolder(shown) }
-                            } else {
-                                // #1323: another Mac's path: shown through OutsideText, set raw
-                                Button(OutsideText.shown(f)) { model.setNewSessionFolder(f) }
-                            }
-                        }
-                    } label: {
-                        AgentNewSession.recentFoldersLabel(Image(nsImage: AgentNewSession.recentFoldersChevron()))
-                    }
-                    .recentFoldersMenuStyle(disabled: model.newSessionRecents.isEmpty)
+                    // #1540: the window model publishes as the store ticks; the open list is rebuilt only on a change.
+                    let recents = AgentNewSession.recents(model.newSessionRecents, remote: form.host != nil, home: model.home)
+                    AgentRecentFoldersMenu(recents: recents) { model.setNewSessionFolder($0) }
+                        .recentFoldersMenuStyle(disabled: recents.isEmpty)
                     if form.host == nil {   // #1323: no folder browser on another Mac in v1
                         AgentPillButton(title: "Choose\u{2026}", icon: "folder", tint: Neon.blue) { model.chooseNewSessionFolder() }
                     }

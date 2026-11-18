@@ -1830,6 +1830,10 @@ tag from the now-released section and put it on the new top draft.
   layout back as you left it. Use "Edit layout" in the window's top bar (or Go > Edit Layout) to
   change a layout, then "Done"; a new layout opens ready to edit. The empty strip at the top of the
   window is gone when there is nothing to show in it. (#1538)
+- Menus no longer close by themselves a second after opening: the Agent Sessions pane "..." (its
+  Model and Effort submenus), the session list "...", the New session Recent folders list, the
+  System Stats Headline and Order menus and the AI Models row "..." now stay open while their window
+  updates. (#1540)
 
 ## v2.174.0
 

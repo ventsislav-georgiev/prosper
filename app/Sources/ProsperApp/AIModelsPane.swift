@@ -181,32 +181,26 @@ struct AIModelsPane: View {
                         Button("Delete") {
                             Task { await LlamaInlineEngine.deleteModel(m); refresh += 1 }
                         }.buttonStyle(.neonDestructive)
-                        Menu {
-                            if !isCurrent {
-                                Button("Use for inline") {
-                                    LlamaInlineEngine.selectModel(m.id); refresh += 1
-                                }
-                            }
-                            Button("Reveal in Finder") {
+                        AIModelMenu(items: (isCurrent ? [] : [.init(title: "Use for inline")])
+                                    + [.init(title: "Reveal in Finder")]) { title in
+                            if title == "Use for inline" {
+                                LlamaInlineEngine.selectModel(m.id); refresh += 1
+                            } else {
                                 NSWorkspace.shared.activateFileViewerSelecting(
                                     [LlamaInlineEngine.fileURL(for: m)])
                             }
-                        } label: { Image(systemName: "ellipsis.circle") }
-                            .menuStyle(.borderlessButton).fixedSize()
+                        }
                     } else {
                         Button("Download") { downloadGGUF(m) }.buttonStyle(.neon)
                             .disabled(anyDownloadActive)
                         if !isCurrent {
-                            Menu {
-                                // Select + fetch in one go — selecting a missing GGUF
-                                // without downloading would silently kill autocomplete
-                                // (ensureLoaded throws modelMissing).
-                                Button("Use for inline") {
-                                    LlamaInlineEngine.selectModel(m.id); refresh += 1
-                                    downloadGGUF(m)
-                                }.disabled(anyDownloadActive)
-                            } label: { Image(systemName: "ellipsis.circle") }
-                                .menuStyle(.borderlessButton).fixedSize()
+                            // Select + fetch in one go — selecting a missing GGUF
+                            // without downloading would silently kill autocomplete
+                            // (ensureLoaded throws modelMissing).
+                            AIModelMenu(items: [.init(title: "Use for inline", enabled: !anyDownloadActive)]) { _ in
+                                LlamaInlineEngine.selectModel(m.id); refresh += 1
+                                downloadGGUF(m)
+                            }
                         }
                     }
                 }
@@ -445,25 +439,22 @@ struct AIModelsPane: View {
                     Button(partial ? "Resume" : "Download") { downloads.start(row.id) }.buttonStyle(.neon)
                         .disabled(anyDownloadActive || !fits)
                 }
-                Menu {
-                    if !isCurrent {
-                        Button(role == .inline ? "Use for inline" : "Use for agent") {
-                            if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }
-                        }.disabled(!fits)
+                let use = role == .inline ? "Use for inline" : "Use for agent"
+                AIModelMenu(items: (isCurrent ? [] : [.init(title: use, enabled: fits)])
+                            + (downloaded || partial ? [.init(title: "Reveal in Finder")] : [])
+                            + (row.isCustom ? [.init(title: "Remove from list", destructive: true)] : [])) { title in
+                    switch title {
+                    case use:
+                        if role == .inline { model.coreModel = row.id } else { model.agentModel = row.id }
+                    case "Reveal in Finder":
+                        ModelFiles.reveal(row.id)
+                    default:
+                        // No agentModel write: it syncs between Macs (#256), and
+                        // Preferences.agentModel already reads a now-unknown id as this
+                        // Mac's RAM default (#332); a Mac that still has the row keeps it.
+                        CustomModelStore.remove(row.id); model.healAgentModelMirror(); refresh += 1
                     }
-                    if downloaded || partial {
-                        Button("Reveal in Finder") { ModelFiles.reveal(row.id) }
-                    }
-                    if row.isCustom {
-                        Button("Remove from list", role: .destructive) {
-                            // No agentModel write: it syncs between Macs (#256), and
-                            // Preferences.agentModel already reads a now-unknown id as this
-                            // Mac's RAM default (#332); a Mac that still has the row keeps it.
-                            CustomModelStore.remove(row.id); model.healAgentModelMirror(); refresh += 1
-                        }
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
-                    .menuStyle(.borderlessButton).fixedSize()
+                }
             }
         }
     }
@@ -560,5 +551,27 @@ private struct AddCustomModelSheet: View {
             label: label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? f.label : label,
             sizeBytes: f.sizeBytes, note: note, toolFormat: toolFormat))
         onDone()
+    }
+}
+
+/// #1540: a model row's "..." menu. The pane redraws on every download progress tick (ModelDownloadManager, the GGUF
+/// progress), so it is a StableMenu: rebuilt only when its items change. An item runs `act` with its title.
+struct AIModelMenu: View {
+    struct Item: Equatable {
+        var title: String
+        var enabled = true
+        var destructive = false
+    }
+    static let menuID = "aimodels.row"
+    let items: [Item]
+    let act: (String) -> Void
+
+    var body: some View {
+        StableMenu(Self.menuID, entries: items, run: act) { items, run in
+            ForEach(items, id: \.title) { i in
+                Button(i.title, role: i.destructive ? .destructive : nil) { run(i.title) }.disabled(!i.enabled)
+            }
+        } label: { _ in Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).fixedSize()
     }
 }

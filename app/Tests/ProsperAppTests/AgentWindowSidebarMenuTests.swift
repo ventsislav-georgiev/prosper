@@ -388,6 +388,9 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
 
     // MARK: #1466: an equal publish leaves the menu alone
 
+    /// #1540: the sidebar "..." is a StableMenu; how many times its Menu body ran.
+    @MainActor var menuBodies: Int { StableMenuProbe.bodies[AgentSidebarMenuButton.menuID, default: 0] }
+
     /// Counts its own body: a store publish reached the hosted tree when this moves.
     struct PublishProbe: View {
         @ObservedObject var store: AgentIslandStore
@@ -408,8 +411,8 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         func pump(_ moved: () -> Bool) {
             settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() }
         }
-        pump { AgentSidebarMenu.bodies > 0 }
-        let probe0 = PublishProbe.bodies, menu0 = AgentSidebarMenu.bodies
+        pump { menuBodies > 0 }
+        let probe0 = PublishProbe.bodies, menu0 = menuBodies
         XCTAssertGreaterThan(menu0, 0, "precondition: the menu is drawn")
         let before = AgentWindowControls.sidebarMenu(store: st, autoAllow: Preferences.agentIslandAutoAllow)
         for _ in 0..<2 {   // two poll ticks whose menu content is equal
@@ -421,13 +424,66 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         }
         XCTAssertEqual(AgentWindowControls.sidebarMenu(store: st, autoAllow: Preferences.agentIslandAutoAllow), before,
                        "precondition: the entries are equal")
-        XCTAssertEqual(AgentSidebarMenu.bodies, menu0,
+        XCTAssertEqual(menuBodies, menu0,
                        "equal publishes: the menu is not rebuilt (probe ran \(PublishProbe.bodies - probe0) times)")
         st.details.agents.toggle()   // a checked Row details item changes
-        pump { AgentSidebarMenu.bodies > menu0 }
-        XCTAssertEqual(AgentSidebarMenu.bodies, menu0 + 1, "a changed entry rebuilds the menu once")
+        pump { menuBodies > menu0 }
+        XCTAssertEqual(menuBodies, menu0 + 1, "a changed entry rebuilds the menu once")
         st.controlDch = nil   // the base gate turns off: every list-wide item goes off
-        pump { AgentSidebarMenu.bodies > menu0 + 1 }
-        XCTAssertEqual(AgentSidebarMenu.bodies, menu0 + 2, "a changed gate rebuilds the menu once")
+        pump { menuBodies > menu0 + 1 }
+        XCTAssertEqual(menuBodies, menu0 + 2, "a changed gate rebuilds the menu once")
+    }
+
+    // MARK: #1540: the pane header "..." (Model and Effort submenus) is not rebuilt by an equal publish
+
+    /// The header's parent: observes the store (as the window does) and hands the "⋯" the store's first session.
+    struct HeaderProbe: View {
+        @ObservedObject var store: AgentIslandStore
+        @MainActor static var bodies = 0
+        var body: some View {
+            let _ = Self.bodies += 1
+            if let s = store.sessions.first { AgentSessionMenuButton(store: store, session: s, ask: { _ in }) }
+        }
+    }
+
+    @MainActor var headerBodies: Int { StableMenuProbe.bodies[AgentSessionMenuButton.menuID, default: 0] }
+
+    /// The operator's report (#1540): the pane header's Model submenu closed about a second after it opened, Effort
+    /// too: each store publish rebuilt the menu. Equal publishes must leave its body alone; a changed effort (the
+    /// Effort submenu's check) or a changed gate rebuilds it once. Offscreen: a hosted tree, no window, no menu popped.
+    @MainActor
+    func testPaneHeaderMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange() throws {
+        let st = store([session("api"), session("api-qa")], dch: bin([1, 38, 0]))
+        let host = NSHostingView(rootView: HeaderProbe(store: st).frame(width: 40, height: 40))
+        func pump(_ moved: () -> Bool) {
+            settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() }
+        }
+        func snap() -> AgentSessionMenuButton.Snapshot? {
+            st.sessions.first.map { AgentSessionMenuButton.snapshot($0, store: st, ended: false, panes: []) }
+        }
+        pump { headerBodies > 0 }
+        let menu0 = headerBodies
+        XCTAssertGreaterThan(menu0, 0, "precondition: the menu is drawn")
+        let s0 = try XCTUnwrap(st.sessions.first)
+        XCTAssertEqual(snap()?.switches.map(\.title), [AgentModelSwitch.modelLabel, AgentModelSwitch.effortLabel],
+                       "precondition: the menu holds the Model and Effort submenus")
+        for _ in 0..<3 {   // three poll ticks whose menu content is equal
+            let probe = HeaderProbe.bodies
+            st.sessions = st.sessions
+            st.notices = st.notices
+            pump { HeaderProbe.bodies > probe }
+            XCTAssertGreaterThan(HeaderProbe.bodies, probe, "precondition: the publish reached the hosted tree")
+        }
+        XCTAssertEqual(headerBodies, menu0, "equal publishes: the pane header menu is not rebuilt")
+        var s1 = s0
+        s1.effort = s0.effort == "high" ? "low" : "high"   // the Effort submenu's checked item moves
+        st.sessions = [s1] + st.sessions.dropFirst()
+        pump { headerBodies > menu0 }
+        XCTAssertEqual(headerBodies, menu0 + 1, "a changed effort rebuilds the menu once")
+        let gated = snap()
+        st.controlDch = nil   // the base gate turns off: the session items go off
+        XCTAssertTrue(snap() != gated, "precondition: the gate changes the entries")
+        pump { headerBodies > menu0 + 1 }
+        XCTAssertEqual(headerBodies, menu0 + 2, "a changed gate rebuilds the menu once")
     }
 }

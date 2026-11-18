@@ -739,17 +739,37 @@ struct AgentSessionMenuButton: View {
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
 
+    /// StableMenuProbe.bodies key.
+    static let menuID = "agent.paneHeader"
+
+    /// #1540: what the "⋯" draws: the session's and pane items, then Model and Effort (#1469: a live session's only,
+    /// #627: never for a name dch would read as a flag; none without a store, as before).
+    struct Snapshot: Equatable {
+        var entries: [AgentWindowMenuEntry]
+        var switches: [AgentModelSwitch.Submenu]
+    }
+
+    /// #1540: a menu item's verb, run through the newest closures of the header's draw.
+    enum Verb {
+        case ask(AgentWindowVerb), open, pane(AgentPaneVerb)
+    }
+
+    @MainActor
+    static func snapshot(_ s: AgentSession, store: AgentIslandStore?, ended: Bool,
+                         panes: [AgentWindowMenuEntry]) -> Snapshot {
+        Snapshot(entries: AgentWindowControls.sessionMenu(s, store: store, ended: ended) + panes,
+                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [])
+    }
+
     var body: some View {
-        Menu {
+        // #1540: the store publishes about every second; the open "⋯" (its Model and Effort submenus) is rebuilt only
+        // when what it draws changes. With a store, an observing reader re-reads the gates as they change.
+        Group {
             if let store {
-                AgentSessionMenuItems(store: store, session: session, ask: ask, open: open, ended: ended, panes: panes,
-                                      pane: pane)
+                AgentSessionMenuReader(store: store) { menu(Self.snapshot(session, store: store, ended: ended, panes: panes)) }
             } else {
-                AgentMenuEntries(entries: entries, act: ask, open: open, pane: pane)
+                menu(Self.snapshot(session, store: nil, ended: ended, panes: panes))
             }
-        } label: {
-            Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         // A borderless Menu's own minimum is 20 pt at every UI scale; framed, it scales with the
@@ -782,7 +802,27 @@ struct AgentSessionMenuButton: View {
         return today + (verbs.contains(.equalize) ? "; split, zoom, equalize or close this pane" : "; split this pane")
     }
 
-    /// The list the menu is built from (AgentSessionMenuItems re-reads it as the store changes).
+    private func menu(_ snap: Snapshot) -> some View {
+        let ask = ask, open = open, pane = pane
+        return StableMenu(Self.menuID, entries: snap, run: { (v: Verb) in
+            switch v {
+            case .ask(let a): ask(a)
+            case .open: open()
+            case .pane(let p): pane(p)
+            }
+        }) { snap, run in
+            AgentMenuEntries(entries: snap.entries, act: { run(.ask($0)) }, open: { run(.open) }, pane: { run(.pane($0)) })
+            if !snap.switches.isEmpty {
+                Divider()
+                AgentSwitchMenus(menus: snap.switches, act: { run(.ask($0)) })
+            }
+        } label: { _ in
+            Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .contentShape(Rectangle())
+        }
+    }
+
+    /// The list the menu is built from (the snapshot re-reads it as the store changes).
     var entries: [AgentWindowMenuEntry] { AgentWindowControls.sessionMenu(session, store: store, ended: ended) + panes }
 
     /// QA #693 INFO-6: what the menu holds: Rename alone for a name dch would read as a flag (#627).
@@ -790,6 +830,14 @@ struct AgentSessionMenuButton: View {
         AgentIsland.passable(s.name) ? "Open in terminal, rename, restart, stop or end this session"
             : "Open in terminal or rename this session"
     }
+}
+
+/// #1540: redraws its content whenever the store publishes (a gate the "⋯" reads may have changed); the StableMenu
+/// inside decides whether the menu itself is rebuilt.
+struct AgentSessionMenuReader<Content: View>: View {
+    @ObservedObject var store: AgentIslandStore
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
 }
 
 // MARK: - Strips
@@ -902,52 +950,17 @@ struct AgentAlwaysAllowStrip: View {
 struct AgentSidebarMenuButton: View {
     @ObservedObject var store: AgentIslandStore
     let run: (AgentSidebarVerb) -> Void
-    /// #1466: the entries the menu draws; they change only when the list does.
-    @StateObject private var menu: AgentSidebarMenuModel
-
-    init(store: AgentIslandStore, run: @escaping (AgentSidebarVerb) -> Void) {
-        self.store = store
-        self.run = run
-        _menu = StateObject(wrappedValue: AgentSidebarMenuModel(
-            AgentWindowControls.sidebarMenu(store: store, autoAllow: Preferences.agentIslandAutoAllow)))
-    }
+    /// StableMenuProbe.bodies key.
+    static let menuID = "agent.sidebar"
 
     var body: some View {
-        // #1466: the store publishes about every second (ages, History); an equal list must not rebuild the open
-        // menu (that closes an open submenu such as Row details), so the menu observes only its own entries.
-        let entries = AgentWindowControls.sidebarMenu(store: store, autoAllow: Preferences.agentIslandAutoAllow)
-        let _ = menu.run = run   // not published: the newest window closure, no redraw
-        AgentSidebarMenu(menu: menu)
-            .onChange(of: entries) { _, e in menu.show(e) }
-    }
-}
-
-/// #1466: what the "..." menu draws; publishes only on a real change.
-@MainActor
-final class AgentSidebarMenuModel: ObservableObject {
-    private(set) var entries: [AgentSidebarMenuEntry]
-    var run: (AgentSidebarVerb) -> Void = { _ in }
-
-    init(_ entries: [AgentSidebarMenuEntry]) { self.entries = entries }
-
-    func show(_ e: [AgentSidebarMenuEntry]) {
-        guard e != entries else { return }
-        objectWillChange.send()
-        entries = e
-    }
-}
-
-/// #1466: the "..." menu itself. It holds only its model, so a parent's redraw (a poll tick) leaves it alone.
-struct AgentSidebarMenu: View {
-    @ObservedObject var menu: AgentSidebarMenuModel
-    /// Test seam: how many times this body ran.
-    @MainActor static var bodies = 0
-
-    var body: some View {
-        let _ = Self.bodies += 1
-        Menu {
-            AgentSidebarMenuEntries(entries: menu.entries, run: { menu.run($0) })
-        } label: {
+        // #1466/#1540: the store publishes about every second (ages, History); an equal list must not rebuild the open
+        // menu (that closes an open submenu such as Row details): StableMenu rebuilds it only on a real change.
+        StableMenu(Self.menuID, entries: AgentWindowControls.sidebarMenu(store: store,
+                                                                         autoAllow: Preferences.agentIslandAutoAllow),
+                   run: run) { entries, run in
+            AgentSidebarMenuEntries(entries: entries, run: run)
+        } label: { _ in
             Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                 .contentShape(Rectangle())
         }
