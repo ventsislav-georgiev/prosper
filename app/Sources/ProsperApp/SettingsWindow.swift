@@ -1050,7 +1050,7 @@ struct AgentIslandLookSection: View {
 /// The same store and recorder as the Shortcuts pane's row; a change re-registers the hotkeys at once.
 struct AgentIslandShortcutSection: View {
     static let label = ShortcutAction.agentIsland.title
-    static let subtitle = "Opens the island on the first session that needs input. Off until you record one."
+    static let subtitle = "Opens the island on the first session that needs input, or closes it. Off until you record one."
     @State private var combo = ShortcutStore.combo(for: .agentIsland)
 
     /// Saves `c` (unsetKeyCombo turns the shortcut off) and re-registers, as the Shortcuts pane's rows do.

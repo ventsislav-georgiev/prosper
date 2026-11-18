@@ -792,8 +792,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .settings: return { settings().toggleFromShortcut() }
         case .agent: return { ChatWindow.shared.toggleFromShortcut() }
         case .agentSessions: return { AgentsWindow.toggleFromShortcut() }
-        // #1536: opens (never closes) the island expanded on its first card needing input.
-        case .agentIsland: return { _ = AgentIslandController.shared.openFocused() }
+        // #1536: opens the island expanded on its first card needing input; #1581: pressed again, closes it.
+        case .agentIsland: return { AgentIslandController.shared.toggleFocused() }
         case .calendarTogglePopup: return { CalendarBarController.shared.toggleFromShortcut() }
         default: return nil
         }

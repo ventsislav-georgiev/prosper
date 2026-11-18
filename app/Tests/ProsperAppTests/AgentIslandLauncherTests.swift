@@ -99,6 +99,45 @@ final class AgentIslandLauncherTests: XCTestCase {
 
     // MARK: - The global shortcut
 
+    /// #1581: the shortcut toggles: closed, it opens focused as the launcher command does; open, it closes.
+    @MainActor func testShortcutTogglesTheIsland() throws {
+        let c = controller([session("api", .idle), session("web", .blocked)])
+        let store = try XCTUnwrap(c.store)
+        c.toggleFocused()
+        XCTAssertTrue(store.expanded, "a closed island opens")
+        XCTAssertEqual(store.focusKey?.name, "web", "on the session that needs input")
+        c.toggleFocused()
+        XCTAssertFalse(store.expanded, "an open island closes")
+        XCTAssertTrue(store.focusKey == nil)
+        c.toggleFocused()
+        XCTAssertTrue(store.expanded, "and opens again")
+    }
+
+    /// #1581 (OQ-95 Reduce Motion): the island has no motion to reduce. Open/close and expand swap frames at
+    /// once (the panel's animationBehavior is .none, the root view drops every transaction's animation), so
+    /// Reduce Motion is honoured whatever it is set to. A future animation here must read Reduce Motion
+    /// through one seam (as AgentWindowModel.reduceMotion does) and be added to this list on purpose.
+    func testIslandHasNoMotionToReduce() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentIsland")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertTrue(files.count >= 5, "the island's sources were found")
+        let motion = ["withAnimation", ".animation(", "animator()", "NSAnimationContext", ".transition(", "repeatForever",
+                      ".symbolEffect", "phaseAnimator", "keyframeAnimator", "matchedGeometryEffect", "CABasicAnimation",
+                      "allowsImplicitAnimation", "animate: true"]
+        var text: [String: String] = [:]
+        for f in files {
+            let s = try String(contentsOf: f, encoding: .utf8)
+            text[f.lastPathComponent] = s
+            for m in motion { XCTAssertFalse(s.contains(m), "\(f.lastPathComponent) animates (\(m)) without Reduce Motion") }
+        }
+        XCTAssertTrue(text["AgentIslandController.swift"]?.contains("p.animationBehavior = .none") == true,
+                      "the panel orders in and out without the window fade")
+        XCTAssertTrue(text["AgentIslandView.swift"]?.contains(".transaction { $0.animation = nil }") == true,
+                      "the root view drops implicit animations")
+    }
+
     @MainActor func testShortcutIsOffByDefaultAndRegistersNothing() {
         let a = ShortcutAction.agentIsland
         XCTAssertEqual(a.defaultCombo, unsetKeyCombo, "off by default")

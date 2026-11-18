@@ -1963,6 +1963,8 @@ tag from the now-released section and put it on the new top draft.
   terminal (libghostty-spm fork 2.2.2026110702-prosper.2). (#1468)
 - The Go menu's Command-W item now reads "Close Pane" and closes the pane when split panes are on
   and more than one pane is open, matching the key. (#1367)
+- The Agent Island shortcut (Settings > Agent Island) now toggles: press it again to close the
+  island. (#1581)
 
 ## v2.174.0
 

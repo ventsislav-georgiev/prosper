@@ -1557,6 +1557,11 @@ final class AgentIslandController {
         }
     }
 
+    /// #1581 (OQ-95): the optional global shortcut toggles: an open island closes, a closed one opens as `openFocused`.
+    func toggleFocused() {
+        if store?.expanded == true { setExpanded(false) } else { openFocused() }
+    }
+
     /// #1536 (OQ-95): the launcher's Open Agent Island command and its optional shortcut. Opens the island
     /// expanded (setExpanded's gates hold: nothing live and no history keeps it hidden) and focuses the first
     /// session that needs input in drawn order, Sessions then Sidekicks (its tab is shown), else the first
