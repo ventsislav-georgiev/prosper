@@ -36,16 +36,24 @@ private final class FakeMarket: @unchecked Sendable {
         set { lock.withLock { listing = newValue } }
     }
 
+    var workFolder: URL { work.appendingPathComponent("prosper-market-fake", isDirectory: true) }
     var fetchCount: Int { lock.withLock { fetches } }
     var detailCount: Int { lock.withLock { details } }
 
     @MainActor func wire(_ registry: ExtensionRegistry, index: [String: String]? = nil) {
         registry.marketFetch = { [self] _, _ in
             let n = lock.withLock { () -> Int in fetches += 1; return fetches }
-            let dir = work.appendingPathComponent("download-\(n)", isDirectory: true)
+            // Like the real download: a work folder directly in the temp root, a lost cleanup keeps it (the real one keeps a lock).
+            let folder = workFolder
+            guard !FileManager.default.fileExists(atPath: folder.path) else {
+                throw RemoteInstaller.InstallError.extractFailed("this extension is already being installed")
+            }
+            let dir = folder.appendingPathComponent("src", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: source, to: dir)
             return dir
         }
+        registry.marketTempRoot = work
         registry.marketDetail = { [self] _ in lock.withLock { () -> MarketClient.PackageDetail? in details += 1; return listing } }
         registry.marketIndex = { index }
     }
@@ -168,6 +176,48 @@ final class MarketKitRecheckTests: XCTestCase {
 
     // MARK: - Failures, the update check, plain extensions
 
+    /// A refused recheck removes the download's work folder (the real one keeps a lock until then), so the next Install runs.
+    func testRefusedRecheckRemovesTheWorkFolderAndASecondInstallProceeds() async throws {
+        let (registry, market, user) = try served(kit: true)
+        let good = try XCTUnwrap(market.detail)
+        market.detail = detail(summary: good.preview?.kit?.summary ?? [], readme: "Something else.")
+        await assertRefused(registry, .previewMismatch, user)
+        XCTAssertEqual(market.fetchCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path), "the refused download was kept")
+        market.detail = good
+        let rec = try await registry.installFromMarket(id: extID, version: "1.0.0")
+        XCTAssertEqual(rec.id, extID)
+        XCTAssertEqual(market.fetchCount, 2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path), "the installed download was kept")
+    }
+
+    /// A kit update whose listing matches installs through the update check (the kit's own name is not "taken").
+    func testUpdateCheckInstallsAKitUpdateWhoseListingMatches() async throws {
+        let (registry, market, user) = try updating(newVersion: "1.1.0") { _ in }
+        market.detail = try detail(summary: expectedListing().summary, readme: expectedListing().readme, version: "1.1.0")
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(registry.record(id: extID)?.manifest.extension.version, "1.1.0")
+        XCTAssertEqual(registry.updateStatus, "Updated 1 extension.")
+        XCTAssertEqual(market.detailCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: user.appendingPathComponent(extID).path))
+    }
+
+    /// An installed kit whose next version is a plain extension under the same id: the update check reads the listing
+    /// (it passes kind "kit"), refuses it, and keeps the installed kit.
+    func testUpdateCheckRefusesAKitThatTurnedIntoAnExtension() async throws {
+        let (registry, market, _) = try updating(newVersion: "1.1.0") { f in
+            try f.write("extension.toml", KitFixture.head.replacingOccurrences(of: "\"1.0.0\"", with: "\"1.1.0\"") + "\n")
+            try f.write("init.lua", "return {}\n")
+        }
+        // The listing still says kit (it is what the installed kit was published as); only the archive changed.
+        market.detail = MarketClient.PackageDetail(kind: "kit", latest_version: "1.1.0", preview: nil, status: "active")
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(market.detailCount, 1, "the update check did not read the listing of an installed kit")
+        XCTAssertEqual(registry.record(id: extID)?.manifest.extension.version, "1.0.0")
+        XCTAssertEqual(registry.updateStatus, "1 update could not be installed.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path))
+    }
+
     /// The listing could not be loaded: an error, nothing installed, and not remembered as a refusal.
     func testFailedListingReadIsTransient() async throws {
         let (registry, market, user) = try served(kit: true)
@@ -277,8 +327,28 @@ final class MarketKitRecheckTests: XCTestCase {
         return (registry, market, user)
     }
 
-    private func detail(summary: [String], readme: String) -> MarketClient.PackageDetail {
-        MarketClient.PackageDetail(kind: "kit", latest_version: "1.0.0",
+    /// An installed kit 1.0.0 with the market update_url, and a fake Marketplace serving `newVersion` (the fixture kit with
+    /// that version, then `change`) and an index that lists it. The caller sets the listing.
+    private func updating(newVersion: String, change: (KitDirFixture) throws -> Void) throws -> (ExtensionRegistry, FakeMarket, URL) {
+        let root = tempDir()
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let registry = makeRegistry(user)
+        let old = try makeKitDir(under: root.appendingPathComponent("old", isDirectory: true))
+        try old.write("extension.toml", KitFixture.head.replacingOccurrences(
+            of: "[extension]\n", with: "[extension]\nupdate_url = \"prosper://market/\(extID)\"\n") + "\n" + KitFixture.kit + "\n")
+        _ = try registry.installLocal(from: old.kit)
+        let new = try kitFolder(under: root.appendingPathComponent("new", isDirectory: true)) { f in
+            try f.write("extension.toml", KitFixture.head.replacingOccurrences(of: "\"1.0.0\"", with: "\"\(newVersion)\"")
+                        + "\n" + KitFixture.kit + "\n")
+            try change(f)
+        }
+        let market = FakeMarket(source: new.kit, work: root, detail: nil)
+        market.wire(registry, index: [extID: newVersion])
+        return (registry, market, user)
+    }
+
+    private func detail(summary: [String], readme: String, version: String = "1.0.0") -> MarketClient.PackageDetail {
+        MarketClient.PackageDetail(kind: "kit", latest_version: version,
                                    preview: MarketClient.Preview(kit: KitListingPreview(summary: summary, readme: readme)),
                                    status: "active")
     }

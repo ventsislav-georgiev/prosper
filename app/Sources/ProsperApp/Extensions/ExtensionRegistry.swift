@@ -1351,8 +1351,8 @@ final class ExtensionRegistry: ObservableObject {
     /// overrides any author-declared update_url so updates always come from us).
     /// #919 S3: the Install button and the auto-update both come here, so both get the kit recheck.
     @discardableResult
-    func installFromMarket(id: String, version: String) async throws -> ExtensionRecord {
-        let prepared = try await prepareFromMarket(id: id, version: version)
+    func installFromMarket(id: String, version: String, listedKind: String? = nil) async throws -> ExtensionRecord {
+        let prepared = try await prepareFromMarket(id: id, version: version, listedKind: listedKind)
         defer { discard(prepared) }
         return try install(prepared)
     }
@@ -1371,6 +1371,8 @@ final class ExtensionRegistry: ObservableObject {
     }
     var marketDetail: @Sendable (_ id: String) async -> MarketClient.PackageDetail? = { await MarketClient.packageDetail(id: $0) }
     var marketIndex: @Sendable () async -> [String: String]? = { await MarketClient.index() }
+    /// Where the downloads' work folders live (rows pass a folder under their tempDir, so the cleanup really removes).
+    var marketTempRoot: URL = FileManager.default.temporaryDirectory
 
     /// Fetch, bind and recheck; on a throw the work folder is already removed. `listedKind`: the kind the caller's
     /// listing shows (nil: not known, as in the update check); "kit" makes a non-kit archive fetch the listing too.
@@ -1393,7 +1395,7 @@ final class ExtensionRegistry: ObservableObject {
         return try installLocal(from: prepared.directory)
     }
 
-    func discard(_ prepared: PreparedMarketInstall) { RemoteInstaller.removeWorkFolder(holding: prepared.directory) }
+    func discard(_ prepared: PreparedMarketInstall) { RemoteInstaller.removeWorkFolder(holding: prepared.directory, tempRoot: marketTempRoot) }
 
     /// #919 S3 (spec 4.12): a kit archive is checked against its listing as the server holds it now (kind, version, status,
     /// and the preview recomputed from the archive); the validator sees the other installed kits' names as taken.
@@ -1583,7 +1585,9 @@ final class ExtensionRegistry: ObservableObject {
                     tally.record(step)
                     guard step == .install, let latest = marketIndex?[pkgID] else { continue }
                     tried = (pkgID, latest)
-                    try await installFromMarket(id: pkgID, version: latest)
+                    // An installed kit gets its listing read whatever the new archive is (it may have turned into a non-kit).
+                    let kind = record(id: cand.id)?.manifest.contributes?.kit != nil ? "kit" : nil
+                    try await installFromMarket(id: pkgID, version: latest, listedKind: kind)
                     tally.record(Self.outcome(threwAt: nil))
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue
