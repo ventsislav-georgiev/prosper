@@ -582,7 +582,16 @@ final class ExtensionRegistry: ObservableObject {
     private(set) var fallbackSearchLive = false
     private(set) var snippetsLive = false
 
+    /// #1564 (X7): the live extensions' `[[contributes.xrefs]]` rules. Rebuilt with the routes, so discover (reload),
+    /// enable, disable, trust and untrust each bump `rulesVersion`; an X-ray memo keyed on it never outlives a rule set.
+    private(set) var xrefRules: [XrayExtensionRule] = []
+    private(set) var rulesVersion = 0
+
     private func rebuildRoutes() {
+        let xrefs = XrayExtensionRefs.compile(records.filter(\.isLive).map { ($0.id, $0.manifest.contributes?.xrefs) })
+        for line in xrefs.refusals { log.warning("\(line, privacy: .public)") }
+        xrefRules = xrefs.rules
+        rulesVersion &+= 1
         fallbackSearchLive = record(id: FallbackSearchStore.extensionID)?.isLive ?? false
         snippetsLive = record(id: SnippetStore.extensionID)?.isLive ?? false
         cachedCommandEntries = nil   // live command set changed → drop discovery memo

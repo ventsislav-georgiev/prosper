@@ -109,6 +109,9 @@ struct Contributes: Codable, Sendable, Equatable {
     /// #872: `[contributes.kit]`, an Agent Kit (spec 4.2), kept as the raw TOML table. Decoding it
     /// never fails; `KitManifest.parse` and `KitValidator` refuse a bad kit with a reason.
     let kit: KitTOML?
+    /// #1564 (X7): `[[contributes.xrefs]]`, X-ray ref rules. Decoding never fails; XrayExtensionRefs.compile refuses a
+    /// bad rule with one load-log line and the rest of the extension loads.
+    let xrefs: XrefList?
 
     var allCommands: [CommandContribution] { commands ?? [] }
     var allKeybindings: [KeybindingContribution] { keybindings ?? [] }
@@ -140,6 +143,47 @@ struct Contributes: Codable, Sendable, Equatable {
             }
             return nil
         }
+    }
+}
+
+/// #1564: the `[[contributes.xrefs]]` array as TOML gave it. A value that is not an array decodes as no rows with
+/// `notAList` set, so the extension still loads.
+struct XrefList: Codable, Sendable, Equatable {
+    var rows: [XrefContribution] = []
+    var notAList = false
+
+    init(from decoder: Decoder) throws {
+        guard var u = try? decoder.unkeyedContainer() else { notAList = true; return }
+        while !u.isAtEnd { rows.append(try u.decode(XrefContribution.self)) }   // XrefContribution's init never throws
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var u = encoder.unkeyedContainer()
+        try u.encode(contentsOf: rows)
+    }
+}
+
+/// #1564: one `[[contributes.xrefs]]` row (spec v2.1 2.6), each field kept as TOML gave it. Decoding never throws: a
+/// field of a type TOMLValue does not take (an array, a table) is named in `unreadable`, a row that is not a table
+/// sets `notATable`. XrayExtensionRefs.compile turns the row into a rule or a refusal.
+struct XrefContribution: Codable, Sendable, Equatable {
+    var id: TOMLValue?
+    var template: TOMLValue?
+    var label: TOMLValue?
+    var in_code: TOMLValue?
+    var handler: TOMLValue?
+    var timeout: TOMLValue?
+    var unreadable: [String] = []
+    var notATable = false
+
+    enum CodingKeys: String, CodingKey, CaseIterable { case id, template, label, in_code, handler, timeout }
+
+    init(from decoder: Decoder) throws {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else { notATable = true; return }
+        func value(_ k: CodingKeys) -> TOMLValue? { (try? c.decodeIfPresent(TOMLValue.self, forKey: k)) ?? nil }
+        id = value(.id); template = value(.template); label = value(.label)
+        in_code = value(.in_code); handler = value(.handler); timeout = value(.timeout)
+        unreadable = CodingKeys.allCases.filter { c.contains($0) && value($0) == nil }.map(\.rawValue)
     }
 }
 
