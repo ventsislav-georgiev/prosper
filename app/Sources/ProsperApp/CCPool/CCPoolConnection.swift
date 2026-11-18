@@ -105,7 +105,7 @@ final class CCPoolConnection: @unchecked Sendable {
     /// Hop-by-hop headers plus the ones the proxy owns (B10). The client's own credential never
     /// goes upstream. accept-encoding: URLSession decodes what it asked for, so it asks itself.
     static let stripRequest: Set<String> = ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-                                            "te", "trailers", "transfer-encoding", "upgrade", "host",
+                                            "te", "trailers", "trailer", "proxy-connection", "transfer-encoding", "upgrade", "host",
                                             "authorization", "x-api-key", "content-length", "expect", "accept-encoding"]
     /// content-encoding: URLSession hands over decoded bytes, so the upstream's encoding no longer applies.
     static let stripResponse: Set<String> = ["connection", "transfer-encoding", "content-length", "keep-alive",

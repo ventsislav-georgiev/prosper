@@ -1944,6 +1944,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Command-K in a live terminal pane now clears the screen and also empties that
   session's X-ray history, and the X-ray panel's header says what X-ray reads for the session (for
   example "Shell · last 500 rows"). (#1566)
+- The account pool no longer forwards a client's Trailer or Proxy-Connection header upstream.
+  (#1576)
 
 ## v2.174.0
 

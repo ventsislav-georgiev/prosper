@@ -70,6 +70,13 @@ extension XCTestCase {
     }
 }
 
+final class CCPoolDecoyHits: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.withLock { n += 1 } }
+    var count: Int { lock.withLock { n } }
+}
+
 /// #871 P2a: the pane model. Real queues, a fake upstream; never the production port or upstream.
 @MainActor
 final class CCPoolPaneModelTests: XCTestCase {
@@ -196,6 +203,60 @@ final class CCPoolPaneModelTests: XCTestCase {
         r.store.mutate { $0.clear("b", claim: "five_hour") }
         XCTAssertEqual(row(r.model, "b")?.state, .limited(until: t0 + 86400, claims: ["seven_day"]))
         XCTAssertEqual(row(r.model, "b")?.stateText, "limited until Sat 08:00 (week)")
+    }
+
+    // B22: each fixed Hold preset of the pane (Hold 1 h, Hold 5 h) and a 24 h hold set the end to now + that span (#1576).
+    // The pane has no 24 h button: 24 h goes through the same hold(_:hours:) the buttons call.
+    func testCCPoolPaneHoldPresetsEndAtNowPlusSpan() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b", "c"])
+        for (label, hours) in [("a", 1), ("b", 5), ("c", 24)] {
+            r.clock.advance(1000)   // "now" is read at the click, not at the rig's start
+            let now = Int(r.clock.now)
+            r.model.hold(label, hours: Double(hours))
+            XCTAssertEqual(row(r.model, label)?.state, .held(until: now + hours * 3600), "\(hours) h")
+            XCTAssertEqual(r.store.snapshot.accounts[label]?.held, now + hours * 3600, "\(hours) h persisted")
+            XCTAssertEqual(r.store.snapshot.accounts[label]?.cooldown["five_hour"], now + hours * 3600, "\(hours) h bench")
+        }
+    }
+
+    // B20: the usage probe goes straight to the configured upstream, never to ANTHROPIC_BASE_URL (#1576).
+    func testCCPoolPaneProbeIgnoresAnthropicBaseURL() async throws {
+        let decoyHits = CCPoolDecoyHits()
+        let decoy = try CCPoolFakeServer { _, _ in decoyHits.bump(); return .respond(200, [], Data()) }
+        let saved = ProcessInfo.processInfo.environment["ANTHROPIC_BASE_URL"]
+        setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:\(decoy.port)", 1)
+        addTeardownBlock {
+            decoy.stop()
+            if let saved { setenv("ANTHROPIC_BASE_URL", saved, 1) } else { unsetenv("ANTHROPIC_BASE_URL") }
+        }
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.anthropic.get { $0.seen }, ["Bearer tok-a", "Bearer tok-b"], "both probes hit the configured upstream")
+        XCTAssertEqual(decoyHits.count, 0, "nothing went to ANTHROPIC_BASE_URL")
+        // The add-time probe is direct too.
+        r.model.labelDraft = "c"
+        r.model.tokenDraft = "tok-c"
+        await r.model.addAccount().value
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 3)
+        XCTAssertEqual(decoyHits.count, 0)
+    }
+
+    // B20: no timer polls usage: a long stretch on the fake clock, nothing triggered, no probe.
+    func testCCPoolPaneUsageIsNeverPolled() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.clock.advance(3 * 86400)
+        r.model.objectWillChange.send()
+        // Let the main run loop run: a Timer or a Task.sleep poll would fire here.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        r.clock.advance(3 * 86400)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(r.anthropic.get { $0.seen }, [], "no probe without a trigger")
+        XCTAssertFalse(r.model.refreshing)
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 2, "a Refresh is the one trigger")
     }
 
     func testCCPoolPaneAddValidatesByOneProbe() async throws {

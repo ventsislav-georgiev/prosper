@@ -13,6 +13,8 @@ final class CCPoolFakeServer: @unchecked Sendable {
         case respond(Int, [(String, String)], Data)
         /// Read the request, close without answering (a stale pooled connection).
         case drop
+        /// A reply that declares 100 more body bytes than it sends, then hangs up: the upstream dies after its first bytes.
+        case respondCut(Int, [(String, String)], Data)
     }
 
     private let queue = DispatchQueue(label: "ccpool.test.fake")
@@ -85,6 +87,14 @@ final class CCPoolFakeServer: @unchecked Sendable {
                 case .drop:
                     c.cancel()
                     return
+                case .respondCut(let status, let headers, let body):
+                    var head = "HTTP/1.1 \(status) X\r\n"
+                    for (k, v) in headers { head += "\(k): \(v)\r\n" }
+                    head += "Content-Length: \(body.count + 100)\r\n\r\n"
+                    var out = Data(head.utf8)
+                    out.append(body)
+                    c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
+                    return
                 case .respond(let status, let headers, let body):
                     var head = "HTTP/1.1 \(status) X\r\n"
                     for (k, v) in headers { head += "\(k): \(v)\r\n" }
@@ -113,6 +123,8 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
     var reject: [String: Int] = [:]    // token -> 401/403, no rate-limit headers
     var overloadRetryAfter: String?    // Retry-After sent with an overload 429 (P2a follow-up a)
     var errorPad = 0                   // bytes of padding in a 429 error body (QA #733 INFO-3)
+    var cutAfterFirstBytes: Set<String> = []   // 200 whose body is cut short, the connection hung up (B12 / 3.8-M2)
+    private(set) var heads: [[String: String]] = []   // every request head received, names lowercased (B10)
     var gzipReply: Data?               // #1264: a 200 body sent gzip-encoded, only to a request that asked for gzip
     private(set) var acceptEncodings: [String] = []   // accept-encoding values received
     private(set) var gzipServed = 0
@@ -125,7 +137,7 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
 
     func set(_ body: (CCPoolFakeAnthropic) -> Void) { lock.withLock { body(self) } }
     func get<T>(_ body: (CCPoolFakeAnthropic) -> T) -> T { lock.withLock { body(self) } }
-    func clearSeen() { lock.withLock { seen = []; apiKeys = []; bodySizes = []; paths = [] } }
+    func clearSeen() { lock.withLock { seen = []; apiKeys = []; bodySizes = []; paths = []; heads = [] } }
 
     func reply(_ head: CCPoolRequestHead, _ body: Data) -> CCPoolFakeServer.Reply {
         lock.withLock {
@@ -136,6 +148,7 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             if let k = head.header("x-api-key") { apiKeys.append(k) }
             bodySizes.append(body.count)
             paths.append(head.path)
+            heads.append(Dictionary(head.headers.map { ($0.name.lowercased(), $0.value) }, uniquingKeysWith: { a, _ in a }))
             let accept = head.header("accept-encoding")
             if let accept { acceptEncodings.append(accept) }
             let has = { (set: Set<String>) in set.contains { auth.contains($0) } }
@@ -166,6 +179,7 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
                 out = gz
                 gzipServed += 1
             }
+            if has(cutAfterFirstBytes), !limited { return .respondCut(200, h, out) }
             return .respond(limited ? 429 : 200, h, out)
         }
     }
@@ -352,6 +366,86 @@ final class CCPoolProxyTests: XCTestCase {
         let (seen, keys) = r.anthropic.get { ($0.seen, $0.apiKeys) }
         XCTAssertEqual(seen, ["Bearer tok-two"])
         XCTAssertEqual(keys, [], "x-api-key never goes upstream")
+    }
+
+    // B10: the client's hop-by-hop headers, Host and Content-Length never go upstream (#1576).
+    // Trailer and Proxy-Connection are separate rows: see testCCPoolTrailerNeverForwarded.
+    func testCCPoolClientHopByHopHeadersNeverForwarded() throws {
+        let r = try rig()
+        r.setCurrent("two")
+        let body = Data(#"{"model":"claude-opus-5","max_tokens":1}"#.utf8)
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"),
+            ("Connection", "client-hop-conn"),
+            ("Keep-Alive", "client-hop-timeout=99"),
+            ("Proxy-Authorization", "Basic client-hop-proxy"),
+            ("Proxy-Authenticate", "client-hop-proxy-auth"),
+            ("TE", "client-hop-te"),
+            ("Upgrade", "client-hop-upgrade"),
+            ("x-keep-me", "client-keep-me"),
+        ], body: body, host: ["localhost:\(r.port)"]))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        let heads = r.anthropic.get { $0.heads }
+        XCTAssertEqual(heads.count, 1)
+        let h = heads.last ?? [:]
+        for name in ["connection", "keep-alive", "proxy-authorization", "proxy-authenticate", "te", "upgrade"] {
+            XCTAssertFalse((h[name] ?? "").contains("client-hop"), "\(name) reached the upstream: \(h[name] ?? "")")
+        }
+        XCTAssertEqual(h["x-keep-me"], "client-keep-me", "an end-to-end header still goes through")
+        XCTAssertEqual(h["host"], "127.0.0.1:\(r.up.port)", "Host is the upstream's, never the client's localhost:\(r.port)")
+        // The length is the proxy's own for the body it forwards, never a copy of the client's header.
+        XCTAssertEqual(h["content-length"], String(body.count))
+        XCTAssertEqual(r.anthropic.get { $0.bodySizes }, [body.count])
+    }
+
+    // B10: a chunked request body is refused before anything is relayed, so Transfer-Encoding never goes upstream.
+    func testCCPoolClientTransferEncodingNeverForwarded() throws {
+        let r = try rig()
+        r.setCurrent("two")
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"), ("Transfer-Encoding", "chunked"),
+        ]))
+        XCTAssertEqual(resp.status, 400, resp.text)
+        XCTAssertEqual(r.anthropic.get { $0.heads }.count, 0, "nothing reached the upstream")
+    }
+
+    // B10: Trailer is hop-by-hop (RFC 9110 7.6.1). The code strips "trailers" (sic), so this row is the check.
+    func testCCPoolTrailerNeverForwarded() throws {
+        let r = try rig()
+        r.setCurrent("two")
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"), ("Trailer", "client-hop-trailer"),
+        ]))
+        XCTAssertEqual(resp.status, 200)
+        XCTAssertFalse((r.anthropic.get { $0.heads }.last?["trailer"] ?? "").contains("client-hop"))
+    }
+
+    // B10: Proxy-* are hop-by-hop; Proxy-Connection (the non-standard one) is a Proxy-* header too.
+    func testCCPoolProxyConnectionNeverForwarded() throws {
+        let r = try rig()
+        r.setCurrent("two")
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"), ("Proxy-Connection", "client-hop-proxyconn"),
+        ]))
+        XCTAssertEqual(resp.status, 200)
+        XCTAssertFalse((r.anthropic.get { $0.heads }.last?["proxy-connection"] ?? "").contains("client-hop"))
+    }
+
+    // B12 / 3.8-M2: the upstream dies after its first bytes went downstream: no replay on another account, and the client
+    // sees the stream cut (no terminating chunk), never a clean end or a second answer.
+    func testCCPoolUpstreamCutAfterFirstByteIsNotReplayed() throws {
+        let r = try rig(["one", "two"])
+        r.anthropic.set { $0.cutAfterFirstBytes = ["tok-one"] }
+        r.setCurrent("one")
+        let req = Data("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:\(r.port)\r\ncontent-type: application/json\r\nContent-Length: 2\r\n\r\n{}".utf8)
+        let raw = try XCTUnwrap(CCPoolTestClient.exchange(port: r.port, send: req, timeout: 15))
+        XCTAssertEqual(r.anthropic.get { $0.seen }, ["Bearer tok-one"], "one upstream attempt, no replay to two")
+        let text = String(decoding: raw, as: UTF8.self)
+        XCTAssertTrue(text.hasPrefix("HTTP/1.1 200"), "the head went out before the cut: \(text.prefix(80))")
+        XCTAssertTrue(text.contains(#"{"type":"message""#), "the first bytes reached the client")
+        XCTAssertFalse(text.hasSuffix("0\r\n\r\n"), "no clean end of stream: the cut is visible")
+        XCTAssertEqual(text.components(separatedBy: "HTTP/1.1").count, 2, "one response only")
+        XCTAssertEqual(r.cooldown("two"), [:])
     }
 
     // B5: one account at a time, never a gratuitous switch.
