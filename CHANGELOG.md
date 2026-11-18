@@ -1847,6 +1847,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Island: an "Agent Island" command in the launcher, and an optional global shortcut (off
   until you record one in Settings › Agent Island), open the island expanded on the first session
   that needs your input. (#1536)
+- Extensions whose ids share a beginning (for example com.example and com.example.x) can no longer
+  read or change each other's settings; settings saved before the update keep their values. (#1542)
 
 ## v2.174.0
 

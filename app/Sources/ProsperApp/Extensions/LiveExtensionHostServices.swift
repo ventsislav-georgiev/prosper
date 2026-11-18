@@ -17,7 +17,10 @@ import os
 final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendable {
 
     static let shared = LiveExtensionHostServices()
-    private let defaults = Preferences.defaults
+    private let defaults: UserDefaults
+
+    /// `defaults`: rows pass a scratch suite (#1542); the app uses `Preferences.defaults`.
+    init(defaults: UserDefaults = Preferences.defaults) { self.defaults = defaults }
 
     /// Presents a host-rendered window for `host.window.open`. Injected by
     /// `AppDelegate` once the extension registry exists (the presenter wires the
@@ -269,7 +272,33 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         defaults.set(value, forKey: Self.prefKey(extensionID, key))
     }
 
-    private static func prefKey(_ id: String, _ key: String) -> String { "ext.\(id).\(key)" }
+    /// #1542: "ext.<id>.<key>" with each "." of the key written as "%2E". The key part then has no dot, so the id
+    /// is everything before the last "." and no id can name another id's key, though ids hold dots (com.prosper
+    /// vs com.prosper.x: before, ("com.prosper", "x.k") and ("com.prosper.x", "k") were one default). A key
+    /// with no dot keeps its old name byte for byte, so the native stores that read "ext.<id>.items" etc. agree.
+    // shortcut: a key holding a literal "%2E" names the same pref as its dotted form, only ever within one id.
+    static func prefKey(_ id: String, _ key: String) -> String {
+        "ext.\(id).\(key.replacingOccurrences(of: ".", with: "%2E"))"
+    }
+
+    /// #1542: a dotted key saved before the change ("ext.<id>.a.b") is copied to its new name for each loaded id,
+    /// unless that old name is now a loaded id's own key (id "<id>.a", key "b"): then it stays that id's alone.
+    /// Copies only where the new name is unset and removes nothing, so a second run changes nothing.
+    /// shortcut: with ids A and A.x both loaded, an old "ext.A.x.y.k" is copied to both (it was both of theirs
+    /// before the change and nothing tells the owner); A.x's later writes go to its new name, which A cannot reach.
+    static func migrateDottedPrefKeys(ids: [String], in defaults: UserDefaults) {
+        let known = Set(ids)
+        let old = defaults.dictionaryRepresentation().filter { $0.key.hasPrefix("ext.") }
+        for id in known {
+            let head = "ext.\(id)."
+            for (name, value) in old where name.hasPrefix(head) {
+                let key = String(name.dropFirst(head.count))
+                guard let dot = key.lastIndex(of: "."), !known.contains("\(id).\(key[..<dot])") else { continue }
+                let new = prefKey(id, key)
+                if defaults.object(forKey: new) == nil { defaults.set(value, forKey: new) }
+            }
+        }
+    }
 
     // MARK: Privacy grants (read-only check for host.perms.has)
 

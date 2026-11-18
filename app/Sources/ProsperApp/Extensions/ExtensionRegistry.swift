@@ -557,6 +557,8 @@ final class ExtensionRegistry: ObservableObject {
             record.privileged = record.isSystem || (record.trusted && privileged.contains(record.id))
         }
 
+        // #1542: before any extension runs, so a dotted key saved before the key change reads back.
+        LiveExtensionHostServices.migrateDottedPrefKeys(ids: found.map(\.id), in: defaults)
         records = found
         refused = refusedFound
         dropStalePhoneApprovals()
