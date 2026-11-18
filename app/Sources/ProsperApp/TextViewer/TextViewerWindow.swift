@@ -301,13 +301,14 @@ final class TextViewerModel: ObservableObject {
     }
 
     /// The window closed: its client goes, and OQ-118 Q3: its editor session ends too. An Edit in flight starts nothing.
-    func closeTerminal() {
+    /// `done` is entered until the session's end is done (Quit waits on it; a close does not).
+    func closeTerminal(_ done: DispatchGroup = DispatchGroup()) {
         closed = true
         planning?.cancel()
         guard let t = terminal else { return }
         terminal = nil
         t.controller.detach()
-        editor.end(t.spawn)
+        editor.end(t.spawn, done)
     }
 
     /// The editor's text from the first Edit on, nil before; kept through Read (the preview renders it).
@@ -622,8 +623,11 @@ final class TextViewerWindows {
     }
 
     /// Quit: every edit session a window started ends through the window close's path (OQ-118 Q3); the windows stay.
-    func endEditSessions() {
-        for entry in entries { entry.model.closeTerminal() }
+    /// #1604: returns once every `dch -k` has ended, or after `wait` (the app must not exit before the sessions end).
+    func endEditSessions(wait: TimeInterval = TerminalEditor.quitWait) {
+        let done = DispatchGroup()
+        for entry in entries { entry.model.closeTerminal(done) }
+        _ = done.wait(timeout: .now() + wait)
     }
 
     private func teardown(_ win: NSWindow) {

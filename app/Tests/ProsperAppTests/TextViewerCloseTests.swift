@@ -17,8 +17,8 @@ final class TextViewerCloseTests: XCTestCase {
         var ends = 0
 
         init() {
-            dirty.prompt = { [unowned self] count, answer in
-                prompted.append(count)
+            dirty.prompt = { [unowned self] files, sessions, answer in
+                prompted.append(files + sessions)
                 self.answer = answer
             }
         }
@@ -76,8 +76,40 @@ final class TextViewerCloseTests: XCTestCase {
     /// The live prompt shows nothing under XCTest: it cancels.
     func testLivePromptCancelsUnderXCTest() {
         var got: [Bool] = []
-        TextViewerDirty.livePrompt(1) { got.append($0) }
+        TextViewerDirty.livePrompt(1, 0) { got.append($0) }
         XCTAssertEqual(got, [false])
+    }
+
+    /// #1604: the Quit alert names a live terminal edit session an open editor, never "unsaved changes" (Prosper cannot
+    /// see its buffer); the built-in editor's dirty files keep "unsaved changes"; a mix names both.
+    func testQuitAlertNamesAnOpenEditorForATerminalSession() {
+        XCTAssertEqual(TextViewerDirty.promptText(files: 1, sessions: 0).message, "A Text Viewer file has unsaved changes")
+        XCTAssertEqual(TextViewerDirty.promptText(files: 2, sessions: 0).message, "2 Text Viewer files have unsaved changes")
+        XCTAssertEqual(TextViewerDirty.promptText(files: 1, sessions: 0).info, "Quit anyway and lose them, or cancel and save first.")
+        let one = TextViewerDirty.promptText(files: 0, sessions: 1), two = TextViewerDirty.promptText(files: 0, sessions: 2)
+        XCTAssertEqual(one.message, "A Text Viewer file is open in an editor")
+        XCTAssertEqual(two.message, "2 Text Viewer files are open in an editor")
+        for t in [one, two] {
+            XCTAssertFalse((t.message + t.info).contains("unsaved"), t.message)
+            XCTAssertTrue(t.info.contains("open editor"), t.info)
+        }
+        let mix = TextViewerDirty.promptText(files: 1, sessions: 1)
+        XCTAssertEqual(mix.message, "A Text Viewer file has unsaved changes, and another is open in an editor")
+        XCTAssertEqual(TextViewerDirty.promptText(files: 2, sessions: 3).message,
+                       "2 Text Viewer files have unsaved changes, and 3 more are open in an editor")
+    }
+
+    /// #1604: the prompt is told which holders are files and which are terminal edit sessions: a plain owner is a file.
+    func testPromptCountsFilesApartFromSessions() {
+        let dirty = TextViewerDirty(), a = NSObject(), b = NSObject()
+        var asked: [String] = []
+        dirty.prompt = { files, sessions, answer in asked.append("\(files)/\(sessions)"); answer(false) }
+        dirty.report(a, dirty: true)
+        dirty.report(b, dirty: true)
+        _ = dirty.terminateReply(endSessions: {}, reply: { _ in })
+        XCTAssertEqual(asked, ["2/0"], "two files, no session")
+        dirty.report(a, dirty: false)
+        dirty.report(b, dirty: false)
     }
 
     // MARK: #1544: a window's close while dirty (the sheet seam; no NSAlert, no sheet)
@@ -181,7 +213,7 @@ final class TextViewerCloseTests: XCTestCase {
         let model = try await rig.editAsync(viewerFile("tvc-quit", "a\n"))
         try rig.type(model, "x")
         var answer: (@MainActor (Bool) -> Void)?
-        rig.dirty.prompt = { _, a in answer = a }
+        rig.dirty.prompt = { _, _, a in answer = a }
         var replies: [Bool] = []
         XCTAssertEqual(rig.dirty.terminateReply(endSessions: {}, reply: { replies.append($0) }), .terminateLater)
         answer?(false)

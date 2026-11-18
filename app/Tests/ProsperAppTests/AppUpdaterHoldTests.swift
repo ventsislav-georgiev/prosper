@@ -59,4 +59,33 @@ final class AppUpdaterHoldTests: XCTestCase {
         dirty.report(c, dirty: false)
         XCTAssertEqual(replies, [.install, .install], "each held reply answered once")
     }
+
+    /// #1604: beyond the window's 5 s banner, the menu's version row says the update waits on an open editor for as long
+    /// as it is held (it said "Downloading update…" before); once installed, or dropped by a confirmed Quit, it no longer does.
+    func testHeldUpdateShowsInTheMenusVersionRowWhileHeld() {
+        let dirty = TextViewerDirty(), a = NSObject()
+        let d = driver(dirty)
+        func title() -> String { MenuBarController.versionTitle("Prosper v1", downloading: true, held: dirty.isHoldingUpdate) }
+        XCTAssertEqual(title(), "Prosper v1 — Downloading update\u{2026}")
+        dirty.report(a, dirty: true)
+        XCTAssertFalse(dirty.isHoldingUpdate, "dirty, but no update waits yet")
+        var replies: [SPUUserUpdateChoice] = []
+        d.showReady { replies.append($0) }
+        XCTAssertTrue(dirty.isHoldingUpdate)
+        XCTAssertEqual(title(), "Prosper v1 — Update waits on an open editor")
+        XCTAssertEqual(MenuBarController.versionTitle("Prosper v1", downloading: false, held: true),
+                       "Prosper v1 — Update waits on an open editor")
+        dirty.report(a, dirty: false)
+        XCTAssertEqual(replies, [.install])
+        XCTAssertFalse(dirty.isHoldingUpdate, "released: no longer said")
+        XCTAssertEqual(MenuBarController.versionTitle("Prosper v1", downloading: false, held: false), "Prosper v1")
+        // A confirmed Quit drops the held install: the row no longer says it waits.
+        dirty.report(a, dirty: true)
+        d.showReady { replies.append($0) }
+        dirty.prompt = { _, _, answer in answer(true) }
+        _ = dirty.terminateReply(endSessions: {}, reply: { _ in })
+        XCTAssertFalse(dirty.isHoldingUpdate)
+        XCTAssertEqual(replies, [.install], "the dropped install never fired")
+        dirty.report(a, dirty: false)
+    }
 }

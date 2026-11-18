@@ -49,11 +49,13 @@ final class TerminalEditorTests: XCTestCase {
         var ios: [AgentTerminalIO] = []
         var requests: [AgentTerminalSpawn] = []
         var ended: [TerminalEditor.Spawn] = []
+        /// #1604: a fake `dch -k`: gets each end's group (nil: the end is done at once).
+        var onEnd: ((DispatchGroup) -> Void)?
 
         var seams: TerminalEditorSeams {
             TerminalEditorSeams(settings: { [unowned self] in settings }, io: shell.io, cache: cache,
                                 makeController: { [unowned self] in controller() },
-                                end: { [unowned self] in ended.append($0) })
+                                end: { [unowned self] spawn, done in ended.append(spawn); onEnd?(done) })
         }
 
         /// A controller that spawns a fake child at once: the grid is known before the attach, the screen reports it.
@@ -386,12 +388,12 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertEqual(names.count, 2)
         // #1599: the live sessions are the window's registry's holders: Quit asks, and a confirmed quit ends them
         let dirty = w.dirty()
-        var prompted: [Int] = [], replies: [Bool] = [], installs = 0
-        dirty.prompt = { count, answer in prompted.append(count); answer(true) }
+        var prompted: [String] = [], replies: [Bool] = [], installs = 0
+        dirty.prompt = { files, sessions, answer in prompted.append("\(files)/\(sessions)"); answer(true) }
         dirty.holdUpdate { installs += 1 }
         XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { replies.append($0) }),
                        .terminateLater)
-        XCTAssertEqual(prompted, [2], "asked, with both sessions counted")
+        XCTAssertEqual(prompted, ["0/2"], "asked, with both counted as sessions (#1604: an open editor), none as files")
         XCTAssertEqual(replies, [true])
         XCTAssertEqual(installs, 0, "the sessions' end lets no held install fire into the quit")
         XCTAssertFalse(dirty.isDirty)
@@ -442,11 +444,11 @@ final class TerminalEditorTests: XCTestCase {
         model.edit()
         await model.planning?.value
         let dirty = w.dirty()
-        var prompted: [Int] = [], replies: [Bool] = []
-        dirty.prompt = { count, answer in prompted.append(count); answer(false) }
+        var prompted: [String] = [], replies: [Bool] = []
+        dirty.prompt = { files, sessions, answer in prompted.append("\(files)/\(sessions)"); answer(false) }
         XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { replies.append($0) }),
                        .terminateLater)
-        XCTAssertEqual(prompted, [1], "asked")
+        XCTAssertEqual(prompted, ["0/1"], "asked, for one open editor")
         XCTAssertEqual(replies, [false], "Cancel → .terminateCancel")
         XCTAssertTrue(rig.ended.isEmpty, "nothing ended")
         XCTAssertTrue(model.terminal != nil && model.mode == .terminal, "the session and its window stay")
@@ -454,6 +456,73 @@ final class TerminalEditorTests: XCTestCase {
         for e in w.entries { e.window.close() }
         XCTAssertEqual(rig.ended.count, 1, "the window's close still ends it")
         XCTAssertFalse(dirty.isDirty)
+    }
+
+    /// Set from the fake `dch -k`'s queue, read on main.
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _on = false
+        var on: Bool { lock.withLock { _on } }
+        func set() { lock.withLock { _on = true } }
+    }
+
+    /// #1604 (QA #1486 F1): Quit's end of the edit sessions returns only once each `dch -k` has ended, so
+    /// `.terminateNow` (or the confirmed `.terminateLater` reply) never lets the app exit before the session ends.
+    func testQuitWaitsForEachSessionsKillToEnd() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let first = try await openAsync(w, file("te-wait-a", "a.md"))
+        let second = try await openAsync(w, file("te-wait-b", "b.md"))
+        first.edit()
+        await first.planning?.value
+        second.edit()
+        await second.planning?.value
+        let a = Flag(), b = Flag()
+        var kills = [a, b]
+        rig.onEnd = { done in
+            guard !kills.isEmpty else { return }
+            let killed = kills.removeFirst()
+            done.enter()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { killed.set(); done.leave() }
+        }
+        let dirty = w.dirty()
+        var replies: [Bool] = []
+        dirty.prompt = { _, _, answer in answer(true) }
+        XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { replies.append($0) }),
+                       .terminateLater)
+        XCTAssertTrue(a.on && b.on, "both kills ended before the quit was replied")
+        XCTAssertEqual(replies, [true])
+        XCTAssertEqual(rig.ended.count, 2)
+        rig.onEnd = nil
+        for e in w.entries { e.window.close() }
+    }
+
+    /// #1604: a `dch -k` that does not end holds Quit for the bound only, then Quit goes on; a window's close never waits.
+    func testQuitGoesOnAfterTheBoundWhenAKillHangs() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let closing = try await openAsync(w, file("te-hang-a", "a.md"))
+        let quitting = try await openAsync(w, file("te-hang-b", "b.md"))
+        closing.edit()
+        await closing.planning?.value
+        quitting.edit()
+        await quitting.planning?.value
+        var hung: [DispatchGroup] = []
+        defer { hung.forEach { $0.leave() } }   // a group must not go with an enter left
+        rig.onEnd = { done in done.enter(); hung.append(done) }
+        var t = Date()
+        try XCTUnwrap(w.entries.first?.window).close()
+        XCTAssertLessThan(Date().timeIntervalSince(t), 1, "a window's close does not wait for its session's end")
+        XCTAssertEqual(rig.ended.count, 1)
+        t = Date()
+        w.endEditSessions(wait: 0.2)
+        let took = Date().timeIntervalSince(t)
+        XCTAssertEqual(rig.ended.count, 2, "Quit asked the other session to end")
+        XCTAssertGreaterThanOrEqual(took, 0.2, "Quit waited for the hung kill")
+        XCTAssertLessThan(took, 1.5, "but only for the bound")
+        XCTAssertEqual(TerminalEditor.quitWait, 2, "the live bound: up to 2 s, then Quit goes on")
+        rig.onEnd = nil
+        for e in w.entries { e.window.close() }
     }
 
     // MARK: R9: an editor session is not an agent

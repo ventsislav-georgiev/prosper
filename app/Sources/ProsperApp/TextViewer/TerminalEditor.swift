@@ -181,10 +181,16 @@ enum TerminalEditor {
                             argv: [exe] + words.dropFirst() + [path], env: env))
     }
 
-    /// OQ-118 Q3: the window closed, so its session ends (`dch -k <name>`, the spawn's dch and dir). Off main.
-    static func end(_ s: Spawn) {
+    /// #1604: how long Quit waits for the edit sessions' `dch -k` before it goes on.
+    static let quitWait: TimeInterval = 2
+
+    /// OQ-118 Q3: the window closed, so its session ends (`dch -k <name>`, the spawn's dch and dir). Off main;
+    /// `done` is entered until the kill has ended (Quit waits on it, #1604).
+    static func end(_ s: Spawn, done: DispatchGroup) {
         guard NSClassFromString("XCTestCase") == nil, let args = AgentIsland.killArgs(s.key.name) else { return }
+        done.enter()
         DispatchQueue.global(qos: .utility).async {
+            defer { done.leave() }
             _ = DchCommand.bounded(LoginPath.timeout) { onPid, onExit in
                 DchCommand.runCapturingBoth(args: args, env: s.env, path: s.dch, onPid: onPid, onExit: onExit).status
             }
@@ -199,11 +205,12 @@ struct TerminalEditorSeams {
     var io: TerminalEditorIO
     var cache: TerminalEditor.Cache
     var makeController: @MainActor () -> AgentTerminalController
-    var end: @MainActor (TerminalEditor.Spawn) -> Void
+    /// Ends a session; enters the group until its end is done.
+    var end: @MainActor (TerminalEditor.Spawn, DispatchGroup) -> Void
 
     static var current: TerminalEditorSeams {
         TerminalEditorSeams(settings: { .stored }, io: .current, cache: TerminalEditor.shared,
-                            makeController: { AgentTerminalController() }, end: { TerminalEditor.end($0) })
+                            makeController: { AgentTerminalController() }, end: { TerminalEditor.end($0, done: $1) })
     }
 }
 

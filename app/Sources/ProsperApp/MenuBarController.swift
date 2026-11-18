@@ -233,8 +233,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Top menu row: app name + version, with a live "downloading update" hint
     /// while Sparkle is fetching/staging a new build.
     private var versionTitle: String {
-        let base = "Prosper v\(AppInfo.shortVersion)"
-        return AppUpdater.shared.isDownloadingUpdate ? "\(base) — Downloading update\u{2026}" : base
+        Self.versionTitle("Prosper v\(AppInfo.shortVersion)", downloading: AppUpdater.shared.isDownloadingUpdate,
+                          held: TextViewerDirty.shared.isHoldingUpdate)
+    }
+
+    /// #1604: an update held by an open Text Viewer editor says so for as long as it waits, not only in a 5 s banner.
+    static func versionTitle(_ base: String, downloading: Bool, held: Bool) -> String {
+        held ? "\(base) — \(TextViewerDirty.updateHeld)" : downloading ? "\(base) — Downloading update\u{2026}" : base
     }
 
     private var shouldShowSetup: Bool {
