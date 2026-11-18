@@ -1989,9 +1989,9 @@ tag from the now-released section and put it on the new top draft.
   the update waits until the editor is quit or its window closed, and Quit asks first (Cancel keeps
   the editor and its unsaved changes). (#1599)
 - Text Viewer: Quit now waits (up to 2 seconds) for a file's terminal editor session to end before
-  the app exits; while an update waits on an open editor the menu's version row says so for as long
-  as it waits; and the Quit alert calls a terminal editor session "an open editor" instead of
-  "unsaved changes". (#1604)
+  the app exits; while an update waits on an open editor the menu's version row and the About pane
+  say so for as long as it waits; and the Quit alert calls a terminal editor session "an open
+  editor" instead of "unsaved changes". (#1604)
 
 ## v2.174.0
 

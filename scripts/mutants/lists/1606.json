@@ -1,0 +1,13 @@
+{
+ "entry": 1606,
+ "filter": "AppUpdaterHoldTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "note-ignores-held",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "held ? updateHeld : downloading",
+   "new": "downloading",
+   "expect": "killed"
+  }
+ ]
+}

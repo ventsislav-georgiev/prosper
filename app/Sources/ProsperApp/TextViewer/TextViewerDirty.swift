@@ -17,12 +17,12 @@ final class TextViewerDirty {
     /// Sparkle's install replies held while a viewer is dirty.
     private var held: [@MainActor () -> Void] = []
     var isDirty: Bool { !owners.isEmpty }
-    /// #1604: an update waits on a dirty viewer.
     /// #1606: the About pane's update note; a held update says it waits (#1604), not that it installs on its own.
     static func updateNote(downloading: Bool, held: Bool) -> String? {
         held ? updateHeld : downloading ? "Downloading the new version — it will install and relaunch automatically." : nil
     }
 
+    /// #1604: an update waits on a dirty viewer.
     var isHoldingUpdate: Bool { !held.isEmpty }
 
     /// Quit's prompt while a viewer is dirty: the dirty files, the live terminal edit sessions, then true to quit without
