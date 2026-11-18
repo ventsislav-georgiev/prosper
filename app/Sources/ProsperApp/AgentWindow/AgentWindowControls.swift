@@ -17,6 +17,8 @@ enum AgentWindowVerb: Equatable {
     case stopGroup([String])
     /// #909: a History record's Resume both / Resume all N (runs at once, as Resume).
     case resumeGroup
+    /// #1469: a live session's Model or Effort item (runs at once through the window's act, asks nothing).
+    case switchTo(AgentModelSwitch.Command)
 }
 
 /// The confirm strip's question: what, on which session (by key; re-resolved at the answer).
@@ -82,6 +84,8 @@ enum AgentMenuSymbol {
     static let sort = "arrow.up.arrow.down", sortActivity = "clock", sortName = "textformat"
     static let rowDetails = "list.bullet.rectangle", rowDetail = "list.bullet", autoAllow = "checkmark.shield"
     static let settings = "gearshape", diagnostics = "stethoscope"
+    /// #1469: the Model and Effort submenus.
+    static let model = "cpu", effort = "speedometer"
     static let xray = "rectangle.righthalf.inset.filled"
 
     /// Every name above, for the test that resolves each one (a typo draws no image).
@@ -102,6 +106,7 @@ extension AgentWindowVerb {
         case .pin: AgentMenuSymbol.pin
         case .remove: AgentMenuSymbol.remove
         case .rename: AgentMenuSymbol.rename
+        case .switchTo(let c): c.isModel ? AgentMenuSymbol.model : AgentMenuSymbol.effort
         }
     }
 }
@@ -443,7 +448,7 @@ enum AgentWindowControls {
             spell.locale = Locale(identifier: "en")
             let all = names.count > 2 ? "all \(spell.string(from: names.count as NSNumber) ?? "\(names.count)") and the" : "both and both"
             return "Stop \(list)? Claude Code is paused in \(all) sessions end. Resume them later from History." + blocked
-        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup:
+        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup, .switchTo:
             return ""   // History verbs: removeQuestion; the rest never ask
         }
     }
@@ -460,6 +465,7 @@ enum AgentWindowControls {
         case .rename: AgentIsland.renameLabel
         case .stopGroup(let names): AgentIsland.pairTitle(.stop, count: names.count)
         case .resumeGroup: AgentIsland.pairTitle(.resume)
+        case .switchTo(let c): c.text
         }
     }
 
@@ -647,6 +653,33 @@ struct AgentSessionMenuItems: View {
         let base = row.map { AgentWindowControls.rowMenu(session, store: store, in: $0, groups: groups) }
             ?? AgentWindowControls.sessionMenu(session, store: store, ended: ended, groups: groups)
         AgentMenuEntries(entries: base + panes, act: ask, open: open, pane: pane, side: side)
+        // #1469: Model and Effort for a live session (#627: never for a name dch would read as a flag).
+        if !ended, AgentIsland.passable(session.name) {
+            Divider()
+            AgentSwitchMenus(menus: AgentModelSwitch.menus(session, requested: row?.interaction.requested[session.key]?.level),
+                             act: ask)
+        }
+    }
+}
+
+/// #1469: the Model and Effort submenus from AgentModelSwitch.menus (a value, tested without a menu); an item runs
+/// `.switchTo` through the row's `ask`.
+struct AgentSwitchMenus: View {
+    let menus: [AgentModelSwitch.Submenu]
+    let act: (AgentWindowVerb) -> Void
+
+    var body: some View {
+        ForEach(menus, id: \.title) { m in
+            SwiftUI.Menu {
+                ForEach(m.items, id: \.title) { i in
+                    Toggle(i.title, isOn: Binding(get: { i.checked }, set: { _ in act(.switchTo(i.command)) }))
+                }
+                Divider()
+                ForEach(m.notes, id: \.self) { Text(verbatim: $0) }
+            } label: {
+                Label(m.title, systemImage: m.title == AgentModelSwitch.modelLabel ? AgentMenuSymbol.model : AgentMenuSymbol.effort)
+            }
+        }
     }
 }
 

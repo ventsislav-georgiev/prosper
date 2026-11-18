@@ -332,6 +332,121 @@ enum AgentWindowOutcome: Equatable, Sendable {
     case done
     /// Nothing more was sent (or what was sent is not confirmed): the reason, shown with Open in terminal.
     case failed(String)
+    /// #1469: a switch Claude Code took: the notice with what it answered.
+    case answered(String)
+}
+
+/// #1469 (spec #1192 P3): a model or effort switch, typed into Claude Code as its own `/model` or `/effort` command.
+enum AgentModelSwitch {
+    /// One command, built only from AgentModelEffort's one list (dch #444: exact full command names, never free text).
+    struct Command: Equatable, Sendable {
+        let verb: String
+        let value: String
+        private init(_ verb: String, _ value: String) { (self.verb, self.value) = (verb, value) }
+
+        static func model(_ alias: String) -> Command? {
+            AgentModelEffort.aliases.contains(alias) ? Command("/model", alias) : nil
+        }
+        static func effort(_ level: String) -> Command? {
+            AgentModelEffort.levelOrder.contains(level) ? Command("/effort", level) : nil
+        }
+        var isModel: Bool { verb == "/model" }
+        /// What `--say` types: "/model opus", "/effort high" (dch 1.88.0 types a leading "/" as keys).
+        var text: String { verb + " " + value }
+    }
+
+    struct Item: Equatable {
+        let title: String
+        let checked: Bool
+        let command: Command
+    }
+
+    struct Submenu: Equatable {
+        let title: String
+        let items: [Item]
+        /// Disabled lines under the items.
+        let notes: [String]
+    }
+
+    static let modelLabel = "Model", effortLabel = "Effort"
+    /// OQ-129: typing the command saves it as the default (effort max: this session only).
+    static let defaultLine = "Also becomes your default for new sessions"
+    static let maxLine = "max: This session only"
+
+    /// The Model and Effort menus for `s`: every item of the one list; the current value checked when the row knows it
+    /// (an alias by the model id's family; default and opusplan never); `requested`: an effort sent, not yet seen.
+    static func menus(_ s: AgentSession, requested: String? = nil) -> [Submenu] {
+        let family = s.model.map { $0.split(separator: "-").map(String.init) } ?? []
+        let models = AgentModelEffort.aliases.compactMap { a in
+            Command.model(a).map { Item(title: a, checked: family.count > 1 && family[1] == a, command: $0) }
+        }
+        let efforts = AgentModelEffort.levelOrder.compactMap { l in
+            Command.effort(l).map { Item(title: l, checked: s.effort == l, command: $0) }
+        }
+        return [Submenu(title: modelLabel, items: models, notes: [defaultLine]),
+                Submenu(title: effortLabel, items: efforts, notes: [defaultLine, maxLine] + (requested.map { [requestedText($0)] } ?? []))]
+    }
+
+    static let working = "Claude is working. Switch when it's done"
+    static let unconfirmed = "Couldn't confirm the switch. Open in terminal"
+    static let noScreen = "This dch can't confirm a switch. Open in terminal"
+    static func requestedText(_ level: String) -> String { "Requested: \(level) (from the next message)" }
+    static func refused(_ answer: String) -> String { "Not switched. Claude Code answered: \(answer)" }
+    static func switched(_ answer: String) -> String { "Claude Code answered: \(answer)" }
+    static func kept(_ level: String) -> String {
+        "Claude Code kept \(level). An environment setting (CLAUDE_CODE_EFFORT_LEVEL) or the model may override it."
+    }
+
+    /// Claude Code's answer under the newest echo of `c` on screen, when the screen shows more echoes than `before`: the
+    /// first "\u{23BF}" line within three lines under it, cleaned. nil: no new answer yet.
+    static func screenAnswer(_ c: Command, _ screen: String, before: Int) -> String? {
+        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let marks = lines.indices.filter { echoes(c, lines[$0]) }
+        guard marks.count > before, let e = marks.last else { return nil }
+        for l in lines[(e + 1)...].prefix(3) {
+            let t = l.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("\u{23BF}") { return AgentModelEffort.clean(String(t.dropFirst())) }
+        }
+        return nil
+    }
+
+    static func echoes(_ c: Command, _ line: String) -> Bool {
+        line.filter { !$0.isWhitespace }.hasSuffix(c.text.filter { !$0.isWhitespace })
+    }
+
+    static func echoCount(_ c: Command, _ screen: String) -> Int {
+        screen.split(separator: "\n", omittingEmptySubsequences: false).filter { echoes(c, String($0)) }.count
+    }
+
+    /// What Claude Code's answer means: a model is switched only when the answer sets the model and names the alias; an
+    /// effort answer that does not set and name the level is a refusal; one that does waits for the next answer
+    /// (`requested`), as does no answer at all (spec d: effort is confirmed only by the next answer).
+    /// shortcut: Claude Code's answer wording is not documented (spec N4): "Set ..." naming the value; re-check on a live capture.
+    static func verdict(_ c: Command, _ answer: String?) -> AgentWindowOutcome {
+        let flat = (answer ?? "").lowercased().filter { !$0.isWhitespace }
+        if c.isModel {
+            guard let answer else { return .failed(unconfirmed) }
+            return flat.contains("setmodelto") && flat.contains(c.value) ? .answered(switched(answer)) : .failed(refused(answer))
+        }
+        guard let answer else { return .answered(requestedText(c.value)) }
+        return flat.hasPrefix("set") && flat.contains(c.value) ? .answered(requestedText(c.value) + ". " + switched(answer))
+            : .failed(refused(answer))
+    }
+
+    /// An effort sent and taken, waiting for the next answer to carry it.
+    struct Pending: Equatable {
+        let level: String
+        var sawWorking = false
+    }
+
+    /// The next answer after an effort switch: the row worked, then stopped with an effort. Same level: confirmed (nil
+    /// pending, no notice); another: the "may override" notice. Row gone: dropped. Else still pending.
+    static func landed(_ p: Pending, _ row: AgentSession?) -> (pending: Pending?, notice: String?) {
+        guard let row else { return (nil, nil) }
+        if row.state == .working { return (Pending(level: p.level, sawWorking: true), nil) }
+        guard p.sawWorking, let e = row.effort else { return (p, nil) }
+        return (nil, e == p.level ? nil : kept(e))
+    }
 }
 
 /// The dch steps of each action, off main, against the island's IO. Pure apart from `io`
@@ -499,6 +614,35 @@ struct AgentWindowDriver: Sendable {
             if Self.count("Interrupted", in: io.read(key)) > before { return .done }
         }
         return .failed(AgentWindowText.unconfirmed)
+    }
+
+    // MARK: Model and effort switch (#1469)
+
+    /// One `/model <alias>` or `/effort <level>` (spec #1192 P3), as `send`: only while dch says idle or done and the
+    /// screen shows no prompt or plan (`refusal`); typed by dch's `--say --json` (1.88.0 types a leading "/" as keys),
+    /// whose result maps as a message's. Claude Code's answer: a main-thread local_command line written to
+    /// `transcript` after the send (`files`), else the screen's line under the command's echo (`screenAnswer`).
+    func switchTo(_ c: AgentModelSwitch.Command, transcript: String?, files: AgentModelEffort.IO) -> AgentWindowOutcome {
+        let st = status()
+        guard st == "idle" || st == "done" else {
+            return .failed(st == "working" ? AgentModelSwitch.working
+                           : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus)
+        }
+        let shown = io.read(key)
+        if let why = refusal(shown, lite: AgentModelSwitch.noScreen) { return .failed(why) }
+        let path = transcript.flatMap { $0.isEmpty ? nil : $0 }
+        let size = path.flatMap { files.size($0) }, before = AgentModelSwitch.echoCount(c, shown)
+        if let why = Self.sayFailure(Self.sayReply(io.say(key, c.text))) { return .failed(why) }
+        for _ in 0..<confirmReads {
+            pause(confirmStep)
+            var answer: String?
+            if let path, let size, let now = files.size(path) {
+                answer = AgentModelEffort.localAnswer(after: size, size: now) { files.read(path, $0, $1) }
+            }
+            if answer == nil { answer = AgentModelSwitch.screenAnswer(c, io.read(key), before: before) }
+            if let answer { return AgentModelSwitch.verdict(c, answer) }
+        }
+        return AgentModelSwitch.verdict(c, nil)
     }
 
     // MARK: Prompt key sequences
@@ -1065,6 +1209,47 @@ final class AgentWindowInteraction: ObservableObject {
         }
     }
 
+    // MARK: Model and effort switch (#1469)
+
+    /// Efforts sent and taken, by session, until the next answer carries one (AgentModelSwitch.landed).
+    @Published private(set) var requested: [AgentSessionKey: AgentModelSwitch.Pending] = [:]
+    /// The transcript reads of a switch's confirm. Seam: tests pass a fake.
+    var files: AgentModelEffort.IO = .live
+
+    /// A Model or Effort menu item for `s` (the store's row now): only while the list says idle or done and dch lists
+    /// its Claude in front; then through `act` (the Restart/Stop lock, controller.humanAction). `tell`: every notice.
+    func switchTo(_ c: AgentModelSwitch.Command, _ s: AgentSession, tell: @escaping @MainActor (String) -> Void) {
+        guard s.state == .idle || s.state == .done else {
+            return tell(s.state == .blocked ? AgentWindowText.blocked : AgentModelSwitch.working)
+        }
+        guard s.claudeForeground == true else { return tell(AgentWindowText.notForeground) }
+        let path = s.transcriptPath, files = files, key = s.key, pause = pause
+        act(s, prompt: nil, run: { io in
+            AgentWindowDriver(key: key, io: io, pause: pause).switchTo(c, transcript: path, files: files)
+        }, tell: { [weak self] r in
+            switch r {
+            case .failed(let why): tell(why)
+            case .answered(let text):
+                if !c.isModel { self?.requested[key] = AgentModelSwitch.Pending(level: c.value) }
+                tell(text)
+            case .done: break
+            }
+        })
+    }
+
+    /// The list's rows now: each pending effort meets its row (AgentModelSwitch.landed); the notices to show, by session.
+    func effortLanded(_ sessions: [AgentSession]) -> [AgentSessionKey: String] {
+        guard !requested.isEmpty else { return [:] }
+        var out: [AgentSessionKey: String] = [:], next: [AgentSessionKey: AgentModelSwitch.Pending] = [:]
+        for (key, p) in requested {
+            let r = AgentModelSwitch.landed(p, sessions.first { $0.key == key })
+            next[key] = r.pending
+            out[key] = r.notice
+        }
+        if next != requested { requested = next }
+        return out
+    }
+
     /// Esc while working.
     func interrupt() {
         guard let s = actionSession, s.state == .working else { return }
@@ -1083,19 +1268,21 @@ final class AgentWindowInteraction: ObservableObject {
     /// Restart or Stop's running text shows on the row (dch types into Claude's composer) nothing
     /// reaches the pty and the notice says why.
     private func act(_ s: AgentSession, prompt: AgentPrompt?, run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome,
-                     sent: (@MainActor () -> Void)? = nil) {
+                     sent: (@MainActor () -> Void)? = nil, tell: (@MainActor (AgentWindowOutcome) -> Void)? = nil) {
+        // #1469: `tell` (a switch from a menu, whose session need not be the followed one) gets every notice instead.
+        func say(_ why: String) { if let tell { tell(.failed(why)) } else { notice = why } }
         let row = if let rowText { rowText(s.key) } else { controller?.store?.actions[s.key] }
         if let lock = AgentWindowControls.lock(row) {
-            notice = AgentWindowControls.lockPlaceholder(lock)
+            say(AgentWindowControls.lockPlaceholder(lock))
             return
         }
         guard let controller, !busy else { return }
         // #1135: dch lists its Claude as not in front: every key or message would go to a shell.
         if s.claudeForeground == false {
-            notice = AgentWindowText.notForeground
+            say(AgentWindowText.notForeground)
             return
         }
-        notice = nil
+        if tell == nil { notice = nil }
         busy = true
         let key = s.key
         let ok = controller.humanAction(s, prompt: prompt, run: run) { [weak self] r in
@@ -1103,6 +1290,7 @@ final class AgentWindowInteraction: ObservableObject {
             self.busy = false
             // QA #629 INFO-3: a confirmed send clears its own session's draft, selected or not.
             if r == .done { sent?() }
+            if let tell { return tell(r) }
             guard self.session?.key == key else { return }
             if case .failed(let why) = r { self.notice = why }
             if prompt != nil {
@@ -1113,7 +1301,7 @@ final class AgentWindowInteraction: ObservableObject {
         }
         if !ok {
             busy = false
-            notice = AgentWindowText.busy
+            say(AgentWindowText.busy)
         }
     }
 }

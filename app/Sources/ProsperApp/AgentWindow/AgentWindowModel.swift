@@ -1614,6 +1614,8 @@ final class AgentWindowModel: ObservableObject {
         // Hidden or closed: nothing is rebuilt; showing again reads the store afresh.
         guard visible, !closed else { return }
         refreshes += 1
+        // #1469: an effort switch's next answer; one that kept another level says so on its row.
+        for (key, text) in interaction.effortLanded(sessions) { refusal = AgentWindowRefusal(id: .live(key), text: text) }
         // #901 B3 step 5 (section 10): the attention source, on this visible refresh only; gate off: stays nil.
         let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
         if n != needs { needs = n }
@@ -2669,12 +2671,20 @@ final class AgentWindowModel: ObservableObject {
         if let s = row.session { ask(.stop, s) } else if let r = row.record { act(.remove, r) }
     }
 
+    /// #1469: a Model or Effort item, on the store's row for `s` now (gone: nothing); every notice on that row's line.
+    func switchSession(_ c: AgentModelSwitch.Command, _ s: AgentSession) {
+        guard let live = store?.sessions.first(where: { $0.key == s.key }) else { return }
+        let key = s.key
+        interaction.switchTo(c, live) { [weak self] text in self?.refusal = AgentWindowRefusal(id: .live(key), text: text) }
+    }
+
     /// A header "⋯" or row context-menu item: selects the row first (R6), then asks.
     func ask(_ verb: AgentWindowVerb, _ s: AgentSession) {
         if ended?.row.id == .live(s.key) { return }   // QA #668 F1, 4.4 (d): it ended, nothing to ask
         select(.live(s.key))
         refusal = nil
         renameEdit = nil
+        if case .switchTo(let c) = verb { return switchSession(c, s) }
         // G4: Rename edits the title in place and asks nothing; only a session still listed live.
         if verb == .rename {
             confirming = nil
@@ -2723,7 +2733,7 @@ final class AgentWindowModel: ObservableObject {
         case .resumeNoMessage: resumeNoMessage(r)
         case .pin: pinRecord(r)
         case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
-        case .restart, .stop, .kill, .rename, .stopGroup: break
+        case .restart, .stop, .kill, .rename, .stopGroup, .switchTo: break
         }
     }
 
@@ -2807,7 +2817,7 @@ final class AgentWindowModel: ObservableObject {
         case .stop: _ = stopSession(s)   // #831 B1: the pane goes Ended, then its record by resolve (4.5)
         case .kill: _ = killSession(s)
         case .stopGroup(let names): _ = stopGroup(s, names)
-        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup: break
+        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup, .switchTo: break
         }
     }
 

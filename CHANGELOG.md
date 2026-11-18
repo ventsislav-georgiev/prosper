@@ -1790,6 +1790,9 @@ tag from the now-released section and put it on the new top draft.
 - The Marketplace lists Agent Kits: filter by Agent Kits, read a kit's README and what it will
   change before you install it, and Prosper refuses a kit whose download does not match its listing.
   (#1496)
+- Agent Sessions: switch a session's model or effort from its menu (the sidebar row's menu or the
+  pane's "..." menu), without opening the session and typing /model or /effort; Prosper shows what
+  Claude Code answered. (#1469)
 
 ## v2.174.0
 

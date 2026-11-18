@@ -14,7 +14,12 @@ struct AgentModelEffort: Equatable, Sendable {
     static let budget: UInt64 = 16 << 20
     static let maxLine = 1 << 20
     static let step: UInt64 = 1 << 16
-    static let levels: Set<String> = ["low", "medium", "high", "xhigh", "max"]
+    /// #1469 (spec #1192 c): the ONE list the switch menus and the sent text come from. Source: Claude Code's documented
+    /// model aliases and effort levels (model configuration docs, doc facts 5 and 1 of the #1192 spec), read 2026-11-14.
+    /// Re-read from the docs at every ClaudeCodeCompat.upper bump. No model id: the menu never goes stale.
+    static let aliases = ["default", "opus", "sonnet", "haiku", "opusplan"]
+    static let levelOrder = ["low", "medium", "high", "xhigh", "max"]
+    static let levels = Set(levelOrder)
     static let maxModelLength = 128
     private static let allowedModelScalars: Set<UInt32> = Set(
         Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:@/-".unicodeScalars).map { $0.value })
@@ -106,6 +111,51 @@ struct AgentModelEffort: Equatable, Sendable {
               model.unicodeScalars.allSatisfy({ allowedModelScalars.contains($0.value) }) else { return nil }
         let effort = TranscriptKeys.str(o, "effort").flatMap { levels.contains($0) ? $0 : nil }
         return AgentModelEffort(model: model, effort: effort)
+    }
+
+    // MARK: - Local command answers (#1469)
+
+    /// At most this many bytes are read back from the end for a local command's answer.
+    static let answerWindow: UInt64 = 1 << 16
+    static let maxAnswer = 300
+
+    /// #1469 (spec #1192 d): Claude Code's answer to a typed local command (/model, /effort), from the main-thread
+    /// `system` / `local_command` lines written after byte `after` of a file now `size` long: the newest one holding
+    /// `<local-command-stdout>` or `<local-command-stderr>`, cleaned (`clean`). nil when none is there yet. Bounded: at most
+    /// `answerWindow` bytes, never before `after`; a line cut by the window's start is not read.
+    static func localAnswer(after: UInt64, size: UInt64, read: (_ offset: UInt64, _ length: Int) -> Data?) -> String? {
+        guard size > after else { return nil }
+        let start = size - after > answerWindow ? size - answerWindow : after
+        let length = Int(size - start)   // <= answerWindow
+        guard let chunk = read(start, length), chunk.count == length else { return nil }
+        var lines = chunk.split(separator: 0x0A, omittingEmptySubsequences: false)
+        if start > after, !lines.isEmpty { lines.removeFirst() }   // cut by the window
+        for line in lines.reversed() {
+            guard !line.contains(0), String(data: Data(line), encoding: .utf8) != nil,
+                  let o = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  TranscriptKeys.str(o, "type") == "system", TranscriptKeys.str(o, "subtype") == "local_command",
+                  !((TranscriptKeys.get(o, "isSidechain") as? NSNumber)?.boolValue ?? false),
+                  let content = TranscriptKeys.str(o, "content"),
+                  content.contains("<local-command-stdout>") || content.contains("<local-command-stderr>"),
+                  let text = clean(content) else { continue }
+            return text
+        }
+        return nil
+    }
+
+    /// Outside text made safe for a notice: the local-command tags and terminal escape sequences dropped, every other
+    /// control or format character dropped, whitespace folded, cut to `maxAnswer` characters; nil when nothing is left.
+    static func clean(_ text: String) -> String? {
+        var t = text
+        for tag in ["<local-command-stdout>", "</local-command-stdout>", "<local-command-stderr>", "</local-command-stderr>"] {
+            t = t.replacingOccurrences(of: tag, with: " ")
+        }
+        t = t.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[ -/]*[@-~]", with: "", options: .regularExpression)
+        let kept = String(String.UnicodeScalarView(t.unicodeScalars.map {
+            [.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) ? " " : $0
+        }))
+        let folded = kept.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return folded.isEmpty ? nil : String(folded.prefix(maxAnswer))
     }
 
     // MARK: - Short name
