@@ -1982,7 +1982,7 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray ref card now lists each other session of the same project as its own block, headed "also
   discussed in <session>, <age>", with that session's mentions grouped by prompt (needs dch 1.104.0;
   an older dch keeps the single Earlier list). (#1589)
-- CCPool: a claude session started with an API key no longer gets pool accounts refused; the pool
+- Account pool: a Claude session started with an API key no longer gets pool accounts refused; the pool
   now sends the OAuth beta header its accounts need. (#1595)
 
 ## v2.174.0
