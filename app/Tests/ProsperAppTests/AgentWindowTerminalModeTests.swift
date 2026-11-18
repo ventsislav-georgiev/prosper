@@ -180,7 +180,7 @@ extension AgentWindowD1Tests {
         let down = key(125, "\u{F701}", [.command, .numericPad, .function])
         for r in all {
             XCTAssertEqual(route(key(13, "w", .command), r), .close)
-            XCTAssertEqual(route(key(17, "t", .command), r), .pass, "#1471: Command-T is no window key (\(r))")
+            XCTAssertEqual(route(key(17, "t", .command), r), .swallow, "R1471a-s1: Command-T is swallowed in a terminal pane (\(r))")
             XCTAssertEqual(route(key(17, "t", .command), r, terminal: false), .pass)
             XCTAssertEqual(route(key(3, "f", .command), r), .find)
             XCTAssertEqual(route(key(3, "f", .command), r, terminal: false), .pass, "no find bar over the transcript")
@@ -247,10 +247,10 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, live("b"))
             XCTAssertTrue(win.performKeyEquivalent(with: cmdUp))
             XCTAssertEqual(m.selection, live("a"))
-            // #1471: Command-T is no window key (no Transcript mode); focusing the pane sends the keys to the terminal once its
+            // R1471a-s1: Command-T is swallowed in a terminal pane; focusing the pane sends the keys to the terminal once its
             // view is in the window.
             XCTAssertTrue(m.paneHasTerminal, "the only mode")
-            XCTAssertFalse(win.performKeyEquivalent(with: key(17, "t", .command)), "#1471: Command-T is not the window's")
+            XCTAssertTrue(win.performKeyEquivalent(with: key(17, "t", .command)), "R1471a-s1: Command-T is swallowed in a terminal pane")
             XCTAssertTrue(m.paneHasTerminal)
             XCTAssertTrue(m.focusSelection())
             XCTAssertTrue(m.terminal.focusPending)

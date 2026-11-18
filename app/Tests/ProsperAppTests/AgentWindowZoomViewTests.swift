@@ -100,7 +100,7 @@ extension AgentWindowD1Tests {
                 func same(_ s: [String: CGRect], _ keys: [String], _ why: String) {
                     for k in keys { assertSame(s[k], base[k], "\(k): \(why) (\(scale))") }
                 }
-                let slots = ["band", "layout", "chip", "all", "picker"]
+                let slots = ["band", "layout", "chip", "all"]   // #1471: the band's "picker" slot went with the detail level
 
                 m.adopt(try m.layout.focus(try XCTUnwrap(m.layout.order.dropFirst().first)).get())
                 XCTAssertTrue(m.perform(.zoom))

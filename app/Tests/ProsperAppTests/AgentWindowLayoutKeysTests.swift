@@ -139,7 +139,7 @@ extension AgentWindowD1Tests {
             (layoutKeyEvent(29, [.command], "0"), .font(0)),
             (layoutKeyEvent(24, [.command, .shift], "+"), .font(1)),
             (layoutKeyEvent(13, [.command], "w"), .close),
-            (layoutKeyEvent(17, [.command], "t"), .pass),   // #1471
+            (layoutKeyEvent(17, [.command], "t"), .swallow),   // R1471a-s1: a terminal pane swallows it
             (layoutKeyEvent(3, [.command], "f"), .find),
             (layoutKeyEvent(5, [.command], "g"), .findNext(true)),
             (layoutKeyEvent(5, [.command, .shift], "G"), .findNext(false)),
