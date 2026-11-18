@@ -238,7 +238,7 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
     }
 
     @MainActor
-    func testRemoteAttachFailureShowsTheCardAndNeverRetriesByItself() throws {
+    func testRemoteAttachFailureShowsTheCardAndRetriesOnlyAfterItsBackoff() throws {
         let lister = Lister(Self.fixture)
         let (m, _, log) = model(lister, sessions: [])
         defer { m.close() }
@@ -248,7 +248,7 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         log.ios.last?.exit(1)
         spin { m.terminal.phase != .live }
         XCTAssertEqual(m.terminal.phase, .failed("Lost the connection to host-a"))
-        XCTAssertEqual(log.spawns.count, 1, "no automatic retry")
+        XCTAssertEqual(log.spawns.count, 1, "#896: the automatic retry waits for its backoff (this rig's clock never runs)")
         m.terminal.retry()   // the card's Reconnect
         XCTAssertEqual(log.spawns.count, 2)
         XCTAssertEqual(m.terminal.phase, .live)

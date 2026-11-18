@@ -29,6 +29,25 @@ enum AgentTranscriptMapping {
         return out
     }
 
+    /// #896 (dch ask 1): `cols`, `rows` and `clients` by row name (dch.c:17267-17270 at v1.99.0; left out for a master
+    /// too old to say). Outside values: only plain JSON integers, a size that fits a winsize (1...65535) and a client
+    /// count from 0; anything else has no entry.
+    static func ptySizes(_ data: Data) -> [String: AgentSessionPty] {
+        guard !data.isEmpty, let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [:] }
+        func int(_ v: Any?) -> Int? {
+            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            return n as? Int   // nil for a fraction or a value outside Int
+        }
+        var out: [String: AgentSessionPty] = [:]
+        for o in rows {
+            guard let name = o["name"] as? String, !name.isEmpty, let cols = int(o["cols"]), let rows = int(o["rows"]),
+                  let clients = int(o["clients"]), (1...65535).contains(cols), (1...65535).contains(rows), clients >= 0
+            else { continue }
+            out[name] = AgentSessionPty(cols: cols, rows: rows, clients: clients)
+        }
+        return out
+    }
+
     /// name → mapping. Tolerant (rule 2): a row without both, a non-UUID-shaped id or
     /// a path that is not an absolute `.jsonl` maps to nothing, so the session opens
     /// terminal-first (fail closed, never a guessed file).
@@ -1236,6 +1255,14 @@ final class AgentWindowModel: ObservableObject {
         terminal.cwd = { [weak self] key in self?.store?.sessions.first { $0.key == key }?.cwd }
     }
 
+    /// #896: each terminal's session pty size and clients from this list (the Fit here chip); a remote key has no row.
+    private func feedPty(_ sessions: [AgentSession]) {
+        for t in allTerminals {
+            let p = t.key.flatMap { k in sessions.first { $0.key == k }?.pty }
+            if t.sessionPty != p { t.sessionPty = p }
+        }
+    }
+
     /// The window's active layout replaced: a layout switch, or a focus or tree change (saved, 8.1). Only tests call it
     /// before B2/B3 route verbs, with multi-pane layouts built under the split gate (15.0).
     func adopt(_ l: PaneLayout) {
@@ -1565,6 +1592,7 @@ final class AgentWindowModel: ObservableObject {
                     self?.seeSpawn(v.0)
                     self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
                     self?.pollRemote()
+                    self?.feedPty(v.0)   // #896: after the refresh, so a terminal it just attached gets its row
                     self?.stampLastLive(v.0)   // after the refresh: a pane it just filled is stamped by this publish
                 }
             }

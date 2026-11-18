@@ -63,6 +63,13 @@ struct AgentSessionKey: Hashable {
     let name: String
 }
 
+/// #896: a local session's pty size and attached client count, as dch's `--ls-json` gives them.
+struct AgentSessionPty: Equatable {
+    let cols: Int
+    let rows: Int
+    let clients: Int
+}
+
 struct AgentSession: Equatable, Identifiable {
     let key: AgentSessionKey
     var alias: String
@@ -108,6 +115,8 @@ struct AgentSession: Equatable, Identifiable {
     /// QA #606 INFO-1b: the state word dch printed ("" when it gave none), for Remote Terminal's cached list so
     /// an unknown state is absent from the row as a fork's is. nil: built here, the cache words `state`.
     var wireState: String? = nil
+    /// #896: dch's `cols`/`rows`/`clients` (AgentTranscriptMapping.ptySizes); nil when dch leaves them out.
+    var pty: AgentSessionPty? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -772,6 +781,7 @@ enum AgentIsland {
             var rows = DchCommand.parseListJSON(json)
             let mapping = AgentTranscriptMapping.parse(json)   // #797: the same bytes, no second fork
             let foreground = AgentTranscriptMapping.foregrounds(json)   // #1291: also for a row with no transcript
+            let ptys = AgentTranscriptMapping.ptySizes(json)   // #896: the Fit here chip
             if rows.isEmpty {
                 guard let tsv = run(["-lj"], env) else {
                     return previous.filter { $0.key.dir == dir }.map { var s = $0; s.fresh = false; return s }
@@ -789,7 +799,7 @@ enum AgentIsland {
                              claudeSessionID: edit ? nil : mapping[row.name]?.sessionID,
                              transcriptPath: edit ? nil : mapping[row.name]?.path,
                              claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
-                             wireState: edit ? "idle" : row.state)
+                             wireState: edit ? "idle" : row.state, pty: ptys[row.name])
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }

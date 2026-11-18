@@ -229,6 +229,13 @@ final class AgentTerminalController: ObservableObject {
     let writer = AgentTerminalWriter()
     /// One automatic reattach per attach (an exit 0 while the session is live).
     private var reattached = false
+    /// #896 (dch ask 4): automatic reconnects of a remote attach since the human's last pick or Reconnect, or since an
+    /// attach that settled; at most `reconnectBackoff.count`.
+    private var reconnects = 0
+    /// #896: a reconnect is scheduled (the card says so).
+    @Published private(set) var reconnecting = false
+    /// #896 (dch ask 1): the session's pty size and attached clients from the store's `--ls-json`; the window model feeds it.
+    @Published var sessionPty: AgentSessionPty?
     private(set) var generation = 0
     private var resizeGeneration = 0
     private var backlogged = false
@@ -255,6 +262,11 @@ final class AgentTerminalController: ObservableObject {
     static let scrollbackRows = 2000
     /// An attach that fed no byte by then gets one redraw (a quiet program repaints).
     static let quietRedrawAfter: TimeInterval = 0.7
+    /// #896 (dch ask 4): the delays before each automatic reconnect after a lost link; past the last, the card's Reconnect.
+    static let reconnectBackoff: [TimeInterval] = [1, 2, 4, 8, 16]
+    /// #896: a remote attach that stays up this long starts the backoff over.
+    static let reconnectSettled: TimeInterval = 30
+    static let sizedElsewhereText = "Sized for another window"
 
     // Seams.
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
@@ -324,6 +336,8 @@ final class AgentTerminalController: ObservableObject {
         detach()
         self.key = key
         reattached = false
+        reconnects = 0
+        sessionPty = nil   // #896: the last session's size never shows on this one
         closeFind(refocus: false)   // QA #694 INFO-1: the find bar goes with the session, the keys stay put
         guard key != nil else { phase = .idle; return }
         begin()
@@ -350,6 +364,7 @@ final class AgentTerminalController: ObservableObject {
     func retry() {
         guard key != nil, child == nil else { return }
         reattached = false
+        reconnects = 0
         begin()
     }
 
@@ -357,6 +372,7 @@ final class AgentTerminalController: ObservableObject {
     private func begin() {
         generation += 1
         let gen = generation
+        reconnecting = false
         backlogged = false
         sentSize = nil
         screenGrid = nil
@@ -426,6 +442,12 @@ final class AgentTerminalController: ObservableObject {
             after(Self.quietRedrawAfter) { [weak self] in
                 guard let self, self.generation == gen, !self.fed else { return }
                 self.child?.redraw()
+            }
+            if remoteHost != nil {
+                after(Self.reconnectSettled) { [weak self] in
+                    guard let self, self.generation == gen, self.child != nil else { return }
+                    self.reconnects = 0
+                }
             }
         } catch {
             inbox = nil
@@ -518,6 +540,20 @@ final class AgentTerminalController: ObservableObject {
         child.redraw()
     }
 
+    /// #896 (dch ask 1): "Sized for another window": a local session another client holds at a size other than this pane's.
+    var sizedElsewhere: Bool {
+        guard remoteHost == nil, phase == .live, child != nil, let grid, let p = sessionPty, p.clients > 1 else { return false }
+        return p.cols != grid.cols || p.rows != grid.rows
+    }
+
+    /// #896: Fit here. The session takes this pane's size by the focus-in path: the jiggle makes the dch client re-send
+    /// its winsize (a same-size TIOCSWINSZ sends no SIGWINCH). The chip hides until the next list says otherwise.
+    func fitHere() {
+        guard sizedElsewhere, let child else { return }
+        sessionPty = nil
+        child.redraw()
+    }
+
     /// Raw bytes to the program (an image-only paste's ^V).
     func input(_ bytes: [UInt8]) {
         guard child != nil else { return }
@@ -529,7 +565,7 @@ final class AgentTerminalController: ObservableObject {
         child = nil
         writer.child = nil
         inbox = nil
-        // #836 (e): a remote attach never retries by itself: the card and its Reconnect (dch's `-a host:name` exit codes).
+        // dch's `-a host:name` exit codes (remote.h:47-53 at v1.99.0): 0 ended or detached, 1 lost, 4 refused, 5 taken.
         if let host = remoteHost {
             switch code {
             case 0: phase = .ended
@@ -538,6 +574,9 @@ final class AgentTerminalController: ObservableObject {
             default: phase = .failed("Lost the connection to \(OutsideText.shown(host))")
             }
             revealed = true
+            // #896 (dch ask 4): only a lost link retries by itself ("a retry may work"); refused, taken, ended and
+            // detached never do, nor any other code.
+            if code == 1 { reconnectLater() }
             return
         }
         // INFO-4: the store's list trails the socket, so a stale "live" never flashes "Couldn't attach".
@@ -559,6 +598,20 @@ final class AgentTerminalController: ObservableObject {
         revealed = true   // the card shows over the background
     }
 
+    /// #896: the next automatic reconnect after its backoff, unless the cap is spent. A pick, Reconnect, a detach or
+    /// another attach in between moves `generation` and drops it.
+    private func reconnectLater() {
+        guard reconnects < Self.reconnectBackoff.count else { return }
+        let gen = generation, k = key
+        let delay = Self.reconnectBackoff[reconnects]
+        reconnects += 1
+        reconnecting = true
+        after(delay) { [weak self] in
+            guard let self, self.generation == gen, self.key == k, self.child == nil else { return }
+            self.begin()
+        }
+    }
+
     private func show(_ text: String) {
         notice = text
         after(Self.noticeFor) { [weak self] in if self?.notice == text { self?.notice = nil } }
@@ -567,6 +620,7 @@ final class AgentTerminalController: ObservableObject {
     /// Hidden, deselected, switched to Transcript, closed: the client goes (SIGHUP, then SIGKILL).
     func detach() {
         generation += 1
+        reconnecting = false
         inbox?.close()
         inbox = nil
         child?.terminate()
@@ -1120,6 +1174,16 @@ struct AgentTerminalPane: View {
             .overlay(alignment: .topTrailing) {
                 VStack(alignment: .trailing, spacing: sz(6)) {
                     if controller.findOpen { AgentTerminalFindBar(controller: controller) }
+                    if controller.sizedElsewhere {   // #896 (dch ask 1)
+                        HStack(spacing: sz(6)) {
+                            Text(AgentTerminalController.sizedElsewhereText).foregroundStyle(Neon.textSecondary)
+                            Button("Fit here") { controller.fitHere() }.buttonStyle(.plain).foregroundStyle(Neon.blue)
+                                .help("Resize the session to this pane")
+                        }
+                        .font(Neon.font(10.5, weight: .medium))
+                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+                        .background(Capsule().fill(Neon.card))
+                    }
                     if let n = controller.notice {
                         Text(n).font(Neon.font(10.5, weight: .medium)).foregroundStyle(Neon.textSecondary)
                             .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
@@ -1146,8 +1210,9 @@ struct AgentTerminalPane: View {
                 AgentPillButton(title: "Reattach", icon: "arrow.clockwise", tint: Neon.blue) { controller.retry() }
             }
         case .failed(let why) where controller.remoteHost != nil:
-            // #836 (e): no auto-retry; Reconnect is the human's (no Open in terminal: there is no local session).
-            AgentTerminalCard(icon: "exclamationmark.triangle.fill", text: why) {
+            // #896: a lost link retries by itself a few times (the card says so); Reconnect is now. No Open in terminal:
+            // there is no local session.
+            AgentTerminalCard(icon: "exclamationmark.triangle.fill", text: controller.reconnecting ? why + ". Reconnecting…" : why) {
                 AgentPillButton(title: "Reconnect", icon: "arrow.clockwise", tint: Neon.blue) { controller.retry() }
             }
         case .failed(let why):

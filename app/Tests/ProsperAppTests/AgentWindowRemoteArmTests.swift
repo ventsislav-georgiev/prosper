@@ -177,7 +177,7 @@ final class AgentWindowRemoteArmTests: XCTestCase {
         rows.spin { m.terminal.phase != .live }
         XCTAssertEqual(m.terminal.phase, .failed("Lost the connection to host-a"))
         m.refresh()
-        XCTAssertEqual(log.spawns.count, 1, "no retry by itself")
+        XCTAssertEqual(log.spawns.count, 1, "#896: a re-list never retries; the backoff does (this rig's clock never runs)")
         m.terminal.retry()   // Reconnect
         XCTAssertEqual(log.spawns.count, 2)
     }

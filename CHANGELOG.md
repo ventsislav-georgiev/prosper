@@ -1879,6 +1879,9 @@ tag from the now-released section and put it on the new top draft.
 - Remote Terminal: when a session on the Mac is detached (for example with `dch -d` on the Mac), a
   connected client is now told it was a detach and the session is still running, instead of seeing
   what looked like the session ending. (#1119)
+- Agent Sessions: a terminal pane whose session another window holds at a different size now offers
+  "Sized for another window · Fit here", and a session on another Mac reconnects by itself a few
+  times after a lost connection (never when it was opened on another device or refused). (#896)
 
 ## v2.174.0
 
