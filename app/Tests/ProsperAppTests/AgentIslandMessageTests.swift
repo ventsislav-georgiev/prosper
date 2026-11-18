@@ -29,6 +29,8 @@ final class AgentIslandMessageTests: XCTestCase {
         var dirs: [String] = []
         var out: [String: (String, Int32)] = [:]
         var hold: DispatchSemaphore?
+        /// #1104: with `readHold`, each `--read` waits on it after it is logged (a held read: no real wait).
+        var readHold: DispatchSemaphore?
         var screens: [String: String] = [:]
         var noMirror = false
         var events: [String] = []
@@ -55,10 +57,12 @@ final class AgentIslandMessageTests: XCTestCase {
             AgentPromptIO(read: { key in
                 let r = self.lock.withLock { self.made }
                 let held = r?.isBusy(key) ?? false, main = Thread.isMainThread
-                return self.lock.withLock {
+                let (screen, h) = self.lock.withLock { () -> (String, DispatchSemaphore?) in
                     self.events.append("read \(key.name) held=\(held) main=\(main)")
-                    return self.screens[key.name] ?? AgentWindowInteractionTests.idleScreen
+                    return (self.screens[key.name] ?? AgentWindowInteractionTests.idleScreen, self.readHold)
                 }
+                h?.wait()
+                return screen
             }, status: { _ in "idle" }, send: { _, _ in }, noMirror: { _ in self.lock.withLock { self.noMirror } })
         }
         var args: [[String]] { lock.withLock { launches } }
@@ -195,7 +199,8 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "api")], "Sending…")
         settle { store.actions[AgentSessionKey(dir: "/d", name: "")] != "Sending…" && store.actions[AgentSessionKey(dir: "/e", name: "")] != "Sending…" }
         XCTAssertEqual(p.says.sorted { $0.count > $1.count }, [["--say", "api", "api-qa", "--json", "--", "hi"], ["--say", "web", "--json", "--", "hi"]])
-        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "1 sent, 1 skipped")
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], "1 sent, 1 skipped. 1 skipped: name starts with “-”.",
+                       "#1104: the \"-\" row left out is said")
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/e", name: "")], "1 failed")
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "api")], "Sent")
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "api-qa")], "no claude runs in the session")
@@ -212,6 +217,9 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(AgentIsland.messageTally(result(Self.say("a", "ok") + "\n" + Self.say("a", "ok")), names: ["a"]), "1 sent",
                        "one name, one count")
         XCTAssertEqual(AgentIsland.messageTally(result("", stopped: true), names: ["a"]), "Message all cancelled: no answer in 1m")
+        XCTAssertEqual(AgentIsland.messageTally(result(Self.say("a", "ok")), names: ["a"], dashed: 2),
+                       "1 sent. 2 skipped: name starts with “-”.", "#1104: the \"-\" names left out")
+        XCTAssertEqual(AgentIsland.messageTally(result(Self.say("a", "ok")), names: ["a"], dashed: 0), "1 sent")
     }
 
     /// Under Sidekicks the item and the names are the sidekicks'; under History, the session tab's (as Stop all).
@@ -422,28 +430,183 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(ds.actions[AgentSessionKey(dir: "/d", name: "a")], "Couldn't confirm. Open in terminal")
     }
 
-    /// A 2 MB paste: argv that long fails the spawn (Process.run throws E2BIG; runCapturingBoth returns
-    /// status -1 and no output). The fake runner returns that: the row and the dir line read failed.
+    /// #1104 (QA #836 INFO-5): a text past 256 KB (UTF-8 bytes) is never spawned: its argv would pass ARG_MAX and
+    /// read "Message failed (exit -1)". The composer closes and the row, or Message all's dir line, says why; at the
+    /// cap it goes, one argv element, whole.
     @MainActor
-    func testArgvTooLongReadsFailed() throws {
-        let big = String(repeating: "x", count: 2_000_000)
+    func testTextPastTheCapIsRefusedWithItsReason() throws {
         let p = Proc()
-        p.out["/d"] = ("", -1)
+        p.out["/d"] = (Self.say("a", "ok"), 0)
         let c = controller(p, [session("a"), session("b")])
         let store = try XCTUnwrap(c.store)
-        c.askMessage(session("a"))
-        store.typeMessage(big)
-        c.sendMessage()
         let a = AgentSessionKey(dir: "/d", name: "a"), dir = AgentSessionKey(dir: "/d", name: "")
-        settle { store.actions[a] != "Sending…" }
-        XCTAssertEqual(store.actions[a], "Message failed (exit -1)")
-        XCTAssertEqual(p.says.first?.last?.count, 2_000_000, "one argv element, whole")
-        c.askMessageAll()
-        store.typeMessage(big)
+        c.askMessage(session("a"))
+        store.typeMessage(String(repeating: "x", count: AgentIsland.messageCap + 1))
         c.sendMessage()
-        settle { store.actions[dir] != "Sending…" }
-        XCTAssertEqual(store.actions[dir], "2 failed")
-        XCTAssertEqual(p.says.count, 2)
+        XCTAssertTrue(store.messageDraft == nil, "the composer closes")
+        XCTAssertEqual(store.actions[a], "Message not sent: longer than 256 KB")
+        XCTAssertEqual(p.args, [], "nothing spawned")
+        c.askMessageAll()
+        store.typeMessage(String(repeating: "\u{E9}", count: AgentIsland.messageCap / 2 + 1))   // bytes, not characters
+        c.sendMessage()
+        XCTAssertEqual(store.actions[dir], AgentIsland.messageTooLongText)
+        XCTAssertEqual(p.args, [])
+        c.askMessage(session("a"))
+        store.typeMessage(String(repeating: "x", count: AgentIsland.messageCap))
+        c.sendMessage()
+        settle { store.actions[a] != "Sending\u{2026}" }
+        XCTAssertEqual(store.actions[a], "Sent")
+        XCTAssertEqual(p.says.first?.last?.utf8.count, AgentIsland.messageCap, "at the cap: one argv element, whole")
+    }
+
+    // MARK: - #1104: the 584 review's follow-ups
+
+    /// Item 1: a Message all cancelled while its first screen read is held (DchActionRunner.cancel, what the 60 s idle
+    /// bound calls, here with no 60 s wait) launches no say once the reads end, and its dir line reads cancelled.
+    @MainActor
+    func testMessageAllCancelledDuringItsReadsLaunchesNothing() throws {
+        let p = Proc(), reads = DispatchSemaphore(value: 0)
+        p.readHold = reads
+        let c = controller(p, [session("a"), session("b")])
+        let store = try XCTUnwrap(c.store)
+        let dir = AgentSessionKey(dir: "/d", name: "")
+        defer {
+            p.lock.withLock { p.readHold = nil }
+            reads.signal()
+        }
+        c.askMessageAll()
+        store.typeMessage("hi")
+        c.sendMessage()
+        settle { p.log.count == 1 }
+        XCTAssertEqual(p.log, ["read a held=true main=false"], "the first read is held")
+        c.runner.cancel(dir)
+        p.lock.withLock { p.readHold = nil }
+        reads.signal()
+        settle { store.actions[dir] != "Sending\u{2026}" }
+        XCTAssertEqual(p.args, [], "nothing launched after the reads")
+        XCTAssertEqual(store.actions[dir], "Message all cancelled: no answer in 1m")
+        XCTAssertFalse(c.runner.isBusy(dir), "reaped")
+    }
+
+    /// The screen reads' clock and log: each read costs `cost[name]` seconds of the fake clock and returns the
+    /// name's next screen (the last one stays; none: Claude's idle composer).
+    private final class Reads: @unchecked Sendable {
+        let lock = NSLock()
+        var t: TimeInterval = 0
+        var log: [String] = []
+        var cost: [String: TimeInterval] = [:]
+        var screens: [String: [String]] = [:]
+        var io: AgentPromptIO {
+            AgentPromptIO(read: { key in
+                self.lock.withLock {
+                    self.log.append(key.name)
+                    self.t += self.cost[key.name] ?? 0
+                    var s = self.screens[key.name] ?? []
+                    let shown = s.count > 1 ? s.removeFirst() : s.first ?? AgentWindowInteractionTests.idleScreen
+                    self.screens[key.name] = s
+                    return shown
+                }
+            }, status: { _ in "idle" }, send: { _, _ in })
+        }
+        func clock() -> TimeInterval { lock.withLock { t } }
+    }
+
+    private func skips(_ out: Data) -> [String] {
+        AgentIsland.actionResult(status: 0, output: out).json.map { "\($0.name): \($0.detail ?? "")" }
+    }
+
+    /// Items 2 and 4 (QA #836 INFO-4): a pass of reads slower than 2 s (a stuck session's 8 s timeout) is read once
+    /// more over the names it cleared, so a prompt that came up meanwhile is refused; a fast pass is read once; the
+    /// first pass starts no read at 20 s, the re-read none at 40 s, so the reads end inside the 60 s bound (fake clock).
+    func testScreenReadsReReadASlowPassAndStopInTime() {
+        let slow = Reads()
+        slow.cost = ["b": 8]
+        slow.screens = ["a": [T.idleScreen, T.planScreen(caret: 1, footer: nil)], "b": [""]]
+        let g = AgentIsland.messageScreens(slow.io, dir: "/d", names: ["a", "b", "c"], clock: slow.clock)
+        XCTAssertEqual(g.names, ["c"], "a showed a prompt by the re-read")
+        XCTAssertEqual(slow.log, ["a", "b", "c", "a", "c"])
+        XCTAssertEqual(skips(g.out), ["b: \(AgentWindowText.unconfirmed)", "a: \(AgentWindowText.promptShown)"])
+        let fast = Reads()
+        let f = AgentIsland.messageScreens(fast.io, dir: "/d", names: ["a", "b"], clock: fast.clock)
+        XCTAssertEqual(f.names, ["a", "b"])
+        XCTAssertEqual(fast.log, ["a", "b"], "a fast pass is read once")
+        let stuck = Reads()
+        stuck.cost = ["n1": 8, "n2": 8, "n3": 8, "n4": 8]
+        let s = AgentIsland.messageScreens(stuck.io, dir: "/d", names: ["n1", "n2", "n3", "n4"], clock: stuck.clock)
+        XCTAssertEqual(stuck.log, ["n1", "n2", "n3", "n1", "n2"], "no read starts at 20 s, nor a re-read at 40 s")
+        XCTAssertEqual(s.names, ["n1", "n2"])
+        XCTAssertEqual(skips(s.out), ["n4: \(AgentWindowText.unconfirmed)", "n3: \(AgentWindowText.unconfirmed)"])
+        XCTAssertLessThan(AgentIsland.messageRereadBy + 16, DchActionRunner.messageBound, "a last read and its probe end in the bound")
+    }
+
+    /// Item 3 (QA: cannot happen): every refused control gate names the dch it needs, so the fallen-gate line is
+    /// never a bare "Controls ".
+    func testARefusedGateAlwaysNamesTheDchItNeeds() {
+        let cases: [(DchCommand.Binary?, [String])] = [(nil, []), (Self.v1230, []), (Self.v1240, ["1.30.0"]), (Self.v1240, ["x"])]
+        for (dch, masters) in cases {
+            let gate = DchCommand.gate(dch, masters: masters, minimum: AgentIsland.controlMinimum)
+            XCTAssertTrue(gate.refusal?.hasPrefix("needs dch 1.") ?? gate.isOK, "\(String(describing: dch?.version)) \(masters)")
+        }
+        XCTAssertFalse(DchCommand.gate(Self.v1240, masters: ["1.30.0"], minimum: AgentIsland.controlMinimum).isOK)
+    }
+
+    /// Item 5 (QA #836 INFO-2): a window action, then a card click (its screen read held), in flight on a row: Message…
+    /// refuses with the busy text, and Message all refuses that row's dir whole and sends to the others.
+    @MainActor
+    func testBusyWhileAWindowActionOrACardClickIsInFlight() throws {
+        let p = Proc(), gate = DispatchSemaphore(value: 0), reads = DispatchSemaphore(value: 0)
+        let c = controller(p, [session("api"), session("web", dir: "/e")])
+        let store = try XCTUnwrap(c.store)
+        let api = AgentSessionKey(dir: "/d", name: "api")
+        defer {
+            gate.signal()
+            p.lock.withLock { p.readHold = nil }
+            reads.signal()
+        }
+        XCTAssertTrue(c.humanAction(session("api"), prompt: nil, run: { _ in gate.wait() }) { _ in })
+        c.askMessage(session("api"))
+        XCTAssertTrue(store.messageDraft == nil, "a window action holds the row: no composer")
+        XCTAssertEqual(store.actions[api], AgentIsland.messageBusyText)
+        store.actions[api] = nil
+        c.askMessageAll()
+        store.typeMessage("hi")
+        c.sendMessage()
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "")], AgentIsland.messageBusyText, "its dir, whole")
+        settle { p.says.count == 1 }
+        XCTAssertEqual(p.says, [["--say", "web", "--json", "--", "hi"]])
+        gate.signal()
+        settle { !c.heldByAutoAllow(api) }
+        XCTAssertFalse(c.heldByAutoAllow(api))
+        p.lock.withLock { p.readHold = reads }
+        let prompt = try XCTUnwrap(AgentPrompt.parse(T.permission()))
+        let option = try XCTUnwrap(prompt.options.first)
+        store.actions[api] = nil
+        c.answer(session("api"), prompt, option)
+        XCTAssertTrue(c.heldByAutoAllow(api), "the click is in flight")
+        c.askMessage(session("api"))
+        XCTAssertTrue(store.messageDraft == nil, "a card click holds the row too")
+        XCTAssertEqual(store.actions[api], AgentIsland.messageBusyText)
+        p.lock.withLock { p.readHold = nil }
+        reads.signal()
+        settle { !c.heldByAutoAllow(api) }
+    }
+
+    /// Item 6 (QA #836 INFO-3): Message all refused by Stop all running on the dir leaves "Stopping\u{2026}" up.
+    @MainActor
+    func testMessageAllRefusalNeverOverwritesARunningText() throws {
+        let p = Proc(), gate = DispatchSemaphore(value: 0)
+        p.hold = gate
+        let c = controller(p, [session("api")])
+        let store = try XCTUnwrap(c.store)
+        let dir = AgentSessionKey(dir: "/d", name: "")
+        defer { gate.signal() }
+        XCTAssertTrue(c.runner.start(dir, path: "/fake/dch", args: ["--stop", "api", "--json"], env: { ["DCH_SOCKET_DIR": "/d"] }, done: { _ in }))
+        store.actions[dir] = AgentIsland.stoppingText
+        c.askMessageAll()
+        store.typeMessage("hi")
+        c.sendMessage()
+        XCTAssertEqual(store.actions[dir], AgentIsland.stoppingText, "Stop all's running text stays")
+        XCTAssertEqual(p.says, [])
     }
 
     // MARK: - QA #453 L2, L3
@@ -464,6 +627,23 @@ final class AgentIslandMessageTests: XCTestCase {
         let dash = #"{"name":"-x","as":"-x","result":"failed","reason":"not_started","detail":"NOT revived — the session did not start","session_id":""}"#
         XCTAssertEqual(AgentIsland.rowText(result(dash + "\ndch: -x: refused", status: 1), name: "-x", .resume),
                        AgentIsland.dashRefusedText, "#878's words stay")
+    }
+
+    /// Item 9 (QA #836 INFO-6): the phone's Resume and Restart get the same L2/L3 words in their error frame (0x13
+    /// {"message"}, which the phone shows as written: docs/protocol/remote-frames.md), "<name>: " first.
+    func testPhoneErrorFrameCarriesTheDchLine() {
+        func message(_ frame: Data) -> String? {
+            XCTAssertEqual(frame.first, DchFrame.error)
+            let json = (try? JSONSerialization.jsonObject(with: Data(frame.dropFirst(5)))) as? [String: Any]
+            return json?["message"] as? String
+        }
+        let notStarted = #"{"name":"s3","as":"s3-2","result":"failed","reason":"not_started","detail":"NOT revived — the session did not start","session_id":""}"#
+        let resume = result(notStarted + "\ndch: s3-2: /src/prog: No such file or directory\ndch: failed to spawn session", status: 1)
+        XCTAssertEqual(message(DchControlOps.answer(named: [("s3", resume)], .resume)),
+                       "s3: Resume failed: dch: s3-2: /src/prog: No such file or directory")
+        let master = #"{"name":"a","phase":"master","result":"failed","reason":"x","detail":"not restarted (see stderr)","session_id":""}"#
+        XCTAssertEqual(message(DchControlOps.answer(named: [("a", result(master + "\ndch: a: master is gone", status: 1))], .restart)),
+                       "a: Restart failed: dch: a: master is gone")
     }
 
     // MARK: - Offscreen: accessibility tree and UI scale

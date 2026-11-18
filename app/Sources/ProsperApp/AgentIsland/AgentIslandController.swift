@@ -901,14 +901,18 @@ final class AgentIslandController {
     func sendMessage() {
         guard let store, let draft = store.messageDraft, let text = AgentIsland.messageText(draft) else { return }
         let rows = store.messageTargets, all = store.asked.tab != nil, io = io
+        let tabRows = all ? store.sessionTab.sessions : []
         store.dropQuestions()
-        guard case .ok(let dch) = store.resumeGate else {
-            let why = "Controls \(store.resumeGate.refusal ?? "")"
+        // #1104 (QA #836 INFO-5): a text past the cap closes the composer and says so, as a fallen gate does.
+        let long = text.utf8.count > AgentIsland.messageCap
+        guard !long, case .ok(let dch) = store.resumeGate else {
+            let why = long ? AgentIsland.messageTooLongText : "Controls \(store.resumeGate.refusal ?? "")"
             for s in rows { store.actions[all ? AgentSessionKey(dir: s.key.dir, name: "") : s.key] = why }
             return layout()
         }
         for (dir, group) in Dictionary(grouping: rows, by: \.key.dir).sorted(by: { $0.key < $1.key }) {
             let names = group.map(\.name), only = Set(names)
+            let dashed = tabRows.filter { $0.key.dir == dir && !AgentIsland.passable($0.name) }.count
             let key = all ? AgentSessionKey(dir: dir, name: "") : group[0].key
             let line: (@MainActor @Sendable (String) -> Void)? = { [weak self] in self?.dirLine($0, dir: dir, .message, only: only) }
             let screens: @Sendable () -> (args: [String]?, out: Data) = {
@@ -919,13 +923,14 @@ final class AgentIslandController {
             if !group.contains(where: { inFlight.contains($0.key) }) {
                 started = run(key, dch: dch, args: AgentIsland.messageArgs(names, text), running: AgentIsland.sendingText,
                               bound: DchActionRunner.messageBound, onLine: all ? line : nil, prepare: screens) { [weak self] r in
-                    if all { self?.dirDone(dir, AgentIsland.messageTally(r, names: names)) } else {
+                    if all { self?.dirDone(dir, AgentIsland.messageTally(r, names: names, dashed: dashed)) } else {
                         self?.setRow(key, AgentIsland.rowText(r, name: key.name, .message))
                     }
                 }
             }
             if !started {
-                if all { store.actions[key] = AgentIsland.messageBusyText } else { refuseBusy(key, AgentIsland.messageBusyText) }
+                // #1104 (QA #836 INFO-3): the dir line too: never over a running text ("Stopping…"), cleared once free.
+                refuseBusy(key, AgentIsland.messageBusyText)
             } else if all {
                 for s in group { store.actions[s.key] = AgentIsland.sendingText }
             }

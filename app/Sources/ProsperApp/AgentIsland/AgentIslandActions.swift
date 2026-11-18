@@ -769,6 +769,10 @@ extension AgentIsland {
     static func messageAllLabel(tab: String) -> String { "Message all in \(tab)…" }
     static let sendingText = "Sending…"
     static let messageBusyText = "Message not sent: another job is running"
+    /// #1104 (QA #836 INFO-5): the longest text sent, in UTF-8 bytes. The text is one argv element and macOS's
+    /// ARG_MAX (1 MiB) holds the argv and the env together: past it the spawn failed as "Message failed (exit -1)".
+    static let messageCap = 256 * 1024
+    static let messageTooLongText = "Message not sent: longer than 256 KB"
     /// #1135: dch 1.63's not_foreground (--say, --stop) and a click refused on claude_foreground false: Claude is
     /// suspended or in the background, so a shell would read the keys.
     static let notInFrontText = "Claude is not in front in that session; nothing was typed"
@@ -789,23 +793,51 @@ extension AgentIsland {
     /// misreads, and a pasted digit then picks a row), per name, on the job's thread: one `--read` each (and
     /// `--read`'s no-mirror probe after an empty one). The names it clears, and a skipped line in the window's
     /// words for each it refuses: a prompt on screen, or an empty read (fails closed; no mirror: noScreen).
-    static func messageScreens(_ io: AgentPromptIO, dir: String, names: [String]) -> (names: [String], out: Data) {
-        var clear: [String] = [], out = Data()
-        for name in names {
-            let key = AgentSessionKey(dir: dir, name: name), shown = io.read(key)
-            guard let why = AgentWindowDriver(key: key, io: io).refusal(shown, lite: AgentWindowText.noScreen) else {
-                clear.append(name)
-                continue
+    /// #1104 (QA #836 INFO-4): a pass of reads that took longer than `messageReadAge` is read once more over the
+    /// names it cleared, so a prompt that came up while a stuck session's read timed out (8 s) is seen before the say.
+    /// #1104 item 2: the reads are bounded on their own, inside the job's 60 s idle bound (DchActionRunner.messageBound):
+    /// the first pass starts no read at or past `messageReadBudget`, the re-read none at or past `messageRereadBy`;
+    /// a name not read in time is skipped as unconfirmed. Worst case: a read (8 s) and its no-mirror probe (8 s)
+    /// started just before 40 s end by 56 s, under 60 s.
+    static let messageReadAge: TimeInterval = 2
+    static let messageReadBudget: TimeInterval = 20
+    static let messageRereadBy: TimeInterval = 40
+
+    static func messageScreens(_ io: AgentPromptIO, dir: String, names: [String],
+                               clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) -> (names: [String], out: Data) {
+        let start = clock()
+        var out = Data()
+        func pass(_ names: [String], by: TimeInterval) -> [String] {
+            var clear: [String] = []
+            for name in names {
+                var why = AgentWindowText.unconfirmed
+                if clock() - start < by {
+                    let key = AgentSessionKey(dir: dir, name: name), shown = io.read(key)
+                    guard let refused = AgentWindowDriver(key: key, io: io).refusal(shown, lite: AgentWindowText.noScreen) else {
+                        clear.append(name)
+                        continue
+                    }
+                    why = refused
+                }
+                let line = ["name": name, "result": "skipped", "reason": "screen", "detail": why]
+                out += ((try? JSONSerialization.data(withJSONObject: line, options: .sortedKeys)) ?? Data()) + Data("\n".utf8)
             }
-            let line = ["name": name, "result": "skipped", "reason": "screen", "detail": why]
-            out += ((try? JSONSerialization.data(withJSONObject: line, options: .sortedKeys)) ?? Data()) + Data("\n".utf8)
+            return clear
         }
+        var clear = pass(names, by: messageReadBudget)
+        if clock() - start > messageReadAge { clear = pass(clear, by: messageRereadBy) }
         return (clear, out)
     }
 
     /// Message all's dir line, "N sent, K skipped, F failed", over the asked names only: a line naming
     /// another session is ignored, and an asked name with no result line counts as failed.
-    static func messageTally(_ r: DchActionResult, names: [String]) -> String {
+    /// #1104 (QA #836 INFO-3): `dashed`, the dir's rows of the tab left out for a "-" name, is said after it.
+    static func messageTally(_ r: DchActionResult, names: [String], dashed: Int = 0) -> String {
+        let tally = messageCounts(r, names: names)
+        return dashed > 0 ? tally + "." + dashSkipped(dashed) : tally
+    }
+
+    private static func messageCounts(_ r: DchActionResult, names: [String]) -> String {
         if r.stopped { return "Message all cancelled: no answer in \(Verb.message.minutes)m" }
         let asked = Set(names)
         var last: [String: String] = [:]
@@ -1695,7 +1727,13 @@ final class DchActionRunner: @unchecked Sendable {
             let prepared: (args: [String]?, out: Data) = prepare?() ?? (args, Data())
             let pre = prepared.out
             lines.add(pre)
-            let r = prepared.args.map { argv in launch(path, argv, env(), cwd, { pid in
+            // #1104: a job cancelled while `prepare` ran launches nothing and reads cancelled; the idle bound
+            // counts from the launch, so prepare's own time (a Message's screen reads) is not the say's.
+            let go = lock.withLock { () -> Bool in
+                job.lastOutput = .now()
+                return !job.cancelled
+            }
+            let r = (go ? prepared.args : nil).map { argv in launch(path, argv, env(), cwd, { pid in
                 // Cancelled before the pid was known: its one SIGTERM goes now.
                 let late = self.lock.withLock { () -> pid_t? in
                     job.pid = pid

@@ -1803,6 +1803,9 @@ tag from the now-released section and put it on the new top draft.
   choosing Automatic ends the wait. (#981)
 - After reinstalling Prosper on a Mac whose clock had run fast, the iPhone's Live Activity card
   updates again right away instead of showing old data for up to an hour. (#1074)
+- Agent island: Message all now checks screens again when reading them was slow, never types a
+  message after its job was cancelled, says which "-" sessions it left out, and refuses a message
+  over 256 KB with a clear reason instead of "Message failed (exit -1)". (#1104)
 
 ## v2.174.0
 
