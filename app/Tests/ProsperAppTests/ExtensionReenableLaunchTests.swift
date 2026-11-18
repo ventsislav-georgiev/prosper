@@ -4,7 +4,7 @@ import XCTest
 /// Records every host.notify title and which idle-sleep holds each extension has,
 /// as the live ExtensionResources would (acquire per call, all released by
 /// resetResources). Can park the lane inside prevent_idle_sleep until the test lets go.
-private final class LaunchRecordingServices: ExtensionHostServices, @unchecked Sendable {
+final class LaunchRecordingServices: ExtensionHostServices, @unchecked Sendable {
     private let lock = NSLock()
     private var _titles: [String] = []
     private var _held: [String: Set<String>] = [:]
@@ -78,9 +78,9 @@ private final class LaunchRecordingServices: ExtensionHostServices, @unchecked S
 @MainActor
 final class ExtensionReenableLaunchTests: XCTestCase {
 
-    private struct Fixture { let id: String; let system: Bool; let launch: Bool; let lua: String }
+    struct Fixture { let id: String; let system: Bool; let launch: Bool; let lua: String }
 
-    private func registry(_ services: LaunchRecordingServices, _ exts: [Fixture]) throws -> ExtensionRegistry {
+    func registry(_ services: LaunchRecordingServices, _ exts: [Fixture]) throws -> ExtensionRegistry {
         let root = tempDir("reenable-launch")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         for e in exts {
