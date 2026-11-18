@@ -319,6 +319,14 @@ enum CCPoolTestClient {
     }
 }
 
+/// #1595: the anthropic-beta values a fake upstream received, in order.
+final class CCPoolBetaBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [String] = []
+    func add(_ v: String) { lock.withLock { _values.append(v) } }
+    var values: [String] { lock.withLock { _values } }
+}
+
 final class CCPoolProxyTests: XCTestCase {
     struct Rig {
         let up: CCPoolFakeServer
@@ -393,6 +401,47 @@ final class CCPoolProxyTests: XCTestCase {
         let (seen, keys) = r.anthropic.get { ($0.seen, $0.apiKeys) }
         XCTAssertEqual(seen, ["Bearer tok-two"])
         XCTAssertEqual(keys, [], "x-api-key never goes upstream")
+    }
+
+    // #1595: the relay sends the pool's OAuth token, so anthropic-beta carries oauth-2025-04-20 (an API-key client sends none).
+    private func upstreamBeta(_ clientBeta: String?) throws -> String? {
+        let r = try rig()
+        r.setCurrent("two")
+        var headers = [("content-type", "application/json"), ("x-api-key", "client-key-should-be-dropped")]
+        if let clientBeta { headers.append(("anthropic-beta", clientBeta)) }
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: headers))
+        XCTAssertEqual(resp.status, 200)
+        let heads = r.anthropic.get { $0.heads }
+        XCTAssertEqual(heads.count, 1)
+        return heads.last?["anthropic-beta"]
+    }
+
+    func testCCPoolOAuthBetaAddedForAPIKeyClient() throws {
+        XCTAssertEqual(try upstreamBeta(nil), "oauth-2025-04-20")
+    }
+
+    func testCCPoolOAuthBetaAppendedToClientList() throws {
+        XCTAssertEqual(try upstreamBeta("a,b"), "a,b,oauth-2025-04-20", "the client's betas kept, in order")
+    }
+
+    func testCCPoolOAuthBetaNeverDuplicated() throws {
+        XCTAssertEqual(try upstreamBeta("a, OAuth-2025-04-20 ,b"), "a, OAuth-2025-04-20 ,b", "any case or spacing: unchanged")
+        XCTAssertEqual(try upstreamBeta("oauth-2025-04-20"), "oauth-2025-04-20")
+        XCTAssertEqual(CCPoolConnection.withOAuthBeta("  "), "oauth-2025-04-20", "a blank list is no list")
+        XCTAssertEqual(CCPoolConnection.withOAuthBeta("oauth-2025-04-200"), "oauth-2025-04-200,oauth-2025-04-20", "whole tokens only")
+    }
+
+    // #1595: the usage probe still sends exactly oauth-2025-04-20 itself.
+    func testCCPoolProbeBetaUnchanged() async throws {
+        let seen = CCPoolBetaBox()
+        let server = try CCPoolFakeServer { head, _ in
+            seen.add(head.header("anthropic-beta") ?? "<none>")
+            return .respond(200, [], Data())
+        }
+        defer { server.stop() }
+        let probe = await CCPoolUsage.probe(token: "tok-probe", base: URL(string: "http://127.0.0.1:\(server.port)")!, timeout: 10)
+        XCTAssertEqual(probe?.status, 200)
+        XCTAssertEqual(seen.values, ["oauth-2025-04-20"])
     }
 
     // B10: the client's hop-by-hop headers, Host and Content-Length never go upstream (#1576).

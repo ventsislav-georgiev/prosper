@@ -122,6 +122,18 @@ final class CCPoolConnection: @unchecked Sendable {
 
     static func capped(_ s: String) -> String { String(decoding: s.utf8.prefix(logFieldCap), as: UTF8.self) }
 
+    static let oauthBeta = "oauth-2025-04-20"
+    /// #1595: the client's anthropic-beta list with the OAuth beta appended once; a list that already
+    /// names it (any case or spacing) goes out unchanged.
+    static func withOAuthBeta(_ list: String?) -> String {
+        let list = list ?? ""
+        let has = list.split(separator: ",").contains {
+            $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(oauthBeta) == .orderedSame
+        }
+        if has { return list }
+        return list.trimmingCharacters(in: .whitespaces).isEmpty ? oauthBeta : list + "," + oauthBeta
+    }
+
     /// #1256 delay seam: run `go` on `queue` after `seconds`. Tests install a recorder that records the
     /// seconds and continues at once; no test runs this default.
     nonisolated(unsafe) static var throttleWait: @Sendable (_ seconds: Int, _ queue: DispatchQueue,
@@ -471,6 +483,8 @@ final class CCPoolConnection: @unchecked Sendable {
             req.addValue(value, forHTTPHeaderField: name)
         }
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        // #1595: an OAuth Bearer without this beta is refused upstream (and the 401 benches the account, #1278).
+        req.setValue(Self.withOAuthBeta(req.value(forHTTPHeaderField: "anthropic-beta")), forHTTPHeaderField: "anthropic-beta")
         if streamed {
             req.httpBodyStream = bodyIn
             bodyIn = nil
