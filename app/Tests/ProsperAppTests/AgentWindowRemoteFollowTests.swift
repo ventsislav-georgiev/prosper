@@ -109,6 +109,34 @@ final class AgentWindowRemoteFollowTests: XCTestCase {
         XCTAssertEqual(lines.append(Data()), [])
     }
 
+    /// #1486 B4: the cut tail never grows past the cap; an over-long line is dropped through its newline.
+    func testAnOverlongFollowLineIsDroppedAndTheNextGoodLineStillComes() {
+        let max = AgentRemoteFollowLines.maxPending
+        let good = Data("good\n".utf8)
+        var lines = AgentRemoteFollowLines()
+        XCTAssertEqual(lines.append(Data(repeating: UInt8(ascii: "x"), count: max + 1)), [])
+        XCTAssertTrue(lines.pending.count <= max, "pending never above the cap")
+        XCTAssertEqual(lines.append(Data(repeating: UInt8(ascii: "x"), count: 100)), [], "still dropping")
+        XCTAssertTrue(lines.pending.count <= max)
+        XCTAssertEqual(lines.append(Data("tail\n".utf8) + good), [Data("good".utf8)], "the newline ends the drop")
+
+        var one = AgentRemoteFollowLines()
+        XCTAssertEqual(one.append(Data(repeating: UInt8(ascii: "x"), count: max + 1) + Data("\n".utf8) + good),
+                       [Data("good".utf8)], "over-long line and good line in one read")
+        XCTAssertTrue(one.pending.isEmpty)
+
+        // Exactly max bytes then a newline: not over the cap, so it is emitted like any line.
+        var exact = AgentRemoteFollowLines()
+        let full = Data(repeating: UInt8(ascii: "y"), count: max)
+        XCTAssertEqual(exact.append(full), [])
+        XCTAssertEqual(exact.pending.count, max)
+        XCTAssertEqual(exact.append(Data("\n".utf8)), [full])
+
+        var split = AgentRemoteFollowLines()
+        XCTAssertEqual(split.append(Data("go".utf8)), [])
+        XCTAssertEqual(split.append(Data("od\n".utf8)), [Data("good".utf8)], "a good line split across reads joins")
+    }
+
     @MainActor
     func testABadLineKeepsTheLastGoodRows() throws {
         let (m, _, rig) = model([1, 62, 0])

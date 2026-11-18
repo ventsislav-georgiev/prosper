@@ -10,16 +10,35 @@ protocol AgentRemoteFollowHandle: AnyObject {
 }
 
 /// Splits the follow stream into complete lines: a line cut across reads waits for its newline.
+/// A line longer than `maxPending` bytes is dropped up to and including its newline (the remote list is outside data).
 struct AgentRemoteFollowLines {
-    private var pending = Data()
+    /// 1 MiB, the cap the other bounded readers use (TOMLGuard.maxBytes); no shared dch-reader constant exists.
+    static let maxPending = 1 << 20
+    private(set) var pending = Data()
+    private var dropping = false
 
-    /// Every line `chunk` completes, in order, without its "\n"; the cut tail is kept for the next chunk.
+    /// Every line `chunk` completes, in order, without its "\n"; the cut tail (at most `maxPending`) is kept for the next chunk.
     mutating func append(_ chunk: Data) -> [Data] {
-        pending.append(chunk)
-        guard let last = pending.lastIndex(of: UInt8(ascii: "\n")) else { return [] }
-        let lines = pending[..<last].split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true).map { Data($0) }
-        pending = Data(pending[pending.index(after: last)...])
-        return lines
+        var lines: [Data] = []
+        var rest = chunk[...]
+        while true {
+            let nl = rest.firstIndex(of: UInt8(ascii: "\n"))
+            let seg = nl.map { rest[..<$0] } ?? rest
+            if dropping {
+                if nl != nil { dropping = false }
+            } else if pending.count + seg.count > Self.maxPending {
+                pending = Data()
+                dropping = nl == nil
+            } else {
+                pending.append(seg)
+                if nl != nil {
+                    if !pending.isEmpty { lines.append(pending) }
+                    pending = Data()
+                }
+            }
+            guard let nl else { return lines }
+            rest = rest[rest.index(after: nl)...]
+        }
     }
 }
 
