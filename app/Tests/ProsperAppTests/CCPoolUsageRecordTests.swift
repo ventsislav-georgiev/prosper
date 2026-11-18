@@ -71,8 +71,8 @@ final class CCPoolUsageRecordTests: XCTestCase {
 
     private func row(_ acct: String, sess: String = "", qc: Bool = false, done: Bool = true, att: Int = 1, thr: Int = 0,
                      mv: Bool = false, routed: String = "pick", counts: Bool = true, st: Int = 200,
-                     answered: Bool = false) -> String {
-        "{\"v\":1,\"t\":1800000000.250,\"acct\":\"\(acct)\",\"model\":\"claude-opus-5\"\(sess),\"path\":\"messages\",\"st\":\(st),\"ms\":0,"
+                     answered: Bool = false, path: String = "messages") -> String {
+        "{\"v\":1,\"t\":1800000000.250,\"acct\":\"\(acct)\",\"model\":\"claude-opus-5\"\(sess),\"path\":\"\(path)\",\"st\":\(st),\"ms\":0,"
             + "\"done\":\(done),\"qc\":\(qc),\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\"\(routed)\""
             + (counts && !answered ? "," + recCounts : "") + (answered ? "" : "," + recLim) + "}"
     }
@@ -194,6 +194,28 @@ final class CCPoolUsageRecordTests: XCTestCase {
         let r = try rig()
         let resp = try XCTUnwrap(r.post(headers: [("content-type", "application/json"), ("origin", "http://example.com")]))
         XCTAssertEqual(resp.status, 403)
+        XCTAssertEqual(r.rows(), [])
+    }
+
+    /// #1572 (O11): a path that cannot form a URL gets the pool's own 400 after the relay began: one row (st 400, path
+    /// "other", no counts, the account of the attempt), the client's bytes the 400 it always got.
+    func testBadRequestPath400HasOneRowAndTheClientBytesAreUnchanged() throws {
+        let r = try rig()
+        // Which spellings fail URL(string:) depends on the OS; pin the ones that do here.
+        let bad = try XCTUnwrap(["/v1/messages%zz", "/%", "/v1/%GG", "/v1/messages%"].first { URL(string: "http://127.0.0.1:1" + $0) == nil },
+                                "no candidate path fails URL(string:) on this OS")
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, path: bad, body: throttleWork))
+        XCTAssertEqual(resp.status, 400, resp.text)
+        XCTAssertEqual(resp.header("content-type"), "application/json")
+        XCTAssertEqual(resp.text, #"{"error":{"message":"ccpool: bad request path","type":"invalid_request_error"},"type":"error"}"#)
+        XCTAssertEqual(r.rows(), [row(r.ids.first ?? "", st: 400, answered: true, path: "other")])
+    }
+
+    /// The health path is answered locally: no relay began, so no row.
+    func testHealthAnswerHasNoRow() throws {
+        let r = try rig()
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, method: "GET", path: CCPoolService.healthPath, headers: []))
+        XCTAssertEqual(resp.status, 200)
         XCTAssertEqual(r.rows(), [])
     }
 

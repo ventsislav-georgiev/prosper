@@ -460,7 +460,11 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         let base = config.upstream.absoluteString.hasSuffix("/")
             ? String(config.upstream.absoluteString.dropLast()) : config.upstream.absoluteString
-        guard let url = URL(string: base + head.path) else { return fail(400, "bad request path", type: "invalid_request_error") }
+        guard let url = URL(string: base + head.path) else {
+            // #1572 (O11): the pool's own 400 after a relay began is one usage row too (acct of this attempt).
+            recordAnswer(400, acct: accountID)
+            return fail(400, "bad request path", type: "invalid_request_error")
+        }
         var req = URLRequest(url: url, timeoutInterval: config.timeout)
         req.httpMethod = head.method
         for (name, value) in head.headers where !Self.stripRequest.contains(name.lowercased()) {

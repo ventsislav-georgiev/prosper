@@ -1939,6 +1939,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray on a remote session keeps one connection to the host open while the Agent Sessions window is
   shown, so its reads no longer start a new connection each time; it closes when the window is
   hidden or closed. (#1561)
+- Fixed a case where a request with an unusable path got a 400 that the usage record never counted.
+  (#1572)
 
 ## v2.174.0
 

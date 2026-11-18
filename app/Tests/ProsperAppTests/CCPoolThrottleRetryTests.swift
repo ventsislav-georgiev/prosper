@@ -58,7 +58,8 @@ final class ThrottleWaitRecorder: @unchecked Sendable {
 
 /// Stands in for the upstream; each token answers its script in order, then 200.
 final class ThrottleUpstream: @unchecked Sendable {
-    enum Step { case throttle(String?), spent, status(Int) }
+    /// `drop`: run the closure, then close the connection without an answer (a pooled connection the far end dropped).
+    enum Step { case throttle(String?), spent, status(Int), drop(@Sendable () -> Void) }
     private let lock = NSLock()
     private var script: [String: [Step]] = [:]
     private var _calls: [String: Int] = [:]
@@ -89,6 +90,9 @@ final class ThrottleUpstream: @unchecked Sendable {
                 return .respond(429, h, Data(#"{"type":"error","error":{"type":"rate_limit_error","message":"busy"}}"#.utf8))
             case .spent?:
                 return .respond(429, h, Data(#"{"type":"error","error":{"type":"rate_limit_error","message":"spent"}}"#.utf8))
+            case .drop(let before)?:
+                before()
+                return .drop
             case .status(let code)?:
                 return .respond(code, [("content-type", "application/json")], Data(#"{"type":"error","error":{"message":"x"}}"#.utf8))
             case nil:
@@ -116,6 +120,19 @@ let throttleTokens = ["Example Org A": "tok-a", "Example Org B": "tok-b", "Examp
 let throttleWork = Data(#"{"model":"claude-opus-5","max_tokens":4096,"messages":[{"role":"user","content":"hi"}]}"#.utf8)
 let throttleQuotaCheck = Data(#"{"model":"claude-opus-5","max_tokens":1}"#.utf8)
 
+/// Counts token reads; everything else goes to the memory store.
+final class ReadCountingSecrets: CCPoolSecrets, @unchecked Sendable {
+    private let inner: CCPoolMemorySecrets
+    private let lock = NSLock()
+    private var _reads = 0
+    init(_ inner: CCPoolMemorySecrets) { self.inner = inner }
+    var reads: Int { lock.withLock { _reads } }
+    func store(token: String, id: String, label: String) throws { try inner.store(token: token, id: id, label: label) }
+    func token(id: String) throws -> String? { lock.withLock { _reads += 1 }; return try inner.token(id: id) }
+    func remove(id: String) throws { try inner.remove(id: id) }
+    func relabel(id: String, label: String) throws { try inner.relabel(id: id, label: label) }
+}
+
 final class CCPoolThrottleRetryTests: XCTestCase {
     struct Rig {
         let up: ThrottleUpstream
@@ -133,7 +150,9 @@ final class CCPoolThrottleRetryTests: XCTestCase {
     }
 
     /// The wait recorder is installed FIRST, before any listener exists, and restored at teardown.
-    private func rig(_ count: Int = 2, replayCap: Int = 32 << 20) throws -> Rig {
+    /// `wrap`: what the service reads tokens through (a counting wrapper); the Rig's `secrets` stays the memory store under it.
+    private func rig(_ count: Int = 2, replayCap: Int = 32 << 20,
+                     wrap: ((CCPoolMemorySecrets) -> any CCPoolSecrets)? = nil) throws -> Rig {
         let rec = ThrottleWaitRecorder()
         let saved = CCPoolConnection.throttleWait
         CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
@@ -151,7 +170,7 @@ final class CCPoolThrottleRetryTests: XCTestCase {
         cfg.upstream = URL(string: "http://127.0.0.1:\(server.port)")!
         cfg.replayCap = replayCap
         cfg.timeout = 10
-        let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: log)
+        let service = CCPoolService(config: cfg, store: store, secrets: wrap?(secrets) ?? secrets, logger: log)
         guard case .running(let p) = service.start(), p != 0 else {
             XCTFail("proxy did not start: \(service.status)")
             throw XCTSkip("no listener")
@@ -385,5 +404,36 @@ final class CCPoolThrottleRetryTests: XCTestCase {
         XCTAssertEqual(r.post()?.status, 200)
         XCTAssertEqual(r.up.calls, ["tok-a": 2], "the throttled call and the later request only")
         XCTAssertEqual(r.rec.waits, [1])
+    }
+
+    // #1572 (O7, R1326-n1): a request that went out on a reused (pooled) connection which the far end dropped, on an
+    // account removed meanwhile (its Keychain item left): the one resend is never sent. One request reached the
+    // upstream for it, no fresh connection opened, the log says "account removed", and no token was read for the resend.
+    func testPooledDropOnAnAccountRemovedBeforeOnDoneIsNeverResent() throws {
+        var counter: ReadCountingSecrets?
+        let r = try rig(1) { mem in
+            let c = ReadCountingSecrets(mem)
+            counter = c
+            return c
+        }
+        let reads = try XCTUnwrap(counter)
+        let store = r.store, secrets = r.secrets
+        let id = try XCTUnwrap(store.snapshot.accounts["Example Org A"]?.id)
+        r.up.set("tok-a", [.status(200), .drop {
+            secrets.refuseRemove = true
+            _ = try? store.removeAccount(label: "Example Org A", secrets: secrets)
+        }])
+        XCTAssertEqual(r.post()?.status, 200, "opens the pooled connection")
+        XCTAssertEqual(r.server.accepted, 1)
+        XCTAssertEqual(reads.reads, 1)
+        let resp = try XCTUnwrap(r.post())
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(r.up.calls, ["tok-a": 2], "the first request and the dropped one; no resend")
+        XCTAssertEqual(r.server.accepted, 1, "the second request rode the pooled connection and no fresh one was opened")
+        XCTAssertTrue(store.snapshot.accounts["Example Org A"] == nil)
+        XCTAssertTrue(try secrets.token(id: id) != nil, "its Keychain item was left behind")
+        XCTAssertEqual(r.log.lines.filter { $0 == "Example Org A: account removed; skipping this account" }.count, 1, "\(r.log.lines)")
+        XCTAssertFalse(r.log.lines.contains { $0.contains("retrying once") || $0.contains("token unavailable") }, "\(r.log.lines)")
+        XCTAssertEqual(reads.reads, 2, "one read per first attempt; the resend read none")
     }
 }
