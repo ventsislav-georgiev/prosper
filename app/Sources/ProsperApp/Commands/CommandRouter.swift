@@ -696,6 +696,8 @@ enum CommandRouter {
          "text.viewfinder", .copyScreenText),
         ("Pick Color from Screen", "pick color from screen picker eyedropper hex sample swatch",
          "eyedropper", .pickColor),
+        ("Agent Island", "agent island sessions needs input dch claude notch",
+         "sparkles", .openAgentIsland),
     ]
 
     /// Bookmark extension id, shared by the snapshot + fetch.

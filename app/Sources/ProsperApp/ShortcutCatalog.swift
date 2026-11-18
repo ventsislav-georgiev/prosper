@@ -322,6 +322,7 @@ extension ShortcutAction {
         case .copyScreenText: return "text.viewfinder"
         case .pickColor: return "eyedropper"
         case .agentSessions: return "sidebar.left"
+        case .agentIsland: return "sparkles"
         }
     }
 }

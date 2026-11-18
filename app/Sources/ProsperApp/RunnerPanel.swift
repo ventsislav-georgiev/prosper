@@ -382,6 +382,11 @@ final class RunnerPanel {
             ScreenTools.copyScreenText()
         case .pickColor:
             ScreenTools.pickColor()
+        case .openAgentIsland:
+            // Island off (no store): open the Extensions pane, where it is turned on.
+            if !AgentIslandController.shared.openFocused() {
+                LiveExtensionHostServices.shared.settingsOpener?("extensions")
+            }
         }
     }
 

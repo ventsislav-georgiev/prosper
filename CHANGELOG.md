@@ -1844,6 +1844,9 @@ tag from the now-released section and put it on the new top draft.
 - The sub-agents robot is now a clean line drawing that matches the other icons and takes their
   colour, in the Sessions header count, the sidebar counts, the X-ray prompt rows and the menu.
   (#1546)
+- Agent Island: an "Agent Island" command in the launcher, and an optional global shortcut (off
+  until you record one in Settings › Agent Island), open the island expanded on the first session
+  that needs your input. (#1536)
 
 ## v2.174.0
 

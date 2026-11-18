@@ -896,7 +896,8 @@ private struct SettingsRootView: View {
         // then (#571) the sort and sidekick tabs, then (#534) the row-detail toggles.
         case "com.prosper.agentisland":
             footer = AnyView(Group {
-                AgentIslandPane(); AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentIslandLookSection(); AgentSessionsSection()
+                AgentIslandPane(); AgentIslandShortcutSection()   // #1536
+                AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentIslandLookSection(); AgentSessionsSection()
             })
         // ccpool (#871): the account pool pane as the FOOTER. The page exists only while the
         // extension is live, and going live built the owner (AppDelegate's onEnabledChanged).
@@ -1037,6 +1038,36 @@ struct AgentIslandLookSection: View {
             NeonRow(Self.label, subtitle: Self.subtitle) { Toggle("", isOn: $follows).labelsHidden().accessibilityLabel(Self.label) }
         }
         .onChange(of: follows) { _, v in Preferences.agentIslandFollowsTheme = v; ThemeStore.shared.objectWillChange.send() }
+    }
+}
+
+/// #1536 (OQ-95): Agent Island › Shortcut: the global key for Open Agent Island, off by default (no combo).
+/// The same store and recorder as the Shortcuts pane's row; a change re-registers the hotkeys at once.
+struct AgentIslandShortcutSection: View {
+    static let label = ShortcutAction.agentIsland.title
+    static let subtitle = "Opens the island on the first session that needs input. Off until you record one."
+    @State private var combo = ShortcutStore.combo(for: .agentIsland)
+
+    /// Saves `c` (unsetKeyCombo turns the shortcut off) and re-registers, as the Shortcuts pane's rows do.
+    @MainActor static func save(_ c: KeyCombo) {
+        ShortcutStore.setCombo(c, for: .agentIsland)
+        SettingsHooks.shared.onShortcutsChanged?()
+    }
+
+    var body: some View {
+        NeonSection("Shortcut") {
+            NeonRow(Self.label, subtitle: Self.subtitle) {
+                HStack(spacing: sz(6)) {
+                    ShortcutRecorder(combo: combo, actionName: Self.label) { combo = $0; Self.save($0) }
+                        .frame(width: sz(142), height: sz(24))
+                    Button { combo = unsetKeyCombo; Self.save(unsetKeyCombo) } label: { Image(systemName: "xmark.circle") }
+                        .buttonStyle(.borderless)
+                        .help("Turn this shortcut off")
+                        .accessibilityLabel("Turn off \(Self.label) shortcut")
+                        .disabled(combo.carbonModifiers == 0)
+                }
+            }
+        }
     }
 }
 

@@ -415,6 +415,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case copyScreenText
     case pickColor
     case agentSessions
+    case agentIsland
 
     var title: String {
         switch self {
@@ -439,6 +440,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .copyScreenText: return "Screen: Copy Text from Region"
         case .pickColor: return "Screen: Pick Color"
         case .agentSessions: return "Open Agent Sessions"
+        case .agentIsland: return "Open Agent Island"
         }
     }
 
@@ -466,6 +468,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .pickColor: return 19
         case .mixerToggleMicMute: return 20
         case .agentSessions: return 21
+        case .agentIsland: return 22
         }
     }
 
@@ -480,7 +483,8 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .menuBarToggleHidden: return "com.prosper.menubar"
         case .calendarTogglePopup: return "com.prosper.calendar"
         // #858: the Agent Sessions window reads the island's store, so it goes with the island.
-        case .agentSessions: return "com.prosper.agentisland"
+        // #1536: the island it opens is the extension's own.
+        case .agentSessions, .agentIsland: return "com.prosper.agentisland"
         default: return nil
         }
     }
@@ -566,6 +570,9 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .agentSessions:
             // #1177: ⇧⌥S, the same shape as Clipboard History's ⇧⌥A. A saved choice, cleared included, still wins.
             return KeyCombo(keyCode: UInt32(kVK_ANSI_S), carbonModifiers: UInt32(optionKey | shiftKey), display: "⇧⌥S")
+        case .agentIsland:
+            // #1536 (OQ-95): opt-in; the launcher's Open Agent Island command is the always-available trigger.
+            return unsetKeyCombo
         }
     }
 }

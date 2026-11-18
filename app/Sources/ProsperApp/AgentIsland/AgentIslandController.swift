@@ -1520,6 +1520,7 @@ final class AgentIslandController {
         // #581: nothing live: open on History.
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if !on {
+            store.focusKey = nil   // #1536: the next open picks its own
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.dropQuestions()
             store.actions = store.actions.filter { runner.isBusy($0.key) }   // a running one keeps its "Resuming…"
@@ -1542,6 +1543,24 @@ final class AgentIslandController {
             // Hand key focus back: out and straight back in, no animation.
             if let panel, panel.isKeyWindow { panel.orderOut(nil); layout() }
         }
+    }
+
+    /// #1536 (OQ-95): the launcher's Open Agent Island command and its optional shortcut. Opens the island
+    /// expanded (setExpanded's gates hold: nothing live and no history keeps it hidden) and focuses the first
+    /// session that needs input in drawn order, Sessions then Sidekicks (its tab is shown), else the first
+    /// session drawn. False only with no store (the extension off or untrusted), so the caller can open Settings.
+    @discardableResult
+    func openFocused() -> Bool {
+        guard let store else { return false }
+        setExpanded(true)
+        let s = store.split
+        let all = s.primary.map { ($0, false) } + s.sidekicks.map { ($0, true) }
+        guard store.expanded, let hit = all.first(where: { $0.0.state == .blocked }) ?? all.first else { return true }
+        store.historyTab = false
+        store.sidekickTab = hit.1
+        store.focusKey = hit.0.key
+        refreshCards()   // the tab may have changed: read the shown tab's blocked screens
+        return true
     }
 
     /// #1112: the open island also closes when the user turns to another Prosper window: a mouse down in

@@ -190,6 +190,8 @@ enum MetaCommand: String, Sendable {
     case copyScreenText
     /// Pick a pixel colour anywhere on screen and copy its sRGB hex.
     case pickColor
+    /// #1536 (OQ-95): open the Agent Island expanded, on the first session needing input.
+    case openAgentIsland
 
     static func parse(_ input: String) -> MetaCommand? {
         let s = input.trimmingCharacters(in: .whitespaces).lowercased()
@@ -216,6 +218,7 @@ enum MetaCommand: String, Sendable {
         case .openVolumeMixer: return "Open Volume Mixer"
         case .copyScreenText: return "Copy Text from Screen"
         case .pickColor: return "Pick Color from Screen"
+        case .openAgentIsland: return "Open Agent Island"
         }
     }
 }

@@ -792,6 +792,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .settings: return { settings().toggleFromShortcut() }
         case .agent: return { ChatWindow.shared.toggleFromShortcut() }
         case .agentSessions: return { AgentsWindow.toggleFromShortcut() }
+        // #1536: opens (never closes) the island expanded on its first card needing input.
+        case .agentIsland: return { _ = AgentIslandController.shared.openFocused() }
         case .calendarTogglePopup: return { CalendarBarController.shared.toggleFromShortcut() }
         default: return nil
         }
@@ -864,6 +866,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         add(.copyScreenText) { ScreenTools.copyScreenText() }
         add(.pickColor) { ScreenTools.pickColor() }
         addWindow(.agentSessions)
+        addWindow(.agentIsland)   // #1536: off by default (no combo), so nothing registers until one is recorded
 
         // Built-in window management: snap the frontmost window to a screen edge,
         // maximize, or centre it. Applied via Accessibility to whatever app is

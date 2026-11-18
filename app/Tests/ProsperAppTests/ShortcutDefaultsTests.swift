@@ -58,7 +58,7 @@ final class ShortcutDefaultsTests: XCTestCase {
         ]
         let expectedUnset: Set<String> = ["runnerBackslash", "toggleAutocomplete", "menuBarToggleHidden",
                                           "calendarTogglePopup", "mixerCycleOutput", "mixerToggleMicMute",
-                                          "copyScreenText", "pickColor"]
+                                          "copyScreenText", "pickColor", "agentIsland"]
 
         let code = ShortcutAction.allCases.map { a in
             Default(action: a.rawValue, keyCode: Int(a.defaultCombo.keyCode), modifiers: Int(a.defaultCombo.carbonModifiers))

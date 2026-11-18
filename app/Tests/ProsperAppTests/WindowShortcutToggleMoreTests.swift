@@ -643,7 +643,7 @@ final class WindowShortcutToggleMoreTests: XCTestCase {
             AppDelegate.windowHotkey(a, runner: { rp }, clipboard: { cp }, settings: { s })
         }
         let windowActions: Set<ShortcutAction> = [.runner, .runnerSpace, .runnerBackslash, .translate, .clipboard,
-                                                  .settings, .agent, .agentSessions, .calendarTogglePopup]
+                                                  .settings, .agent, .agentSessions, .agentIsland, .calendarTogglePopup]
         XCTAssertEqual(Set(ShortcutAction.allCases.filter { hotkey($0) != nil }), windowActions,
                        "the hotkeys that open a window, and only those")
 

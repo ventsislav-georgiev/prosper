@@ -286,6 +286,8 @@ final class AgentIslandStore: ObservableObject {
     /// after an action; the History tab is chosen (it wins over `sidekickTab`).
     @Published var history: [DchHistoryRecord] = [] { didSet { resetTab() } }
     @Published var historyTab = false
+    /// #1536: the row the launcher command or its shortcut opened on (lit and scrolled to); nil once the island closes.
+    @Published var focusKey: AgentSessionKey?
     /// The control binary (DchCommand.controlDch), probed with the history.
     @Published var controlDch: DchCommand.Binary?
     /// #719: the live sessions' Claude ids (their dch records), read with the history
@@ -668,7 +670,10 @@ struct AgentIslandView: View {
             if tabs { tabRow.frame(height: AgentIslandGeometry.tabsHeight) }
             Group {
                 if g.listScrolls(rows: store.rowHeights, cards: store.cardsHeight, tabs: tabs) {
-                    ScrollView(.vertical, showsIndicators: false) { rows }
+                    ScrollViewReader { proxy in   // #1536: the focused row is brought into view
+                        ScrollView(.vertical, showsIndicators: false) { rows }
+                            .onChange(of: store.focusKey, initial: true) { _, k in if let k { proxy.scrollTo(k, anchor: .top) } }
+                    }
                 } else {
                     rows
                 }
@@ -698,7 +703,8 @@ struct AgentIslandView: View {
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
                                    notice: store.notices[r.session.key] ?? store.actions[r.session.key],
-                                   show: store.details, action: r.open)
+                                   show: store.details, focused: store.focusKey == r.session.key, action: r.open)
+                    .id(r.session.key)
                     .contextMenu { restartItem(r) }
                     if let card = r.card {
                         AgentPromptCardView(card: card, onOption: r.answer, onJump: r.open)
@@ -1231,15 +1237,18 @@ struct AgentIslandRow: View {
     let notice: String?
     /// #534: the row details toggled on.
     var show: AgentIslandRowDetails
+    /// #1536: the row the launcher command opened on; it wears the hover look until the island closes.
+    var focused = false
     let action: () -> Void
     @State private var hover = false
     @ObservedObject private var theme = ThemeStore.shared   // #1375 (R1371-i2): a theme switch redraws the card
 
     var body: some View {
+        let lit = hover || focused
         let prs = AgentIsland.prChips(session.meta, show: show)   // once per body
         let chipLine = AgentIslandGeometry.hasChipLine(session.meta, show: show)
         // #1371: the Agent Sessions sidebar row's own pieces (hover takes its selected look and inks).
-        let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: hover,
+        let side = AgentSidebarRowView(row: Self.sidebarRow(session, show: show, now: now, notice: notice), selected: lit,
                                        inks: Self.inks, show: show)
         Button(action: action) {
             // #1371: line 1 the state mark, the title, the model and effort badges; line 2 the state word, the agents,
@@ -1255,7 +1264,7 @@ struct AgentIslandRow: View {
                         side.detailLine([], open: side.row.prCount)
                         side.detailLine([])
                     }
-                    if chipLine { prLineView(prs, selected: hover).modifier(AgentSidebarRowProbe(kind: "chips", title: session.title)) }
+                    if chipLine { prLineView(prs, selected: lit).modifier(AgentSidebarRowProbe(kind: "chips", title: session.title)) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1263,8 +1272,8 @@ struct AgentIslandRow: View {
             .padding(.trailing, AgentIslandGeometry.rowTrail)
             .frame(height: (chipLine ? AgentIslandGeometry.prRowHeight : AgentIslandGeometry.rowHeight) - AgentIslandGeometry.rowGap)
             .coordinateSpace(.named(agentSidebarRowSpace))
-            .background(NeonSelectedRowFill(selected: hover && AgentIslandInk.follows))
-            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Self.card(hover: hover)))
+            .background(NeonSelectedRowFill(selected: lit && AgentIslandInk.follows))
+            .background(RoundedRectangle(cornerRadius: sz(9), style: .continuous).fill(Self.card(hover: lit)))
             .contentShape(Rectangle())
             .modifier(AgentSidebarRowProbe(kind: "card", title: session.title))
             .padding(.vertical, AgentIslandGeometry.rowGap / 2)
