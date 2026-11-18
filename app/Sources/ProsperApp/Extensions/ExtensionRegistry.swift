@@ -55,6 +55,11 @@ enum ExtensionError: Error, Equatable {
     /// R1182-g: a market artifact's own manifest declares another version than the listing it was asked for.
     /// The values are stored as shown (OutsideText), so the log's String(describing:) holds them cleaned too.
     case marketVersionMismatch(id: String, listed: String, got: String)
+    /// #919 S3: a downloaded package checked against its Marketplace listing (a kit, or listed as one) was refused. The id
+    /// is stored as shown (OutsideText). `.versionMovedOn` is not a refusal of the content (RefusedUpdates.isRefusal).
+    case marketKitRefused(id: String, KitListingRefusal)
+    /// #919 S3: the listing a kit is checked against could not be loaded: nothing installed, a later try can pass.
+    case marketListingUnavailable(id: String)
 }
 
 extension ExtensionError: LocalizedError {
@@ -68,6 +73,10 @@ extension ExtensionError: LocalizedError {
             // R1182-m: both ids are outside data (the listing's and the archive's own), cleaned and bounded here.
             return "Not installed: the package's files declare the id \"\(OutsideText.shown(got, max: 128))\", but the Marketplace "
                 + "lists it as \"\(OutsideText.shown(expected, max: 128))\". Nothing was changed."
+        case let .marketKitRefused(id, why):
+            return "Not installed: \(id): " + why.sentence + (why.isRefusal ? " Nothing was changed." : "")
+        case let .marketListingUnavailable(id):
+            return "Not installed: the Marketplace listing of \(id) could not be loaded to check the kit. Try again."
         default:
             return nil
         }
@@ -1340,13 +1349,69 @@ final class ExtensionRegistry: ObservableObject {
     /// it was already trusted under the same id — an auto-update of a trusted package
     /// stays trusted. Stamps `prosper://market/<id>` as the update origin (force —
     /// overrides any author-declared update_url so updates always come from us).
+    /// #919 S3: the Install button and the auto-update both come here, so both get the kit recheck.
     @discardableResult
     func installFromMarket(id: String, version: String) async throws -> ExtensionRecord {
-        let extDir = try await RemoteInstaller.fetchFromMarket(id: id, version: version)
-        defer { RemoteInstaller.removeWorkFolder(holding: extDir) }
-        try bindMarketIdentity(extDir: extDir, expected: id, expectedVersion: version)
-        injectUpdateURL("prosper://market/\(id)", intoManifestAt: extDir, force: true)
-        return try installLocal(from: extDir)
+        let prepared = try await prepareFromMarket(id: id, version: version)
+        defer { discard(prepared) }
+        return try install(prepared)
+    }
+
+    /// #919 S3: a market download fetched, bound to its id and version and, for a kit, checked against its listing.
+    /// It holds the work folder until `discard`.
+    struct PreparedMarketInstall: Sendable {
+        let id: String
+        let version: String
+        let directory: URL
+    }
+
+    /// #919 S3: the download and the listing read (rows pass fakes; the defaults reach the Marketplace).
+    var marketFetch: @Sendable (_ id: String, _ version: String) async throws -> URL = {
+        try await RemoteInstaller.fetchFromMarket(id: $0, version: $1)
+    }
+    var marketDetail: @Sendable (_ id: String) async -> MarketClient.PackageDetail? = { await MarketClient.packageDetail(id: $0) }
+    var marketIndex: @Sendable () async -> [String: String]? = { await MarketClient.index() }
+
+    /// Fetch, bind and recheck; on a throw the work folder is already removed. `listedKind`: the kind the caller's
+    /// listing shows (nil: not known, as in the update check); "kit" makes a non-kit archive fetch the listing too.
+    /// A non-kit archive not listed as a kit makes no listing call.
+    func prepareFromMarket(id: String, version: String, listedKind: String? = nil) async throws -> PreparedMarketInstall {
+        let prepared = PreparedMarketInstall(id: id, version: version, directory: try await marketFetch(id, version))
+        do {
+            let loaded = try bindMarketIdentity(extDir: prepared.directory, expected: id, expectedVersion: version)
+            try await recheckKitListing(prepared, manifest: loaded.manifest, listedKind: listedKind)
+        } catch {
+            discard(prepared)
+            throw error
+        }
+        return prepared
+    }
+
+    /// Stamps `prosper://market/<id>` as the update origin and installs the prepared folder.
+    func install(_ prepared: PreparedMarketInstall) throws -> ExtensionRecord {
+        injectUpdateURL("prosper://market/\(prepared.id)", intoManifestAt: prepared.directory, force: true)
+        return try installLocal(from: prepared.directory)
+    }
+
+    func discard(_ prepared: PreparedMarketInstall) { RemoteInstaller.removeWorkFolder(holding: prepared.directory) }
+
+    /// #919 S3 (spec 4.12): a kit archive is checked against its listing as the server holds it now (kind, version, status,
+    /// and the preview recomputed from the archive); the validator sees the other installed kits' names as taken.
+    private func recheckKitListing(_ p: PreparedMarketInstall, manifest: ExtensionManifest, listedKind: String?) async throws {
+        let isKit = manifest.contributes?.kit != nil
+        guard isKit || listedKind == "kit" else { return }
+        let shownID = OutsideText.shown(p.id)
+        guard let listing = await marketDetail(p.id) else { throw ExtensionError.marketListingUnavailable(id: shownID) }
+        var tarballKit: KitValidation?, readme = ""
+        if isKit {
+            let others = Set(records.filter { $0.id != p.id && $0.manifest.contributes?.kit != nil }.map(\.manifest.extension.name))
+            tarballKit = KitValidator.validate(kitDir: p.directory, manifest: manifest, source: .market, otherKitSlugs: others)
+            readme = (try? BoundedFileRead.data(p.directory.appendingPathComponent("README.md"), maxBytes: KitValidator.maxTextBytes))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        }
+        if let why = KitListingCheck.verify(tarballKit: tarballKit, readme: readme, listing: listing, version: p.version) {
+            throw ExtensionError.marketKitRefused(id: shownID, why)
+        }
     }
 
     /// Bind the signed/requested package id to the artifact's OWN manifest id BEFORE
@@ -1356,7 +1421,8 @@ final class ExtensionRegistry: ObservableObject {
     /// already trusted, the replacement would inherit trust. The Ed25519 sig binds
     /// the claim's id, NOT the bytes' internal manifest, so this is the binding.
     /// R1182-g: `expectedVersion` is the listing version the download was asked for (nil: no listing, no check).
-    func bindMarketIdentity(extDir: URL, expected: String, expectedVersion: String?) throws {
+    @discardableResult
+    func bindMarketIdentity(extDir: URL, expected: String, expectedVersion: String?) throws -> LoadedExtension {
         let loaded = try ExtensionLoader.load(directory: extDir, isSystem: false, hostVersion: hostVersion)
         guard loaded.id == expected else {
             throw ExtensionError.marketIdMismatch(expected: expected, got: loaded.id)
@@ -1372,6 +1438,7 @@ final class ExtensionRegistry: ObservableObject {
             throw ExtensionError.marketVersionMismatch(id: OutsideText.shown(expected), listed: OutsideText.shown(listed, max: 32),
                                                        got: OutsideText.shown(got, max: 32))
         }
+        return loaded
     }
 
     // MARK: - Auto-update
@@ -1402,6 +1469,7 @@ final class ExtensionRegistry: ObservableObject {
         static func isRefusal(_ error: Error) -> Bool {
             switch error {
             case ExtensionError.marketIdMismatch, ExtensionError.marketVersionMismatch: return true
+            case ExtensionError.marketKitRefused(_, let why): return why.isRefusal   // #919 S3
             case ExtensionLoadError.unreadable: return false   // R1182-q4: a failed open or read is local, may pass next time
             case is ExtensionLoadError: return true
             case RemoteInstaller.InstallError.unsafeArchive, RemoteInstaller.InstallError.manifestNotFound: return true
@@ -1502,7 +1570,7 @@ final class ExtensionRegistry: ObservableObject {
         // than polling per-package. GitHub-hosted ones keep the per-url tarball path.
         let marketPrefix = "prosper://market/"
         let marketIndex: [String: String]? = candidates.contains { $0.url.hasPrefix(marketPrefix) }
-            ? await MarketClient.index() : [:]   // nil = the index failed (R1182-q7)
+            ? await marketIndex() : [:]   // nil = the index failed (R1182-q7)
 
         var tally = UpdateTally()
         for cand in candidates {

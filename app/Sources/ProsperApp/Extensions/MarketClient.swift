@@ -98,6 +98,7 @@ enum MarketClient {
             "too_large": "The extension is too large to publish (256 KB max).",
             "preview_too_large": "The marketplace preview is too large to publish.",
             "kit_preview_missing": "A kit is published with its preview; this one had none.",
+            "kind_change": "This id is already published as a different kind of package.",
             "invalid_id": "The extension id isn't a valid reverse-DNS identifier.",
             "invalid_version": "The version isn't valid semver (e.g. 1.2.3).",
             "missing_fields": "The manifest is missing a required field (name, title, or author).",
@@ -133,12 +134,23 @@ enum MarketClient {
     /// The latest published version of `id`, or nil if it was never published
     /// (404) or has been yanked. Drives the Publish/Published row UX.
     static func publishedVersion(id: String) async -> String? {
+        guard let p = await packageDetail(id: id), p.status == "active" else { return nil }
+        return p.latest_version
+    }
+
+    /// #919 S3: one package's listing as the server holds it now (any status); nil when it could not be loaded.
+    struct PackageDetail: Codable, Sendable, Equatable {
+        let kind: String?
+        let latest_version: String
+        let preview: Preview?
+        let status: String
+    }
+
+    static func packageDetail(id: String) async -> PackageDetail? {
         guard let (data, code) = try? await get(base("/market/packages/\(id)")), code < 300
         else { return nil }
-        struct Resp: Codable { struct Pkg: Codable { let latest_version: String; let status: String }; let package: Pkg }
-        guard let p = (try? JSONDecoder().decode(Resp.self, from: data))?.package, p.status == "active"
-        else { return nil }
-        return p.latest_version
+        struct Resp: Codable { let package: PackageDetail }
+        return (try? JSONDecoder().decode(Resp.self, from: data))?.package
     }
 
     static func download(id: String, version: String) async throws -> Download {
