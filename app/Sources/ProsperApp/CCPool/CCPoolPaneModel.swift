@@ -245,8 +245,15 @@ final class CCPoolPaneModel: ObservableObject {
     }
 
     /// What the toggle shows (QA #739 F1): off while the pool has no account, the stored choice
-    /// otherwise. Turning it never happens while it is disabled, so the stored choice survives.
+    /// otherwise. Turning it on is refused while disabled, so a stored true survives an empty pool.
     var routeToggleShown: Bool { store.hasAccounts && routeAgentSessions }
+
+    /// The toggle's write (O2, QA #751 INFO-3): off is always stored; on only while `routeDisabledReason` is nil.
+    func setRouteAgentSessions(_ on: Bool) {
+        // A refused on still republishes, so the switch redraws from the stored false.
+        guard !on || routeDisabledReason == nil else { objectWillChange.send(); return }
+        routeAgentSessions = on
+    }
 
     var routeDisabledReason: String? {
         if !store.hasAccounts { return "Add an account first." }

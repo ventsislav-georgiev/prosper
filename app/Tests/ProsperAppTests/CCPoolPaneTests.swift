@@ -292,8 +292,11 @@ final class CCPoolPaneTests: XCTestCase {
                        + "Shells, headroom, other programs and sessions started in a terminal are not routed. "
                        + "Resume interrupted is not routed.")
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeScope) }, "the scope line is shown")
-        // #1499: the shell-startup limit holds below dch 1.94.0 (or with no control dch); from it Resume passes --env/--unset.
-        let limited = CCPoolPane.routeScope + " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
+        // #1499: the shell-startup limit holds below dch 1.94.0 (or with no control dch); from it Resume passes --env.
+        // OQ-132 (#1570): keys and tokens are kept, so the limit names only the base URL.
+        let limited = CCPoolPane.routeScope + " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL."
+        XCTAssertEqual(CCPoolPane.shellLimit, " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL.")
+        XCTAssertFalse(CCPoolPane.shellLimit.contains("API key"))
         XCTAssertEqual(CCPoolPane.routeScope(dch: nil), limited)
         XCTAssertEqual(CCPoolPane.routeScope(dch: [1, 93, 9]), limited)
         XCTAssertEqual(CCPoolPane.routeScope(dch: [1, 94, 0]), CCPoolPane.routeScope)

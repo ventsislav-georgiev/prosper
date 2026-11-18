@@ -4,7 +4,6 @@ import XCTest
 /// #871 spec 3.6 + errata C8: the env a new Agent Session gets. Pure; no process is spawned.
 final class CCPoolSessionEnvTests: XCTestCase {
     private let base = CCPool.baseURL(port: 41234)
-    private let creds = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
 
     private func env(_ argv: [String], on: Bool = true, healthy: Bool = true, hasAccounts: Bool = true) -> CCPool.EnvDelta {
         CCPool.sessionEnv(command: argv, base: base, on: on, healthy: healthy, hasAccounts: hasAccounts)
@@ -12,7 +11,8 @@ final class CCPoolSessionEnvTests: XCTestCase {
 
     func testCCPoolSessionEnvTable() {
         XCTAssertEqual(base, "http://127.0.0.1:41234")
-        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": base], remove: creds)
+        // OQ-132: the base URL only; nothing is removed.
+        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
         let rows: [(String, [String], Bool, Bool, CCPool.EnvDelta)] = [
             ("claude", ["claude"], true, true, claude),
             ("claude with args", ["claude", "--resume", "x"], true, true, claude),
@@ -44,11 +44,15 @@ final class CCPoolSessionEnvTests: XCTestCase {
         }
     }
 
-    func testCCPoolSessionEnvAppliedStripsCredentialsOnlyWhenRouting() {
+    /// OQ-132 (#1570): a routed claude keeps the API key, the auth token and the OAuth token; only the base URL changes.
+    func testCCPoolSessionEnvAppliedKeepsCredentialsWhenRouting() {
         let parent = ["ANTHROPIC_API_KEY": "dummy-key", "ANTHROPIC_AUTH_TOKEN": "dummy-auth", "PATH": "/usr/bin",
                       "ANTHROPIC_BASE_URL": "http://elsewhere.invalid", "CLAUDE_CODE_OAUTH_TOKEN": "dummy-oauth"]
         let routed = env(["claude"]).applied(to: parent)
-        XCTAssertEqual(routed, ["PATH": "/usr/bin", "ANTHROPIC_BASE_URL": base])
+        XCTAssertEqual(routed, ["ANTHROPIC_API_KEY": "dummy-key", "ANTHROPIC_AUTH_TOKEN": "dummy-auth", "PATH": "/usr/bin",
+                                "ANTHROPIC_BASE_URL": base, "CLAUDE_CODE_OAUTH_TOKEN": "dummy-oauth"])
+        XCTAssertEqual(Set(parent.keys.filter { routed[$0] != parent[$0] }), ["ANTHROPIC_BASE_URL"], "only the base URL is touched")
+        XCTAssertEqual(env(["claude"]).remove, [], "nothing is removed")
         for argv in [["headroom"], ["/usr/local/bin/headroom"], ["headroom", "wrap", "claude"]] {
             XCTAssertEqual(env(argv).applied(to: parent), parent, "headroom is never routed: credentials kept, \(argv)")
         }
@@ -82,7 +86,7 @@ final class CCPoolSessionEnvTests: XCTestCase {
         func routing(_ on: Bool, _ status: CCPoolService.Status, _ accounts: Bool) -> CCPool.Routing {
             CCPool.Routing(on: { on }, status: { status }, hasAccounts: { accounts })
         }
-        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"], remove: creds)
+        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"])
         XCTAssertEqual(routing(true, .running(port: 41234), true).delta(["claude"]), claude)
         XCTAssertEqual(routing(true, .running(port: 41235), true).delta(["claude"]).set, ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41235"])
         let none: [(String, CCPool.Routing)] = [

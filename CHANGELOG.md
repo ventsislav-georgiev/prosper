@@ -1921,6 +1921,10 @@ tag from the now-released section and put it on the new top draft.
   an older dch keeps the plain list). (#1528)
 - Account pool: removing an account now drops its usage reading together with the account, and the
   usage chart is faster on large histories. (#1571)
+- Account pool: sessions routed through the pool now keep your Anthropic API key and tokens in their
+  environment (only ANTHROPIC_BASE_URL is changed; the pool still sends its own account's token),
+  and the "Start new Claude sessions through the pool" toggle can now be switched off while the
+  proxy is stopped or there is no account. (#1570)
 
 ## v2.174.0
 

@@ -19,9 +19,9 @@ final class CCPoolSessionRoutingTests: XCTestCase {
     /// The env every --spawn got before P2b-2 (spawnEnv over controlEnv), literally: the env when routing does not apply.
     private let today = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d", "ANTHROPIC_API_KEY": "example-key",
                          "ANTHROPIC_AUTH_TOKEN": "example-auth", "ANTHROPIC_BASE_URL": "http://example.invalid"]
-    /// claude routed: the credentials stripped, the base URL the pool's.
-    private let routedClaude = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d",
-                                "ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"]
+    /// claude routed (OQ-132): `today` with the pool's base URL; the credentials kept.
+    private let routedClaude = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d", "ANTHROPIC_API_KEY": "example-key",
+                                "ANTHROPIC_AUTH_TOKEN": "example-auth", "ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"]
 
     private var geometry: AgentIslandGeometry {
         AgentIslandGeometry.make(
@@ -473,10 +473,13 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(rec.args.last?.first, "--revive", "the job is the record's --revive, not a spawn")
         XCTAssertEqual(rec.args.last?.contains("--spawn"), false)
         XCTAssertEqual(resumed, spawned, "the same env as the spawn recorder's for that command")
-        XCTAssertEqual(resumed, routedClaude, "literally: the pool's base URL, the credentials gone")
+        XCTAssertEqual(resumed, routedClaude, "literally: the pool's base URL, the credentials kept (OQ-132)")
         XCTAssertEqual(Self.touched(resumed), Self.touched(spawned), "the same set of variables as the spawn")
-        XCTAssertEqual(Self.touched(resumed), ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-                                               "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"])
+        // spawnEnv's own CLAUDECODE / CLAUDE_CODE_* strip, plus the base URL: routing touches nothing else.
+        XCTAssertEqual(Self.touched(resumed), ["ANTHROPIC_BASE_URL", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"])
+        // Against the unrouted spawn env (`today`): the base URL only.
+        XCTAssertEqual(Set(today.keys.filter { spawned?[$0] != today[$0] }).union((spawned ?? [:]).keys.filter { today[$0] == nil }),
+                       ["ANTHROPIC_BASE_URL"])
         XCTAssertEqual(pool.mainReads, 0, "the Resume reads the pool on the runner's queue, never main")
     }
 
@@ -518,9 +521,8 @@ final class CCPoolSessionRoutingTests: XCTestCase {
 
     // MARK: - Resume past the login shell's env (#1499, dch 1.94.0 --revive --env/--unset)
 
-    /// The pool's spawn delta as --revive flags, literally: the three credentials by name, then the pool's base URL.
-    private static let poolFlags = ["--unset", "ANTHROPIC_API_KEY", "--unset", "ANTHROPIC_AUTH_TOKEN", "--unset", "CLAUDE_CODE_OAUTH_TOKEN",
-                                    "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:41234"]
+    /// The pool's spawn delta as --revive flags, literally: the pool's base URL only, no --unset (OQ-132).
+    private static let poolFlags = ["--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:41234"]
 
     /// One single Resume of `r` on a control dch of `version` through the recorder; the argv it was handed.
     private func resumedArgs(_ r: DchHistoryRecord, version: [Int], pool: Pool,
@@ -544,7 +546,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(resumedArgs(record("api", argv: ["/opt/homebrew/bin/claude", "--chrome"]), version: [1, 94, 0], pool: pool),
                        ["--revive", "api", "--json"] + Self.poolFlags)
         XCTAssertEqual(pool.mainReads, 0, "the flags read the pool on the runner's queue, never main")
-        XCTAssertEqual(CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"], remove: CCPool.strippedCredentials).reviveFlags,
+        XCTAssertEqual(CCPool.Routing(on: { true }, status: { .running(port: 41234) }, hasAccounts: { true }).delta(["claude"]).reviveFlags,
                        Self.poolFlags, "exactly the spawn delta")
     }
 

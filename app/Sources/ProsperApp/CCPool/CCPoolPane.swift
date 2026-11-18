@@ -17,8 +17,8 @@ struct CCPoolPane: View {
     static let routeScope = "New sessions started from Prosper that run claude. "
         + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed."
     /// #1499: below dch 1.94.0 a resumed session takes dch's login-shell env, rc files' ANTHROPIC_* included; from it
-    /// Resume passes the routing with --env/--unset, which win.
-    static let shellLimit = " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
+    /// Resume passes the routing with --env, which wins. Keys and tokens are kept (OQ-132), so only the base URL matters.
+    static let shellLimit = " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL."
     static func routeScope(dch: [Int]?) -> String {
         dch.map { DchCommand.isAtLeast($0, AgentIsland.reviveEnvMinimum) } == true ? routeScope : routeScope + shellLimit
     }
@@ -183,10 +183,10 @@ struct CCPoolPane: View {
         return NeonSection("Agent Sessions") {
             VStack(alignment: .leading, spacing: sz(6)) {
                 NeonRow(Self.routeTitle, subtitle: reason ?? "Applies to sessions started after the change.") {
-                    // Shows off while there is no account; writes only the stored choice (QA #739 F1).
-                    Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.routeAgentSessions = $0 }))
+                    // Shows off while there is no account; writes only the stored choice (QA #739 F1). Never disabled:
+                    // switching off always works, switching on is refused while `reason` holds (O2, QA #751 INFO-3).
+                    Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.setRouteAgentSessions($0) }))
                         .labelsHidden()
-                        .disabled(reason != nil)
                         .accessibilityLabel(Self.routeTitle)
                 }
                 caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))

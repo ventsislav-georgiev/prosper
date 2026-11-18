@@ -27,10 +27,6 @@ enum CCPool {
         }
     }
 
-    /// Credentials that would bypass the pool on a direct call; dropped whenever a session routes
-    /// (the proxy supplies the account's token). QA #739 INFO-4 adds Claude Code's own OAuth token.
-    static let strippedCredentials = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"]
-
     static func baseURL(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
 
     /// The program name of a command word the way dch reads it: the text after the last "/", or
@@ -42,14 +38,15 @@ enum CCPool {
 
     /// `command` is the user's command value (argv) BEFORE any login-shell wrap: the wrapped argv
     /// starts with the shell and would never route (errata C8). Off, the proxy not healthy, or a
-    /// pool with no account (QA #739 F1; `CCPoolStore.hasAccounts`): no change at all. `claude` gets ANTHROPIC_BASE_URL.
+    /// pool with no account (QA #739 F1; `CCPoolStore.hasAccounts`): no change at all. `claude` gets ANTHROPIC_BASE_URL
+    /// only: OQ-132 keeps the person's API key and tokens in the env (the proxy replaces the client's auth header, S10).
     /// `headroom` is not routed in v1 (#1200): it reads its upstream address in its own proxy process, shared by every
     /// headroom session, so it cannot be set per session; the environment stays as it is, credentials kept. Anything else
     /// (a shell, `direnv exec . claude`, a custom wrapper): no change.
     static func sessionEnv(command: [String], base: String, on: Bool, healthy: Bool, hasAccounts: Bool) -> EnvDelta {
         guard on, healthy, hasAccounts, let first = command.first else { return EnvDelta() }
         switch programName(first) {
-        case "claude": return EnvDelta(set: ["ANTHROPIC_BASE_URL": base], remove: strippedCredentials)
+        case "claude": return EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
         case "headroom": return EnvDelta()
         default: return EnvDelta()
         }

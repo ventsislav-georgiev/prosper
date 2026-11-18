@@ -369,6 +369,46 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(m.notice, CCPoolMigration.ReadError.notJSON.description)
     }
 
+    /// O2 (QA #751 INFO-3, #1570): while a disabled reason holds, the toggle's write still stores off but refuses on.
+    func testCCPoolRouteToggleOffAlwaysWorksOnIsRefusedWhileDisabled() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a"])
+        XCTAssertEqual(m.routeDisabledReason, "The proxy is not running.")
+        // Stopped, stored true: switching off writes false.
+        m.routeAgentSessions = true
+        XCTAssertTrue(m.routeToggleShown, "S35: an account shows the stored choice")
+        m.setRouteAgentSessions(false)
+        XCTAssertFalse(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "off is written while stopped")
+        XCTAssertFalse(m.routeToggleShown)
+        // Stopped, stored false: switching on is refused.
+        m.setRouteAgentSessions(true)
+        XCTAssertFalse(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "on is refused while stopped")
+        XCTAssertFalse(m.routeToggleShown)
+        // Running: on is stored.
+        await m.startProxy().value
+        guard case .running = r.service.status else { return XCTFail("\(r.service.status)") }
+        XCTAssertTrue(m.routeDisabledReason == nil)
+        m.setRouteAgentSessions(true)
+        XCTAssertTrue(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "on is written while running")
+        XCTAssertTrue(m.routeToggleShown)
+        r.service.stop()
+    }
+
+    /// O2: with no account, on is refused and the shown value stays off (S35); off is still written.
+    func testCCPoolRouteToggleWithNoAccount() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        m.setRouteAgentSessions(true)
+        XCTAssertNil(r.defaults.object(forKey: CCPoolPaneModel.routeKey), "on is refused: nothing is written")
+        XCTAssertFalse(m.routeToggleShown)
+        m.routeAgentSessions = true
+        XCTAssertFalse(m.routeToggleShown, "shown off with no account whatever is stored")
+        m.setRouteAgentSessions(false)
+        XCTAssertFalse(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "off is written with no account")
+    }
+
     // QA #739 F1 (follow-up A1): no account, no routing, whatever the stored choice; the toggle
     // shows off and says why, and the stored choice comes back with an account.
     func testCCPoolRoutingNeedsAnAccount() async throws {
