@@ -375,8 +375,10 @@ extension AgentWindowD1Tests {
         /// Rows (pixels) where two renders differ.
         func diffRows(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> [Int] {
             (0..<a.pixelsHigh).filter { y in
-                stride(from: 0, to: a.pixelsWide, by: 2).contains { x in
-                    a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y)
+                autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                    stride(from: 0, to: a.pixelsWide, by: 2).contains { x in
+                        a.colorAt(x: x, y: y) != b.colorAt(x: x, y: y)
+                    }
                 }
             }
         }
@@ -434,8 +436,10 @@ extension AgentWindowD1Tests {
                 let x0 = Int((AgentWindowModel.fullSidebarWidth + 2) * k), inputTop = Int((size.height - 120 * scale) * k)
                 let moved = (0..<locked.pixelsHigh).filter { y in
                     (y < (band.min() ?? 0) - 1 || y > (band.max() ?? 0) + 1) && y < inputTop
-                        && stride(from: x0, to: locked.pixelsWide - Int(24 * k), by: 2).contains { x in
-                            plain.colorAt(x: x, y: y) != locked.colorAt(x: x, y: y)
+                        && autoreleasepool {   // #1083: per row
+                            stride(from: x0, to: locked.pixelsWide - Int(24 * k), by: 2).contains { x in
+                                plain.colorAt(x: x, y: y) != locked.colorAt(x: x, y: y)
+                            }
                         }
                 }
                 XCTAssertEqual(moved, [], "locked: the conversation did not move (\(label) \(scale))")
@@ -960,6 +964,7 @@ extension AgentWindowD1Tests {
             // In a window that is never shown (never ordered front, never key), so the list's scrollTo can act.
             let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
             win.isReleasedWhenClosed = false
+            defer { win.close() }   // #1083: one hosting window per scale, closed with its iteration
             win.contentView = host
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.15))
@@ -1015,7 +1020,7 @@ extension AgentWindowD1Tests {
         m.select(.history(h.id))
         func diffRows(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep, from x0: Int) -> [Int] {
             (0..<a.pixelsHigh).filter { y in
-                stride(from: x0, to: a.pixelsWide, by: 2).contains { a.colorAt(x: $0, y: y) != b.colorAt(x: $0, y: y) }
+                autoreleasepool { stride(from: x0, to: a.pixelsWide, by: 2).contains { a.colorAt(x: $0, y: y) != b.colorAt(x: $0, y: y) } }   // #1083
             }
         }
         for scale: CGFloat in [1.0, 0.85, 0.7] {
@@ -1033,7 +1038,7 @@ extension AgentWindowD1Tests {
             func rightEdges(_ rep: NSBitmapImageRep) -> [Int] {
                 let bg = rep.colorAt(x: 0, y: rep.pixelsHigh - 1)
                 return (0..<rep.pixelsHigh).map { y in
-                    (0..<rep.pixelsWide).last { rep.colorAt(x: $0, y: y) != bg } ?? -1
+                    autoreleasepool { (0..<rep.pixelsWide).last { rep.colorAt(x: $0, y: y) != bg } ?? -1 }   // #1083
                 }
             }
             // Rows whose ink reaches past the centre are the Remove pill's (the pin glyphs stay left of it).

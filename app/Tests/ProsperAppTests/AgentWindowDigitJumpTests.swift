@@ -354,11 +354,13 @@ extension AgentWindowD1Tests {
                 let sx = CGFloat(with.pixelsWide) / (size.width + 24)
                 var diff = 0
                 for y in 0..<min(with.pixelsHigh, without.pixelsHigh) {
-                    for x in 0..<Int(size.width * 0.6 * sx) {
-                        guard let a = with.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                              let b = without.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
-                            + abs(a.blueComponent - b.blueComponent) > 0.02 { diff += 1 }
+                    autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                        for x in 0..<Int(size.width * 0.6 * sx) {
+                            guard let a = with.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                  let b = without.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                                + abs(a.blueComponent - b.blueComponent) > 0.02 { diff += 1 }
+                        }
                     }
                 }
                 XCTAssertEqual(diff, 0, "\(row.title) at \(scale): nothing left of the chip moved")
@@ -395,11 +397,13 @@ extension AgentWindowD1Tests {
             let nk = CGFloat(nWith.pixelsWide) / (nSize.width + 24)
             var nDiff = 0
             for y in 0..<min(nWith.pixelsHigh, nWithout.pixelsHigh) {
-                for x in 0..<Int(nSize.width * 0.6 * nk) {
-                    guard let a = nWith.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                          let b = nWithout.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                    if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
-                        + abs(a.blueComponent - b.blueComponent) > 0.02 { nDiff += 1 }
+                autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                    for x in 0..<Int(nSize.width * 0.6 * nk) {
+                        guard let a = nWith.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              let b = nWithout.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                            + abs(a.blueComponent - b.blueComponent) > 0.02 { nDiff += 1 }
+                    }
                 }
             }
             XCTAssertEqual(nDiff, 0, "the title cut at the same place with and without a number at sz(110) (\(scale))")
@@ -412,9 +416,11 @@ extension AgentWindowD1Tests {
                 let k = CGFloat(rep.pixelsWide) / (aSize.width + 24)
                 var n = 0
                 for y in 0..<rep.pixelsHigh {
-                    for x in Int(aSize.width * 0.6 * k)..<rep.pixelsWide {
-                        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                        if c.blueComponent > 0.85 && c.greenComponent > 0.65 && c.redComponent < 0.5 { n += 1 }
+                    autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                        for x in Int(aSize.width * 0.6 * k)..<rep.pixelsWide {
+                            guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            if c.blueComponent > 0.85 && c.greenComponent > 0.65 && c.redComponent < 0.5 { n += 1 }
+                        }
                     }
                 }
                 return n

@@ -14,6 +14,15 @@ final class AgentWindowInteractionTests: XCTestCase {
     override func setUp() {
         super.setUp()
         Preferences.defaults.removeObject(forKey: "agentWindowLayouts")
+        MainActor.assumeIsolated { Self.assertTestWindowsBounded(since: &Self.windowBaseline) }
+    }
+
+    /// #1083: the class's live test windows when its first case started (assertTestWindowsBounded).
+    @MainActor static var windowBaseline: Int?
+
+    override class func tearDown() {
+        MainActor.assumeIsolated { assertTestWindowsBounded(since: &windowBaseline) }
+        super.tearDown()
     }
 
     static let key = AgentSessionKey(dir: "/tmp/dch-test", name: "s")
@@ -1693,14 +1702,17 @@ final class AgentWindowInteractionTests: XCTestCase {
         }
         .frame(width: size.width + margin, height: size.height + margin, alignment: .topLeading)
         .environment(\.colorScheme, dark ? .dark : .light)
-        let h = NSHostingView(rootView: root)
-        h.frame = CGRect(origin: .zero, size: CGSize(width: size.width + margin, height: size.height + margin))
-        h.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-        h.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
-        h.cacheDisplay(in: h.bounds, to: rep)
-        return rep
+        // #1083: one pool per render: the hosting view, its layers and what the layout autoreleased go here, the bitmap leaves.
+        return try autoreleasepool {
+            let h = NSHostingView(rootView: root)
+            h.frame = CGRect(origin: .zero, size: CGSize(width: size.width + margin, height: size.height + margin))
+            h.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            h.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+            h.cacheDisplay(in: h.bounds, to: rep)
+            return rep
+        }
     }
 
     func overflow(_ rep: NSBitmapImageRep, content: CGSize, canvas: CGSize) -> Int {
@@ -1708,10 +1720,13 @@ final class AgentWindowInteractionTests: XCTestCase {
         guard let bg = rep.colorAt(x: rep.pixelsWide - 1, y: rep.pixelsHigh - 1)?.usingColorSpace(.sRGB) else { return 0 }
         var n = 0
         for y in 0..<rep.pixelsHigh {
-            for x in 0..<rep.pixelsWide where CGFloat(x) >= content.width * sx + 1 || CGFloat(y) >= content.height * sy + 1 {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
-                    + abs(c.blueComponent - bg.blueComponent) > 0.1 { n += 1 }
+            // #1083: colorAt and usingColorSpace autorelease 2 NSColors a pixel: drained per row (#829 P3).
+            autoreleasepool {
+                for x in 0..<rep.pixelsWide where CGFloat(x) >= content.width * sx + 1 || CGFloat(y) >= content.height * sy + 1 {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
+                        + abs(c.blueComponent - bg.blueComponent) > 0.1 { n += 1 }
+                }
             }
         }
         return n
@@ -1721,10 +1736,12 @@ final class AgentWindowInteractionTests: XCTestCase {
         guard let bg = rep.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB) else { return 0 }
         var n = 0
         for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
-                    + abs(c.blueComponent - bg.blueComponent) > 0.15 { n += 1 }
+            autoreleasepool {   // #1083: per row, as overflow()
+                for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
+                        + abs(c.blueComponent - bg.blueComponent) > 0.15 { n += 1 }
+                }
             }
         }
         return n

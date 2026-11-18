@@ -10,6 +10,19 @@ import XCTest
 /// event is posted.
 final class AgentWindowD1Tests: XCTestCase {
 
+    /// #1083: the class's live test windows when its first case started (assertTestWindowsBounded).
+    @MainActor static var windowBaseline: Int?
+
+    override func setUp() {
+        super.setUp()
+        MainActor.assumeIsolated { Self.assertTestWindowsBounded(since: &Self.windowBaseline) }
+    }
+
+    override class func tearDown() {
+        MainActor.assumeIsolated { assertTestWindowsBounded(since: &windowBaseline) }
+        super.tearDown()
+    }
+
     static let corpus = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("Fixtures/claude-code", isDirectory: true)
 
@@ -642,14 +655,17 @@ final class AgentWindowD1Tests: XCTestCase {
         }
         .frame(width: size.width + margin, height: size.height + margin, alignment: .topLeading)
         .environment(\.colorScheme, dark ? .dark : .light)
-        let h = NSHostingView(rootView: root)
-        h.frame = CGRect(origin: .zero, size: CGSize(width: size.width + margin, height: size.height + margin))
-        h.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-        h.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
-        h.cacheDisplay(in: h.bounds, to: rep)
-        return rep
+        // #1083: one pool per render: the hosting view, its layers and what the layout autoreleased go here, the bitmap leaves.
+        return try autoreleasepool {
+            let h = NSHostingView(rootView: root)
+            h.frame = CGRect(origin: .zero, size: CGSize(width: size.width + margin, height: size.height + margin))
+            h.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            h.layoutSubtreeIfNeeded()
+            let rep = try XCTUnwrap(h.bitmapImageRepForCachingDisplay(in: h.bounds))
+            h.cacheDisplay(in: h.bounds, to: rep)
+            return rep
+        }
     }
 
     /// Pixels in the margin that differ from the canvas: content drawn past its frame.
@@ -658,10 +674,13 @@ final class AgentWindowD1Tests: XCTestCase {
         guard let bg = rep.colorAt(x: rep.pixelsWide - 1, y: rep.pixelsHigh - 1)?.usingColorSpace(.sRGB) else { return 0 }
         var n = 0
         for y in 0..<rep.pixelsHigh {
-            for x in 0..<rep.pixelsWide where CGFloat(x) >= content.width * sx + 1 || CGFloat(y) >= content.height * sy + 1 {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
-                    + abs(c.blueComponent - bg.blueComponent) > 0.1 { n += 1 }
+            // #1083: colorAt and usingColorSpace autorelease 2 NSColors a pixel: drained per row (#829 P3).
+            autoreleasepool {
+                for x in 0..<rep.pixelsWide where CGFloat(x) >= content.width * sx + 1 || CGFloat(y) >= content.height * sy + 1 {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
+                        + abs(c.blueComponent - bg.blueComponent) > 0.1 { n += 1 }
+                }
             }
         }
         return n
@@ -671,10 +690,12 @@ final class AgentWindowD1Tests: XCTestCase {
         guard let bg = rep.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB) else { return 0 }
         var n = 0
         for y in stride(from: 0, to: rep.pixelsHigh, by: 3) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
-                    + abs(c.blueComponent - bg.blueComponent) > 0.15 { n += 1 }
+            autoreleasepool {   // #1083: per row, as overflow()
+                for x in stride(from: 0, to: rep.pixelsWide, by: 3) {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    if abs(c.redComponent - bg.redComponent) + abs(c.greenComponent - bg.greenComponent)
+                        + abs(c.blueComponent - bg.blueComponent) > 0.15 { n += 1 }
+                }
             }
         }
         return n
@@ -779,5 +800,72 @@ final class AgentWindowD1Tests: XCTestCase {
         let offRep = try render(AgentWindowRootView(model: off), size: size, dark: true)
         try save(offRep, "window-island-off")
         XCTAssertGreaterThan(ink(offRep), 100)
+    }
+}
+
+// MARK: - #1083: test windows left alive across a class
+
+extension XCTestCase {
+    /// The windows this process made and still holds: a plain NSWindow, or a subclass declared in the app or its tests
+    /// (AgentsNSWindow, OverlayBackingWindow). AppKit's own NS-prefixed subclasses are not a test's.
+    @MainActor
+    static func liveTestWindows() -> Int {
+        NSApplication.shared.windows.filter { type(of: $0) == NSWindow.self || !NSStringFromClass(type(of: $0)).hasPrefix("NS") }.count
+    }
+
+    /// #1083: at most `bound` more test windows alive than when the class's first case started. Checked in setUp, where
+    /// the case before has torn down and its autorelease pool has drained, and at class teardown: a literal bound on
+    /// live windows, not a timing. Returns the failure to report, or nil; a failure re-bases, so one leak fails one case,
+    /// not every case after it.
+    @MainActor
+    static func testWindowsLeft(since baseline: inout Int?, now: Int, bound: Int = 4) -> String? {
+        guard let base = baseline else { baseline = now; return nil }
+        guard now - base > bound else { return nil }
+        baseline = now
+        return "#1083: \(now - base) test windows more than at the class's start (bound \(bound)): a case left its windows "
+            + "alive (close them, drop the hosting view)"
+    }
+
+    @MainActor
+    static func assertTestWindowsBounded(since baseline: inout Int?, file: StaticString = #filePath, line: UInt = #line) {
+        if let failure = testWindowsLeft(since: &baseline, now: liveTestWindows()) { XCTFail(failure, file: file, line: line) }
+    }
+}
+
+extension AgentWindowD1Tests {
+    /// #1083: the guard's probe counts a window that is never shown, deferred or not, and drops it once it is closed and
+    /// released, so a case that leaves its windows alive is seen (the setUp guard is not vacuous).
+    @MainActor
+    func testAgentWindowLiveWindowProbeCountsWindowsNeverShown() {
+        let before = Self.liveTestWindows()
+        autoreleasepool {
+            let a = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled],
+                                   backing: .buffered, defer: true)
+            let b = NSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [.borderless],
+                             backing: .buffered, defer: false)
+            a.isReleasedWhenClosed = false
+            b.isReleasedWhenClosed = false
+            XCTAssertEqual(Self.liveTestWindows(), before + 2, "both counted, neither shown")
+            XCTAssertFalse(a.isVisible || b.isVisible, "never on screen")
+            a.close()
+            b.close()
+        }
+        XCTAssertEqual(Self.liveTestWindows(), before, "closed and released: no longer counted")
+    }
+
+    /// #1083: the bound is literal: the first read sets the base; up to 4 more windows pass; a fifth fails once and
+    /// re-bases, so the next case is measured from there.
+    @MainActor
+    func testAgentWindowLiveWindowGuardFailsPastItsBoundOnce() {
+        var base: Int?
+        XCTAssertTrue(Self.testWindowsLeft(since: &base, now: 3) == nil, "the first read is the base")
+        XCTAssertEqual(base, 3)
+        XCTAssertTrue(Self.testWindowsLeft(since: &base, now: 7) == nil, "4 more: within the bound")
+        XCTAssertTrue(Self.testWindowsLeft(since: &base, now: 2) == nil, "fewer: fine")
+        let failure = Self.testWindowsLeft(since: &base, now: 8)
+        XCTAssertTrue(failure?.contains("5 test windows more") == true, failure ?? "nil")
+        XCTAssertEqual(base, 8, "re-based after the failure")
+        XCTAssertTrue(Self.testWindowsLeft(since: &base, now: 8) == nil, "the same windows fail no second case")
+        XCTAssertEqual(base, 8)
     }
 }

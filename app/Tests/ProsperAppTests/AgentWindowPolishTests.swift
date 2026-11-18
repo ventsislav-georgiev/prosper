@@ -180,9 +180,11 @@ extension AgentWindowD1Tests {
                 reps.append(rep)
                 var last = 0
                 for y in Int(sz(8) * k)..<Int(sz(24) * k) {
-                    for x in 0..<limit {
-                        guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                        if c.redComponent + c.greenComponent + c.blueComponent > 1.2 { last = max(last, x) }
+                    autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                        for x in 0..<limit {
+                            guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            if c.redComponent + c.greenComponent + c.blueComponent > 1.2 { last = max(last, x) }
+                        }
                     }
                 }
                 XCTAssertGreaterThan(last, 0, "found the title (\(age) \(scale))")
@@ -200,11 +202,13 @@ extension AgentWindowD1Tests {
             for (age, rep) in zip(ages, reps).dropFirst() {
                 var diff = 0
                 for y in 0..<min(rep.pixelsHigh, first.pixelsHigh) {
-                    for x in 0..<left {
-                        guard let a = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                              let b = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
-                            + abs(a.blueComponent - b.blueComponent) > 0.02 { diff += 1 }
+                    autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                        for x in 0..<left {
+                            guard let a = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                  let b = first.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+                                + abs(a.blueComponent - b.blueComponent) > 0.02 { diff += 1 }
+                        }
                     }
                 }
                 XCTAssertEqual(diff, 0, "nothing before the age slot moves, \"now\" against \"\(age)\" at \(scale)")

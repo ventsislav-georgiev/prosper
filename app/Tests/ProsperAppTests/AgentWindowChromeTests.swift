@@ -230,8 +230,10 @@ extension AgentWindowD1Tests {
         let sx = CGFloat(rep.pixelsWide) / size.width, sy = CGFloat(rep.pixelsHigh) / size.height
         var n = 0
         for y in Int(rect.minY * sy)..<min(rep.pixelsHigh, Int(rect.maxY * sy)) {
-            for x in Int(rect.minX * sx)..<min(rep.pixelsWide, Int(rect.maxX * sx)) {
-                if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), test(c) { n += 1 }
+            autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                for x in Int(rect.minX * sx)..<min(rep.pixelsWide, Int(rect.maxX * sx)) {
+                    if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), test(c) { n += 1 }
+                }
             }
         }
         return n
@@ -246,10 +248,12 @@ extension AgentWindowD1Tests {
         let sx = CGFloat(rep.pixelsWide) / size.width, sy = CGFloat(rep.pixelsHigh) / size.height
         var n = 0
         for y in Int(rect.minY * sy)..<min(rep.pixelsHigh, Int(rect.maxY * sy)) {
-            for x in Int(rect.minX * sx)..<min(rep.pixelsWide, Int(rect.maxX * sx)) {
-                guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.95 else { continue }
-                if abs(c.redComponent - want.redComponent) < tolerance, abs(c.greenComponent - want.greenComponent) < tolerance,
-                   abs(c.blueComponent - want.blueComponent) < tolerance { n += 1 }
+            autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                for x in Int(rect.minX * sx)..<min(rep.pixelsWide, Int(rect.maxX * sx)) {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), c.alphaComponent > 0.95 else { continue }
+                    if abs(c.redComponent - want.redComponent) < tolerance, abs(c.greenComponent - want.greenComponent) < tolerance,
+                       abs(c.blueComponent - want.blueComponent) < tolerance { n += 1 }
+                }
             }
         }
         return n
@@ -643,8 +647,10 @@ extension AgentWindowD1Tests {
             let s = CGFloat(rep.pixelsHigh) / size.height
             var ys: [Int] = []
             for y in 0..<rep.pixelsHigh {
-                for x in 0..<Int(barStrip.maxX * s) {
-                    if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), cyan(c) { ys.append(y); break }
+                autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                    for x in 0..<Int(barStrip.maxX * s) {
+                        if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), cyan(c) { ys.append(y); break }
+                    }
                 }
             }
             let lo = try XCTUnwrap(ys.min()), hi = try XCTUnwrap(ys.max())
@@ -660,13 +666,15 @@ extension AgentWindowD1Tests {
             var box = (x0: Int.max, x1: Int.min, y0: Int.max, y1: Int.min)
             let top = Int((mid - 4) * s)
             for y in top..<Int((mid + 4) * s) {
-                for x in Int(sz(145) * s)..<Int(AgentWindowModel.fullSidebarWidth * s) where !chipColumn.contains(CGFloat(x) / s) {
-                    guard let a = on.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                          let b = off.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                    let d = a.blueComponent - b.blueComponent
-                    if d > 0.03 { any += 1; box = (min(box.x0, x), max(box.x1, x), min(box.y0, y - top), max(box.y1, y - top)) }
-                    if d > 0.05 && d < 0.25 { fill += 1 }
-                    if d > 0.3 { edge += 1 }
+                autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                    for x in Int(sz(145) * s)..<Int(AgentWindowModel.fullSidebarWidth * s) where !chipColumn.contains(CGFloat(x) / s) {
+                        guard let a = on.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                              let b = off.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                        let d = a.blueComponent - b.blueComponent
+                        if d > 0.03 { any += 1; box = (min(box.x0, x), max(box.x1, x), min(box.y0, y - top), max(box.y1, y - top)) }
+                        if d > 0.05 && d < 0.25 { fill += 1 }
+                        if d > 0.3 { edge += 1 }
+                    }
                 }
             }
             let at = any == 0 ? "none" : "x \(CGFloat(box.x0) / s)-\(CGFloat(box.x1) / s) y \(CGFloat(box.y0) / s)-\(CGFloat(box.y1) / s)"
@@ -727,11 +735,13 @@ extension AgentWindowD1Tests {
                 let s = CGFloat(g.pixelsWide) / size.width
                 var through = 0, total = 0
                 for y in Int(column.minY * s)..<Int(column.maxY * s) {
-                    for x in Int(column.minX * s)..<Int(column.maxX * s) {
-                        guard let a = g.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                              let b = mg.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                        total += 1
-                        if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) > 0.1 { through += 1 }
+                    autoreleasepool {   // #1083: colorAt's NSColors drained per row
+                        for x in Int(column.minX * s)..<Int(column.maxX * s) {
+                            guard let a = g.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                  let b = mg.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                            total += 1
+                            if abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent) > 0.1 { through += 1 }
+                        }
                     }
                 }
                 XCTAssertEqual(pt2(total, g, size), 400, accuracy: 0.01, tag)
