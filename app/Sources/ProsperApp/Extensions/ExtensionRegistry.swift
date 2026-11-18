@@ -562,6 +562,7 @@ final class ExtensionRegistry: ObservableObject {
         dropStalePhoneApprovals()
         rebuildRoutes()
         asyncRuntimes.invalidateAll()   // drop stale off-main VMs on rescan
+        disarmLegacyRemoteWake()
     }
 
     /// Live (enabled + trusted) state of the extensions whose behaviour runs natively
@@ -1115,6 +1116,17 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     static let openLidID = "com.prosper.openlid"
+    static let openLidLegacyDisarmKey = "openLidLegacyRemoteWakeDisarmed"
+
+    /// #1541: an OpenLid turned off before #1072 never disarmed Remote Wake, and the helper keeps it across
+    /// restarts. The first discover with OpenLid off disarms once through the #1072 path; the marker (set by the
+    /// first check whatever the state, since a later turn-off disarms itself) keeps later launches and rescans quiet.
+    private func disarmLegacyRemoteWake() {
+        guard defaults.object(forKey: Self.openLidLegacyDisarmKey) == nil,
+              let openLid = record(id: Self.openLidID) else { return }
+        defaults.set(true, forKey: Self.openLidLegacyDisarmKey)
+        if !openLid.enabled { suspendRemoteWake(id: openLid.id) }
+    }
 
     /// #1072: Remote Wake outlives quit by design, so no teardown disarms it; turning OpenLid off does,
     /// only when its saved setting (openlid's `remote_wake` pref, kept as is) has it on. Re-enable needs

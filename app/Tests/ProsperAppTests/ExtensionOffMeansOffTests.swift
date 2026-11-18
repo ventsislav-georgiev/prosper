@@ -121,7 +121,7 @@ final class ExtensionOffMeansOffTests: XCTestCase {
 
     /// An OpenLid stand-in (system, `system.launch` subscriber) whose on_launch re-arms Remote
     /// Wake from its saved setting the way openlid's does, plus a second system extension.
-    private func openLidRegistry(_ services: RemoteWakeRecorder) throws -> ExtensionRegistry {
+    private func openLidRegistry(_ services: RemoteWakeRecorder, defaults: UserDefaults? = nil) throws -> ExtensionRegistry {
         let root = tempDir("offmeans-openlid")
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let lua = """
@@ -161,7 +161,7 @@ final class ExtensionOffMeansOffTests: XCTestCase {
         let registry = ExtensionRegistry(
             systemDir: root.appendingPathComponent("system", isDirectory: true),
             userDir: root.appendingPathComponent("user", isDirectory: true),
-            hostVersion: "2.0.0", defaults: scratchDefaults("offmeans-openlid"), services: services)
+            hostVersion: "2.0.0", defaults: defaults ?? scratchDefaults("offmeans-openlid"), services: services)
         registry.discover()
         XCTAssertTrue(registry.record(id: ExtensionRegistry.openLidID) != nil, "openlid fixture not discovered")
         return registry
@@ -210,5 +210,35 @@ final class ExtensionOffMeansOffTests: XCTestCase {
         await fulfillment(of: [launched], timeout: 10)
         await drainApplyChain()
         XCTAssertEqual(services.calls, [], "saved off stays off on enable")
+    }
+
+    // MARK: #1541 launch-time disarm
+
+    func testLaunchDisarmsOnceForOpenLidOffWithRemoteWakeOn() async throws {
+        let id = ExtensionRegistry.openLidID
+        let defaults = scratchDefaults("offmeans-1541")
+        // Saved disabled before the registry exists: the pre-#1072 state.
+        defaults.set([id], forKey: "disabledExtensionIDs")
+        let services = RemoteWakeRecorder()
+        services.setPref(id, "remote_wake", "true")
+        services.setPref(id, "rw_device_id", "api-host")
+        _ = try openLidRegistry(services, defaults: defaults)
+        _ = try openLidRegistry(services, defaults: defaults)   // second launch
+        await drainApplyChain()
+        XCTAssertEqual(services.calls, ["\(id) off api-host"], "one disarm, the second launch does nothing")
+        XCTAssertEqual(services.prefGet(extensionID: id, key: "remote_wake"), "true", "the saved setting is kept")
+    }
+
+    func testLaunchLeavesRemoteWakeAloneWhenOpenLidIsOnOrItWasOff() async throws {
+        let id = ExtensionRegistry.openLidID
+        let on = RemoteWakeRecorder()
+        on.setPref(id, "remote_wake", "true")
+        _ = try openLidRegistry(on, defaults: scratchDefaults("offmeans-1541-on"))   // enabled
+        let off = RemoteWakeRecorder()   // disabled, Remote Wake not saved on
+        let d = scratchDefaults("offmeans-1541-off")
+        d.set([id], forKey: "disabledExtensionIDs")
+        _ = try openLidRegistry(off, defaults: d)
+        await drainApplyChain()
+        XCTAssertEqual(on.calls + off.calls, [], "nothing to disarm")
     }
 }

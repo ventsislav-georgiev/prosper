@@ -1839,6 +1839,8 @@ tag from the now-released section and put it on the new top draft.
   transcript no longer open. (#1419)
 - Quitting Prosper now also stops the terminal editor sessions the Text Viewer opened, as closing
   their windows already did. (#1543)
+- OpenLid: a Mac that had OpenLid turned off before the last update, with Remote Wake still on, is
+  now disarmed once at the next launch. (#1541)
 
 ## v2.174.0
 
