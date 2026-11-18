@@ -223,7 +223,7 @@ final class AgentSidebarModeTests: XCTestCase {
                     let r = edge.convert(edge.bounds, to: nil), content = try XCTUnwrap(win.contentView).bounds
                     XCTAssertEqual(r.minX, 0, accuracy: pixel, "at the left edge at \(scale)")
                     XCTAssertEqual(r.width, AgentWindowModel.fullSidebarWidth / 2, accuracy: pixel, "half the sidebar at \(scale): \(r)")
-                    XCTAssertEqual(r.height, content.height - (AgentWindowBand.shown ? AgentWindowBand.height : 0), accuracy: 1,
+                    XCTAssertEqual(r.height, content.height - (AgentWindowBand.shows(m) ? AgentWindowBand.height : 0), accuracy: 1,
                                    "the whole height below the band at \(scale)")
                     edge.updateTrackingAreas()
                     XCTAssertEqual(edge.trackingAreas.count, 1)

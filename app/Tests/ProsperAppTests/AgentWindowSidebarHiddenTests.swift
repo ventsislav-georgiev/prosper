@@ -172,6 +172,7 @@ extension AgentWindowD1Tests {
                     m.setVisible(true)
                     defer { m.close() }
                     m.select(.live(paneKey("api")))
+                    bandTwoPanes(m)   // #1538: the band shows whether the sidebar is hidden or not
                     let box = SidebarProbeBox()
                     AgentWindowBand.probe = { kind, r in box.seen[kind, default: []].append(r) }   // main actor (layout)
                     let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless],

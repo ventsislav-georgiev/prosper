@@ -755,7 +755,7 @@ extension AgentWindowD1Tests {
                                 // sz(18) (AgentWindowControls.swift:263) and 2 of slack. Left of it, the line's spacing
                                 // sz(8) (AgentsWindow.swift:903) is blank: its right sz(4) pins the box's edge.
                                 // #1488 d: the band, when shown, puts the whole pane column (the header too) its height lower.
-                                let top = band ? AgentWindowBand.height : 0
+                                let top = band && AgentWindowBand.shows(m) ? AgentWindowBand.height : 0   // #1538
                                 let line = Int((top + AgentSessionHeader.padTop) * px)..<Int((top + AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
                                 // #1476: the X-ray button's box before it: the line's spacing sz(8) and the button's frame.

@@ -731,7 +731,7 @@ struct AgentWindowRootView: View {
             // #1379: Full sz(290), Mini its rail; Slide has no column (its sidebar is the overlay below).
             if model.sidebarShown && model.sidebarMode != .slide {
                 AgentSidebarView(model: model)
-                    .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)
+                    .padding(.top, AgentWindowBand.shows(model) ? AgentWindowBand.height : 0)
                     .frame(width: model.sidebarColumnWidth)
                     .background(NeonSidebarSurface())
                 Rectangle().fill(Neon.stroke).frame(width: 1)
@@ -739,7 +739,7 @@ struct AgentWindowRootView: View {
             // #831 9.1: the band over the pane area, one whatever the number of panes, only while the split gate is on
             // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
             Group {
-                if AgentWindowBand.shown {
+                if AgentWindowBand.shows(model) {
                     // #900 B2 step 3: the band's chip reads the pane area from this geometry (the model's paneArea is
                     // not published, so a resize to too small would not redraw the band).
                     GeometryReader { proxy in
@@ -769,11 +769,11 @@ struct AgentWindowRootView: View {
             AgentSlideTracker(edge: true) { model.slideArea($0) }
                 .frame(width: AgentSlideTracker.areaWidth)
                 .frame(maxHeight: .infinity)
-                .padding(.top, AgentSlideTracker.areaTop)
+                .padding(.top, AgentSlideTracker.areaTop(model))
             if model.slideOpen {
                 HStack(spacing: 0) {
                     AgentSidebarView(model: model)
-                        .padding(.top, AgentWindowBand.shown ? AgentWindowBand.height : 0)
+                        .padding(.top, AgentWindowBand.shows(model) ? AgentWindowBand.height : 0)
                         .frame(width: AgentWindowModel.fullSidebarWidth)
                         .background(NeonSidebarSurface())
                     Rectangle().fill(Neon.stroke).frame(width: 1)
@@ -882,8 +882,8 @@ struct AgentSlideTracker: NSViewRepresentable {
     static var areaWidth: CGFloat { AgentWindowModel.fullSidebarWidth / 2 }
     /// The area starts below the row of the window's controls: the band's, or, band off under No title bar (the content
     /// runs under the title bar), the title bar's own height as AppKit gives it for a titled window.
-    @MainActor static var areaTop: CGFloat {
-        if AgentWindowBand.shown { return AgentWindowBand.height }
+    @MainActor static func areaTop(_ m: AgentWindowModel) -> CGFloat {
+        if AgentWindowBand.shows(m) { return AgentWindowBand.height }
         return Preferences.agentWindowStyle == .noTitleBar ? NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height : 0
     }
     func makeNSView(context: Context) -> AgentSlideTrackerView { AgentSlideTrackerView(edge: edge) }
@@ -2405,6 +2405,14 @@ struct AgentWindowBand: View {
     /// picker all read it. Off (the product, the split gate's default): no band, the parent's window. Read at layout
     /// time, not observed: a flip shows at the next build of the view, as the split gate does.
     @MainActor static var shown: Bool { AgentPaneLayout.splitsEnabled }
+    /// #1538 (operator 2026-11-18: "also a lot of empty space in the top?"): the band takes its height only when it has
+    /// something to show: a saved layout (the Layouts section is built: the layout slot and Edit layout), two panes or
+    /// more (the zoom and too-small chip), or the hidden sidebar's show glyph (Full and Mini; Slide has its hover edge,
+    /// and its slide-in must not move the panes). Else no band at all, as with the gate off. One rule for the view, the
+    /// sidebar's top padding, the Slide hover area and AgentWindowModel.paneAreaFrame.
+    @MainActor static func shows(_ m: AgentWindowModel) -> Bool {
+        shown && (m.layoutRows != nil || m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))
+    }
     /// #901 B3 step 4b: the layout slot's row, the Layouts section's active one; nil (gate off, one layout of one pane):
     /// nothing is built in the slot.
     @MainActor static func layoutSlot(_ m: AgentWindowModel) -> AgentWindowModel.LayoutRow? { m.layoutRows?.first { $0.active } }
@@ -2493,6 +2501,19 @@ struct AgentWindowBand: View {
         }
         .padding(.horizontal, sz(16))
         .frame(maxWidth: .infinity)   // the ideal width still decides the tier; the taken line spans the band
+        // #1538: Edit layout / Done, left of the show-sidebar slot, while a saved layout exists (the layout slot's rule).
+        // An overlay: no slot's frame or tier changes (shortcut: it may cover the chip's words in a narrow band; give it
+        // a slot of its own if that shows).
+        .overlay(alignment: .trailing) {
+            if model.layoutRows != nil {
+                Button(model.layoutEditing ? "Done" : "Edit layout") { model.toggleLayoutEditing() }   // main actor
+                    .buttonStyle(.plain).font(Neon.font(11, weight: .medium))
+                    .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
+                    .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
+                    .padding(.trailing, sz(16) + Self.allWidth + sz(8) + Self.sidebarWidth + sz(8))
+                    .modifier(AgentBandProbe(kind: "edit"))
+            }
+        }
     }
 }
 

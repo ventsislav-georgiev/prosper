@@ -1825,6 +1825,11 @@ tag from the now-released section and put it on the new top draft.
   switch at the bottom stays on one line when it fits. (#1539)
 - Unmuting the microphones no longer forgets one that was unplugged or asleep: it stays muted and is
   restored, with its saved level, when it comes back. (#1044)
+- Agent Sessions: saved layouts are now locked. Clicking a session that is not in the layout opens
+  it on its own without changing the layout, and the layout's row (or Control-number) brings the
+  layout back as you left it. Use "Edit layout" in the window's top bar (or Go > Edit Layout) to
+  change a layout, then "Done"; a new layout opens ready to edit. The empty strip at the top of the
+  window is gone when there is nothing to show in it. (#1538)
 
 ## v2.174.0
 

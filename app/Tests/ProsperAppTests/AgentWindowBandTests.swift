@@ -56,9 +56,11 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(paneKey("api")))
+            bandTwoPanes(m)   // #1538: the band shows only with something to show; two panes (the chip slot) keep it
             let empty = windowModel(store([]))
             empty.setVisible(true)
             defer { empty.close() }
+            bandTwoPanes(empty)
             let sizes = [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))]
             // #1253: on the 1x pixel grid of CI's runner and the 2x of a Retina Mac, whatever this machine's screen.
             for (label, size, px) in sizes.flatMap({ s in [CGFloat(1), 2].map { (s.0, s.1, $0) } }) {
@@ -121,6 +123,7 @@ extension AgentWindowD1Tests {
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(paneKey("api")))
+            bandTwoPanes(m)   // #1538: the band shows only with something to show; two panes (the chip slot) keep it
             let least = AgentsWindow.contentMinSize(scale: scale)
             var hadChip = true, hadLayout = true, layoutAlone = 0
             var steps: [String] = []
@@ -189,6 +192,7 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         defer { m.close() }
         m.select(.live(paneKey("api")))
+        bandTwoPanes(m)   // #1538: the band shows only with something to show
         let size = CGSize(width: 1600, height: 900)
         let (tree, screen) = bandTree(AgentWindowRootView(model: m, scrolls: false), size, until: ["Session actions"])
         XCTAssertTrue(tree.contains { $0.names.contains("Session actions") }, "the header was read")
@@ -265,6 +269,7 @@ extension AgentWindowD1Tests {
         m.setVisible(true)
         defer { m.close() }
         m.select(.live(paneKey("api")))
+        bandTwoPanes(m)   // #1538: the band shows only with something to show
         let size = CGSize(width: 1600, height: 900)
         let seen = bandSnapshot(m, size)
         let band = try XCTUnwrap(seen["band"], "the band is laid out")
@@ -274,6 +279,12 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(seen["picker"] == nil, "#1471: no picker slot in the band")
         XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: lead, y: 30, width: 1600 - lead, height: 870), "the pane area under the band")
         XCTAssertEqual(m.paneArea.height, 870, accuracy: 0.5, "the view's pane area: the column less the band")
+    }
+
+    /// #1538: a second, empty pane beside the first (its target kept), so the band has something to show (the chip slot).
+    @MainActor
+    func bandTwoPanes(_ m: AgentWindowModel) {
+        m.adopt(paneLayout([m.layout.panes.first?.target, nil]))
     }
 
     /// An AX client's walk: the names it is shown (AXDescription, AXTitle, AXValue; none for an ignored node) and the frame.

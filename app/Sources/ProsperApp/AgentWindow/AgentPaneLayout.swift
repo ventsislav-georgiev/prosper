@@ -132,10 +132,13 @@ enum PaneRefusal: Error, Equatable {
     case layoutExists
     /// #901 B3 step 1: New, Rename or Duplicate with the split gate off (15.0): nothing made, renamed or written.
     case layoutsOff
+    /// #1538: a structural change (split, close, a pane retarget, a drop) while the layout is locked (not in Edit layout).
+    case layoutLocked
 
     var notice: String? {
         switch self {
         case .cap: "6 panes is the most a layout holds"
+        case .layoutLocked: "Edit layout to change it"
         case .noRoom: "No room for another pane here. Widen the window or hide the sidebar (⌃⌘S)."
         default: nil
         }
