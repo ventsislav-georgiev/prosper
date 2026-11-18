@@ -637,7 +637,10 @@ final class CCPoolConnection: @unchecked Sendable {
         case .deciding:
             let code = (error as? URLError)?.code
             if Self.shouldResend(code, retried: ex.retried, streamed: streamed, reused: reused) {
-                log.note(ex.label, "pooled upstream connection dropped before a response; retrying once")
+                // #1572 (O7): an account removed meanwhile is never resent; send() logs that instead of a retry.
+                if store.read({ $0.label(ofID: ex.accountID) }) != nil {
+                    log.note(ex.label, "pooled upstream connection dropped before a response; retrying once")
+                }
                 return send(label: ex.label, accountID: ex.accountID, retried: true)
             }
             log.note(ex.label, "upstream unreachable (\(code.map { "\($0.rawValue)" } ?? "error")\(reused ? ", pooled" : ""))")

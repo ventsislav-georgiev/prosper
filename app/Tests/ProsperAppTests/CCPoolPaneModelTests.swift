@@ -224,12 +224,8 @@ final class CCPoolPaneModelTests: XCTestCase {
     func testCCPoolPaneProbeIgnoresAnthropicBaseURL() async throws {
         let decoyHits = CCPoolDecoyHits()
         let decoy = try CCPoolFakeServer { _, _ in decoyHits.bump(); return .respond(200, [], Data()) }
-        let saved = ProcessInfo.processInfo.environment["ANTHROPIC_BASE_URL"]
-        setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:\(decoy.port)", 1)
-        addTeardownBlock {
-            decoy.stop()
-            if let saved { setenv("ANTHROPIC_BASE_URL", saved, 1) } else { unsetenv("ANTHROPIC_BASE_URL") }
-        }
+        overrideProcessEnv("ANTHROPIC_BASE_URL", "http://127.0.0.1:\(decoy.port)")
+        addTeardownBlock { decoy.stop() }
         let r = try ccpoolPaneRig()
         try r.add(["a", "b"])
         await r.model.refreshUsage()?.value

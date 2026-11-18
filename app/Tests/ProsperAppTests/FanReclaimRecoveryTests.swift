@@ -6,8 +6,31 @@ import ProsperHelperProtocol
 final class FanReclaimRecoveryTests: XCTestCase {
     /// #305: armRecoveryLifecycle installs real NSWorkspace sleep/wake observers; a real
     /// sleep+wake later in the xctest process would drive real fan writes. Remove them.
+    /// #1588: entry 981's trip hold starts off in every row, like FanLaunchTripHoldTests: a latch refusal row leaves
+    /// fanTripHeld set, the launch re-apply row copied it into launchTripHold, and a later re-apply then waited on a
+    /// real SMC temperature (none on a CI runner). The hold's reading is a seam that fails the row if it is ever asked.
+    private var savedTripHeld = false
+    private var savedCelsius: (@Sendable () -> Double?)?
+
+    override func setUp() {
+        super.setUp()
+        (savedTripHeld, savedCelsius) = MainActor.assumeIsolated {
+            let saved = (Preferences.fanTripHeld, FanControlHelper.tripHoldCelsius)
+            Preferences.fanTripHeld = false
+            FanControlHelper.launchTripHold = false
+            FanControlHelper.tripHoldCelsius = { XCTFail("no temperature read expected"); return nil }
+            return saved
+        }
+    }
+
     override func tearDown() {
-        MainActor.assumeIsolated { FanControlHelper.removeSleepObservers() }
+        let held = savedTripHeld, celsius = savedCelsius
+        MainActor.assumeIsolated {
+            FanControlHelper.removeSleepObservers()
+            FanControlHelper.launchTripHold = false
+            Preferences.fanTripHeld = held
+            if let celsius { FanControlHelper.tripHoldCelsius = celsius }
+        }
         super.tearDown()
     }
 

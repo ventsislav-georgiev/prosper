@@ -1247,7 +1247,7 @@ extension AgentIsland {
 }
 
 /// #1537 (OQ-95 part 3): the Claude plan's session (5 h) and weekly limits for the open island, from the account
-/// pool's in-memory usage sample of its current account (CCPoolRuntime.planUsage) and that account's reset stamps.
+/// pool's in-memory usage sample of its current account (the pool runtime's planUsage) and that account's reset stamps.
 /// Pure. Stale is dropped, per limit: a value whose window rolled over (its reset passed) or, with no reset known,
 /// one older than its window belongs to a finished window and is wrong, not just old. nil: nothing to draw.
 struct AgentPlanUsage: Equatable, Sendable {
@@ -1264,7 +1264,7 @@ struct AgentPlanUsage: Equatable, Sendable {
     /// `util` and `at` are the sample (claim -> fraction, its epoch); `reset` claim -> epoch.
     init?(util: [String: Double], at: Double, reset: [String: Int], now: Double) {
         func fresh(_ claim: String, window: Double) -> (value: Double, reset: Int?)? {
-            // Outside data: the pool keeps 0...100 (CCPoolCore.utils); checked again before the percent's Int().
+            // Outside data: the pool keeps 0...100 (its core's utils); checked again before the percent's Int().
             guard let u = util[claim], (0...100).contains(u), at.isFinite, now.isFinite else { return nil }
             if let r = reset[claim] { return Double(r) > now ? (u, r) : nil }
             return now - at < window ? (u, nil) : nil

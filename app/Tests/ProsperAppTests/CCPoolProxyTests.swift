@@ -88,12 +88,18 @@ final class CCPoolFakeServer: @unchecked Sendable {
                     c.cancel()
                     return
                 case .respondCut(let status, let headers, let body):
+                    // #1588: the first bytes go out as one whole chunk; the hang-up inside the next chunk is a second
+                    // send, after the first is out (as UsageTapStub's dropMidChunk). A body short of its Content-Length
+                    // sent with the hang-up never reached URLSession's data callback, so no bytes were "first".
                     var head = "HTTP/1.1 \(status) X\r\n"
                     for (k, v) in headers { head += "\(k): \(v)\r\n" }
-                    head += "Content-Length: \(body.count + 100)\r\n\r\n"
+                    head += "Transfer-Encoding: chunked\r\n\r\n" + String(body.count, radix: 16) + "\r\n"
                     var out = Data(head.utf8)
                     out.append(body)
-                    c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
+                    out.append(Data("\r\n".utf8))
+                    c.send(content: out, completion: .contentProcessed { _ in
+                        c.send(content: Data("40\r\npartial".utf8), completion: .contentProcessed { _ in c.cancel() })
+                    })
                     return
                 case .respond(let status, let headers, let body):
                     var head = "HTTP/1.1 \(status) X\r\n"

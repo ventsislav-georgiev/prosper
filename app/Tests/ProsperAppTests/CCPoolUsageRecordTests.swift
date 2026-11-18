@@ -201,9 +201,18 @@ final class CCPoolUsageRecordTests: XCTestCase {
     /// "other", no counts, the account of the attempt), the client's bytes the 400 it always got.
     func testBadRequestPath400HasOneRowAndTheClientBytesAreUnchanged() throws {
         let r = try rig()
-        // Which spellings fail URL(string:) depends on the OS; pin the ones that do here.
-        let bad = try XCTUnwrap(["/v1/messages%zz", "/%", "/v1/%GG", "/v1/messages%"].first { URL(string: "http://127.0.0.1:1" + $0) == nil },
-                                "no candidate path fails URL(string:) on this OS")
+        // #1588: since macOS 14 (the app's floor) URL(string:) percent-encodes what it once refused, so no request-line
+        // path (a leading "/", no space) fails it and the guard is not reached: the path is relayed, the pool's 400 never
+        // sent. The guard stays; the 400 case below runs on an OS whose URL(string:) refuses one of these again.
+        let candidates = ["/v1/messages%zz", "/%", "/v1/%GG", "/v1/messages%"]
+        guard let bad = candidates.first(where: { URL(string: "http://127.0.0.1:1" + $0) == nil }) else {
+            r.stub.push(UsageTapReply(body: recJSON))
+            let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, path: "/v1/messages%zz", body: throttleWork))
+            XCTAssertEqual(resp.status, 200, resp.text)
+            XCTAssertEqual(resp.body, recJSON, "the upstream's answer, not the pool's bad-path 400")
+            XCTAssertEqual(r.rows(), [row(r.ids.first ?? "", path: "other")])
+            return
+        }
         let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, path: bad, body: throttleWork))
         XCTAssertEqual(resp.status, 400, resp.text)
         XCTAssertEqual(resp.header("content-type"), "application/json")
