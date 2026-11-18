@@ -253,6 +253,12 @@ enum FanInfo {
         return FanControlCore.macOSSpeed(current: fc.currentRPM(index), target: fc.targetRPM(index))
     }
 
+    /// Entry 981: the hottest sensor, complete (nil if any sensor fails to read), as the helper's re-arm reads it.
+    static func maxCelsius() -> Double? {
+        guard let smc = try? SMC() else { return nil }
+        return SMCFanController(smc).maxTemperature(complete: true)
+    }
+
     static func read() -> [FanReading] {
         guard let smc = try? SMC() else { return [] }
         let fc = SMCFanController(smc)
@@ -332,6 +338,37 @@ enum FanControlHelper {
     // ponytail: in-memory and never cleared; it only orders the fans.
     static var lastRefusedFan: Int?
 
+    /// Entry 981 (OQ-142 b): this launch found `Preferences.fanTripHeld`, so the saved speed waits until the app's own
+    /// complete reading is below the helper's re-arm line: a helper that exited latched starts unlatched below 95 °C.
+    /// Only the re-apply of the saved speed waits (launch, wake, recovery); a Manual click goes to the helper as before.
+    static var launchTripHold = false
+    /// The app's own hottest reading for that hold (test seam; nil = unreadable). Called off-main.
+    static var tripHoldCelsius: @Sendable () -> Double? = { FanInfo.maxCelsius() }
+
+    /// True when the saved speed may be re-applied. Held: one reading; below the re-arm line ends the hold here and on
+    /// disk. No reading (nil, NaN, infinite) or 80 °C and up keeps it: the fans stay with macOS and the recovery asks
+    /// again one cooldown later, for as long as the reading never comes (the safe side, manual intent kept).
+    static func tripHoldReleased() async -> Bool {
+        guard launchTripHold else { return true }
+        let read = tripHoldCelsius
+        guard let c = await Task.detached(priority: .utility, operation: { read() }).value,
+              c.isFinite, c < FanControlCore.reArmCelsius else { return false }
+        clearTripHold()
+        return true
+    }
+
+    /// Entry 981: the hold ends, in memory and on disk (a reading below the re-arm line, or the user's Automatic).
+    static func clearTripHold() {
+        launchTripHold = false
+        Preferences.fanTripHeld = false
+    }
+
+    /// Entry 981: a refusal by the helper's latch is remembered across a relaunch.
+    private static func rememberingTrip(_ reply: FanManualReply) -> FanManualReply {
+        if reply.isLatchRefusal { Preferences.fanTripHeld = true }
+        return reply
+    }
+
     // MARK: - Connection
 
     private static func makeConnection() -> NSXPCConnection {
@@ -410,9 +447,9 @@ enum FanControlHelper {
                 let said = FanManualReply.reason(reason.withLock { $0 } ?? -1)
                 // ...except below macOS's speed, still named by the app's read as before: where the two reads differ
                 // that names it settling, and a Manual click's later fan then saves nothing (a preset would re-apply).
-                guard said == .refused else { return said }
+                guard said == .refused else { return rememberingTrip(said) }
             }
-            return .refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value)
+            return rememberingTrip(.refusal(rpm: rpm, macOSRPM: await Task.detached(priority: .utility) { macOSRPM(index) }.value))
         case nil: return .unavailable
         }
     }
@@ -544,6 +581,7 @@ enum FanControlHelper {
         Preferences.fanManualEnabled = true
         Preferences.fanTargets = targets
         presetPending = false
+        launchTripHold = false   // entry 981: the user's own click, accepted by the helper's gate, wins over the hold
         return (true, reply)
     }
 
@@ -786,6 +824,7 @@ enum FanControlHelper {
     static func reapplyFromPreferences(start: () -> Void = { armRecoveryLifecycle(); startReapply() }) {
         guard Preferences.fanManualEnabled else { return }
         presetPending = true   // not landed this launch: a refused launch re-apply keeps a low preset (#737)
+        launchTripHold = Preferences.fanTripHeld   // entry 981: the last run ended with the latch refusing
         start()
     }
 
@@ -807,6 +846,8 @@ enum FanControlHelper {
         guard Preferences.fanManualEnabled else { return false }
         let targets = Preferences.fanTargets
         guard !targets.isEmpty else { return false }
+        // Entry 981: held after a trip in the last run; false keeps the preset pending and the recovery retries.
+        guard await tripHoldReleased() else { return false }
         // Launch/wake IS a cold engage: sleep hardware-clears Ftst, so the daemon
         // re-runs the full unlock. First fan gets the cold ceiling; once it lands the
         // unlock is live and the siblings commit at the steady default.

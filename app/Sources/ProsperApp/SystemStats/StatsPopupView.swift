@@ -1035,6 +1035,7 @@ struct StatsPopupView: View {
     @discardableResult
     @MainActor static func selectAuto(fanIDs ids: [Int], presentModal: Bool = true) -> Task<Void, Never> {
         FanControlHelper.automaticGeneration &+= 1   // R1223-a: an engage in flight on either surface saves nothing
+        FanControlHelper.clearTripHold()   // entry 981: Automatic ends the post-trip hold
         Preferences.fanManualEnabled = false
         Preferences.fanTargets = [:]
         FanControlHelper.userAdjusting = false

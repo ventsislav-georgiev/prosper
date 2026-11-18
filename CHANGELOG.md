@@ -1798,6 +1798,9 @@ tag from the now-released section and put it on the new top draft.
   outline. (#1531)
 - Agent Sessions splits: a remote pane's title switches its session too, like a local pane's.
   (#1513)
+- Fans: if the overheat cut-off was holding your manual fan speed back when Prosper quit, Prosper
+  now waits after a relaunch until the Mac reads below 80 °C before setting that speed again;
+  choosing Automatic ends the wait. (#981)
 
 ## v2.174.0
 

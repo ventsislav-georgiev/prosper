@@ -331,6 +331,8 @@ enum Preferences {
         static let fanManualConsent = "fanManualConsent"
         static let fanTargets = "fanTargets"
         static let fanHoldUnlock = "fanHoldUnlock"
+        // Entry 981: the helper's overheat latch refused this Mac's speed; per Mac, not in SyncedKeys.
+        static let fanTripHeld = "fanTripHeld"
         static let statsRefreshInterval = "statsRefreshInterval"
         static let statsSensorsInterval = "statsSensorsInterval"
         static let sensorsHeadlineSensor = "sensorsHeadlineSensor"
@@ -1787,6 +1789,14 @@ enum Preferences {
     static var fanHoldUnlock: Bool {
         get { defaults.bool(forKey: Keys.fanHoldUnlock) }   // absent → false
         set { defaults.set(newValue, forKey: Keys.fanHoldUnlock) }
+    }
+
+    /// Entry 981 (OQ-142 b): the helper's overheat latch refused a manual speed, and the app has not read the Mac
+    /// below the helper's re-arm line since. The latch itself lives only in the helper's memory, so a relaunch holds
+    /// the saved speed on this instead (`FanControlHelper.launchTripHold`). Cleared by that reading and by Automatic.
+    static var fanTripHeld: Bool {
+        get { defaults.bool(forKey: Keys.fanTripHeld) }   // absent → false
+        set { defaults.set(newValue, forKey: Keys.fanTripHeld) }
     }
 
     /// Temperature list order in the Sensors popup. true (default) → the curated
