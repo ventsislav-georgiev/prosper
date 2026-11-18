@@ -319,6 +319,8 @@ final class AgentsNSWindow: NSWindow {
         case stopOrRemove
         /// #1110: Command-1...9, the numbered row at that position (1-based). #1470: Option-Command-1...9 are rows 10...18.
         case jump(Int)
+        /// #1111: Control-Tab (1) and Control-Shift-Tab (-1), the selected group's next or previous member.
+        case member(Int)
         /// #895: the terminal's text size: +1, -1, 0 (back to today's size).
         case font(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
@@ -354,7 +356,7 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .session, .jump, .find, .findNext, .font, .stopOrRemove, .xray:
+        case .session, .jump, .member, .find, .findNext, .font, .stopOrRemove, .xray:
             return form ? .swallow : r
         default: return r
         }
@@ -374,6 +376,10 @@ final class AgentsNSWindow: NSWindow {
         // #1470: Option-Command-1...9 jump to rows 10...18 in both modes, by key code as Command-1...9 (the old detail-level
         // keys are gone).
         if mods == [.command, .option], let n = digit(event.keyCode) { return .jump(n + 9) }
+        // #1111 (operator 2026-11-13): Control-Tab / Control-Shift-Tab from every responder, by key code (Tab on any layout).
+        // Not Option-Left/Right: those move by a word in the terminal, a shell and the composer. Acted on only inside a group
+        // (perform); elsewhere the key goes on as before (#901's previous layout with the split gate on, the terminal's Tab).
+        if event.keyCode == 48, mods == [.control] || mods == [.control, .shift] { return .member(mods.contains(.shift) ? -1 : 1) }
         if mods == [.command] {
             if let n = digit(event.keyCode) { return .jump(n) }
             // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
@@ -454,6 +460,7 @@ final class AgentsNSWindow: NSWindow {
         case .close: performClose(nil)
         case .session(let d): model.move(d)
         case .jump(let n): model.selectNumbered(n)   // no row there: nothing, and the key stops here (no beep, not the terminal's)
+        case .member(let step): return model.stepGroupMember(step)   // #1111: no group: false, the key goes on
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
         case .font(let step): model.terminal.zoomFont(step)
@@ -485,6 +492,7 @@ final class AgentsNSWindow: NSWindow {
         ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
         ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
         ("\u{F700}", .command, 126, .session(-1)), ("\u{F701}", .command, 125, .session(1)),
+        ("\t", .control, 48, .member(1)), ("\t", [.control, .shift], 48, .member(-1)),   // #1111
         ("x", [.command, .shift], 7, .xray),
     ]
 
@@ -628,12 +636,16 @@ final class AgentsNSWindow: NSWindow {
         // R1477b-m1: a right or middle down focuses the pane but asks no key and front (AppKit's own right-click does not).
         if Self.asksKey(focusing: focusing && left, isKey: isKeyWindow) { raise(self) }
         if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
+        let routed = model.map { m in
+            Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused, terminalMode: m.paneHasTerminal,
+                       renaming: m.renaming != nil || m.layoutRenaming != nil, form: m.newSession != nil)
+        }
+        // #1111: inside a group Control-Tab is the group's, before #901's previous layout (gate on) and the responder's keyDown
+        // (the terminal's Tab, AppKit's key-view step out of a text view); outside a group both keep it, as before.
+        if case .member(let step)? = routed, perform(.member(step)) { return }
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
-        if let model, Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                                 terminalMode: model.paneHasTerminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
-                                 form: model.newSession != nil) == .sidebar,
-           Self.handle(event, model) { return }
+        if let model, routed == .some(.sidebar), Self.handle(event, model) { return }
         super.sendEvent(event)
     }
 
@@ -942,6 +954,7 @@ struct AgentSidebarView: View {
                     // #909 (R909-1): the groups once per draw, never per row (every row's menu reads them).
                     let groups = model.store?.groups
                     let drawn = AgentSidebar.items(model.sections) { groups ?? [] }   // #1342: a group is one row
+                    let numbers = model.numbers(drawn)   // #1111: a group's one number, on its first line
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
@@ -965,10 +978,12 @@ struct AgentSidebarView: View {
                                         Group {
                                             if let stem = item.stem {
                                                 AgentSidebarGroupRow(stem: stem, count: item.rows.count) {
-                                                    ForEach(item.rows) { line($0, mini: mini, inView: inView, groups: groups) }
+                                                    ForEach(item.rows) {
+                                                        line($0, number: numbers[$0.id], mini: mini, inView: inView, groups: groups)
+                                                    }
                                                 }
                                             } else if let row = item.rows.first {
-                                                line(row, mini: mini, inView: inView, groups: groups)
+                                                line(row, number: numbers[row.id], mini: mini, inView: inView, groups: groups)
                                             }
                                         }
                                         .id(ItemID(section: section.title, row: item.id))
@@ -1008,10 +1023,10 @@ struct AgentSidebarView: View {
     }
 
     /// One session's row (#1342: a group's member line too): its click, its number and its context menu, as before.
-    func line(_ row: AgentSidebar.Row, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?) -> some View {
+    func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?) -> some View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
-                                number: model.number(row.id), inView: inView.contains(row.id),
+                                number: number, inView: inView.contains(row.id),
                                 openPR: model.openPR, mini: mini, show: details,   // #1455
                                 tip: mini ? model.miniTip : nil)   // #1457
         }
@@ -1050,6 +1065,11 @@ struct AgentSidebarGroupRow<Lines: View>: View {
     }
 
     static func words(stem: String, count: Int) -> String { "Group \(stem), \(count) sessions" }
+    /// #1111: the group's keys, its help (the nvim note: a Control-Tab mapping no longer reaches the terminal here).
+    static var help: String {
+        "Command-<number> selects this group. Control-Tab and Control-Shift-Tab move between its sessions "
+            + "(inside this window they no longer reach the terminal)."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { lines }
@@ -1057,6 +1077,7 @@ struct AgentSidebarGroupRow<Lines: View>: View {
             .background(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(Neon.faded(Neon.textSecondary, 0.3), lineWidth: 1))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(Self.words(stem: stem, count: count))
+            .help(Self.help)
     }
 
     /// The row's own padding above the first line and below the last.
@@ -1633,8 +1654,8 @@ private struct AgentIdealWidths: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {}
 }
 
-/// #1110: a numbered row's ⌘<n> chip, Clipboard History's position keycap (ClipboardPanel.swift's PositionKeyCap: private
-/// there, and its glyph follows the clipboard's ⌘/⌃ setting while this chord is always ⌘). Brighter on the selected row.
+/// #1110: a numbered row's ⌘<n> chip. #1111 (R1111-1): Clipboard History's position keycap itself (PositionKeyCap), with
+/// this chord's glyphs (always ⌘, or ⌥⌘ for rows 10-18) instead of the clipboard's ⌘/⌃ setting. Brighter on the selected row.
 /// Neon.blue, not the keycap's blueBright: a theme that sets only its accent leaves blueBright at the default cyan.
 struct AgentDigitChip: View {
     let number: Int
@@ -1646,22 +1667,9 @@ struct AgentDigitChip: View {
     static func words(_ n: Int) -> String { (n > 9 ? "Option-Command-" : "Command-") + "\(digit(n))" }
 
     var body: some View {
-        HStack(spacing: sz(1)) {
-            Text(Self.glyphs(number))
-            Text("\(Self.digit(number))")
-        }
-        .font(Neon.font(10, weight: .bold, design: .rounded))
-        .foregroundStyle(active ? Neon.bgTop : Neon.blue)
-        .padding(.horizontal, sz(5))
-        .padding(.vertical, sz(2))
-        .background(
-            RoundedRectangle(cornerRadius: sz(4))
-                .fill(active ? Neon.blue : Neon.bgBottom)
-                .overlay(
-                    RoundedRectangle(cornerRadius: sz(4))
-                        .strokeBorder(Neon.faded(Neon.blue, active ? 0.9 : 0.6), lineWidth: 1))
-        )
-        .fixedSize()
+        PositionKeyCap(digit: "\(Self.digit(number))", active: active, glyph: Self.glyphs(number), accent: Neon.blue,
+                       edge: Neon.faded(Neon.blue, active ? 0.9 : 0.6))
+            .fixedSize()
     }
 }
 

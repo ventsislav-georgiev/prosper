@@ -1806,6 +1806,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent island: Message all now checks screens again when reading them was slow, never types a
   message after its job was cancelled, says which "-" sessions it left out, and refuses a message
   over 256 KB with a clear reason instead of "Message failed (exit -1)". (#1104)
+- Agent Sessions: a group of sessions (a main and its sidekicks) now takes one Command number, which
+  selects the session you used last in it, and Control-Tab / Control-Shift-Tab move between the
+  group's sessions. (#1111)
 
 ## v2.174.0
 

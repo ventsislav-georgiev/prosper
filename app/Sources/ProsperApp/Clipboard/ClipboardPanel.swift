@@ -1392,28 +1392,36 @@ private struct SlotLadderOverlay: View {
     }
 }
 
-private struct PositionKeyCap: View {
+/// A position keycap: the modifier glyphs and the digit. #1111 (R1111-1): shared with the Agent Sessions sidebar's
+/// Command-number chip (AgentDigitChip), which passes its own glyphs, accent and border.
+struct PositionKeyCap: View {
     let digit: String
     let active: Bool
+    /// The glyphs before the digit; nil: Clipboard History's, read from its ⌘ / ⌃ setting at draw time.
+    var glyph: String? = nil
+    /// The selected fill and the glyphs' colour (Clipboard History: blueBright).
+    var accent: Color = Neon.blueBright
+    /// The border; nil: Clipboard History's (the theme's blue at 0.9 selected, 0.6 not).
+    var edge: Color? = nil
 
     var body: some View {
         HStack(spacing: sz(1)) {
-            Text(Preferences.quickSelectModifier.glyph)  // ⌘ / ⌃ per Preferences
+            Text(glyph ?? Preferences.quickSelectModifier.glyph)  // ⌘ / ⌃ per Preferences
             Text(digit)
         }
         .font(Neon.font(10, weight: .bold, design: .rounded))
         // Solid, higher-contrast chip: filled blue when its row is selected (dark
         // glyph), otherwise a dark slate fill with a bright cyan glyph + border, so
         // the badge reads clearly against any thumbnail underneath.
-        .foregroundColor(active ? Neon.bgTop : Neon.blueBright)
+        .foregroundColor(active ? Neon.bgTop : accent)
         .padding(.horizontal, sz(5))
         .padding(.vertical, sz(2))
         .background(
             RoundedRectangle(cornerRadius: sz(4))
-                .fill(active ? Neon.blueBright : Neon.bgBottom)
+                .fill(active ? accent : Neon.bgBottom)
                 .overlay(
                     RoundedRectangle(cornerRadius: sz(4))
-                        .strokeBorder(Neon.blue.opacity(active ? 0.9 : 0.6), lineWidth: 1))
+                        .strokeBorder(edge ?? Neon.blue.opacity(active ? 0.9 : 0.6), lineWidth: 1))
         )
     }
 }

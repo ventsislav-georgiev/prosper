@@ -31,7 +31,7 @@ final class AgentGoMenuTests: XCTestCase {
         XCTAssertEqual(keyed.count, table.count, "one item per table chord")
         XCTAssertEqual(entries.count, keyed.count, "splits off: no pane item")
         XCTAssertEqual(entries.map(\.title), [
-            "Previous Session", "Next Session", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
+            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
             "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
             "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
             "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",
@@ -44,7 +44,7 @@ final class AgentGoMenuTests: XCTestCase {
 
     /// Every table chord, built as a key-down, is what `route` returns (a terminal pane or none; the sidebar focused).
     func testKeyTableIsWhatRouteReturns() {
-        XCTAssertEqual(AgentsNSWindow.keyTable.count, 31)   // #1470: the 3 level keys out, Option-Command-1...9 in; #1471: Command-T, L out
+        XCTAssertEqual(AgentsNSWindow.keyTable.count, 33)   // #1470: the 3 level keys out, Option-Command-1...9 in; #1471: Command-T, L out; #1111: Control-Tab, Control-Shift-Tab
         for c in AgentsNSWindow.keyTable {
             guard let e = AgentsNSWindow.keyEvent(c.key, c.mods, c.keyCode) else { return XCTFail("event \(c.route)") }
             let routes = [true, false].map {
@@ -63,7 +63,7 @@ final class AgentGoMenuTests: XCTestCase {
         go.menuNeedsUpdate(menu)
         let items = menu.items.filter { !$0.isSeparatorItem }
         XCTAssertEqual(items.count, go.shown.count)
-        XCTAssertEqual(items.count, 41, "#1379: the 31 keyed items (#1471) and the three sidebar modes; #1477: the 7 pane items, splits on")
+        XCTAssertEqual(items.count, 43, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on")
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
             XCTAssertEqual(item.action, #selector(AgentGoMenu.pick(_:)), item.title)

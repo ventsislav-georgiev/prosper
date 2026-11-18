@@ -164,7 +164,7 @@ enum AgentSidebar {
     /// with two live members or more is one item at its first member's place in the list (Needs you, Sessions, Sidekicks),
     /// its live members in group order, each taken from its own place; a group with one live member, a row in no group,
     /// History and other machines: each row its own item. No groups: one item per row, the rows `sections` holds. The
-    /// numbers, the selection and the arrow keys still walk `sections` (#1111 gives a group its one number).
+    /// selection and the arrow keys still walk `sections`; #1111 numbers these items (a group: one number).
     static func items(_ sections: [Section], groups compute: () -> [AgentGroup]) -> [String: [Item]] {
         let groups = compute()
         var live: [AgentSessionKey: Row] = [:]   // by dir and folded name, the first one (liveGroup's fold limit)
@@ -364,6 +364,11 @@ final class AgentWindowModel: ObservableObject {
     /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
     /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
+    /// #1111: the human's picks (`select` with `manual`: a click, a key, a menu; never the first fill or a follow), oldest
+    /// first, each once; a group's Command-<n> takes the member picked last. shortcut: capped at `recentCap`; a group whose
+    /// members all fell off selects its first member again, upgrade to a per-group store if that ever shows.
+    private(set) var recentSelections: [AgentSidebar.RowID] = []
+    static let recentCap = 64
     /// #831: the window's active layout. B1 step 3 (8.1): restored from the store on open (init, `layouts`), else a
     /// fresh one; every change is saved (`autosave`). Every selection change goes into its focused pane through the
     /// browse rule (`show`, 7.1). 15.0: a multi-pane layout keeps its whole tree here with the split gate off;
@@ -1799,6 +1804,7 @@ final class AgentWindowModel: ObservableObject {
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
         if manual { removing = nil; pendingSpawn = nil; newSession = nil }
+        if manual, let id { noteSelected(id) }   // #1111
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
@@ -1975,22 +1981,66 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
-    /// #1110: the rows Command-1...9 select (#1470: then Option-Command-1...9), from `sections` (the list the sidebar draws): the live rows it
-    /// shows, top to bottom across its sections, the first 18. A folded section's rows are not shown, so not numbered; History never is.
-    var numberedIDs: [AgentSidebar.RowID] {
-        Array(sections.filter { !isCollapsed($0.title) }.flatMap(\.rows).filter { $0.session != nil }.map(\.id).prefix(18))
+    /// #1342: the sidebar's drawn rows by section, the store's groups computed once (no store: no group).
+    var drawnItems: [String: [AgentSidebar.Item]] { AgentSidebar.items(sections) { store?.groups ?? [] } }
+
+    /// #1110: the rows Command-1...9 select (#1470: then Option-Command-1...9), from the list the sidebar draws: the live rows
+    /// it shows, top to bottom across its sections, the first 18. A folded section's rows are not shown, so not numbered;
+    /// History never is. #1111: a group (#1342: two live members or more) is one drawn row, so one number; `drawn` is the
+    /// view's own `drawnItems` (once per draw), the default reads it afresh.
+    func numberedItems(_ drawn: [String: [AgentSidebar.Item]]? = nil) -> [AgentSidebar.Item] {
+        let drawn = drawn ?? drawnItems
+        return Array(sections.filter { !isCollapsed($0.title) }.flatMap { drawn[$0.title] ?? [] }
+            .filter { $0.rows.first?.session != nil }.prefix(18))
     }
 
-    /// The sidebar row's chip: its 1-based number, nil for an unnumbered row.
+    /// The numbered rows' ids (a group's: its first member's, the line that wears the chip).
+    var numberedIDs: [AgentSidebar.RowID] { numberedItems().map(\.id) }
+
+    /// The sidebar row's chip: its 1-based number, nil for an unnumbered row (#1111: a group's other members too).
     func number(_ id: AgentSidebar.RowID) -> Int? { numberedIDs.firstIndex(of: id).map { $0 + 1 } }
 
+    /// #1111: every chip of one draw by row id, from the view's `drawnItems` (the groups computed once, R909-1).
+    func numbers(_ drawn: [String: [AgentSidebar.Item]]) -> [AgentSidebar.RowID: Int] {
+        Dictionary(numberedItems(drawn).enumerated().map { ($1.id, $0 + 1) }) { a, _ in a }
+    }
+
     /// ⌘<n>: the n-th numbered row, the human's pick, and the keyboard into its pane (as a click). False: no row there,
-    /// nothing changes.
+    /// nothing changes. #1111: a group's number picks its member selected last, its first member (the main) the first time.
     @discardableResult
     func selectNumbered(_ n: Int) -> Bool {
-        let ids = numberedIDs
-        guard n >= 1, n <= ids.count else { return false }
-        click(ids[n - 1])
+        let items = numberedItems()
+        guard n >= 1, n <= items.count, let id = lastSelected(items[n - 1].rows.map(\.id)) else { return false }
+        click(id)
+        return true
+    }
+
+    /// #1111: of `ids`, the one selected last; none of them ever (or since the cap): the first.
+    func lastSelected(_ ids: [AgentSidebar.RowID]) -> AgentSidebar.RowID? {
+        recentSelections.last(where: ids.contains) ?? ids.first
+    }
+
+    private func noteSelected(_ id: AgentSidebar.RowID) {
+        recentSelections.removeAll { $0 == id }
+        recentSelections.append(id)
+        if recentSelections.count > Self.recentCap { recentSelections.removeFirst(recentSelections.count - Self.recentCap) }
+    }
+
+    /// #1111: the selection's group as drawn (#1342: two live members or more, in group order); nil: no selection, or a
+    /// row in no group (a session alone, a group with one live member, History, another machine).
+    var selectionGroup: [AgentSidebar.RowID]? {
+        guard let sel = selection else { return nil }
+        return drawnItems.values.lazy.flatMap { $0 }.first { $0.stem != nil && $0.rows.contains { $0.id == sel } }?.rows.map(\.id)
+    }
+
+    /// #1111: Control-Tab (`step` 1) and Control-Shift-Tab (-1): the selection's group's next or previous member, round the
+    /// end, selected with the keyboard in its pane (as a click; #831's browse rule focuses a pane already showing it).
+    /// False, nothing changes: the selection is in no group (the key goes on to the responder).
+    @discardableResult
+    func stepGroupMember(_ step: Int) -> Bool {
+        guard let ids = selectionGroup, let sel = selection, let i = ids.firstIndex(of: sel) else { return false }
+        let n = ids.count   // two or more (a group as drawn)
+        click(ids[((i + step.signum()) % n + n) % n])
         return true
     }
 

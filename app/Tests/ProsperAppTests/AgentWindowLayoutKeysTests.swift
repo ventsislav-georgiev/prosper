@@ -152,7 +152,7 @@ extension AgentWindowD1Tests {
             (layoutKeyEvent(0, [.command], "a"), .pass),
             (layoutKeyEvent(6, [.command], "z"), .pass),
             (layoutKeyEvent(48, [], "\t"), .pass),
-            (layoutKeyEvent(48, [.control, .shift], "\t"), .pass),
+            (layoutKeyEvent(48, [.control, .shift], "\t"), .member(-1)),   // #1111: the group's previous member (layoutKey leaves it)
             (layoutKeyEvent(8, [.control], "\u{3}"), .pass),
         ]
         for (e, want) in rows {
