@@ -1787,6 +1787,9 @@ tag from the now-released section and put it on the new top draft.
   arrow keys; picking a session that another pane already shows swaps the two panes. (#1491)
 - Agent Sessions: drag a session from the sidebar onto a pane: drop it in the middle to replace that
   pane's session, or on an edge to split the pane there. (#1492)
+- The Marketplace lists Agent Kits: filter by Agent Kits, read a kit's README and what it will
+  change before you install it, and Prosper refuses a kit whose download does not match its listing.
+  (#1496)
 
 ## v2.174.0
 

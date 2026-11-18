@@ -24,7 +24,8 @@ final class MarketplaceWindow {
         // pane uses, so an install here shows up there (and vice-versa) immediately.
         guard let registry = SettingsHooks.shared.extensionRegistry else { return }
 
-        let hosting = NSHostingController(rootView: Themed { MarketplaceRootView(registry: registry) })
+        let installer = MarketInstaller(seams: .live(registry))
+        let hosting = NSHostingController(rootView: Themed { MarketplaceRootView(registry: registry, installer: installer) })
         let win = MarketplaceClosableWindow(contentViewController: hosting)
         win.title = "Extension Marketplace"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -46,6 +47,7 @@ final class MarketplaceWindow {
             forName: NSWindow.willCloseNotification, object: win, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
+                installer.closeSheet()   // #919 S4: a kit sheet open at close removes its work folder
                 guard let self else { return }
                 if let obs = self.closeObserver { NotificationCenter.default.removeObserver(obs) }
                 self.closeObserver = nil
@@ -81,15 +83,16 @@ private final class MarketplaceClosableWindow: NSWindow {
 @MainActor
 final class MarketplaceBrowseModel: ObservableObject {
 
-    /// All | Themes | Extensions. nil kind = no server filter.
+    /// All | Themes | Extensions | Agent Kits. nil kind = no server filter.
     enum Category: String, CaseIterable, Identifiable {
-        case all = "All", themes = "Themes", extensions = "Extensions"
+        case all = "All", themes = "Themes", extensions = "Extensions", kits = "Agent Kits"
         var id: String { rawValue }
         var kind: String? {
             switch self {
             case .all: return nil
             case .themes: return "theme"
             case .extensions: return "extension"
+            case .kits: return "kit"
             }
         }
     }
@@ -181,12 +184,11 @@ final class MarketplaceBrowseModel: ObservableObject {
 /// Browse + one-click install. Installed packages land UNTRUSTED — the user reviews
 /// and trusts them in the Extensions settings list. Results paginate via the server's
 /// cursor; the next page loads as the last row scrolls into view (infinite scroll).
+/// #919 S4: themes and extensions install in one click; an agent kit's Install opens its pre-install sheet (MarketKitSheet).
 struct MarketplaceRootView: View {
     @ObservedObject var registry: ExtensionRegistry
+    @ObservedObject var installer: MarketInstaller
     @StateObject private var model = MarketplaceBrowseModel()
-
-    @State private var installingID: String?
-    @State private var installError: String?
 
     private var installedIDs: Set<String> { Set(registry.records.map(\.id)) }
 
@@ -202,6 +204,9 @@ struct MarketplaceRootView: View {
         .background(MarketplaceBackdrop())
         .foregroundStyle(Neon.textPrimary)
         .onAppear { model.reload() }
+        .sheet(item: Binding(get: { installer.kitSheet }, set: { if $0 == nil { installer.closeSheet() } })) { sheet in
+            MarketKitSheetView(model: sheet, onInstall: { installer.installFromSheet() }, onCancel: { installer.closeSheet() })
+        }
     }
 
     // MARK: Header
@@ -241,7 +246,7 @@ struct MarketplaceRootView: View {
         // Clearing the field reloads the full list; the load-once dedupe makes the
         // post-Enter debounce a no-op.
         .task(id: model.query) {
-            installError = nil   // drop a stale per-package install error when the query changes
+            installer.installError = nil   // drop a stale per-package install error when the query changes
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
             model.reload()
@@ -253,7 +258,7 @@ struct MarketplaceRootView: View {
     private func content(installed: Set<String>) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if let err = model.error ?? installError {
+                if let err = model.error ?? installer.installError {
                     VStack(alignment: .leading, spacing: sz(2)) {
                         Text(err).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
                         // A network error is retryable in place; reload() refetches
@@ -294,16 +299,16 @@ struct MarketplaceRootView: View {
     private func row(_ pkg: MarketClient.Package, installed: Set<String>) -> some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             HStack(alignment: .top) {
-                Image(systemName: pkg.icon ?? (pkg.isTheme ? "paintpalette" : "puzzlepiece.extension"))
+                Image(systemName: pkg.icon ?? (pkg.isTheme ? "paintpalette" : pkg.isKit ? "terminal" : "puzzlepiece.extension"))
                     .foregroundColor(.accentColor).frame(width: sz(22))
                 MarketplacePackageTexts(pkg: pkg)
                 Spacer()
-                if installingID == pkg.id {
+                if installer.installingID == pkg.id {
                     ProgressView().controlSize(.small)
                 } else if installed.contains(pkg.id) {
                     Text("Installed").font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                 } else {
-                    Button("Install") { install(pkg) }.buttonStyle(.neon)
+                    Button("Install") { installer.install(pkg) }.buttonStyle(.neon)
                 }
             }
             if let preview = pkg.preview {
@@ -315,22 +320,6 @@ struct MarketplaceRootView: View {
         .padding(.vertical, sz(8))
     }
 
-    private func install(_ pkg: MarketClient.Package) {
-        installingID = pkg.id
-        installError = nil
-        Task {
-            do {
-                try await registry.installFromMarket(id: pkg.id, version: pkg.latestVersion)
-                await MainActor.run { installingID = nil }
-            } catch {
-                await MainActor.run {
-                    installingID = nil
-                    installError = Self.installErrorText(error)
-                }
-            }
-        }
-    }
-
     /// The line an install failure shows; #984: a refused manifest reads as ExtensionLoadError's plain sentence.
     nonisolated static func installErrorText(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
@@ -339,6 +328,7 @@ struct MarketplaceRootView: View {
 
 /// #1251: a package's own texts in its row (title, THEME badge, version, description, author line), each drawn verbatim
 /// through ExtensionRowText: a package is outside data written by its publisher. The title line is clipped to its bounds.
+/// #919 S4: a kit adds the KIT badge, the Unreviewed line and its first summary lines (each through OutsideText, clipped).
 struct MarketplacePackageTexts: View {
     let pkg: MarketClient.Package
 
@@ -353,11 +343,19 @@ struct MarketplacePackageTexts: View {
                         .background(Color.accentColor.opacity(0.25))
                         .clipShape(Capsule())
                 }
+                if pkg.isKit { MarketKitBadge() }
                 Text(verbatim: ExtensionRowText.version(pkg.latestVersion)).font(Neon.font(.caption)).foregroundColor(.secondary)
             }
             Text(verbatim: ExtensionRowText.description(pkg.description)).font(Neon.font(.caption)).foregroundColor(.secondary)
             Text(verbatim: ExtensionRowText.byLine(pkg.author) + " \u{00B7} \(pkg.downloads) downloads")
                 .font(Neon.font(.caption2)).foregroundColor(.secondary)
+            if pkg.isKit {
+                Text(MarketKitText.unreviewed).font(Neon.font(.caption2)).foregroundStyle(Neon.magenta).lineLimit(1)
+                ForEach(Array(MarketKitText.lines(pkg.preview?.kit?.summary ?? [], max: MarketKitText.rowSummaryLines).enumerated()),
+                        id: \.offset) { _, line in
+                    Text(verbatim: line).font(Neon.font(.caption2)).foregroundColor(.secondary).lineLimit(1).clipped()
+                }
+            }
         }
     }
 }

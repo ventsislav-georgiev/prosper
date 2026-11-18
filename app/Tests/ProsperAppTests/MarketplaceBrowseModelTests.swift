@@ -264,4 +264,46 @@ final class MarketplaceBrowseModelTests: XCTestCase {
         // Guards against an accidental O(n²) re-scan per page, which would blow past this.
         XCTAssertLessThan(totalMs, 500, "catalogue accumulation unexpectedly slow — possible O(n²) per page")
     }
+
+    // MARK: #919 S4 - the Agent Kits filter
+
+    private func items(_ url: URL?) -> [String: String] {
+        let q = url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+        return Dictionary(q.map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// The model hands its category's kind to the browse seam; records every kind asked.
+    private actor KindLog {
+        var kinds: [String?] = []
+        func add(_ k: String?) { kinds.append(k) }
+    }
+
+    /// Agent Kits asks for kind "kit", and its request carries kits=1.
+    func testKitsCategorySendsKindKitAndKits1() async {
+        XCTAssertTrue(MarketplaceBrowseModel.Category.allCases.contains(.kits))
+        XCTAssertEqual(MarketplaceBrowseModel.Category.kits.rawValue, "Agent Kits")
+        let log = KindLog()
+        let model = MarketplaceBrowseModel { _, _, k, _ in
+            await log.add(k)
+            return MarketClient.BrowseResult(packages: [], cursor: nil)
+        }
+        model.category = .kits
+        await settle(model)
+        let kinds = await log.kinds
+        XCTAssertEqual(kinds.count, 1)
+        XCTAssertEqual(kinds.last ?? nil, "kit")
+        let q = items(MarketClient.browseURL(kind: MarketplaceBrowseModel.Category.kits.kind))
+        XCTAssertEqual(q["kind"], "kit")
+        XCTAssertEqual(q["kits"], "1")
+    }
+
+    /// All sends no kind and kits=1, so kits stay in the All list.
+    func testAllSendsKits1AndNoKind() {
+        XCTAssertTrue(MarketplaceBrowseModel.Category.all.kind == nil)
+        let q = items(MarketClient.browseURL(query: "calm", kind: MarketplaceBrowseModel.Category.all.kind, cursor: 20))
+        XCTAssertEqual(q["kits"], "1")
+        XCTAssertTrue(q["kind"] == nil, "\(q)")
+        XCTAssertEqual(q["q"], "calm")
+        XCTAssertEqual(q["cursor"], "20")
+    }
 }

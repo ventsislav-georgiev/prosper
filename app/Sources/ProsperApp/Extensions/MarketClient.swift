@@ -111,17 +111,22 @@ enum MarketClient {
     // MARK: - Public reads
 
     static func browse(query: String = "", sort: String = "updated_at", kind: String? = nil, cursor: Int = 0) async -> BrowseResult {
-        var comps = URLComponents(url: base("/market/packages"), resolvingAgainstBaseURL: false)!
-        var items = [URLQueryItem(name: "sort", value: sort)]
-        if !query.isEmpty { items.append(URLQueryItem(name: "q", value: query)) }
-        if let kind { items.append(URLQueryItem(name: "kind", value: kind)) }
-        if cursor > 0 { items.append(URLQueryItem(name: "cursor", value: String(cursor))) }
-        comps.queryItems = items
-        guard let url = comps.url,
+        guard let url = browseURL(query: query, sort: sort, kind: kind, cursor: cursor),
               let (data, code) = try? await get(url), code < 300,
               let resp = try? JSONDecoder().decode(BrowseResponse.self, from: data)
         else { return BrowseResult(packages: [], cursor: nil, failed: true) }
         return BrowseResult(packages: resp.packages, cursor: resp.cursor)
+    }
+
+    /// #919 S4: kits=1 on every page: this build shows kits, so the server lists them (in All and under kind "kit").
+    static func browseURL(query: String = "", sort: String = "updated_at", kind: String? = nil, cursor: Int = 0) -> URL? {
+        var comps = URLComponents(url: base("/market/packages"), resolvingAgainstBaseURL: false)
+        var items = [URLQueryItem(name: "sort", value: sort), URLQueryItem(name: "kits", value: "1")]
+        if !query.isEmpty { items.append(URLQueryItem(name: "q", value: query)) }
+        if let kind { items.append(URLQueryItem(name: "kind", value: kind)) }
+        if cursor > 0 { items.append(URLQueryItem(name: "cursor", value: String(cursor))) }
+        comps?.queryItems = items
+        return comps?.url
     }
 
     /// id -> latest_version for every active package (drives auto-update); nil when the index could not be loaded.
