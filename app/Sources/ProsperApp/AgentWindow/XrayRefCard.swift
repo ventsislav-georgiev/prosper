@@ -36,6 +36,41 @@ struct XrayRefStream: Equatable {
         var line: String
         var offset: Int?
         var index: Int
+        /// #1528 (dch 1.100.0, README "--ref"): the turn's pN (nil when dch does not know it), who said it ("user",
+        /// "assistant", "tool"; nil before dch 1.97) and its tool, and the sentence split at the ref; all nil from an older dch.
+        var turn: Int? = nil
+        var who: String? = nil
+        var tool: String? = nil
+        var sentence: Sentence? = nil
+    }
+
+    /// #1528: the sentence around the ref, each part cleaned on its own; `hit` "" when dch's span did not hold (the plain
+    /// sentence is all in `before`).
+    struct Sentence: Equatable {
+        var before: String
+        var hit: String
+        var after: String
+    }
+
+    /// dch's sentence is at most 400 bytes (README "--ref"); a longer one is not dch's and is shown plain, cut.
+    static let sentenceCap = 400
+
+    /// #1528 (review-clean-then-parse): the RAW sentence sliced at the span's UTF-8 byte offsets first, then each part
+    /// cleaned. A span that is not two ints with 0 <= start <= end <= the byte count, both on scalar boundaries, or a
+    /// sentence over the cap, keeps the plain sentence with no highlight.
+    static func sentence(_ outside: String, span: Any?) -> Sentence {
+        var raw = outside
+        raw.makeContiguousUTF8()   // a bridged string's indices: native UTF-8 ones, so samePosition is exact
+        let u = raw.utf8
+        let v = raw.unicodeScalars   // sliced as scalars: String's own subscript would round to a Character
+        func show(_ s: String.UnicodeScalarView.SubSequence) -> String { OutsideText.shown(String(s), max: sentenceCap) }
+        if u.count <= sentenceCap, let p = span as? [Any], p.count == 2, let a = p.first as? Int, let b = p.last as? Int,
+           0 <= a, a <= b, b <= u.count,   // checked before offsetBy: a bad span never moves an index past the end
+           let i = u.index(u.startIndex, offsetBy: a).samePosition(in: v),
+           let j = u.index(u.startIndex, offsetBy: b).samePosition(in: v) {
+            return Sentence(before: show(v[..<i]), hit: show(v[i..<j]), after: show(v[j...]))
+        }
+        return Sentence(before: show(v.prefix(sentenceCap * 4)), hit: "", after: "")
     }
 
     struct Tally: Equatable {
@@ -117,7 +152,10 @@ struct XrayRefStream: Equatable {
             } else if let m = o["mention"] as? [String: Any] {
                 s.mentions.append(Mention(session: text(m["session"], 64) ?? "", chapter: (m["chapter"] as? String).map { String($0.prefix(128)) },
                                           at: date(m["at"]), line: text(m["line"], lineCap) ?? "", offset: int(m["offset"]),
-                                          index: s.mentions.count))
+                                          index: s.mentions.count,
+                                          turn: (m["turn"] as? Int).flatMap { (1...Int(Int32.max)).contains($0) ? $0 : nil },
+                                          who: text(m["who"], wordCap), tool: text(m["tool"], wordCap),
+                                          sentence: (m["sentence"] as? String).map { sentence($0, span: m["span"]) }))
             } else if let t = o["tally"] as? [String: Any] {
                 s.tallies.append(Tally(session: text(t["session"], 64) ?? "", count: int(t["count"]) ?? 0,
                                        mentionsDropped: int(t["mentions_dropped"]) ?? 0))
@@ -147,6 +185,12 @@ struct XrayRefContext: Equatable {
         var mentions: [XrayRefStream.Mention]
     }
 
+    /// #1528: one block of the Mentions tab: a turn of this session (pN), or nil: the trailing "Earlier" block.
+    struct Turn: Equatable {
+        var turn: Int?
+        var mentions: [XrayRefStream.Mention]
+    }
+
     /// The text that was asked for (it passed DchCtl.refOK); Copy gives it.
     let ref: String
     /// The session asked about (first.session); its mentions alone may jump.
@@ -160,6 +204,9 @@ struct XrayRefContext: Equatable {
     let firstMention: XrayRefStream.Mention?
     /// This session in file order, then the other sessions, each newest first, the newest group first.
     let groups: [Group]
+    /// #1528: dch 1.100.0's shape (a mention carries a sentence): this session's turns newest first, each in `groups`'
+    /// order, then one Earlier block (no turn, or another session's). nil from an older dch: the flat `groups` stay.
+    let turns: [Turn]?
     let counts: [String]
     let tasks: [XrayTasks.Task]
     let memory: [XrayMemory.Item]
@@ -206,6 +253,16 @@ struct XrayRefContext: Equatable {
             .map { Group(session: $0.key, mentions: $0.value.sorted(by: newest)) }
             .sorted { a, b in newest(a.mentions[0], b.mentions[0]) }   // a grouping never makes an empty group
         groups = (mine.isEmpty ? [] : [Group(session: own ?? "", mentions: mine)]) + others
+        if s.mentions.contains(where: { $0.sentence != nil }) {
+            let flat = groups.flatMap(\.mentions)
+            // a turn is this session's only (README: another session's line has none); grouping keeps `flat`'s order
+            let keyed = Dictionary(grouping: flat.compactMap { m in m.session == own ? m.turn.map { ($0, m) } : nil }, by: \.0)
+            let earlier = flat.filter { $0.turn == nil || $0.session != own }
+            turns = keyed.keys.sorted(by: >).map { Turn(turn: $0, mentions: keyed[$0, default: []].map(\.1)) }
+                + (earlier.isEmpty ? [] : [Turn(turn: nil, mentions: earlier)])
+        } else {
+            turns = nil
+        }
         let ge = s.partial ? "\u{2265}" : ""
         counts = s.counts.map { c in
             ["This session \(ge)\(c.session)", "This project \(ge)\(c.project) in \(c.projectSessions) other sessions"]
@@ -313,6 +370,15 @@ extension XrayPanelModel {
     func jumpRef(_ m: XrayRefStream.Mention, in c: XrayRefContext) -> Bool {
         guard let anchor = m.chapter, c.session != nil, m.session == c.session else { return false }
         if let i = chapterAnchors[anchor], let ch = chapters.first(where: { $0.ordinal == i }) { openChapterCard(ch) }
+        return true
+    }
+
+    /// #1528: a turn header's Return or click: that turn's chapter card (the jumpRef and Read the prompt path). The
+    /// Earlier block, or a turn the chapters read does not hold, opens nothing (a turn block is this session's only).
+    @discardableResult
+    func jumpTurn(_ t: XrayRefContext.Turn, in c: XrayRefContext) -> Bool {
+        guard let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n }) else { return false }
+        openChapterCard(ch)
         return true
     }
 }

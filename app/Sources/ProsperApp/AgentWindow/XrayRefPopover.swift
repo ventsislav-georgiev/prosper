@@ -167,6 +167,64 @@ struct XrayRefPopover: View {
     @ViewBuilder func mentions(_ c: XrayRefContext) -> some View {
         ForEach(c.counts, id: \.self) { faint($0) }
         if c.groups.isEmpty { faint(Self.empty(.mentions, ref: entry.text)) }
+        if let turns = c.turns {
+            ForEach(Array(turns.enumerated()), id: \.offset) { _, t in
+                let head = Self.turnHeader(t, chapters: panel.chapters, now: panel.now())
+                Button { panel.jumpTurn(t, in: c) } label: {
+                    Text(verbatim: head).font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityLabel(head)
+                ForEach(Array(t.mentions.enumerated()), id: \.offset) { _, m in
+                    Button { panel.jumpRef(m, in: c) } label: {
+                        Self.sentenceText(m).font(Neon.font(11)).foregroundStyle(Neon.textPrimary).lineLimit(3)
+                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Self.spokenRow(m))
+                }
+            }
+        } else {
+            flatMentions(c)
+        }
+    }
+
+    /// #1528: a turn block's header: "p3 · Fix login · 5m" (title from the chapters read, time of its newest mention);
+    /// the trailing block "Earlier".
+    static func turnHeader(_ t: XrayRefContext.Turn, chapters: [TranscriptOutline.Chapter], now: Date) -> String {
+        guard let n = t.turn else { return "Earlier" }
+        let title = chapters.last { $0.ordinal == n }?.title ?? ""
+        let age = XrayTaskRow.age(t.mentions.compactMap(\.at).max(), now: now)?.short ?? ""
+        return ["p\(n)", OutsideText.shown(title, max: XrayRefs.titleCap), age].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
+    }
+
+    /// #1528: who said it, dch's words to the card's (README "--ref": You, Reply or the tool); nil from an older dch.
+    static func speaker(_ m: XrayRefStream.Mention) -> String? {
+        switch m.who {
+        case "user": "You"
+        case "assistant": "Reply"
+        case "tool": m.tool.flatMap { $0.isEmpty ? nil : $0 } ?? "Tool"
+        default: nil
+        }
+    }
+
+    /// #1528: the row: speaker, then the sentence with the ref standing out; the line when dch sent no sentence.
+    static func sentenceText(_ m: XrayRefStream.Mention) -> Text {
+        let lead = Text(verbatim: speaker(m).map { $0 + "  " } ?? "").foregroundColor(Neon.textSecondary)
+        guard let s = m.sentence else { return lead + Text(verbatim: m.line) }
+        return lead + Text(verbatim: s.before) + Text(verbatim: s.hit).fontWeight(.semibold).foregroundColor(Neon.blue)
+            + Text(verbatim: s.after)
+    }
+
+    static func spokenRow(_ m: XrayRefStream.Mention) -> String {
+        let said = m.sentence.map { $0.before + $0.hit + $0.after } ?? m.line
+        return (speaker(m).map { $0 + ": " } ?? "Mention: ") + said
+    }
+
+    /// Today's list (a dch before 1.100.0): per session, each mention's line.
+    @ViewBuilder func flatMentions(_ c: XrayRefContext) -> some View {
         ForEach(Array(c.groups.enumerated()), id: \.offset) { _, g in
             faint(g.session).accessibilityAddTraits(.isHeader)
             ForEach(Array(g.mentions.enumerated()), id: \.offset) { _, m in

@@ -1916,6 +1916,9 @@ tag from the now-released section and put it on the new top draft.
   Connect button instead of "isn't running"; once you connect it stays attached when you click
   another pane, and it counts toward the limit of 4 connected terminals. The "Opened on another
   device" card's button now reads "Take back". (#902)
+- X-ray's ref card groups a ref's mentions by turn, newest first, each showing who said it and the
+  sentence with the ref highlighted; click a turn's header to open that prompt (needs dch 1.100.0;
+  an older dch keeps the plain list). (#1528)
 
 ## v2.174.0
 
