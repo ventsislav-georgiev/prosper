@@ -1,0 +1,62 @@
+{
+ "entry": 1611,
+ "filter": "XraySearchScopeTests|XraySearchTabTests|XrayRequestsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "scope-gate-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "static func scoped(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, scopeMinimum) } ?? false }",
+   "new": "static func scoped(_ version: [Int]?) -> Bool { false }",
+   "expect": "killed"
+  },
+  {
+   "name": "scope-no-retry",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "if scoped, remote, r.status == 1, !Task.isCancelled {",
+   "new": "if false, scoped, remote, r.status == 1, !Task.isCancelled {",
+   "expect": "killed"
+  },
+  {
+   "name": "resort-by-time",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "hits: h.hits, more: g[\"more\"]",
+   "new": "hits: h.hits.sorted { ($0.at ?? .distantPast) > ($1.at ?? .distantPast) }, more: g[\"more\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "keep-empty-groups",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "        }.filter { !$0.hits.isEmpty }\n",
+   "new": "        }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "open-by-name-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "if let id = g.sessionID, !id.isEmpty {",
+   "new": "if let id = g.sessionID, !id.isEmpty, false {",
+   "expect": "killed"
+  },
+  {
+   "name": "requests-search-ungated",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "guard search, rest.last == \"--json\"",
+   "new": "guard rest.last == \"--json\"",
+   "expect": "killed"
+  },
+  {
+   "name": "answer-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "answer: h[\"answer\"] as? Bool == true)",
+   "new": "answer: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "moments-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "(s.first, s.latest) = (moment(o[\"first\"]), moment(o[\"latest\"]))",
+   "new": "(s.first, s.latest) = (nil, nil)",
+   "expect": "killed"
+  }
+ ]
+}
