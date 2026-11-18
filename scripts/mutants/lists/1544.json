@@ -1,0 +1,111 @@
+{
+ "entry": 1544,
+ "filter": "TextViewerEditorTests|TextViewerCloseTests|TerminalEditorTests/testRefusalFallsBackToTheBuiltinEditorAndSaysWhy|TextViewerWindowTests/testKeyRoutes|TextViewerWindowTests/testReadIsLeftAndEditIsOff|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "dirty-never",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        setDirty(text != base)\n",
+   "new": "        setDirty(false)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "dirty-always",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        setDirty(text != base)\n",
+   "new": "        setDirty(true)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "preview-off",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "let source = isDirty ? buffer : nil",
+   "new": "let source: String? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "preview-unpublished",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": " || preview || previewed {",
+   "new": " {",
+   "expect": "killed"
+  },
+  {
+   "name": "close-no-ask",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        guard isDirty else { return close() }\n",
+   "new": "        guard !isDirty else { return close() }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "cancel-closes",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "            case .cancel: break\n",
+   "new": "            case .cancel: close()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "discard-stays-dirty",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        saveError = nil\n        setDirty(false)\n",
+   "new": "        saveError = nil\n",
+   "expect": "killed"
+  },
+  {
+   "name": "teardown-no-discard",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        entry.model.discard()   // #1544",
+   "new": "        // entry.model.discard()   // #1544",
+   "expect": "killed"
+  },
+  {
+   "name": "save-overwrites",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "to: url, expected: expected, identity: identity)",
+   "new": "to: url, expected: expected, overwrite: true, identity: identity)",
+   "expect": "killed"
+  },
+  {
+   "name": "save-stays-dirty",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "self.setDirty(self.buffer != text)",
+   "new": "self.setDirty(true)",
+   "expect": "killed"
+  },
+  {
+   "name": "refusal-stays-read",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "            say(why)\n            openEditor()\n",
+   "new": "            say(why)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "lossy-editable",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "doc.readOnly ? \"Not UTF-8: shown read-only\" : nil",
+   "new": "nil",
+   "expect": "killed"
+  },
+  {
+   "name": "save-key-passes",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        case \"s\": return .save\n",
+   "new": "        case \"s\": return .pass\n",
+   "expect": "killed"
+  },
+  {
+   "name": "screenshot-in-edit",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "-> Bool { mode == .read }",
+   "new": "-> Bool { true }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-onedit",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerTextView.swift",
+   "old": "        onEdit?(string)\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

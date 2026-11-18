@@ -1,0 +1,111 @@
+{
+ "entry": 896,
+ "filter": "AgentTerminalFitReconnectTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "chip-clients-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "let p = sessionPty, p.clients > 1 else",
+   "new": "let p = sessionPty, p.clients > 0 else",
+   "expect": "killed"
+  },
+  {
+   "name": "chip-or-to-and",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "return p.cols != grid.cols || p.rows != grid.rows",
+   "new": "return p.cols != grid.cols && p.rows != grid.rows",
+   "expect": "killed"
+  },
+  {
+   "name": "chip-remote-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard remoteHost == nil, phase == .live, child != nil, let grid",
+   "new": "guard phase == .live, child != nil, let grid",
+   "expect": "killed"
+  },
+  {
+   "name": "fit-no-hide",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        sessionPty = nil\n        child.redraw()",
+   "new": "        child.redraw()",
+   "expect": "killed"
+  },
+  {
+   "name": "fit-no-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard sizedElsewhere, let child else { return }\n        sessionPty = nil",
+   "new": "        guard let child else { return }\n        sessionPty = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "attach-keeps-pty",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        sessionPty = nil   // #896: the last session's size never shows on this one\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "retry-any-code",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            if code == 1 { reconnectLater() }",
+   "new": "            if code != 0 { reconnectLater() }",
+   "expect": "killed"
+  },
+  {
+   "name": "retry-never",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            if code == 1 { reconnectLater() }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard reconnects < Self.reconnectBackoff.count else { return }\n        let gen = generation, k = key\n        let delay = Self.reconnectBackoff[reconnects]",
+   "new": "        let gen = generation, k = key\n        let delay = Self.reconnectBackoff[min(reconnects, Self.reconnectBackoff.count - 1)]",
+   "expect": "killed"
+  },
+  {
+   "name": "no-backoff",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        let delay = Self.reconnectBackoff[reconnects]",
+   "new": "        let delay = Self.reconnectBackoff[0]",
+   "expect": "killed"
+  },
+  {
+   "name": "retry-keeps-count",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        reattached = false\n        reconnects = 0\n        begin()",
+   "new": "        reattached = false\n        begin()",
+   "expect": "killed"
+  },
+  {
+   "name": "no-settle-reset",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "                    self.reconnects = 0\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "timer-no-gen-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            guard let self, self.generation == gen, self.key == k, self.child == nil else { return }\n            self.begin()",
+   "new": "            guard let self, self.key == k, self.child == nil else { return }\n            self.begin()",
+   "expect": "killed"
+  },
+  {
+   "name": "parse-allows-bool",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }",
+   "new": "guard let n = v as? NSNumber else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "parse-no-range",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "(1...65535).contains(cols), (1...65535).contains(rows), clients >= 0",
+   "new": "clients >= 0",
+   "expect": "killed"
+  }
+ ]
+}

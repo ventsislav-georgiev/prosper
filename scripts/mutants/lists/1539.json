@@ -1,0 +1,27 @@
+{
+ "entry": 1539,
+ "filter": "AgentMiniNamesTests|AgentSidebarModeSwitchTests",
+ "mutants": [
+  {
+   "name": "eightCharCut",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "static func miniName(_ title: String) -> String { OutsideText.shown(title) }",
+   "new": "static func miniName(_ title: String) -> String { let s = OutsideText.shown(title); return s.count > miniNameLength ? String(s.prefix(miniNameLength)) + \"\\u{2026}\" : s }",
+   "expect": "killed"
+  },
+  {
+   "name": "switchAlwaysVertical",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            HStack(spacing: sz(2)) { ForEach(AgentSidebarMode.allCases, id: \\.self) { button($0) } }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "noNamePriority",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            .layoutPriority(1)   // #1539",
+   "new": "            // .layoutPriority(1)   // #1539",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,62 @@
+{
+ "entry": 1072,
+ "filter": "ExtensionOffMeansOffTests",
+ "mutants": [
+  {
+   "name": "calc-gate",
+   "file": "app/Sources/ProsperApp/Commands/CommandRouter.swift",
+   "old": "        guard await MainActor.run(body: { extensionLive(calcID) }) else { return nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "units-gate",
+   "file": "app/Sources/ProsperApp/Commands/CommandRouter.swift",
+   "old": "        guard await MainActor.run(body: { extensionLive(unitsID) }) else { return nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "currency-gate",
+   "file": "app/Sources/ProsperApp/Commands/CommandRouter.swift",
+   "old": "        guard await MainActor.run(body: { extensionLive(currencyID) }) else { return nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "openlid-only",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !enabled && wasEnabled && id == Self.openLidID { suspendRemoteWake(id: id) }",
+   "new": "if !enabled && wasEnabled { suspendRemoteWake(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "was-enabled",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !enabled && wasEnabled && id == Self.openLidID { suspendRemoteWake(id: id) }",
+   "new": "if !enabled && id == Self.openLidID { suspendRemoteWake(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-disarm",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !enabled && wasEnabled && id == Self.openLidID { suspendRemoteWake(id: id) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "saved-setting-gate",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "        guard services.prefGet(extensionID: id, key: \"remote_wake\") == \"true\" else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "disarm-sends-on",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "await host.caffeinateSetRemoteWake(extensionID: id, enabled: false,",
+   "new": "await host.caffeinateSetRemoteWake(extensionID: id, enabled: true,",
+   "expect": "killed"
+  }
+ ]
+}

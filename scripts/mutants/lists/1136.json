@@ -1,0 +1,62 @@
+{
+ "entry": 1136,
+ "filter": "DchServeParityTests/testServeControlFramesCloseOneByteOver64KiB|DchServeParityTests/testTheListFrameDefaultsToDchsOneMiBListLimit|DchServeParityTests/testTheListFrameDropsTheLargestTitlesFirstPastItsLimit",
+ "mutants": [
+  {
+   "name": "ctrl-bound-off-by-one",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "guard len <= (DchFrame.isServeControl(type)",
+   "new": "guard len < (DchFrame.isServeControl(type)",
+   "expect": "killed"
+  },
+  {
+   "name": "ctrl-set-no-ctl",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "type == watch || type == ctl || type == ctlCancel",
+   "new": "type == watch || type == ctlCancel",
+   "expect": "killed"
+  },
+  {
+   "name": "ctrl-rule-off",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "DchFrame.isServeControl(type) ? DchFrame.maxControlFrame",
+   "new": "false ? DchFrame.maxControlFrame",
+   "expect": "killed"
+  },
+  {
+   "name": "list-default-8mib",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "limit: Int = maxListFrame) -> Data {",
+   "new": "limit: Int = maxFrame) -> Data {",
+   "expect": "killed"
+  },
+  {
+   "name": "list-one-over-passes",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "guard data.count > limit else { return data }",
+   "new": "guard data.count > limit + 1 else { return data }",
+   "expect": "killed"
+  },
+  {
+   "name": "list-smallest-first",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "cost.sorted(by: { $0.1 > $1.1 })",
+   "new": "cost.sorted(by: { $0.1 < $1.1 })",
+   "expect": "killed"
+  },
+  {
+   "name": "list-cost-no-comma",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "(encoded([\"harness\": $0])?.count ?? 2) - 1)",
+   "new": "(encoded([\"harness\": $0])?.count ?? 2) - 2)",
+   "expect": "killed"
+  },
+  {
+   "name": "list-cost-raw-utf8",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "(encoded([\"harness\": $0])?.count ?? 2) - 1)",
+   "new": "$0.utf8.count + 13)",
+   "expect": "killed"
+  }
+ ]
+}

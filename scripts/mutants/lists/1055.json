@@ -1,0 +1,48 @@
+{
+ "entry": 1055,
+ "filter": "ShellRunnerTests/testHostShellReports|ShellRunnerTests/testRunReportsHowTheShellEnded|ShellRunnerTests/testDefaultOptsTimeout|ShellRunnerTests/testFalseOpts|ShellRunnerTests/testKeepRunningOutlives|ExtensionLuaSuiteTests/testEveryLuaTestFilePasses$",
+ "mutants": [
+  {
+   "name": "status-always-success",
+   "file": "app/Sources/ProsperApp/Commands/SystemCommands.swift",
+   "old": "let exit: Exit = process.terminationReason == .uncaughtSignal ? .signal(status) : .exit(status)",
+   "new": "let exit: Exit = .exit(0); _ = status",
+   "expect": "killed"
+  },
+  {
+   "name": "signal-as-exit",
+   "file": "app/Sources/ProsperApp/Commands/SystemCommands.swift",
+   "old": "let exit: Exit = process.terminationReason == .uncaughtSignal ? .signal(status) : .exit(status)",
+   "new": "let exit: Exit = .exit(status)",
+   "expect": "killed"
+  },
+  {
+   "name": "timeout-as-exit",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "rt.pushJSON([\"type\": keepRunning ? \"running\" : \"timeout\"])",
+   "new": "rt.pushJSON([\"type\": \"exit\", \"code\": 0] as [String: Any])",
+   "expect": "killed"
+  },
+  {
+   "name": "running-as-timeout",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "rt.pushJSON([\"type\": keepRunning ? \"running\" : \"timeout\"])",
+   "new": "rt.pushJSON([\"type\": \"timeout\"])",
+   "expect": "killed"
+  },
+  {
+   "name": "example-status-always-true",
+   "file": "app/Examples/extensions/hammerspoon-compat/init.lua",
+   "old": "return out, st.code == 0 or nil, \"exit\", st.code",
+   "new": "return out, true, \"exit\", st.code",
+   "expect": "killed"
+  },
+  {
+   "name": "example-timeout-as-exit",
+   "file": "app/Examples/extensions/hammerspoon-compat/init.lua",
+   "old": "if st.type == \"signal\" then return out, nil, \"signal\", st.code end\n            return out, nil\n",
+   "new": "if st.type == \"signal\" then return out, nil, \"signal\", st.code end\n            return out, true, \"exit\", 0\n",
+   "expect": "killed"
+  }
+ ]
+}

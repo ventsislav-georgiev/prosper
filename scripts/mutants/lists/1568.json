@@ -1,0 +1,153 @@
+{
+ "entry": 1568,
+ "filter": "XrayRemoteMarksTests|XrayHoverTests/testEscHideAndBlurCloseAnyCard|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "follow_remote_guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "let target = XrayRefLink.decorate() ? key.flatMap(XrayRefLink.target) : nil",
+   "new": "let target = XrayRefLink.decorate() && remoteHost == nil ? key.flatMap(XrayRefLink.target) : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "shown_remote_guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let owner = host.owner, owner.phase == .live,\n",
+   "new": "let owner = host.owner, owner.phase == .live, owner.remoteHost == nil,\n",
+   "expect": "killed"
+  },
+  {
+   "name": "refclick_remote_guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics,",
+   "new": "guard XrayRefLink.decorate(), let owner, owner.remoteHost == nil, let key = owner.key, let g = gridMetrics,",
+   "expect": "killed"
+  },
+  {
+   "name": "terminalrefs_bare_name",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "f.target == target(key), let refs",
+   "new": "f.target == XrayTarget(name: key.name, dir: key.dir), let refs",
+   "expect": "killed"
+  },
+  {
+   "name": "target_flag_host",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "return host.isEmpty || host.hasPrefix(\"-\") ? nil :",
+   "new": "return host.isEmpty ? nil :",
+   "expect": "killed"
+  },
+  {
+   "name": "target_bare_name",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "XrayTarget(name: \"\\(host):\\(key.name)\", dir: nil)",
+   "new": "XrayTarget(name: key.name, dir: nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "hover_remote_reads",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "        if target.dir == nil {\n            if let hit",
+   "new": "        if false {\n            if let hit",
+   "expect": "killed"
+  },
+  {
+   "name": "hover_no_cache",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "            if let hit = refResults()?.get(",
+   "new": "            if false, let hit = refResults()?.get(",
+   "expect": "killed"
+  },
+  {
+   "name": "hover_no_note",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "            refNote = Self.pinForPassages\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "panel_cold_run",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "(XrayPanels.dch(), XrayPanels.shared.requests.run(for: target, cold: XrayPanels.run), refs)",
+   "new": "(XrayPanels.dch(), XrayPanels.run, refs)",
+   "expect": "killed"
+  },
+  {
+   "name": "exit6_any",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "case 6 where target.dir == nil: refNote",
+   "new": "case 6: refNote",
+   "expect": "killed"
+  },
+  {
+   "name": "exit6_gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        case 6 where target.dir == nil: refNote = Self.refNoXray\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "group_host_all",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "guard target.dir == nil, session != own, let i",
+   "new": "guard target.dir == nil, let i",
+   "expect": "killed"
+  },
+  {
+   "name": "group_host_local",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "guard target.dir == nil, session != own, let i",
+   "new": "guard session != own, let i",
+   "expect": "killed"
+  },
+  {
+   "name": "group_host_raw",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "return OutsideText.shown(String(target.name[..<i])) + \":\" + session",
+   "new": "return String(target.name[..<i]) + \":\" + session",
+   "expect": "killed"
+  },
+  {
+   "name": "group_call_site",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "faint(Self.groupTitle(g.session, own: c.session, target: panel.target))",
+   "new": "faint(g.session)",
+   "expect": "killed"
+  },
+  {
+   "name": "esc_wiring",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": ".isEmpty, marks.escape() {",
+   "new": ".isEmpty, false {",
+   "expect": "killed"
+  },
+  {
+   "name": "esc_modifiers",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {",
+   "new": "if event.keyCode == 53, marks.escape() {",
+   "expect": "killed"
+  },
+  {
+   "name": "esc_passes_through",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "marks.escape() {\n            return\n        }",
+   "new": "marks.escape() {\n        }",
+   "expect": "killed"
+  },
+  {
+   "name": "escape_always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }",
+   "new": "guard true else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "escape_pinned_missed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }",
+   "new": "guard hover.card != nil else { return false }",
+   "expect": "killed"
+  }
+ ]
+}

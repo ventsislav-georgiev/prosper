@@ -1,0 +1,20 @@
+{
+ "entry": 1541,
+ "filter": "ExtensionOffMeansOffTests",
+ "mutants": [
+  {
+   "name": "M2",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !openLid.enabled {",
+   "new": "if true {",
+   "expect": "killed"
+  },
+  {
+   "name": "M3",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "        disarmLegacyRemoteWake()\n    }\n",
+   "new": "    }\n",
+   "expect": "killed"
+  }
+ ]
+}

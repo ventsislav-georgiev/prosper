@@ -1,0 +1,55 @@
+{
+ "entry": 1556,
+ "filter": "DchCtlTests",
+ "mutants": [
+  {
+   "name": "cap3",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "    static let perDevice = 2\n",
+   "new": "    static let perDevice = 3\n",
+   "expect": "killed"
+  },
+  {
+   "name": "nodevice",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "return Key(device: device, path: \"\", dev:",
+   "new": "return Key(device: \"\", path: \"\", dev:",
+   "expect": "killed"
+  },
+  {
+   "name": "noremove",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "            if counted { follows.remove(job) }",
+   "new": "            if counted { _ = follows }",
+   "expect": "killed"
+  },
+  {
+   "name": "noinode",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "        guard stat(path, &st) == 0 else {",
+   "new": "        guard false, stat(path, &st) == 0 else {",
+   "expect": "killed"
+  },
+  {
+   "name": "newest",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "let i = live.firstIndex(where: { $0.key == key })",
+   "new": "let i = live.lastIndex(where: { $0.key == key })",
+   "expect": "killed"
+  },
+  {
+   "name": "plain",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "            let counted = follow && argv.first == \"--xray\"",
+   "new": "            let counted = follow",
+   "expect": "killed"
+  },
+  {
+   "name": "noreply",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "            if end(.killGroup, running: true) { timeoutReply?(DchCtl.exitFrame(2, why: \"timeout\")) }",
+   "new": "            if end(.killGroup, running: true) { }",
+   "expect": "killed"
+  }
+ ]
+}

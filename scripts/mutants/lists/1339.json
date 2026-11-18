@@ -1,0 +1,27 @@
+{
+ "entry": 1339,
+ "filter": "AgentGlyphContrastTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "threshold-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard reach(base) < 3 else { return base }",
+   "new": "guard reach(base) < 0 else { return base }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-selected-bg",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "min(ThemeRuntime.contrastRatio(c, sidebar), ThemeRuntime.contrastRatio(c, selected))",
+   "new": "ThemeRuntime.contrastRatio(c, sidebar)",
+   "expect": "killed"
+  },
+  {
+   "name": "shade-never-darkens",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "let t = Double(step) * 0.05",
+   "new": "let t = Double(step) * 0.0",
+   "expect": "killed"
+  }
+ ]
+}

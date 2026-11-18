@@ -1,0 +1,104 @@
+{
+ "entry": 1528,
+ "filter": "XrayRefTurnTests|XrayRefContextTests|XrayRefStreamTests|XrayRefPopoverTests",
+ "mutants": [
+  {
+   "name": "turns-oldest-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "keyed.keys.sorted(by: >)",
+   "new": "keyed.keys.sorted(by: <)",
+   "expect": "killed"
+  },
+  {
+   "name": "other-session-turn-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "m.session == own ? m.turn.map",
+   "new": "true ? m.turn.map",
+   "expect": "killed"
+  },
+  {
+   "name": "no-earlier-block",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "(earlier.isEmpty ? [] : [Turn(turn: nil, mentions: earlier)])",
+   "new": "[]",
+   "expect": "killed"
+  },
+  {
+   "name": "old-shape-turned",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if s.mentions.contains(where: { $0.sentence != nil }) {",
+   "new": "if true {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-scalar-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "let i = u.index(u.startIndex, offsetBy: a).samePosition(in: v),",
+   "new": "let i = Optional(u.index(u.startIndex, offsetBy: a)),",
+   "expect": "killed"
+  },
+  {
+   "name": "no-order-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "0 <= a, a <= b, b <= u.count,",
+   "new": "0 <= a, b <= u.count,",
+   "expect": "killed"
+  },
+  {
+   "name": "no-end-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "0 <= a, a <= b, b <= u.count,",
+   "new": "0 <= a, a <= b,",
+   "expect": "killed"
+  },
+  {
+   "name": "clean-then-slice",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        var raw = outside\n",
+   "new": "        var raw = OutsideText.shown(outside, max: 100_000)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "hit-raw",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "hit: show(v[i..<j])",
+   "new": "hit: String(v[i..<j])",
+   "expect": "killed"
+  },
+  {
+   "name": "over-cap-sliced",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if u.count <= sentenceCap, let p = span",
+   "new": "if let p = span",
+   "expect": "killed"
+  },
+  {
+   "name": "turn-zero-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "turn: (m[\"turn\"] as? Int).flatMap { (1...Int(Int32.max)).contains($0) ? $0 : nil },",
+   "new": "turn: m[\"turn\"] as? Int,",
+   "expect": "killed"
+  },
+  {
+   "name": "jump-no-chapter",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "guard let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n })",
+   "new": "guard let n = t.turn, let ch = chapters.last",
+   "expect": "killed"
+  },
+  {
+   "name": "speaker-reply",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "case \"assistant\": \"Reply\"",
+   "new": "case \"assistant\": \"You\"",
+   "expect": "killed"
+  },
+  {
+   "name": "header-no-title",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "let title = chapters.last { $0.ordinal == n }?.title ?? \"\"",
+   "new": "let title = \"\"",
+   "expect": "killed"
+  }
+ ]
+}

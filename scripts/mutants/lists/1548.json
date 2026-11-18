@@ -1,0 +1,34 @@
+{
+ "entry": 1548,
+ "filter": "ExtensionReservedIDTests",
+ "mutants": [
+  {
+   "name": "empty-list",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionLoader.swift",
+   "old": "Set<String> = [\"collapse\", \"timers\"]",
+   "new": "Set<String> = []",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-timers",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionLoader.swift",
+   "old": "[\"collapse\", \"timers\"]",
+   "new": "[\"collapse\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "no-check",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionLoader.swift",
+   "old": "if reservedIDs.contains(manifest.extension.id.lowercased())",
+   "new": "if false && reservedIDs.contains(manifest.extension.id.lowercased())",
+   "expect": "killed"
+  },
+  {
+   "name": "case-sensitive",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionLoader.swift",
+   "old": "manifest.extension.id.lowercased()",
+   "new": "manifest.extension.id",
+   "expect": "killed"
+  }
+ ]
+}

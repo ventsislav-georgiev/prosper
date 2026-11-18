@@ -1,0 +1,55 @@
+{
+ "entry": 1545,
+ "filter": "TextViewerDiskChangeTests",
+ "mutants": [
+  {
+   "name": "M1-no-changed-banner",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "diskChange = .changed",
+   "new": "diskChange = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-reload-stays-dirty",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        saveError = nil\n        setDirty(false)\n        if mode == .read { reload() }",
+   "new": "        saveError = nil\n        if mode == .read { reload() }",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-keep-checks-old-hash",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "self.write(expected: kept, then: done)",
+   "new": "self.write(expected: self.baseHash, then: done)",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-overwrite-ignores-no",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "guard yes, let self, self.keptHash == kept",
+   "new": "guard let self, self.keptHash == kept",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-undo-clean-no-reload",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "if !isDirty, diskChange != nil || keptHash != nil { reload() }",
+   "new": "if false { reload() }",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-same-bytes-ask",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "if hash == baseHash {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-save-keeps-banner",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "self.diskChange = nil",
+   "new": "self.diskChange = self.diskChange",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,55 @@
+{
+ "entry": 1540,
+ "filter": "StableMenuGuardTests|AgentWindowSidebarMenuTests/testPaneHeaderMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange|AgentWindowSidebarMenuTests/testSidebarMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange",
+ "mutants": [
+  {
+   "name": "show_always_publishes",
+   "file": "app/Sources/ProsperApp/StableMenu.swift",
+   "old": "        guard e != entries else { return }\n",
+   "new": "        // mutant: no equality check\n",
+   "expect": "killed"
+  },
+  {
+   "name": "body_rebuilt_per_draw",
+   "file": "app/Sources/ProsperApp/StableMenu.swift",
+   "old": "        StableMenuBody(model: model)\n",
+   "new": "        StableMenuBody(model: model).id(UUID())\n",
+   "expect": "killed"
+  },
+  {
+   "name": "stale_run",
+   "file": "app/Sources/ProsperApp/StableMenu.swift",
+   "old": "        self.run = run\n        self.content = content\n        self.label = label\n    }\n\n    func show(",
+   "new": "        _ = run\n        self.content = content\n        self.label = label\n    }\n\n    func show(",
+   "expect": "killed"
+  },
+  {
+   "name": "unlisted_menu",
+   "file": "app/Sources/ProsperApp/AIModelsPane.swift",
+   "old": "        StableMenu(Self.menuID, entries: items, run: act) { items, run in\n",
+   "new": "        let _ = Menu { EmptyView() } label: { EmptyView() }\n        StableMenu(Self.menuID, entries: items, run: act) { items, run in\n",
+   "expect": "killed"
+  },
+  {
+   "name": "header_no_switches",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [])\n",
+   "new": "                 switches: [])\n",
+   "expect": "killed"
+  },
+  {
+   "name": "headline_label_lost",
+   "file": "app/Sources/ProsperApp/SystemStats/StatsPopupView.swift",
+   "old": "selected: pinned ?? \"\", label: pinned ?? \"Auto (hottest)\")",
+   "new": "selected: pinned ?? \"\", label: \"Auto (hottest)\")",
+   "expect": "killed"
+  },
+  {
+   "name": "recent_local_set_raw",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "            return Recent(shown: shown, set: shown)\n",
+   "new": "            return Recent(shown: shown, set: f)\n",
+   "expect": "killed"
+  }
+ ]
+}

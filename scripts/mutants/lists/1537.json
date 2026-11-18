@@ -1,0 +1,76 @@
+{
+ "entry": 1537,
+ "filter": "AgentIslandPlanUsageTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1-reset-passed-kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return Double(r) > now ? (u, r) : nil",
+   "new": "return (u, r)",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-reset-boundary",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return Double(r) > now ? (u, r) : nil",
+   "new": "return Double(r) >= now ? (u, r) : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-age-unchecked",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return now - at < window ? (u, nil) : nil",
+   "new": "return (u, nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-range-unchecked",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard let u = util[claim], (0...100).contains(u), at.isFinite, now.isFinite else { return nil }",
+   "new": "guard let u = util[claim] else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-empty-not-nil",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard s != nil || w != nil else { return nil }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-help-no-reset",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return \"\\(name): \\(Self.percent(u)) used\" + (r.map",
+   "new": "return \"\\(name): \\(Self.percent(u)) used\" + (Optional<Int>.none.map",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-row-not-shown",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "var showsTabRow: Bool { showsTabs || planUsage != nil }",
+   "new": "var showsTabRow: Bool { showsTabs }",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-open-no-read",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        if on { readPlanUsage() }   // #1537",
+   "new": "        // if on { readPlanUsage() }   // #1537",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-not-current",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "guard let label = st.current, let account",
+   "new": "guard let label = st.order.first(where: { store.usageSample($0) != nil }), let account",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-size-old-tabs",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "cardsHeight, tabs: showsTabRow) : geometry.collapsedSize",
+   "new": "cardsHeight, tabs: showsTabs) : geometry.collapsedSize",
+   "expect": "killed"
+  }
+ ]
+}

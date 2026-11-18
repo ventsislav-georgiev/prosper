@@ -1,0 +1,76 @@
+{
+ "entry": 981,
+ "filter": "FanLaunchTripHoldTests",
+ "mutants": [
+  {
+   "name": "T1",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "return rememberingTrip(.refusal(rpm: rpm,",
+   "new": "return (.refusal(rpm: rpm,",
+   "expect": "killed"
+  },
+  {
+   "name": "T2",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "guard said == .refused else { return rememberingTrip(said) }",
+   "new": "guard said == .refused else { return said }",
+   "expect": "killed"
+  },
+  {
+   "name": "T4",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "launchTripHold = Preferences.fanTripHeld   //",
+   "new": "launchTripHold = false   //",
+   "expect": "killed"
+  },
+  {
+   "name": "T5",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "guard await tripHoldReleased() else { return false }",
+   "new": "_ = await tripHoldReleased()",
+   "expect": "killed"
+  },
+  {
+   "name": "T6",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "c.isFinite, c < FanControlCore.reArmCelsius",
+   "new": "c.isFinite, c <= FanControlCore.reArmCelsius",
+   "expect": "killed"
+  },
+  {
+   "name": "T7",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "c.isFinite, c < FanControlCore.reArmCelsius",
+   "new": "c < FanControlCore.reArmCelsius || c.isInfinite",
+   "expect": "killed"
+  },
+  {
+   "name": "T8",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "        launchTripHold = false\n        Preferences.fanTripHeld = false\n",
+   "new": "        launchTripHold = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "T9",
+   "file": "app/Sources/ProsperApp/SystemStats/StatsPopupView.swift",
+   "old": "        FanControlHelper.clearTripHold()   // entry 981",
+   "new": "        // entry 981",
+   "expect": "killed"
+  },
+  {
+   "name": "T10",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "        guard launchTripHold else { return true }\n        let read",
+   "new": "        let read",
+   "expect": "killed"
+  },
+  {
+   "name": "T11",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "        launchTripHold = false   // entry 981: the user",
+   "new": "        // entry 981: the user",
+   "expect": "killed"
+  }
+ ]
+}

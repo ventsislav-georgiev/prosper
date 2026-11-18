@@ -1,0 +1,104 @@
+{
+ "entry": 1109,
+ "filter": "TerminalEditorTests",
+ "mutants": [
+  {
+   "name": "M1-control-check-off",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "        guard !hasControl(path) else { return .refused(controlChars) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-relative-path-allowed",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "        guard path.hasPrefix(\"/\") else { return .refused(notAbsolute) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-gate-ignored",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "        guard case .ok(let dch) = io.gate() else { return .refused(needsDch) }\n",
+   "new": "        let dch = { if case .ok(let p) = io.gate() { p } else { \"/usr/local/bin/dch\" } }()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-editor-over-visual",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "for name in [\"VISUAL\", \"EDITOR\"]",
+   "new": "for name in [\"EDITOR\", \"VISUAL\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-failed-probe-cached",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "            guard let v = probe(name) else { return nil }\n",
+   "new": "            guard let v = probe(name) else { cache.lock.withLock { cache.value = Detection.none }; return nil }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-hash-8-digits",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": ".prefix(8).map",
+   "new": ".prefix(4).map",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-path-joined",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "argv: [exe] + words.dropFirst() + [path]",
+   "new": "argv: [exe] + words.dropFirst() + path.split(separator: \" \").map(String.init)",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-close-keeps-session",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        editor.end(t.spawn)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-close-race-unguarded",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        guard !closed, mode == .read else { return }",
+   "new": "        guard mode == .read else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-no-reload-on-exit",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        terminal = nil\n        mode = .read\n        reload()\n",
+   "new": "        terminal = nil\n        mode = .read\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M11-r9-state-kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "state: edit ? .idle : AgentState(dch: row.state)",
+   "new": "state: AgentState(dch: row.state)",
+   "expect": "killed"
+  },
+  {
+   "name": "M12-r9-sidekick",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "            .map { ($0.0, $0.1 && !TerminalEditor.isEditSession($0.0.key.name)) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M13-r9-claude-id",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "claudeSessionID: edit ? nil : mapping[row.name]?.sessionID,",
+   "new": "claudeSessionID: mapping[row.name]?.sessionID,",
+   "expect": "killed"
+  },
+  {
+   "name": "M14-max-words",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "guard words.count <= maxWords",
+   "new": "guard words.count <= maxWords + 1",
+   "expect": "killed"
+  }
+ ]
+}

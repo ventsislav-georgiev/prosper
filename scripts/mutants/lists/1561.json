@@ -1,0 +1,76 @@
+{
+ "entry": 1561,
+ "filter": "XrayRequestsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "m1-local-goes-warm",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "guard target.dir == nil, let spawn else { return cold }",
+   "new": "guard let spawn else { return cold }",
+   "expect": "killed"
+  },
+  {
+   "name": "m2-every-form-warm",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "let argv = XrayRequests.form(args, name: name),",
+   "new": "let argv = Optional(Array(args.dropFirst(2))),",
+   "expect": "killed"
+  },
+  {
+   "name": "m3-no-cancel-write",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "await withTaskCancellationHandler { await answer(child, id) } onCancel: { child.write(Self.cancel(id)) }",
+   "new": "await withTaskCancellationHandler { await answer(child, id) } onCancel: { }",
+   "expect": "killed"
+  },
+  {
+   "name": "m4-lost-keeps-exit",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "case \"lost\": return (7, Data())",
+   "new": "case \"lost\": return (Int32(clamping: e), Data())",
+   "expect": "killed"
+  },
+  {
+   "name": "m5-busy-is-exit",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "case \"busy\": return nil",
+   "new": "case \"busy\": return (Int32(clamping: e), out)",
+   "expect": "killed"
+  },
+  {
+   "name": "m6-no-ready-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "guard o?[\"ready\"] is [String: Any] else {",
+   "new": "guard o != nil || o == nil else {",
+   "expect": "killed"
+  },
+  {
+   "name": "m7-no-close-observer",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "        guard n.object is AgentsNSWindow else { return }\n        windowClosed()",
+   "new": "        guard n.object is AgentsNSWindow else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "m8-dial-per-request",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "        if let child { return child }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "m9-read-stays-cold",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "(self.dch, self.run) = (dch, panels?.requests.run(for: target, cold: run) ?? run)",
+   "new": "(self.dch, self.run) = (dch, run)",
+   "expect": "killed"
+  },
+  {
+   "name": "m10-no-hide-observer",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "        guard let w = n.object as? AgentsNSWindow, !w.occlusionState.contains(.visible) else { return }\n        closeAll()",
+   "new": "        guard let w = n.object as? AgentsNSWindow, !w.occlusionState.contains(.visible) else { return }",
+   "expect": "killed"
+  }
+ ]
+}

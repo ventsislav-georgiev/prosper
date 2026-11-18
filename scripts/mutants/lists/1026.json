@@ -1,0 +1,27 @@
+{
+ "entry": 1026,
+ "filter": "ShellRunnerTests/testBackgroundChildDoesNotHoldTheReaderAfterTheShellExits|ShellRunnerTests/testCancelDoesNotWaitForAGrandchildThatLeftTheGroup|ShellRunnerTests/testEndlessOutputStopsAtTheDrainCap|ShellRunnerTests/testProductionFlagIsALoginShellThatReadsZprofile",
+ "mutants": [
+  {
+   "name": "M1_reader_waits_for_eof",
+   "file": "app/Sources/ProsperApp/Commands/SystemCommands.swift",
+   "old": "if ready == 0 { if exited { break }; continue }",
+   "new": "if ready == 0 { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "M2_no_drain_cap",
+   "file": "app/Sources/ProsperApp/Commands/SystemCommands.swift",
+   "old": "while seen < ShellRunner.drainCap {",
+   "new": "while true {",
+   "expect": "killed"
+  },
+  {
+   "name": "M3_production_flag_not_login",
+   "file": "app/Sources/ProsperApp/Commands/SystemCommands.swift",
+   "old": "underTest ? \"-c\" : \"-lc\"",
+   "new": "underTest ? \"-c\" : \"-c\"",
+   "expect": "killed"
+  }
+ ]
+}

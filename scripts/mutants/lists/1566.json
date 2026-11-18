@@ -1,0 +1,167 @@
+{
+ "entry": 1566,
+ "filter": "XrayClearTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-local-clear",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        clearAction(view)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-live-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard phase == .live, child != nil, let key,",
+   "new": "guard let key,",
+   "expect": "killed"
+  },
+  {
+   "name": "no-gate-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "let dch = XrayPanels.dch() else { return }",
+   "new": "let dch = Optional(XrayPanels.dch() ?? \"/fake/dch\") else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-spawn",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        Task { _ = await run(dch, args, env) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "name-not-sid",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "(f?.target == own ? f?.state?.corpus?.sessionID : nil) ?? key.name",
+   "new": "key.name",
+   "expect": "killed"
+  },
+  {
+   "name": "sid-any-follow",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "f?.target == own ? f?.state?.corpus?.sessionID : nil",
+   "new": "f?.state?.corpus?.sessionID",
+   "expect": "killed"
+  },
+  {
+   "name": "no-remote-branch",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if let h = remoteHost {\n",
+   "new": "        if let h = remoteHost, false {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "writes-pty",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        clearAction(view)\n",
+   "new": "        clearAction(view)\n        writer.send([0x0C])\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-responder-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if event.type == .keyDown, window?.firstResponder === self, let owner,",
+   "new": "if event.type == .keyDown, let owner,",
+   "expect": "killed"
+  },
+  {
+   "name": "any-mods",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command]",
+   "new": "event.modifierFlags.contains(.command)",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-word",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "\"Codex\\(d)mentions only\"",
+   "new": "\"Codex\\(d)mentions\"",
+   "expect": "killed"
+  },
+  {
+   "name": "no-clear-note",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": " + d + Self.clearNote",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-alt",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "why == \"alt\"",
+   "new": "why == \"alt-x\"",
+   "expect": "killed"
+  },
+  {
+   "name": "lone-claude-label",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "case \"claude\" where claudes < 2: return nil",
+   "new": "case \"claude\" where claudes < 1: return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "ended-word",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "\"Shell\\(d)ended\\(d)not kept\"",
+   "new": "\"Shell\\(d)ended\"",
+   "expect": "killed"
+  },
+  {
+   "name": "no-claudes-zero",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "if reason.isEmpty && claudes == 0 {",
+   "new": "if reason.isEmpty && claudes == 9 {",
+   "expect": "killed"
+  },
+  {
+   "name": "lines-negative",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "lines: max(0, int(o[\"lines\"]) ?? 0)",
+   "new": "lines: int(o[\"lines\"]) ?? 0",
+   "expect": "killed"
+  },
+  {
+   "name": "no-range-note",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "!complete && why == \"range\"",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "range-when-complete",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "!complete && why == \"range\"",
+   "new": "why != \"budget\"",
+   "expect": "killed"
+  },
+  {
+   "name": "sid-unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "!s.isEmpty && s.utf8.count <= 128 && !s.hasPrefix(\"-\")",
+   "new": "true || !s.isEmpty",
+   "expect": "killed"
+  },
+  {
+   "name": "no-read-corpus",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "        corpus = r.status == 0 ? XrayChapters.corpus(r.out) : nil",
+   "new": "        _ = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "no-follow-corpus",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "(dchChapters, chapterAnchors, corpus) = (s.chapters, s.anchors, s.corpus)",
+   "new": "(dchChapters, chapterAnchors) = (s.chapters, s.anchors)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-range-in-line",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "[corpus?.label, corpus?.rangeNote]",
+   "new": "[corpus?.label]",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,90 @@
+{
+ "entry": 1357,
+ "filter": "DchCtlTests/testXrayOpsFollowTheDchVersion|XrayTerminalRefTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1-min-1-78",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "static let xrayMinDch = [1, 91, 0]",
+   "new": "static let xrayMinDch = [1, 78, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-min-999",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "static let xrayMinDch = [1, 91, 0]",
+   "new": "static let xrayMinDch = [999, 0, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-col-off-by-one",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "if col >= lo, col < lo + cells(line[sp.range])",
+   "new": "if col >= lo, col <= lo + cells(line[sp.range])",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-cells-all-one",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "return n + (wide ? 2 : 1)",
+   "new": "return n + 1",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-url-file-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "refs.filter { $0.shape != .url && $0.shape != .file }",
+   "new": "refs",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-no-padding",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "static let gridOrigin = CGPoint(x: 4, y: 2)",
+   "new": "static let gridOrigin = CGPoint(x: 0, y: 0)",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-no-bounds",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "x < CGFloat(g.columns), y < CGFloat(g.rows) else",
+   "new": "x < 1e9, y < 1e9 else",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-plain-click",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if event.modifierFlags.contains(.command), !unfocused {",
+   "new": "if !unfocused {",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-link-remote",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if remoteHost == nil { openRefLink(url, view?.window, key) }",
+   "new": "openRefLink(url, view?.window, key)",
+   "expect": "killed"
+  },
+  {
+   "name": "M11-link-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if remoteHost == nil { openRefLink(url, view?.window, key) }",
+   "new": "_ = url",
+   "expect": "killed"
+  },
+  {
+   "name": "M12-gate-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard XrayRefLink.decorate(), let owner,",
+   "new": "guard let owner,",
+   "expect": "killed"
+  },
+  {
+   "name": "M13-click-swallowed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))\n        }\n        super.mouseDown(with: event)",
+   "new": "            if refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)) { return }\n        }\n        super.mouseDown(with: event)",
+   "expect": "killed"
+  }
+ ]
+}

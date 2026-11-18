@@ -1,0 +1,111 @@
+{
+ "entry": 1563,
+ "filter": "ProcessRunTests/testArgvIsPassedLiterally|ProcessRunTests/testRelativeMissingAndDirectoryArgvAreRefused|ProcessRunTests/testNonSystemExtensionIsRefused|ProcessRunTests/testEnvIsNotInherited|ProcessRunTests/testTimeoutKillsTheGroup|ProcessRunTests/testDroppedRequestKillsTheGroup|ProcessRunTests/testTenMegabyteFloodIsCapped|ProcessRunTests/testAtMostTwoRunAtOnceAndGroupsAreRegistered|ExtensionRetiredCallTests|ProcessRunTests/testRefusalTextIsCleaned|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "shell",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "process.arguments = Array(argv.dropFirst())",
+   "new": "process.arguments = [\"-c\", argv.joined(separator: \" \")]; process.executableURL = URL(fileURLWithPath: \"/bin/sh\")",
+   "expect": "killed"
+  },
+  {
+   "name": "relative",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "guard path.hasPrefix(\"/\") else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "regular",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "guard st.st_mode & S_IFMT == S_IFREG else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "tier",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "rt.pushJSON(ProcessRun.refused(\"restricted to system extensions\").lua)",
+   "new": "rt.pushJSON(ProcessRun.Result(status: 0, stdout: \"ran\\n\").lua)",
+   "expect": "killed"
+  },
+  {
+   "name": "env",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "process.environment = ProcessRun.environment",
+   "new": "process.environment = ProcessInfo.processInfo.environment.merging(ProcessRun.environment) { $1 }",
+   "expect": "killed"
+  },
+  {
+   "name": "stdin",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "process.standardInput = FileHandle.nullDevice",
+   "new": "_ = FileHandle.nullDevice",
+   "expect": "killed"
+  },
+  {
+   "name": "leader-only",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "if pid > 0 { CodexHarness.killGroup(pid, grace: 1) }",
+   "new": "if pid > 0 { _ = Darwin.kill(pid, SIGTERM) }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-cancel",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "        } onCancel: {\n            job.kill()",
+   "new": "        } onCancel: {\n            _ = job",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-clamp",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "let cap = min(max(cap, 0), maxBytes)",
+   "new": "let cap = max(cap, 0)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-drain",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "if n > room { result.truncated = true }",
+   "new": "if n > room { result.truncated = true; open[i] = -1; continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "concurrency",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "guard n < maxConcurrent else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "unregistered",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "CodexHarness.livePGIDs.withLock { $0[pid] = CodexHarness.startTime(pid) ?? 0 }",
+   "new": "_ = pid",
+   "expect": "killed"
+  },
+  {
+   "name": "unclassed",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "\"__h_dialog_prompt\", \"__h_proc_run\"]",
+   "new": "\"__h_dialog_prompt\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "raw-text",
+   "file": "app/Sources/ProsperApp/Extensions/ProcessRun.swift",
+   "old": "let shown = OutsideText.shown(path)",
+   "new": "let shown = path",
+   "expect": "killed"
+  },
+  {
+   "name": "nul",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "if a:find(string.char(0), 1, true) then",
+   "new": "if false then",
+   "expect": "killed"
+  }
+ ]
+}

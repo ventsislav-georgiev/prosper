@@ -1,0 +1,41 @@
+{
+ "entry": 1083,
+ "filter": "AgentWindowD1Tests/testAgentWindowLiveWindowGuardFailsPastItsBoundOnce|AgentWindowD1Tests/testAgentWindowLiveWindowProbeCountsWindowsNeverShown|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "bound-off",
+   "file": "app/Tests/ProsperAppTests/AgentWindowD1Tests.swift",
+   "old": "        guard now - base > bound else { return nil }\n",
+   "new": "        guard now - base > bound + 1_000_000 else { return nil }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-rebase",
+   "file": "app/Tests/ProsperAppTests/AgentWindowD1Tests.swift",
+   "old": "        guard now - base > bound else { return nil }\n        baseline = now\n",
+   "new": "        guard now - base > bound else { return nil }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "probe-blind",
+   "file": "app/Tests/ProsperAppTests/AgentWindowD1Tests.swift",
+   "old": "        NSApplication.shared.windows.filter { type(of: $0) == NSWindow.self || !NSStringFromClass(type(of: $0)).hasPrefix(\"NS\") }.count\n",
+   "new": "        NSApplication.shared.windows.filter { _ in false }.count\n",
+   "expect": "killed"
+  },
+  {
+   "name": "probe-plain-only",
+   "file": "app/Tests/ProsperAppTests/AgentWindowD1Tests.swift",
+   "old": "        NSApplication.shared.windows.filter { type(of: $0) == NSWindow.self || !NSStringFromClass(type(of: $0)).hasPrefix(\"NS\") }.count\n",
+   "new": "        NSApplication.shared.windows.filter { type(of: $0) == NSWindow.self }.count\n",
+   "expect": "killed"
+  },
+  {
+   "name": "leak-focus-window",
+   "file": "app/Tests/ProsperAppTests/AgentWindowFocusTests.swift",
+   "old": "        win.isReleasedWhenClosed = false\n        win.model = m\n        let host = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))\n",
+   "new": "        win.isReleasedWhenClosed = false\n        AgentWindowD1Tests.leaked1083.append(win)\n        win.model = m\n        let host = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))\n",
+   "expect": "killed"
+  }
+ ]
+}

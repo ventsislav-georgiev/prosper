@@ -1,0 +1,55 @@
+{
+ "entry": 1538,
+ "filter": "AgentWindowLayoutEditTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "lock-ignored-on-click",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let next = if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) } else {",
+   "new": "let next = if let id, manual, placement == .focused, layoutLocked && false { lockedShowing(id) } else {",
+   "expect": "killed"
+  },
+  {
+   "name": "blob-saved-while-locked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if next == nil, layoutLocked { return }   // #1538",
+   "new": "if next == nil, layoutLocked && false { return }   // #1538",
+   "expect": "killed"
+  },
+  {
+   "name": "return-loses-focus",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "adopt(pane.flatMap { try? p.focus($0).get() } ?? p)",
+   "new": "adopt(pane.flatMap { try? p.focus($0).get() } ?? (layouts?.activeLayout ?? p))",
+   "expect": "killed"
+  },
+  {
+   "name": "split-unlocked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { return .failure(.layoutLocked) }   // #1538: the key",
+   "new": "if layoutLocked && false { return .failure(.layoutLocked) }   // #1538: the key",
+   "expect": "killed"
+  },
+  {
+   "name": "choose-unlocked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538: a pane retarget",
+   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return }   // #1538: a pane retarget",
+   "expect": "killed"
+  },
+  {
+   "name": "new-layout-locked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "layoutEditing = true   // #1538: a new layout opens in Edit layout",
+   "new": "layoutEditing = layoutEditing   // #1538: a new layout opens in Edit layout",
+   "expect": "killed"
+  },
+  {
+   "name": "band-always-shown",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && (m.layoutRows != nil || m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "new": "shown",
+   "expect": "killed"
+  }
+ ]
+}

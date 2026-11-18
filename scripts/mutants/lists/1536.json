@@ -1,0 +1,69 @@
+{
+ "entry": 1536,
+ "filter": "AgentIslandLauncherTests|ShortcutDefaultsTests/testNoTwoBuiltInDefaultsShareACombo|WindowShortcutToggleMoreTests/testEachWindowHotkeyRunsItsToggle|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "blocked-first",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let hit = all.first(where: { $0.0.state == .blocked }) ?? all.first",
+   "new": "let hit = all.first",
+   "expect": "killed"
+  },
+  {
+   "name": "no-expand",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        guard let store else { return false }\n        setExpanded(true)\n",
+   "new": "        guard let store else { return false }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "sidekick-tab",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        store.sidekickTab = hit.1\n",
+   "new": "        store.sidekickTab = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "collapse-keeps-focus",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "            store.focusKey = nil   // #1536: the next open picks its own\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-store-true",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        guard let store else { return false }\n        setExpanded(true)\n",
+   "new": "        guard let store else { return true }\n        setExpanded(true)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "default-on",
+   "file": "app/Sources/ProsperApp/Shortcuts.swift",
+   "old": "            // #1536 (OQ-95): opt-in; the launcher's Open Agent Island command is the always-available trigger.\n            return unsetKeyCombo\n",
+   "new": "            return KeyCombo(keyCode: UInt32(kVK_ANSI_I), carbonModifiers: UInt32(controlKey | optionKey), display: \"⌃⌥I\")\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-launcher-row",
+   "file": "app/Sources/ProsperApp/Commands/CommandRouter.swift",
+   "old": "        (\"Agent Island\", \"agent island sessions needs input dch claude notch\",\n         \"sparkles\", .openAgentIsland),\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "save-no-rerun",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "        ShortcutStore.setCombo(c, for: .agentIsland)\n        SettingsHooks.shared.onShortcutsChanged?()\n",
+   "new": "        ShortcutStore.setCombo(c, for: .agentIsland)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-window-hotkey",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "        case .agentIsland: return { _ = AgentIslandController.shared.openFocused() }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

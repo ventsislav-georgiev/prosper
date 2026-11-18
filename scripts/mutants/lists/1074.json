@@ -1,0 +1,69 @@
+{
+ "entry": 1074,
+ "filter": "LiveStatusPublisherTests/testStaleAnswersRepostOnceUntilA2xx|LiveStatusPublisherTests/testAStaleSeqAnswerJumpsPastTheStoredSeqAndRepostsTheListOnce|LiveStatusPublisherTests/testAStaleAnswerNamingOurOwnLastSeqIsNoJump|LiveStatusPublisherTests/testA409WithoutAUsableStaleSeqIsLikeA5xx|LiveStatusPublisherTests/testTheLargestWorkerSeqStillJumps|LiveStatusPublisherTests/testAStaleAnswerToAnOfflinePostJumpsWithoutPosting",
+ "mutants": [
+  {
+   "name": "no_repost_bound",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "guard !staleReposted, isLive else { return }",
+   "new": "guard isLive else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_2xx_clear",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "        case .some(200..<300):\n            staleReposted = false\n",
+   "new": "        case .some(200..<300):\n            break\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_409_case",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "        case 409:\n            staleSeq(reply)\n",
+   "new": "        case 409:\n            break\n",
+   "expect": "killed"
+  },
+  {
+   "name": "ge_last",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "r.seq > lastSeq else { return }",
+   "new": "r.seq >= lastSeq else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_error_check",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": ", r.error == \"stale_seq\",",
+   "new": ",",
+   "expect": "killed"
+  },
+  {
+   "name": "no_range",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "              (1...Self.maxWorkerSeq).contains(r.seq), r.seq > lastSeq",
+   "new": "              r.seq > lastSeq",
+   "expect": "killed"
+  },
+  {
+   "name": "range_low_by_one",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "maxWorkerSeq: Int64 = 9_007_199_254_740_991",
+   "new": "maxWorkerSeq: Int64 = 9_007_199_254_740_990",
+   "expect": "killed"
+  },
+  {
+   "name": "no_islive",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "guard !staleReposted, isLive else { return }",
+   "new": "guard !staleReposted else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_save",
+   "file": "app/Sources/ProsperApp/Licensing/LiveStatusPublisher.swift",
+   "old": "        lastSeq = r.seq\n        saveSeq(r.seq)\n",
+   "new": "        lastSeq = r.seq\n",
+   "expect": "killed"
+  }
+ ]
+}

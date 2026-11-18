@@ -1,0 +1,76 @@
+{
+ "entry": 1247,
+ "filter": "DchXrayFlagParityTests|DchCtlTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1-budget-3digit",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "        var v = 0\n        for b in s.utf8 {",
+   "new": "        var v = 0\n        if s.utf8.count > 3 { return false }\n        for b in s.utf8 {",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-budget-noclamp",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "v = min(v * 10 + Int(b - 0x30), 1000)",
+   "new": "v = v &* 10 &+ Int(b - 0x30)",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-refok-no-061c",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": " || v == 0x061c || v == 0x2028 || v == 0x2029\n        }\n    }\n\n    /// --chapter's",
+   "new": "\n        }\n    }\n\n    /// --chapter's",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-follow-excludes-tasks",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "if seen[\"--follow\"] != nil { one.removeAll",
+   "new": "if false { one.removeAll",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-value-before-json",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "        guard seen[\"--json\"] != nil else { return xrayNeedsJSON }\n",
+   "new": "        if let v = seen[\"--scope\"], ![\"session\", \"project\", \"all\"].contains(v) { return scopeShape }\n        guard seen[\"--json\"] != nil else { return xrayNeedsJSON }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-unknown-old-words",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "return w.hasPrefix(\"-\") ? \"\\(s) is not allowed with --xray\" : \"unexpected \\(s) after --xray\"",
+   "new": "return \"ctl does not allow \\(s) with --xray\"",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-no-60-cut",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "if n > 60 { break }; ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-blank-ref",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "|| v.unicodeScalars.allSatisfy({ $0.properties.isWhitespace })",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-ref-bytes-after-notaref",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "if !refOK(v) { return refText }",
+   "new": "if false { return refText }",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-never-list",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "[\"--config\", \"serve\", \"-h\", \"--help\", \"-f\", \"--all\"].contains(w)",
+   "new": "[\"--config\", \"--all\"].contains(w)",
+   "expect": "killed"
+  }
+ ]
+}

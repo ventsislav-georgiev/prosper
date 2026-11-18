@@ -1,0 +1,20 @@
+{
+ "entry": 1542,
+ "filter": "ExtensionPrefKeyTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "m1_no_escape",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "\"ext.\\(id).\\(key.replacingOccurrences(of: \".\", with: \"%2E\"))\"",
+   "new": "\"ext.\\(id).\\(key)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "m2_no_known_id_check",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "guard let dot = key.lastIndex(of: \".\"), !known.contains(\"\\(id).\\(key[..<dot])\") else { continue }",
+   "new": "guard key.lastIndex(of: \".\") != nil else { continue }",
+   "expect": "killed"
+  }
+ ]
+}

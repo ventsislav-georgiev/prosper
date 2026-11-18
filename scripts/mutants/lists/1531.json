@@ -1,0 +1,27 @@
+{
+ "entry": 1531,
+ "filter": "AgentRowModelEffortTests/testAgentsCountPillKeepsAQuietStrokeOnlyUnderIncreaseContrast|AgentRowSelectedTextTests/testAgentsCountPillFillIsVisibleOnEveryTheme",
+ "mutants": [
+  {
+   "name": "hc-stroke-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if ThemeRuntime.increaseContrast { Capsule().strokeBorder(quiet, lineWidth: 1) }",
+   "new": "if false { Capsule().strokeBorder(quiet, lineWidth: 1) }",
+   "expect": "killed"
+  },
+  {
+   "name": "opacity-cut",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "static let countPillOpacity = 0.16",
+   "new": "static let countPillOpacity = 0.10",
+   "expect": "killed"
+  },
+  {
+   "name": "floor-loosened",
+   "file": "app/Tests/ProsperAppTests/AgentCountOutlineTests.swift",
+   "old": "XCTAssertGreaterThanOrEqual(margin, 1.18, tag)",
+   "new": "XCTAssertGreaterThanOrEqual(margin, 1.12, tag)",
+   "expect": "killed"
+  }
+ ]
+}

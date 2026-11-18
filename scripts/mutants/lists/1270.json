@@ -1,0 +1,20 @@
+{
+ "entry": 1270,
+ "filter": "AgentWindowVerbosityTasksTests/testVerbosityPartialNoteWordingAndNeverOnTheStorePath",
+ "mutants": [
+  {
+   "name": "note-wording",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Partial list: tasks from earlier in the session are not loaded, so some may be missing or out of date.",
+   "new": "Tasks from the loaded part of the transcript only",
+   "expect": "killed"
+  },
+  {
+   "name": "store-partial",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "return AgentTodos.chip(s) }",
+   "new": "return AgentTodos.chip(s, partial: true) }",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,41 @@
+{
+ "entry": 1071,
+ "filter": "ExtensionReenableLaunchTests",
+ "mutants": [
+  {
+   "name": "replay-to-all",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if enabled && !wasEnabled { replayLaunch(id: id) }",
+   "new": "if enabled && !wasEnabled { broadcastEvent(\"system.launch\") }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-replay",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if enabled && !wasEnabled { replayLaunch(id: id) }",
+   "new": "if false { replayLaunch(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "replay-twice",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if enabled && !wasEnabled { replayLaunch(id: id) }",
+   "new": "if enabled && !wasEnabled { replayLaunch(id: id); replayLaunch(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "replay-always",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if enabled && !wasEnabled { replayLaunch(id: id) }",
+   "new": "if enabled { replayLaunch(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "broadcast-twice",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "for sub in eventSubscribers(event) {",
+   "new": "for sub in eventSubscribers(event) + eventSubscribers(event) {",
+   "expect": "killed"
+  }
+ ]
+}

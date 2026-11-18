@@ -1,0 +1,83 @@
+{
+ "entry": 1077,
+ "filter": "FanControlCoreTests|FanReasonReplyTests|FanReplyWordingTests|DchFanCommandsTests/testTooHotRepliesThePlainReasonAndSavesThePreset|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "max-loosened",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "guard rpm >= top else { return refuse(.belowMaximum) }",
+   "new": "guard rpm >= top - 1 else { return refuse(.belowMaximum) }",
+   "expect": "killed"
+  },
+  {
+   "name": "bound-strict",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "if t >= Self.killSwitchCelsius {\n            guard let top",
+   "new": "if t > Self.killSwitchCelsius {\n            guard let top",
+   "expect": "killed"
+  },
+  {
+   "name": "bound-low",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "if t >= Self.killSwitchCelsius {\n            guard let top",
+   "new": "if t >= Self.killSwitchCelsius - 1 {\n            guard let top",
+   "expect": "killed"
+  },
+  {
+   "name": "max-unreadable-open",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "guard let top = maxRPM(), top.isFinite else { return refuse(.unreadable) }",
+   "new": "guard let top = maxRPM(), top.isFinite else { return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "engage-no-max",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "                            maxRPM: fan.maxRPM(index)) else {",
+   "new": "                            maxRPM: nil) else {",
+   "expect": "killed"
+  },
+  {
+   "name": "code-dropped",
+   "file": "app/Sources/ProsperHelperProtocol/FanControlCore.swift",
+   "old": "case .belowMaximum?: return .belowMaximum",
+   "new": "case .belowMaximum?: return .belowMacOS",
+   "expect": "killed"
+  },
+  {
+   "name": "reason-dropped",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "case FanEngageCode.belowMaximum.rawValue: return .tooHot\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "not-latch",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": " || self == .tooHot }",
+   "new": " }",
+   "expect": "killed"
+  },
+  {
+   "name": "phone-reason-dropped",
+   "file": "app/Sources/ProsperApp/Server/DchCommands.swift",
+   "old": "let why = reply == .tooHot ? FanReclaimRecovery.tooHotSentence(shownPercent) : ",
+   "new": "let why = ",
+   "expect": "killed"
+  },
+  {
+   "name": "flag-not-set",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "; pendingTooHot = reply == .tooHot }",
+   "new": " }",
+   "expect": "killed"
+  },
+  {
+   "name": "flag-not-cleared",
+   "file": "app/Sources/ProsperApp/SystemStats/FanControlHelper.swift",
+   "old": "lateLandings = 0; pendingTooHot = false; return .engaged",
+   "new": "lateLandings = 0; return .engaged",
+   "expect": "killed"
+  }
+ ]
+}

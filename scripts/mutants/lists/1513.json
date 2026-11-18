@@ -1,0 +1,20 @@
+{
+ "entry": 1513,
+ "filter": "AgentWindowD1Tests/testPaneSwitcherTitleIsAMenuButtonInAllThreeHeaders|AgentWindowD1Tests/testPaneSwitcherPickOfARemoteRowArmsTheAttach",
+ "mutants": [
+  {
+   "name": "remote-title-plain",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            if let switcher {   // #1513",
+   "new": "            if let switcher, switcher.pane == UUID() {   // #1513",
+   "expect": "killed"
+  },
+  {
+   "name": "remote-pick-no-attach",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        layout = l\n        if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }\n        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
+   "new": "        layout = l\n        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,41 @@
+{
+ "entry": 1570,
+ "filter": "CCPoolSessionEnvTests|CCPoolSessionRoutingTests|CCPoolPaneModelTests/testCCPoolRouteToggle|CCPoolPaneTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "strip-back",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "case \"claude\": return EnvDelta(set: [\"ANTHROPIC_BASE_URL\": base])",
+   "new": "case \"claude\": return EnvDelta(set: [\"ANTHROPIC_BASE_URL\": base], remove: [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\", \"CLAUDE_CODE_OAUTH_TOKEN\"])",
+   "expect": "killed"
+  },
+  {
+   "name": "toggle-off-blocked",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "guard !on || routeDisabledReason == nil else",
+   "new": "guard routeDisabledReason == nil else",
+   "expect": "killed"
+  },
+  {
+   "name": "toggle-on-allowed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "guard !on || routeDisabledReason == nil else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "revive-unset-back",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "remove.flatMap { [\"--unset\", $0] } + self.set",
+   "new": "(remove + (self.set.isEmpty ? [] : [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\", \"CLAUDE_CODE_OAUTH_TOKEN\"])).flatMap { [\"--unset\", $0] } + self.set",
+   "expect": "killed"
+  },
+  {
+   "name": "caption-api-key",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPane.swift",
+   "old": "set ANTHROPIC_BASE_URL.\"",
+   "new": "set ANTHROPIC_BASE_URL or an API key.\"",
+   "expect": "killed"
+  }
+ ]
+}

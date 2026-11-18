@@ -1,0 +1,27 @@
+{
+ "entry": 1044,
+ "filter": "MixerRoutingTests/testMicUnmutePlan|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "restore-all-owes-none",
+   "file": "app/Sources/ProsperApp/AudioMixer/MixerRoutingSupport.swift",
+   "old": "recorded.filter { !present.contains($0) })",
+   "new": "[])",
+   "expect": "killed"
+  },
+  {
+   "name": "nil-record-restores-nothing",
+   "file": "app/Sources/ProsperApp/AudioMixer/MixerRoutingSupport.swift",
+   "old": "guard let recorded else { return (presentUIDs, []) }",
+   "new": "guard let recorded else { return ([], []) }",
+   "expect": "killed"
+  },
+  {
+   "name": "restore-ignores-record",
+   "file": "app/Sources/ProsperApp/AudioMixer/MixerRoutingSupport.swift",
+   "old": "presentUIDs.filter(Set(recorded).contains)",
+   "new": "presentUIDs",
+   "expect": "killed"
+  }
+ ]
+}

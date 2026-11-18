@@ -1,0 +1,55 @@
+{
+ "entry": 1550,
+ "filter": "ExtensionTakeOwnerTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "undo-wrong-owner",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "            if !isCurrent() { undo(owner) }",
+   "new": "            if !isCurrent() { undo(owner + 1) }",
+   "expect": "killed"
+  },
+  {
+   "name": "assert-owner-ignored",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "        if let owner, owners[k] != owner { return false }",
+   "new": "        if let owner, owners[k] != owner, false { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "assert-no-reown",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "            owners[k] = owner\n            guard assertions[k] == nil else { return }",
+   "new": "            guard assertions[k] == nil else { return }\n            owners[k] = owner",
+   "expect": "killed"
+  },
+  {
+   "name": "lid-owner-ignored",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "        if !on, !ExtensionResources.shared.ownsLidSleepDisabled(extID: extensionID, owner: owner) { return }",
+   "new": "        if !on, false, !ExtensionResources.shared.ownsLidSleepDisabled(extID: extensionID, owner: owner) { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "timer-owner-ignored",
+   "file": "app/Sources/ProsperApp/Extensions/TimerScheduler.swift",
+   "old": "            if let owner, self.owners[k] != owner { return }",
+   "new": "            if let owner, self.owners[k] != owner, false { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "main-owner-ignored",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "        guard owners[k] == owner else { return false }",
+   "new": "        guard owners[k] == owner || true else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "main-teardown-keeps",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "        for k in owners.keys where k.hasPrefix(\"\\(id)\\u{1}\") { owners[k] = nil }",
+   "new": "        for k in owners.keys where k.hasPrefix(\"\\(id)\\u{1}\") && false { owners[k] = nil }",
+   "expect": "killed"
+  }
+ ]
+}

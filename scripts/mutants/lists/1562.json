@@ -1,0 +1,48 @@
+{
+ "entry": 1562,
+ "filter": "RemoteFramesGoldenTests/testXrayClearRunsOnlyForTheOwnersDevice|DchCtlTests/testCancelDuringAnXrayRefSIGTERMsThenKillsTheGroupAfter2s|DchXrayFlagParityTests/testClearMatrixWithIdentityForms|RemoteFramesGoldenTests/testXrayFixturesPassWhereXrayIsListed",
+ "mutants": [
+  {
+   "name": "owner-gate-open",
+   "file": "app/Sources/ProsperApp/Server/DchOwnerCheck.swift",
+   "old": "            case .owner, .unverified: true\n            default: false",
+   "new": "            case .owner, .unverified: true\n            default: true",
+   "expect": "killed"
+  },
+  {
+   "name": "xray-long-grace",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "static let longVerbs: Set<String> = [\"--say\", \"--stop\", \"--revive\", \"--run\"]",
+   "new": "static let longVerbs: Set<String> = [\"--say\", \"--stop\", \"--revive\", \"--run\", \"--xray\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "clear-not-exclusive",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "var one = [\"--follow\", \"--clear\", \"--ref\",",
+   "new": "var one = [\"--follow\", \"--ref\",",
+   "expect": "killed"
+  },
+  {
+   "name": "cancel-why-word",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: \"cancel\")",
+   "new": "lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: \"cancelled\")",
+   "expect": "killed"
+  },
+  {
+   "name": "needs-json-words",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "static let xrayNeedsJSON = \"--xray needs --json (the view is client-side only)\"",
+   "new": "static let xrayNeedsJSON = \"--xray needs --json\"",
+   "expect": "killed"
+  },
+  {
+   "name": "cancel-no-term",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "guard let pid, pid > 0 else { return }   // before the spawn: run() sees `cancelled` and runs nothing\n        term(pid)",
+   "new": "guard let pid, pid > 0 else { return }   // before the spawn: run() sees `cancelled` and runs nothing",
+   "expect": "killed"
+  }
+ ]
+}

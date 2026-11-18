@@ -1,0 +1,27 @@
+{
+ "entry": 1573,
+ "filter": "CCPoolScriptsTests/testStatuslineStripsInvisibleFormatCharactersFromTheLabel|CCPoolScriptsTests/testStatuslineWithAnInvisibleOnlyLabelPrintsJustCCPool|CCPoolScriptsTests/testStatuslineStripsControlCharactersFromTheLabel",
+ "mutants": [
+  {
+   "name": "strip-dropped",
+   "file": "app/Sources/ProsperApp/Resources/extensions/ccpool/bin/ccpool-statusline",
+   "old": "-e \"s/$zw//g\" -e \"s/$iso//g\" -e \"s/$bom//g\")",
+   "new": "-e \"s/$shy//g\")",
+   "expect": "killed"
+  },
+  {
+   "name": "bidi-range-short",
+   "file": "app/Sources/ProsperApp/Resources/extensions/ccpool/bin/ccpool-statusline",
+   "old": "\\200[\\213-\\217\\252-\\256]",
+   "new": "\\200[\\213-\\217]",
+   "expect": "killed"
+  },
+  {
+   "name": "bom-dropped",
+   "file": "app/Sources/ProsperApp/Resources/extensions/ccpool/bin/ccpool-statusline",
+   "old": " -e \"s/$bom//g\")",
+   "new": ")",
+   "expect": "killed"
+  }
+ ]
+}

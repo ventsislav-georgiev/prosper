@@ -1,0 +1,76 @@
+{
+ "entry": 1104,
+ "filter": "AgentIslandMessageTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "launch-after-cancel",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "                return !job.cancelled\n",
+   "new": "                return true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-reread",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "        if clock() - start > messageReadAge { clear = pass(clear, by: messageRereadBy) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-read-budget",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "                if clock() - start < by {\n",
+   "new": "                if true {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-cap",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        let long = text.utf8.count > AgentIsland.messageCap\n",
+   "new": "        let long = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "dir-busy-overwrites",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "                refuseBusy(key, AgentIsland.messageBusyText)\n",
+   "new": "                store.actions[key] = AgentIsland.messageBusyText\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-dash-note",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "        return dashed > 0 ? tally + \".\" + dashSkipped(dashed) : tally\n",
+   "new": "        return tally\n",
+   "expect": "killed"
+  },
+  {
+   "name": "field-label-gone",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "                .accessibilityLabel(Text(verbatim: prompt))\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "send-ignores-inflight",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "            if !group.contains(where: { inFlight.contains($0.key) }) {\n",
+   "new": "            if true {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "ask-ignores-inflight",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        if runner.isBusy(s.key) || inFlight.contains(s.key) { return refuseBusy(s.key, AgentIsland.messageBusyText) }\n",
+   "new": "        if runner.isBusy(s.key) { return refuseBusy(s.key, AgentIsland.messageBusyText) }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "gate-refusal-empty",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "        guard let dch, isAtLeast(dch.version, need) else { return .refused(\"needs dch \\(versionString(need))\") }\n",
+   "new": "        guard let dch, isAtLeast(dch.version, need) else { return .refused(\"\") }\n",
+   "expect": "killed"
+  }
+ ]
+}

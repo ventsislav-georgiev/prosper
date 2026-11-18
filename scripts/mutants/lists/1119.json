@@ -1,0 +1,48 @@
+{
+ "entry": 1119,
+ "filter": "RemoteFramesGoldenTests/(testExitWithTheSessionStillThereIsADetach|testExitWithNoSocketIsNoDetach|testKilledMasterWithItsSocketFileLeftIsNoDetach|testMasterThatClosesTheProbeIsNoDetach|testNonZeroExitIsNoDetach|testKilledChildIsNoDetach|testNamelessCreateIsNoDetach|testRefusedAttachSendsNoExit|testSessionExitSendsExitBeforeTheClose)|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "code-any",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "guard code == 0, let name, !name.isEmpty else { return false }",
+   "new": "guard let name, !name.isEmpty else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "name-empty",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "guard code == 0, let name, !name.isEmpty else { return false }",
+   "new": "guard code == 0, let name else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "file-only",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "        guard r == 0 else { return false }\n",
+   "new": "        guard r == 0 else { return FileManager.default.fileExists(atPath: path) }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-poll",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "return poll(&pf, 1, 100) <= 0   // an EINTR",
+   "new": "return pf.fd >= 0 // an EINTR",
+   "expect": "killed"
+  },
+  {
+   "name": "poll-inverted",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "return poll(&pf, 1, 100) <= 0   // an EINTR",
+   "new": "return poll(&pf, 1, 100) > 0   // an EINTR",
+   "expect": "killed"
+  },
+  {
+   "name": "never-detach",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "let detach = DchCommand.exitIsDetach(code: code, name: name, dir: self.sessionSocketDir())",
+   "new": "let detach = false && DchCommand.exitIsDetach(code: code, name: name, dir: self.sessionSocketDir())",
+   "expect": "killed"
+  }
+ ]
+}

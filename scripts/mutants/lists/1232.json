@@ -1,0 +1,41 @@
+{
+ "entry": 1232,
+ "filter": "ManagedConfigUninstallDeclaredTests|ManagedConfigRepairWiringTests",
+ "mutants": [
+  {
+   "name": "left-not-noticed",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if let left { uninstallNotices = Array((uninstallNotices + [left]).suffix(Self.maxUninstallNotices)) }",
+   "new": "_ = left",
+   "expect": "killed"
+  },
+  {
+   "name": "notices-uncapped",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "Array((uninstallNotices + [left]).suffix(Self.maxUninstallNotices))",
+   "new": "uninstallNotices + [left]",
+   "expect": "killed"
+  },
+  {
+   "name": "stop-again",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !named.isEmpty { left = leftNotice(extensionID: owner.id, named) }",
+   "new": "if !named.isEmpty { return (leftNotice(extensionID: owner.id, named), nil) }",
+   "expect": "killed"
+  },
+  {
+   "name": "declaration-kept-on-uninstall",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "ManagedConfigRefresh.current?.declared[id] = nil // r2: dropped with the uninstall",
+   "new": "_ = 0 // r2: dropped with the uninstall",
+   "expect": "killed"
+  },
+  {
+   "name": "names-uncapped",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "+ names.prefix(5).joined(separator: \", \") + (names.count > 5 ? \" and \\(names.count - 5) more\" : \"\")\n            + \". To remove",
+   "new": "+ names.joined(separator: \", \")\n            + \". To remove",
+   "expect": "killed"
+  }
+ ]
+}

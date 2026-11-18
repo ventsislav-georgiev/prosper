@@ -1,0 +1,69 @@
+{
+ "entry": 1543,
+ "filter": "TextViewerCloseTests|AppUpdaterHoldTests|TerminalEditorTests/testQuitEndsEveryEditSessionOnce",
+ "mutants": [
+  {
+   "name": "r6-not-now",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "        guard isDirty else {\n            endSessions()",
+   "new": "        guard !isDirty else {\n            endSessions()",
+   "expect": "killed"
+  },
+  {
+   "name": "cancel-ends-sessions",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "            if quit { endSessions() }",
+   "new": "            endSessions()",
+   "expect": "killed"
+  },
+  {
+   "name": "now-ends-nothing",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "            endSessions()\n            return .terminateNow",
+   "new": "            return .terminateNow",
+   "expect": "killed"
+  },
+  {
+   "name": "update-never-held",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "        guard isDirty else { return install() }",
+   "new": "        install(); return",
+   "expect": "killed"
+  },
+  {
+   "name": "showready-ignores-seam",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "        dirtyViewers.holdUpdate {",
+   "new": "        TextViewerDirty().holdUpdate {",
+   "expect": "killed"
+  },
+  {
+   "name": "held-not-cleared",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "        let run = held\n        held = []",
+   "new": "        let run = held",
+   "expect": "killed"
+  },
+  {
+   "name": "release-while-dirty",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "owners.isEmpty, !held.isEmpty else",
+   "new": "!held.isEmpty else",
+   "expect": "killed"
+  },
+  {
+   "name": "say-every-hold",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "        if held.count == 1 {",
+   "new": "        if true {",
+   "expect": "killed"
+  },
+  {
+   "name": "quit-skips-a-window",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        for entry in entries { entry.model.closeTerminal() }",
+   "new": "        for entry in entries.dropFirst() { entry.model.closeTerminal() }",
+   "expect": "killed"
+  }
+ ]
+}

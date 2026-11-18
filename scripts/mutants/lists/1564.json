@@ -1,0 +1,160 @@
+{
+ "entry": 1564,
+ "filter": "XrayExtensionRefsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "adjacent",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "throw Refusal(why: \"two placeholders with no literal between them\")",
+   "new": "_ = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "inclass",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "            if !literal.isEmpty {\n                if case .slot(let before) = out.last, let first = literal.first, before.mayHold(first) {",
+   "new": "            if !literal.isEmpty {\n                if case .slot(let before) = out.last, let first = literal.first, before.mayHold(first), false {",
+   "expect": "killed"
+  },
+  {
+   "name": "fold",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "return [u, folded, upped].contains",
+   "new": "return [u].contains",
+   "expect": "killed"
+  },
+  {
+   "name": "maxslots",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if slots > maxSlots {",
+   "new": "if slots > maxSlots + 1 {",
+   "expect": "killed"
+  },
+  {
+   "name": "maxlen",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "guard template.count <= maxTemplate else",
+   "new": "guard template.count <= maxTemplate + 1 else",
+   "expect": "killed"
+  },
+  {
+   "name": "literalsonly",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if slots == 0 { throw Refusal(why: \"literals only\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "duplicate",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if out.rules.contains(where: { $0.template == rule.template })",
+   "new": "if false",
+   "expect": "killed"
+  },
+  {
+   "name": "perext",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if kept >= maxPerExtension {",
+   "new": "if kept > maxPerExtension {",
+   "expect": "killed"
+  },
+  {
+   "name": "total",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if out.rules.count >= maxTotal {",
+   "new": "if out.rules.count > maxTotal {",
+   "expect": "killed"
+  },
+  {
+   "name": "liveonly",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "XrayExtensionRefs.compile(records.filter(\\.isLive).map",
+   "new": "XrayExtensionRefs.compile(records.map",
+   "expect": "killed"
+  },
+  {
+   "name": "version",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "        rulesVersion &+= 1\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "before",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if i == 0 || !isWord(cs[i - 1]), case let",
+   "new": "if true, case let",
+   "expect": "killed"
+  },
+  {
+   "name": "lastboundary",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": ".first(where: { $0 == cs.count || !isWord(cs[$0]) })",
+   "new": ".first(where: { _ in true })",
+   "expect": "killed"
+  },
+  {
+   "name": "afterliteral",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "        guard i == cs.count || !isWord(cs[i]) else { return nil }\n        return (i, parts)",
+   "new": "        return (i, parts)",
+   "expect": "killed"
+  },
+  {
+   "name": "never",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if isCode && rule.inCode == .never { return [] }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "whole",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "return out.filter { $0.text == trimmed }",
+   "new": "return out",
+   "expect": "killed"
+  },
+  {
+   "name": "timeout",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "guard case .int(let i) = t, timeouts.contains(i) else",
+   "new": "guard case .int(let i) = t else",
+   "expect": "killed"
+  },
+  {
+   "name": "nmax",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "let r = run(i, max: 7, Self.digit)",
+   "new": "let r = run(i, max: 8, Self.digit)",
+   "expect": "killed"
+  },
+  {
+   "name": "casefold",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "a == b || (a.isASCII && b.isASCII && lower(a) == lower(b))",
+   "new": "a == b",
+   "expect": "killed"
+  },
+  {
+   "name": "backoff",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "ends.lazy.flatMap({ $0.reversed() })",
+   "new": "ends.lazy.map(\\.upperBound)",
+   "expect": "killed"
+  },
+  {
+   "name": "notalist",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if list.notAList { out.refusals.append(\"extension \\(ext): xrefs ignored (not an array of tables)\"); continue }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "unreadable",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
+   "old": "if !row.unreadable.isEmpty { throw Refusal(why: \"unreadable \" + row.unreadable.joined(separator: \", \")) }",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

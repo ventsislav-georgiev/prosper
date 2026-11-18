@@ -1,0 +1,34 @@
+{
+ "entry": 1549,
+ "filter": "ExtensionLidReleaseTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1_hadLidOnly",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "if hadLid || held { _ = await",
+   "new": "if hadLid { _ = await",
+   "expect": "killed"
+  },
+  {
+   "name": "M2_heldOnly",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "if hadLid || held { _ = await",
+   "new": "if held { _ = await",
+   "expect": "killed"
+  },
+  {
+   "name": "M3_releaseAlways",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "if hadLid || held { _ = await",
+   "new": "if true || hadLid || held { _ = await",
+   "expect": "killed"
+  },
+  {
+   "name": "M4_noClear",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "            ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: false)\n            if hadLid || held",
+   "new": "            if hadLid || held",
+   "expect": "killed"
+  }
+ ]
+}

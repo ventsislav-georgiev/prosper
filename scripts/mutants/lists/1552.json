@@ -1,0 +1,13 @@
+{
+ "entry": 1552,
+ "filter": "AgentIslandPlanUsageTests",
+ "mutants": [
+  {
+   "name": "ignore-pref",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "Preferences.agentIslandShowPlanUsage ? planUsage(Date().timeIntervalSince1970) : nil",
+   "new": "planUsage(Date().timeIntervalSince1970)",
+   "expect": "killed"
+  }
+ ]
+}

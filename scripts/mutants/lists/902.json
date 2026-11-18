@@ -1,0 +1,55 @@
+{
+ "entry": 902,
+ "filter": "AgentWindowRemoteArmTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "remote-unpicked-no-connect",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if want == nil, shown.contains(r.pane), paneRemote(r.pane) != nil { refused.insert(r.pane) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "remote-unfocused-never-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            return r.terminal?.armed == k ? k : nil\n",
+   "new": "            return nil\n",
+   "expect": "killed"
+  },
+  {
+   "name": "remote-arm-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            return r.terminal?.armed == k ? k : nil\n",
+   "new": "            return k\n",
+   "expect": "killed"
+  },
+  {
+   "name": "connect-arms-nothing",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            paneTerminal(r).arm(AgentTerminalSpawn.remoteKey(host: x.host, name: x.name))\n",
+   "new": "            _ = paneTerminal(r)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "remote-outside-cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if let k = want, taken.contains(k) || room == 0 { refused.insert(r.pane) }\n",
+   "new": "            if let k = want, taken.contains(k) || (room == 0 && paneRemote(r.pane) == nil) { refused.insert(r.pane) }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "remote-fit-here",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard remoteHost == nil, phase == .live, child != nil, let grid, let p = sessionPty, p.clients > 1 else { return false }\n",
+   "new": "        guard phase == .live, child != nil, let grid, let p = sessionPty, p.clients > 1 else { return false }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "same-key-dead-client-respawns",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard key != self.key else { return }\n        focusPending = false",
+   "new": "        guard key != self.key || (key != nil && child == nil) else { return }\n        focusPending = false",
+   "expect": "killed"
+  }
+ ]
+}

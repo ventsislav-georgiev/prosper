@@ -1,0 +1,48 @@
+{
+ "entry": 1242,
+ "filter": "ExtensionRetiredCallTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1_llm_chat_read",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "\"__h_clip_read\", \"__h_clip_history\",\n",
+   "new": "\"__h_clip_read\", \"__h_clip_history\", \"__h_llm_chat\",\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M2_llm_unclassed",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": ",\n                  \"__h_llm_complete\", \"__h_llm_translate\", \"__h_llm_chat\"]",
+   "new": "]",
+   "expect": "killed"
+  },
+  {
+   "name": "M3_proc_kill_text",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "\"host.process: this call was stopped (the extension was turned off, untrusted, reset, reinstalled or removed)\"",
+   "new": "\"host.process: the extension is switched off\"",
+   "expect": "killed"
+  },
+  {
+   "name": "M4_no_tap_refresh",
+   "file": "app/Sources/ProsperApp/Extensions/LiveExtensionHostServices.swift",
+   "old": "the probe sees it.\n            EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)\n",
+   "new": "the probe sees it.\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M5_seam_dropped",
+   "file": "app/Sources/ProsperApp/Extensions/EventTapHost.swift",
+   "old": "        onRefreshRequest?(extensionID)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M6_read_dropped",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift",
+   "old": "\"__h_ccpool_status\", ",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,55 @@
+{
+ "entry": 1419,
+ "filter": "XrayChapterCardTests|XrayRefRunTests/testALocal|XrayRefOpenTests|XrayRefPopoverTests",
+ "mutants": [
+  {
+   "name": "M1",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "static let ships = true",
+   "new": "static let ships = false",
+   "expect": "killed"
+  },
+  {
+   "name": "M2",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "static var decorate: @MainActor () -> Bool = { ships }",
+   "new": "static var decorate: @MainActor () -> Bool = { false }",
+   "expect": "killed"
+  },
+  {
+   "name": "M3",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "case \"http\", \"https\", \"mailto\": return .system",
+   "new": "case \"http\", \"https\": return .system",
+   "expect": "killed"
+  },
+  {
+   "name": "M4",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "        default: return .discarded\n        }",
+   "new": "        case \"file\": return .system\n        default: return .discarded\n        }",
+   "expect": "killed"
+  },
+  {
+   "name": "M5",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef",
+   "new": "Self.refNotARef",
+   "expect": "killed"
+  },
+  {
+   "name": "M6",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "input.map { $0.count > 256 }",
+   "new": "input.map { $0.count > 255 }",
+   "expect": "killed"
+  },
+  {
+   "name": "M7",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "if let m = XrayPanels.shared.open[pane], m.target == target { return m }",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

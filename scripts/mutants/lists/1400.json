@@ -1,0 +1,27 @@
+{
+ "entry": 1400,
+ "filter": "AgentNewSessionGroupTests/testAddSessionToGroupPrefillsGroupFolderAndHarness|AgentNewSessionGroupTests/testNoneRestoresTheNameTypedBeforeTheGroupChoice|AgentNewSessionGroupTests/testNoRunningGroupHasNoAddSessionItem",
+ "mutants": [
+  {
+   "name": "prefill-ignores-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        setNewSessionGroup(stem, sidekick: false)\n    }\n",
+   "new": "        _ = stem\n    }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "name-not-restored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if let typed = f.groupTypedName, !f.nameEdited { f.name = typed; f.nameEdited = true }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "item-without-running-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "              spawnGroups.contains(where: { $0.stem == stem && $0.dir == dir }) else { return nil }\n",
+   "new": "              !dir.isEmpty else { return nil }\n",
+   "expect": "killed"
+  }
+ ]
+}

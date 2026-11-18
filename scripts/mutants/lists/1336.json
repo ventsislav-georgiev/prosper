@@ -1,0 +1,13 @@
+{
+ "entry": 1336,
+ "filter": "AgentIslandControlsTests/testResumeUnderANewNameLeavesTheClaudeNameToDch|AgentIslandControlsTests/testReviveArgsPickTheFirstFreeName",
+ "mutants": [
+  {
+   "name": "resume-keeps-old-name",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "return named(\"--revive\", [arg], [\"--as\", new] + tail)",
+   "new": "return named(\"--revive\", [arg], tail)",
+   "expect": "killed"
+  }
+ ]
+}

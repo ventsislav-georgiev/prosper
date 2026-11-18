@@ -1,0 +1,90 @@
+{
+ "entry": 1559,
+ "filter": "XrayGridMarksTests",
+ "mutants": [
+  {
+   "name": "m2-shown-window",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "return windowShown(host.window)",
+   "new": "return true",
+   "expect": "killed"
+  },
+  {
+   "name": "m3-marks-urlfile",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "$0.underline && $0.shape != .url && $0.shape != .file",
+   "new": "$0.underline",
+   "expect": "killed"
+  },
+  {
+   "name": "m4-output-clear",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if !marks.isEmpty { marks = []; needsDisplay = true }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "m6-take-settling",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if settle == nil { place() }",
+   "new": "place()",
+   "expect": "killed"
+  },
+  {
+   "name": "m7-hittest",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "override func hitTest(_ point: NSPoint) -> NSView? { nil }",
+   "new": "override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) }",
+   "expect": "killed"
+  },
+  {
+   "name": "m8-focus-unfocused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard paneFocused(), let view, let w = view.window",
+   "new": "guard let view, let w = view.window",
+   "expect": "killed"
+  },
+  {
+   "name": "m9-blur",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if let old = Self.focusHolders[id]?.terminal, old !== self { old.view?.marks.follow = nil }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "m10-focus-stale",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "f.target == target, follows.contains(where: { $0 === f })",
+   "new": "f.target == target",
+   "expect": "killed"
+  },
+  {
+   "name": "m11-detach-on-switch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if let f = held.removeValue(forKey: window) { detach(f) }",
+   "new": "held[window] = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "m13-drain-hook",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        view?.marks.output()   // #1559",
+   "new": "        // #1559",
+   "expect": "killed"
+  },
+  {
+   "name": "m14-attach-defer",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "defer { followFocus() }",
+   "new": "_ = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "m15-moved-to-window",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        owner?.followFocus()\n        show(wanted)",
+   "new": "        show(wanted)",
+   "expect": "killed"
+  }
+ ]
+}

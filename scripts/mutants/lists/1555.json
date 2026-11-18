@@ -1,0 +1,97 @@
+{
+ "entry": 1555,
+ "filter": "AgentWindowRemoteFollowTests",
+ "mutants": [
+  {
+   "name": "gate-unknown-is-new",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "remoteFollows = v.map { DchCommand.isAtLeast($0, Self.remoteFollowDch) } ?? false",
+   "new": "remoteFollows = v.map { DchCommand.isAtLeast($0, Self.remoteFollowDch) } ?? true",
+   "expect": "killed"
+  },
+  {
+   "name": "gate-version-1.61",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "static let remoteFollowDch = [1, 62, 0]",
+   "new": "static let remoteFollowDch = [1, 61, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "two-children",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard remoteFollows == true, follower == nil, !followWaiting,",
+   "new": "guard remoteFollows == true, !followWaiting,",
+   "expect": "killed"
+  },
+  {
+   "name": "no-line-split",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "for line in followLines.append(chunk) {",
+   "new": "for line in [chunk] {",
+   "expect": "killed"
+  },
+  {
+   "name": "bad-line-empties",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let rows = AgentSidebar.parseRemote(line), rows != remoteSessions {",
+   "new": "if case let rows = AgentSidebar.parseRemote(line) ?? [], rows != remoteSessions {",
+   "expect": "killed"
+  },
+  {
+   "name": "flat-backoff",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let delay = steps[min(followRestarts, steps.count - 1)]",
+   "new": "let delay = steps[0]",
+   "expect": "killed"
+  },
+  {
+   "name": "no-settled-reset",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if remoteClock() - followStartedAt >= AgentTerminalController.reconnectSettled {",
+   "new": "if false, remoteClock() - followStartedAt >= AgentTerminalController.reconnectSettled {",
+   "expect": "killed"
+  },
+  {
+   "name": "hide-keeps-child",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if !v { stopFollow() }",
+   "new": "if !v { }",
+   "expect": "killed"
+  },
+  {
+   "name": "late-line-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard gen == followGen, !closed else { return }\n        var changed = false",
+   "new": "guard !closed else { return }\n        var changed = false",
+   "expect": "killed"
+  },
+  {
+   "name": "late-restart-runs",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let self, gen == self.followGen else { return }\n            self.followWaiting = false",
+   "new": "guard let self else { return }\n            self.followWaiting = false",
+   "expect": "killed"
+  },
+  {
+   "name": "bad-usage-restarts",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if status == 2 { remoteFollows = false; return pollRemote() }",
+   "new": "if status == 99 { remoteFollows = false; return pollRemote() }",
+   "expect": "killed"
+  },
+  {
+   "name": "island-off-keeps-child",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "stopFollow()   // #1555: the island off",
+   "new": "// #1555: the island off",
+   "expect": "killed"
+  },
+  {
+   "name": "follow-still-calls",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "(following ? nil : run([\"--ls-json\", \"--remote\"], env),",
+   "new": "(run([\"--ls-json\", \"--remote\"], env),",
+   "expect": "killed"
+  }
+ ]
+}
