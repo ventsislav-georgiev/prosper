@@ -1834,9 +1834,8 @@ tag from the now-released section and put it on the new top draft.
   Model and Effort submenus), the session list "...", the New session Recent folders list, the
   System Stats Headline and Order menus and the AI Models row "..." now stay open while their window
   updates. (#1540)
-- Refs in the Transcript view (issue numbers, tickets, files) are now underlined and clickable and
-  open a ref card; http, https and mailto: links still open as before; other kinds of links in the
-  transcript no longer open. (#1419)
+- Refs in the X-ray chapter card (issue numbers, tickets, files) are now underlined and open their
+  ref card; only http, https and mailto: links leave Prosper. (#1419)
 - Quitting Prosper now also stops the terminal editor sessions the Text Viewer opened, as closing
   their windows already did. (#1543)
 - OpenLid: a Mac that had OpenLid turned off before the last update, with Remote Wake still on, is
@@ -1939,8 +1938,6 @@ tag from the now-released section and put it on the new top draft.
 - X-ray on a remote session keeps one connection to the host open while the Agent Sessions window is
   shown, so its reads no longer start a new connection each time; it closes when the window is
   hidden or closed. (#1561)
-- Fixed a case where a request with an unusable path got a 400 that the usage record never counted.
-  (#1572)
 - Agent Sessions: Command-K in a live terminal pane now clears the screen and also empties that
   session's X-ray history, and the X-ray panel's header says what X-ray reads for the session (for
   example "Shell · last 500 rows"). (#1566)
