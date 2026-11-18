@@ -710,6 +710,8 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             // The whole matrix (12 cases) is a heavy row; a plain run keeps one case per session at scale 1.0,
             // default size, both in Terminal (#1471: the only mode; the aliased one ran in Transcript before).
+            // #1488 d: the band (split gate on, the default since #1477 b) over the whole matrix; the gate off (no band, the
+            // header at the top) in the plain cases.
             let heavy = (try? requireHeavyTests()) != nil
             var ran = 0
             // An aliased session (the field shows the alias) and one with none (the placeholder, its name).
@@ -722,13 +724,13 @@ extension AgentWindowD1Tests {
                     // controls' walk read one more ink run than the box holds.
                     for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)),
                                           ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
-                        for mode in ["terminal"] {   // #1471: Terminal is the only pane mode
-                            guard heavy || (scale == 1.0 && label == "default") else { continue }
+                        for (mode, band) in [("terminal", true), ("terminal", false)] {   // #1471: Terminal is the only pane mode
+                            guard (heavy && band) || (scale == 1.0 && label == "default") else { continue }
                             ran += 1
                             // One pool per case: its three renders (bitmap + hosting view) go before the next.
-                            try autoreleasepool {
+                            try withTreeGate(band) { try autoreleasepool {
                                 m.select(.live(s.key))
-                                let tag = "\(name)-\(mode)-\(label)-\(scale)"
+                                let tag = "\(name)-\(mode)\(band ? "-band" : "")-\(label)-\(scale)"
                                 let plain = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                                 m.ask(.rename, s)
                                 XCTAssertEqual(m.renaming, s.key)
@@ -752,13 +754,15 @@ extension AgentWindowD1Tests {
                                 // The "⋯" box: the header's right padding sz(16) (AgentsWindow.swift:780), the "⋯" frame
                                 // sz(18) (AgentWindowControls.swift:263) and 2 of slack. Left of it, the line's spacing
                                 // sz(8) (AgentsWindow.swift:903) is blank: its right sz(4) pins the box's edge.
-                                let line = Int(AgentSessionHeader.padTop * px)..<Int((AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
+                                // #1488 d: the band, when shown, puts the whole pane column (the header too) its height lower.
+                                let top = band ? AgentWindowBand.height : 0
+                                let line = Int((top + AgentSessionHeader.padTop) * px)..<Int((top + AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
                                 XCTAssertTrue((menuLeft - Int(sz(4) * px)..<menuLeft).allSatisfy { blankColumn(plain, x: $0, line: line) },
                                               "nothing of the controls in the spacing before the \"⋯\" box (\(tag))")
                                 XCTAssertTrue((menuLeft..<width - Int(sz(16) * px)).contains { !blankColumn(plain, x: $0, line: line) },
                                               "the \"⋯\" in its box (\(tag))")
-                                // The controls' box: from the picker's left edge (Terminal mode: the toggle's) to the "⋯"
+                                // The controls' box: from the left edge of the controls (once the toggle's) to the menu button's
                                 // box, read off the plain render. It ends at the first sz(16) blank run left of the "⋯" box:
                                 // the slot keeps at least that much before the controls (the line's spacing sz(8) and
                                 // slotLine's Spacer(minLength: sz(8)), :867); between two controls the blank is the line's
@@ -766,15 +770,13 @@ extension AgentWindowD1Tests {
                                 // to start at the padding and take sz(14): with Open in terminal gone, the toggle's icon and
                                 // the "⋯" glyph stand 15 apart at 1.0, so it stopped at the "⋯" itself, right of menuLeft.
                                 let left = try XCTUnwrap(controlsLeft(plain, line: line, from: menuLeft, to: detail, gap: Int(sz(16) * px)), tag)
-                                if let controls = span(left, menuLeft, "the controls' box (\(tag))") {
-                                    XCTAssertEqual(controlCount(plain, x: controls, line: line, gap: Int(sz(4) * px)), 1,
-                                                   "the box holds the picker and the toggle, Terminal mode the toggle (\(tag))")
-                                    XCTAssertEqual(differing(plain, editing, x: controls, y: 0..<hb), 0, "picker and toggle unmoved (\(tag))")
-                                }
+                                // #1471 b: the mode toggle is gone (shownLine: the slot, a todos chip only with todos, the menu button;
+                                // these sessions have none): the box is empty, so the blank run starts at the menu button's box itself.
+                                XCTAssertGreaterThanOrEqual(left, menuLeft, "no control between the title slot and the \"\u{22EF}\" box (\(tag))")
                                 XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
                                                "\"⋯\" unmoved (\(tag))")
                                 // The field shows, and only in the title line's band.
-                                if let slot = span(detail, left, "the title slot (\(tag))") {
+                                if let slot = span(detail, min(left, menuLeft), "the title slot (\(tag))") {
                                     XCTAssertGreaterThan(differing(plain, editing, x: slot, y: line), 0, "the field shows (\(tag))")
                                 }
                                 XCTAssertEqual(differing(plain, editing, x: detail..<width, y: 0..<max(0, line.lowerBound - Int(sz(4) * px))), 0,
@@ -785,12 +787,12 @@ extension AgentWindowD1Tests {
                                 // Leaving edit mode draws the title exactly as before.
                                 XCTAssertEqual([-1, 0, 1].map { differing(plain, back, x: menuLeft..<width, y: 0..<height, dx: $0, tolerance: 0.06) }.min(), 0, tag)
                                 XCTAssertEqual(differing(plain, back, x: 0..<menuLeft, y: 0..<height), 0, "back to the title (\(tag))")
-                            }
+                            } }
                         }
                     }
                 }
             }
-            XCTAssertEqual(ran, heavy ? 12 : 2, "cases run: a gate that skips them all passes nothing")
+            XCTAssertEqual(ran, heavy ? 14 : 4, "cases run: a gate that skips them all passes nothing")
         }
     }
 
@@ -881,15 +883,6 @@ extension AgentWindowD1Tests {
     /// A column of the title line that holds nothing but the header's backdrop: controlsLeft's own test, on one column.
     func blankColumn(_ rep: NSBitmapImageRep, x: Int, line: Range<Int>) -> Bool {
         controlsLeft(rep, line: line, from: x, to: x, gap: 1) == x + 1
-    }
-
-    /// The controls in a box of the title line: runs of ink parted by at least `gap` blank columns.
-    func controlCount(_ rep: NSBitmapImageRep, x: Range<Int>, line: Range<Int>, gap: Int) -> Int {
-        var n = 0, blank = gap
-        for xx in x {
-            if blankColumn(rep, x: xx, line: line) { blank += 1 } else { if blank >= gap { n += 1 }; blank = 0 }
-        }
-        return n
     }
 
     /// Scanning the title line leftwards from `from`: the x where a run of `gap` columns of the

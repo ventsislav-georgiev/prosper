@@ -506,7 +506,10 @@ extension AgentWindowD1Tests {
         }
         var opaque: [CGFloat: NSColor] = [:]
         // The title row is 30 pt of top padding, a 13 pt line and 8 pt below it: rows and headers start under 54 pt.
-        let belowTitle = CGRect(x: 0, y: sz(54), width: AgentWindowModel.fullSidebarWidth, height: size.height - sz(54))
+        // #1488 d: under the band's height while the band shows (the split gate, on by default since #1477 b): the
+        // sidebar's top padding (AgentsWindow.swift:705) puts the title row that much lower.
+        let top = sz(54) + (AgentWindowBand.shown ? AgentWindowBand.height : 0)
+        let belowTitle = CGRect(x: 0, y: top, width: AgentWindowModel.fullSidebarWidth, height: size.height - top)
         for backing in backings {
             let second = try snapshot(view, backing: backing)
             try saveTo860(second, "live-probe-selected-x\(Int(backing))")
@@ -767,7 +770,9 @@ extension AgentWindowD1Tests {
         let pink: (NSColor) -> Bool = { $0.redComponent > 0.75 && $0.blueComponent > 0.75 && $0.greenComponent < 0.35 }
         // The rail right of the bar and the section ticks, under its title row: the chip's text is the
         // only full-strength accent there (the selected row's fill and edge are faint, and observe the store).
-        let rows = CGRect(x: sz(40), y: sz(54), width: sz(250), height: sz(300))   // the header and both rows
+        // #1488 d: the band's height lower while the band shows (the sidebar's top padding, AgentsWindow.swift:705).
+        let rows = CGRect(x: sz(40), y: sz(54) + (AgentWindowBand.shown ? AgentWindowBand.height : 0),
+                          width: sz(250), height: sz(300))   // the header and both rows
         // The terminal pane's middle: its background (not revealed: the pane's own bgBottom overlay).
         let terminal = CGPoint(x: AgentWindowModel.fullSidebarWidth + 1 + (size.width - AgentWindowModel.fullSidebarWidth - 1) / 2, y: size.height * 0.75)
 
