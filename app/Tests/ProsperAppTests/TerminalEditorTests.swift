@@ -351,6 +351,36 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertTrue(rig.ended.isEmpty)
     }
 
+    /// #1543 (OQ-118 Q3): Quit ends every edit session the Text Viewer started, through the window close's path, once;
+    /// a window with no session ends nothing, and a later close or Edit starts or ends nothing more.
+    func testQuitEndsEveryEditSessionOnce() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let first = try XCTUnwrap(open(w, file("te-quit-a", "a.md")))
+        let second = try XCTUnwrap(open(w, file("te-quit-b", "b.md")))
+        let readOnly = try XCTUnwrap(open(w, file("te-quit-c", "c.md")))
+        first.edit()
+        await first.planning?.value
+        second.edit()
+        await second.planning?.value
+        second.showRead()   // detached: the session lives on, and Quit still ends it
+        XCTAssertEqual(rig.requests.count, 2)
+        let names = Set(rig.requests.compactMap { $0.args.dropFirst(2).first })
+        XCTAssertEqual(names.count, 2)
+        let dirty = TextViewerDirty()
+        XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { _ in XCTFail("no later reply") }),
+                       .terminateNow)
+        XCTAssertEqual(Set(rig.ended.map(\.key.name)), names, "both sessions end")
+        XCTAssertEqual(rig.ended.count, 2, "once each")
+        XCTAssertEqual(rig.children.map(\.terminated), [1, 1], "each client terminated once")
+        XCTAssertTrue(first.terminal == nil && second.terminal == nil && readOnly.terminal == nil)
+        XCTAssertEqual(w.entries.count, 3, "Quit closes no window itself")
+        first.edit()
+        XCTAssertTrue(first.planning == nil, "no Edit after Quit")
+        for e in w.entries { e.window.close() }
+        XCTAssertEqual(rig.ended.count, 2, "a later close ends nothing again")
+    }
+
     // MARK: R9: an editor session is not an agent
 
     func testEditSessionIsNeverNeedsInputClaudeOrSidekick() {

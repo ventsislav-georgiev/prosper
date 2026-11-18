@@ -1837,6 +1837,8 @@ tag from the now-released section and put it on the new top draft.
 - Refs in the Transcript view (issue numbers, tickets, files) are now underlined and clickable and
   open a ref card; http, https and mailto: links still open as before; other kinds of links in the
   transcript no longer open. (#1419)
+- Quitting Prosper now also stops the terminal editor sessions the Text Viewer opened, as closing
+  their windows already did. (#1543)
 
 ## v2.174.0
 

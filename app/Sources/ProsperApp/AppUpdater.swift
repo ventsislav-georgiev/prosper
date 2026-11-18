@@ -300,9 +300,15 @@ final class SilentUserDriver: NSObject, SPUUserDriver {
         onProgressChanged?(min(1, max(0, progress)))
     }
 
+    /// #1108 P3c: the unsaved Text Viewer files that hold the install; tests hand in their own.
+    var dirtyViewers = TextViewerDirty.shared
+
     func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        NSLog("AppUpdater: update ready — installing + relaunching.")
-        reply(.install) // install + relaunch immediately, no prompt
+        // Install + relaunch with no prompt, at once, or once the last unsaved Text Viewer file is saved or closed.
+        dirtyViewers.holdUpdate {
+            NSLog("AppUpdater: update ready — installing + relaunching.")
+            reply(.install)
+        }
     }
 
     func showInstallingUpdate(

@@ -1181,6 +1181,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// #1108 P3c: Quit (and Restart, and Sparkle's relaunch) waits on unsaved Text Viewer files; a quit that goes on
+    /// ends the Text Viewer's terminal edit sessions as their windows' close does (#1109, OQ-118 Q3).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        TextViewerDirty.shared.terminateReply(endSessions: { TextViewerWindows.shared.endEditSessions() }) {
+            sender.reply(toApplicationShouldTerminate: $0)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // #523: the phone's card goes offline (waited on up to 1.5 s), unless Sparkle is
         // relaunching into an update (#766).

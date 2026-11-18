@@ -402,6 +402,11 @@ final class TextViewerWindows {
         return true
     }
 
+    /// Quit: every edit session a window started ends through the window close's path (OQ-118 Q3); the windows stay.
+    func endEditSessions() {
+        for entry in entries { entry.model.closeTerminal() }
+    }
+
     private func teardown(_ win: NSWindow) {
         guard let i = entries.firstIndex(where: { $0.window === win }) else { return }
         let entry = entries.remove(at: i)
