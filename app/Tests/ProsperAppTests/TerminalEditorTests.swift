@@ -106,6 +106,8 @@ final class TerminalEditorTests: XCTestCase {
         w.imageLoader = { _, _, _ in nil }
         w.isRemote = { _ in false }
         w.editorSeams = { rig.seams }
+        let dirty = TextViewerDirty()   // #1544: never the app's registry
+        w.dirty = { dirty }
         return w
     }
 
@@ -264,30 +266,36 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertTrue(rig.ended.isEmpty, "nothing to end")
     }
 
-    func testBuiltinSettingLeavesEditOff() throws {
+    /// #1544: the Built-in setting opens the built-in editor: no plan, no login shell, no dch.
+    func testBuiltinSettingOpensTheBuiltinEditor() throws {
         let rig = Rig()
         rig.settings.terminal = false
         let w = windows(rig)
         let model = try XCTUnwrap(open(w, file("te-builtin")))
-        XCTAssertFalse(model.canEdit)
-        XCTAssertEqual(TextViewerModeSwitch.segments(canEdit: model.canEdit).map(\.enabled), [true, false])
+        XCTAssertTrue(model.canEdit)
         model.edit()
         XCTAssertTrue(model.planning == nil, "no plan")
+        XCTAssertEqual(model.mode, .edit)
+        XCTAssertEqual(model.editorView?.string, "# notes\n")
         XCTAssertEqual(rig.shell.gates, 0)
+        XCTAssertTrue(rig.shell.probes.isEmpty && rig.controllers.isEmpty)
         for e in w.entries { e.window.close() }
     }
 
-    func testRefusalStaysInReadAndSaysWhy() async throws {
+    /// D13 (#1544): a refused terminal Edit falls back to the built-in editor and says why; nothing is spawned.
+    func testRefusalFallsBackToTheBuiltinEditorAndSaysWhy() async throws {
         let rig = Rig()
         rig.shell.gateAnswer = .refused("needs dch 1.24.0")
         let w = windows(rig)
         let model = try XCTUnwrap(open(w, file("te-refused")))
         model.edit()
         await model.planning?.value
-        XCTAssertEqual(model.mode, .read)
+        XCTAssertEqual(model.mode, .edit)
         XCTAssertEqual(model.notice, TerminalEditor.needsDch)
+        XCTAssertEqual(model.editorView?.string, "# notes\n")
         XCTAssertTrue(rig.controllers.isEmpty)
         for e in w.entries { e.window.close() }
+        XCTAssertTrue(rig.ended.isEmpty)
     }
 
     /// The editor quits: dch unlinks the socket, the client exits 0, the controller ends, the window goes to Read and

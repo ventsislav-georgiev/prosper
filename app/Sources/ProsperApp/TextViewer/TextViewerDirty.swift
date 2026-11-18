@@ -1,7 +1,7 @@
 import AppKit
 
 /// #1108 P3c: the Text Viewer windows with unsaved edits, which hold Quit and an unattended update.
-/// The viewers report here from P3d (#1544); until then nothing does, so Quit and updates go on at once (R6).
+/// Each window's model reports here (#1544, TextViewerModel.setDirty); with none dirty, Quit and updates go on at once (R6).
 @MainActor
 final class TextViewerDirty {
     static let shared = TextViewerDirty()

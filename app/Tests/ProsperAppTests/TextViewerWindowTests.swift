@@ -852,12 +852,23 @@ final class TextViewerWindowTests: XCTestCase {
         }
     }
 
-    /// The brief: Read is on the left; Edit is drawn, disabled, until P3, unless #1109's Terminal setting turns it on.
-    func testReadIsLeftAndEditIsOff() {
-        XCTAssertEqual(TextViewerModeSwitch.segments(canEdit: false),
-                       [.init(title: "Read", enabled: true), .init(title: "Edit", enabled: false)])
-        XCTAssertEqual(TextViewerModeSwitch.segments(canEdit: true),
-                       [.init(title: "Read", enabled: true), .init(title: "Edit", enabled: true)])
+    /// D10: the switch is the CapsuleSwitch, Read on the left (index 0); either editor selects Edit. #1544: Edit is on for
+    /// a file shown as text, off with its reason for a lossy one or one not shown as text.
+    func testReadIsLeftAndEditIsOff() throws {
+        XCTAssertEqual(TextViewerModeSwitch.selected(.read), 0)
+        XCTAssertEqual(TextViewerModeSwitch.selected(.edit), 1)
+        XCTAssertEqual(TextViewerModeSwitch.selected(.terminal), 1)
+        let dir = tempDir("tv-edit-off")
+        let text = dir.appendingPathComponent("a.txt"), lossy = dir.appendingPathComponent("b.txt")
+        try write("a\n", text)
+        try Data([0x61, 0xFF, 0x0A]).write(to: lossy)
+        let shown = TextViewerModel(url: text, resolved: text, actions: fakeActions())
+        let readOnly = TextViewerModel(url: lossy, resolved: lossy, actions: fakeActions())
+        XCTAssertEqual(shown.editOff, "Only a text file can be edited", "before the first load lands")
+        loaded(shown)
+        loaded(readOnly)
+        XCTAssertTrue(shown.editOff == nil && shown.canEdit)
+        XCTAssertEqual(readOnly.editOff, "Not UTF-8: shown read-only")
     }
 
     private func key(_ chars: String, _ mods: NSEvent.ModifierFlags, code: UInt16) throws -> NSEvent {
@@ -875,6 +886,9 @@ final class TextViewerWindowTests: XCTestCase {
         XCTAssertEqual(TextViewerNSWindow.route(try key("G", [.command, .shift], code: 5)), R.find(.previousMatch))
         XCTAssertEqual(TextViewerNSWindow.route(try key("e", .command, code: 14)), R.useSelectionForFind)
         XCTAssertEqual(TextViewerNSWindow.route(try key("t", .command, code: 17)), R.toggleMode, "#1109: Read | Edit (passed on while Edit is off)")
+        XCTAssertEqual(TextViewerNSWindow.route(try key("s", .command, code: 1)), R.save, "#1544: Save")
+        XCTAssertEqual(TextViewerNSWindow.route(try key("S", [.command, .shift], code: 1)), R.pass, "⇧⌘S is not Save")
+        XCTAssertEqual(TextViewerNSWindow.route(try key("s", [], code: 1)), R.pass, "a typed s is the editor's")
         XCTAssertEqual(TextViewerNSWindow.route(try key("c", .command, code: 8)), R.pass, "⌘C is the Edit menu's")
         XCTAssertEqual(TextViewerNSWindow.route(try key("w", [], code: 13)), R.pass)
         // R1118-4: ⌘W with Command alone; ⇧⌘W and ⌥⌘W are not this window's close.
@@ -901,8 +915,10 @@ final class TextViewerWindowTests: XCTestCase {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/TextViewer")
         let names = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".swift") }.sorted()
-        XCTAssertEqual(names, ["CapsuleSwitch.swift", "DocumentImage.swift", "ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift", "TextFileWriter.swift",
-                               "TextViewerDocument.swift", "TextViewerRouting.swift", "TextViewerTextView.swift", "TextViewerWindow.swift"])
+        XCTAssertEqual(names, ["CapsuleSwitch.swift", "DocumentImage.swift", "ImagePolicy.swift", "LinkPolicy.swift", "MarkdownRenderer.swift",
+                               "TerminalEditor.swift", "TextFileWriter.swift", "TextViewerDirty.swift", "TextViewerDocument.swift",
+                               "TextViewerEditor.swift", "TextViewerPane.swift", "TextViewerRouting.swift", "TextViewerTextView.swift",
+                               "TextViewerWindow.swift"])
         // #1118: no URL-based loader either (Data(contentsOf:), CGImageSourceCreateWithURL, NSImage(contentsOf:)):
         // every byte is read through the guarded open in TextViewerDocument and ImagePolicy.
         let banned = ["URLSession", "WKWebView", "WebView", "WebKit", "JavaScriptCore", "NSAttributedString(html",

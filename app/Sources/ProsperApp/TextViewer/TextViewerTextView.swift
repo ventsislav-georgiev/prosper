@@ -61,6 +61,22 @@ final class TextViewerTextView: NSTextView {
     private var shown: NSAttributedString?
     /// D6: a clicked link, for the model to decide; AppKit's own handling never runs.
     var onLink: ((URL) -> Void)?
+    /// #1544: the built-in editor's text changed (typing, paste, undo); nil in Read.
+    var onEdit: ((String) -> Void)?
+
+    override func didChangeText() {
+        super.didChangeText()
+        onEdit?(string)
+    }
+
+    /// #1544 (D12, not dirty): the file's new text, the caret offset clamped to it. Not an edit: no onEdit, no undo entry
+    /// (the history named the old text, so it goes; the window's undo manager serves this editor only).
+    func replaceText(_ text: String) {
+        let caret = selectedRange().location
+        string = text
+        undoManager?.removeAllActions()
+        setSelectedRange(NSRange(location: min(caret, (text as NSString).length), length: 0))
+    }
 
     /// #1155: a text up to this many UTF-16 units is laid out whole at show (exact height, a resize lays it
     /// out again, as before); a longer one only where it is drawn or asked for. Rule: every kind a size can

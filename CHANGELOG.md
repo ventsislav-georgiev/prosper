@@ -1866,6 +1866,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: right-click a group in the sidebar and choose "Add session to this group" to open
   the New session form with that group, its folder and its command already filled in; picking None
   in the form's group choice now brings back a name you had typed. (#1400)
+- Text viewer: Edit now works in every window. Switch to Edit (or press ⌘T) to change the file in
+  place, ⌘S saves it, and closing, quitting or updating with unsaved changes asks first. If the
+  terminal editor cannot start, the built-in editor opens and says why. (#1544)
 
 ## v2.174.0
 

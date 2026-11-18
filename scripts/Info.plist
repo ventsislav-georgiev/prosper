@@ -67,14 +67,14 @@
 	     offered for it without claiming the type next to Xcode (Alternate). No
 	     imported type: CoreTypes already declares Markdown, and routing inside
 	     Prosper goes by file name. QA 854, QA 856.
-	     The role becomes Editor when the built-in editor lands (#1108). -->
+	     The role is Editor since the built-in editor landed (#1544, #1108 P3). -->
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
 			<string>Plain text document</string>
 			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
+			<string>Editor</string>
 			<key>LSHandlerRank</key>
 			<string>Alternate</string>
 			<key>LSItemContentTypes</key>

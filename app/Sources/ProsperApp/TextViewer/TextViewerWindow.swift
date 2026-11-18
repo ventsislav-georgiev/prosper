@@ -119,28 +119,41 @@ final class TextViewerModel: ObservableObject {
         job?.cancel()
         generation += 1
         requested = style
+        // #1544 (D11): Read while edited renders the buffer, a live preview; the file is still read (its state and identity).
+        let source = isDirty ? buffer : nil
         let (gen, path, markdown, loader, reader, cap) = (generation, resolved, isMarkdown, imageLoader, self.read, maxParagraphUnits)
         job = Task.detached(priority: .userInitiated) { [weak self] in
             let next = reader(path)
             if Task.isCancelled { return }
             let output = (try? next.get()).map { doc in
-                markdown ? MarkdownRenderer.render(doc.text, document: path, style: style, loader: loader)
-                         : MarkdownRenderer.plain(doc.text, style: style, maxParagraphUnits: cap)
+                let text = source ?? doc.text
+                return markdown ? MarkdownRenderer.render(text, document: path, style: style, loader: loader)
+                                : MarkdownRenderer.plain(text, style: style, maxParagraphUnits: cap)
             }
-            await self?.apply(next, output, generation: gen)
+            await self?.apply(next, output, generation: gen, preview: source != nil)
         }
     }
 
+    /// The shown output is a render of the buffer, not of the file.
+    private var previewed = false
+
     private func apply(_ next: Result<TextViewerDocument, TextViewerDocument.Refusal>, _ out: MarkdownRenderer.Output?,
-                       generation gen: Int) {
+                       generation gen: Int, preview: Bool = false) {
         guard gen == generation else { return }   // a newer load is on its way
         let first = state == nil
         // R1108-r5-a: what a save will check against: the latest load's, also when the shown text is kept (not published).
         identity = (try? next.get())?.identity
         // The same bytes in the same theme keep the shown text (and so the selection and scroll); == ignores the identity.
-        if next != state || out?.style != output?.style || out?.note != output?.note {
+        // A preview, or the first render after one, is always shown: the file's bytes did not change, the shown text did.
+        if next != state || out?.style != output?.style || out?.note != output?.note || preview || previewed {
             state = next
             output = out
+            previewed = preview
+        }
+        // D12, not dirty: an edited file that changed on disk takes the new text, the caret clamped. Dirty: kept (#1545 asks).
+        if let doc = try? next.get(), buffer != nil, !isDirty, doc.text != base || doc.encoding != encoding {
+            adopt(doc)
+            editorView?.replaceText(doc.text)
         }
         if first { onFirstLoad?(); onFirstLoad = nil } else { onReload?() }
         loads += 1
@@ -189,9 +202,9 @@ final class TextViewerModel: ObservableObject {
 
     func openInDefaultApp() { if let app = defaultApp { actions.openWith(url, app) } }
 
-    // MARK: #1109 (D13): Edit in a terminal
+    // MARK: #1109 (D13): Edit in a terminal; #1544 (D11): the built-in editor
 
-    enum Mode: Equatable { case read, terminal }
+    enum Mode: Equatable { case read, edit, terminal }
     /// Never persisted: a window always opens in Read.
     @Published private(set) var mode = Mode.read
     /// The editor session this window started; kept after Read (it lives on) so the window's close ends it (OQ-118 Q3).
@@ -201,13 +214,20 @@ final class TextViewerModel: ObservableObject {
     private(set) var planning: Task<Void, Never>?
     private var closed = false
 
-    /// Edit is on with Settings › Text Viewer › Edit with set to Terminal (the built-in editor is P3's).
-    var canEdit: Bool { editor.settings().terminal }
+    /// Why Edit is off, or nil: a file shown as text that is not lossy (D1). A dirty buffer can always be edited again.
+    var editOff: String? {
+        if isDirty { return nil }
+        guard let doc = document else { return "Only a text file can be edited" }
+        return doc.readOnly ? "Not UTF-8: shown read-only" : nil
+    }
+    var canEdit: Bool { editOff == nil }
 
-    /// The Edit button or ⌘T: only here are the login shell and dch asked, and only for a file shown as text.
+    /// The Edit button or ⌘T. The built-in editor, or with Settings › Text Viewer › Edit with set to Terminal the terminal
+    /// editor: only then are the login shell and dch asked. A dirty buffer stays in the built-in editor.
     func edit() {
+        guard mode == .read, planning == nil, !closed, canEdit else { return }
         let settings = editor.settings()
-        guard settings.terminal, mode == .read, planning == nil, !closed, document?.readOnly == false else { return }
+        guard settings.terminal, !isDirty else { return openEditor() }
         let path = resolved.path, io = editor.io, cache = editor.cache
         planning = Task { [weak self] in
             let plan = await Task.detached(priority: .userInitiated) {
@@ -221,7 +241,9 @@ final class TextViewerModel: ObservableObject {
         planning = nil
         guard !closed, mode == .read else { return }   // closed meanwhile: nothing starts for a gone window
         switch plan {
-        case .refused(let why): say(why)
+        case .refused(let why):   // D13: the built-in editor opens instead, and says why
+            say(why)
+            openEditor()
         case .spawn(let spawn):
             terminal?.controller.detach()
             terminal = TextViewerTerminalEdit(spawn, controller: editor.makeController()) { [weak self] in self?.editorEnded() }
@@ -229,10 +251,11 @@ final class TextViewerModel: ObservableObject {
         }
     }
 
-    /// Read while the editor runs: the client detaches, the session lives on, the disk is shown.
+    /// Read. From the terminal editor: the client detaches, the session lives on, the disk is shown. From the built-in one:
+    /// the buffer is kept and, while dirty, rendered (D11).
     func showRead() {
-        guard mode == .terminal else { return }
-        terminal?.controller.detach()
+        guard mode != .read else { return }
+        if mode == .terminal { terminal?.controller.detach() }
         mode = .read
         reload()
     }
@@ -257,6 +280,117 @@ final class TextViewerModel: ObservableObject {
         t.controller.detach()
         editor.end(t.spawn)
     }
+
+    /// The editor's text from the first Edit on, nil before; kept through Read (the preview renders it).
+    private(set) var buffer: String?
+    /// D11: the buffer differs from the text last loaded or saved; undoing back to it is clean. Each change is reported.
+    @Published private(set) var isDirty = false
+    /// The text last loaded into or saved from the buffer, its encoding, and the hash of its bytes (the save's check).
+    private var base = ""
+    private var encoding = TextViewerDocument.Encoding.utf8
+    private var baseHash: TextFileWriter.Fingerprint = []
+    /// Why the last save failed: shown under the header until a save succeeds or the edits are dropped.
+    @Published private(set) var saveError: String?
+    /// The save in flight (off main); a row awaits it.
+    private(set) var saving: Task<Void, Never>?
+    /// Where dirty is reported: Quit and an update wait on it (P3c). A seam: rows hand in their own.
+    var dirtyRegistry = TextViewerDirty.shared
+    /// D11: the close sheet. A seam: the live one answers Cancel under XCTest and shows nothing.
+    var askToClose: @MainActor (NSWindow?, String, @escaping @MainActor (TextViewerEditor.CloseAnswer) -> Void) -> Void
+        = TextViewerEditor.liveCloseSheet
+    /// The editor's view, made on the first Edit and kept with the buffer, so the window's undo history keeps its target
+    /// across Read and Edit.
+    private(set) var editorScroll: NSScrollView?
+    var editorView: TextViewerTextView? { editorScroll?.documentView as? TextViewerTextView }
+
+    private func openEditor() {
+        if buffer == nil, let doc = document { adopt(doc) }
+        guard buffer != nil else { return }
+        _ = makeEditor()
+        mode = .edit
+    }
+
+    func makeEditor() -> NSScrollView {
+        if let scroll = editorScroll { return scroll }
+        let (scroll, view) = TextViewerEditor.makeEditor(buffer ?? "")
+        view.onEdit = { [weak self] in self?.edited($0) }
+        editorScroll = scroll
+        return scroll
+    }
+
+    /// The buffer and its base become the loaded text: clean.
+    private func adopt(_ doc: TextViewerDocument) {
+        buffer = doc.text
+        base = doc.text
+        encoding = doc.encoding
+        // decode is strict, so the text encodes back to the bytes read
+        baseHash = TextFileWriter.encode(doc.text, encoding: doc.encoding).map(TextFileWriter.digest) ?? []
+    }
+
+    /// The editor's text changed: typing, paste, undo.
+    func edited(_ text: String) {
+        guard buffer != nil else { return }
+        buffer = text
+        setDirty(text != base)
+    }
+
+    private func setDirty(_ dirty: Bool) {
+        guard dirty != isDirty else { return }
+        isDirty = dirty
+        dirtyRegistry.report(self, dirty: dirty) { [weak self] in self?.say($0) }
+    }
+
+    /// D11: ⌘S or Save. The buffer in the file's own encoding, to the opened path resolved, checked against the bytes last
+    /// read or saved; off main. `done` gets whether it was written. Text typed meanwhile stays dirty.
+    func save(then done: @escaping @MainActor (Bool) -> Void = { _ in }) {
+        guard saving == nil else { return done(false) }
+        guard isDirty, let text = buffer else { return done(false) }
+        let (url, expected, identity, encoding) = (self.url, baseHash, self.identity, self.encoding)
+        saving = Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                TextFileWriter.save(text, encoding: encoding, to: url, expected: expected, identity: identity)
+            }.value
+            guard let self else { return }
+            self.saving = nil
+            switch result {
+            case .success(let hash):
+                self.base = text
+                self.baseHash = hash
+                self.saveError = nil
+                self.setDirty(self.buffer != text)
+                done(true)
+            case .failure(let failure):
+                self.saveError = TextViewerEditor.message(failure)
+                done(false)
+            }
+        }
+    }
+
+    /// Don't Save, or the window goes away: the edits are dropped and the window reports clean.
+    func discard() {
+        buffer = nil
+        editorScroll = nil
+        saveError = nil
+        setDirty(false)
+    }
+
+    /// D11: the window's close. Clean: closes. Dirty: the sheet. Save closes once written, Don't Save drops the edits,
+    /// Cancel keeps the window.
+    func closeRequested(_ window: NSWindow?, close: @escaping @MainActor () -> Void) {
+        guard isDirty else { return close() }
+        askToClose(window, shownName) { [weak self] answer in
+            guard let self else { return }
+            switch answer {
+            case .cancel: break
+            case .discard:
+                self.discard()
+                close()
+            case .save:
+                self.save { [weak self] saved in if saved, self?.isDirty == false { close() } }
+            }
+        }
+    }
+
     func reveal() { actions.reveal(url) }
 
     /// D15 (#1107): what the last Screenshot did, shown under the header for 5 s.
@@ -322,6 +456,8 @@ final class TextViewerWindows {
     var imageLoader: TextViewerImageLoader = ImagePolicy.load
     /// #1109: the terminal editor's seams for each new window.
     var editorSeams: () -> TerminalEditorSeams = { .current }
+    /// #1544: where each new window reports dirty; rows hand in their own, so the app's Quit never waits on a test.
+    var dirty: () -> TextViewerDirty = { .shared }
     /// R896-1: a path on an automount or network location is looked at a bounded number of times (FileWatcher.remote).
     /// The live check reads the mount table only (FileWatcher.onAutomountOrNetwork); rows inject one.
     var isRemote: (URL) -> Bool = { FileWatcher.onAutomountOrNetwork($0.path) }
@@ -339,6 +475,7 @@ final class TextViewerWindows {
 
         let model = TextViewerModel(url: url, resolved: resolved, actions: actions(), imageLoader: imageLoader)
         model.editor = editorSeams()
+        model.dirtyRegistry = dirty()
         let win = build(model)
         if let last = entries.last?.window {   // cascade from the newest window
             win.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + sz(24), y: last.frame.maxY - sz(24)))
@@ -416,6 +553,7 @@ final class TextViewerWindows {
         entry.observer = nil
         entry.model.onFirstLoad = nil   // a load still on its way starts no watcher for a closed window
         entry.model.closeTerminal()   // #1109
+        entry.model.discard()   // #1544: reports clean before the window goes (a dirty close was asked first)
         dismissed(win)
         DispatchQueue.main.async { win.contentViewController = nil }
     }
@@ -423,11 +561,11 @@ final class TextViewerWindows {
 
 /// D9 keys, routed by the window itself (the global main menu does not change): ⌘W closes;
 /// ⌘F, ⌘G, ⇧⌘G drive the find bar; ⌘E puts the selection on the find pasteboard seam (R1).
-/// #1109: ⌘T switches Read and Edit.
+/// #1109: ⌘T switches Read and Edit. #1544: ⌘S saves the built-in editor's buffer.
 final class TextViewerNSWindow: NSWindow {
     weak var model: TextViewerModel?
 
-    enum KeyRoute: Equatable { case close, find(NSTextFinder.Action), useSelectionForFind, toggleMode, pass }
+    enum KeyRoute: Equatable { case close, find(NSTextFinder.Action), useSelectionForFind, toggleMode, save, pass }
 
     static func route(_ event: NSEvent) -> KeyRoute {
         guard event.type == .keyDown else { return .pass }
@@ -441,6 +579,7 @@ final class TextViewerNSWindow: NSWindow {
         case "g": return .find(.nextMatch)
         case "e": return .useSelectionForFind
         case "t": return .toggleMode
+        case "s": return .save
         default: return .pass
         }
     }
@@ -455,11 +594,20 @@ final class TextViewerNSWindow: NSWindow {
             guard let view = model?.textView else { return super.performKeyEquivalent(with: event) }
             view.useSelectionForFind()
         case .toggleMode:
-            guard let model, model.canEdit else { return super.performKeyEquivalent(with: event) }
+            guard let model, model.canEdit || model.mode != .read else { return super.performKeyEquivalent(with: event) }
             model.toggleMode()
+        case .save:
+            guard let model, model.mode == .edit || model.isDirty else { return super.performKeyEquivalent(with: event) }
+            model.save()
         case .pass: return super.performKeyEquivalent(with: event)
         }
         return true
+    }
+
+    /// #1544 (D11): the close button and ⌘W. A dirty buffer asks first (the sheet seam); `close()` itself never asks.
+    override func performClose(_ sender: Any?) {
+        guard let model, model.isDirty else { return super.performClose(sender) }
+        model.closeRequested(self) { [weak self] in self?.close() }
     }
 }
 
@@ -471,8 +619,11 @@ struct TextViewerRootView: View {
             TextViewerHeader(model: model)
             Rectangle().fill(Neon.stroke).frame(height: 1)
             if let notice = model.notice { banner(notice) }
+            if let error = model.saveError { banner(error) }
             if model.mode == .terminal, let t = model.terminal {
                 TextViewerTerminalPane(controller: t.controller)
+            } else if model.mode == .edit {
+                TextViewerEditorRepresentable(model: model)
             } else {
             switch model.state {
             case nil:
@@ -527,6 +678,10 @@ struct TextViewerHeader: View {
                 .font(Neon.font(13, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+            if model.isDirty {   // D11: the edited dot
+                Circle().fill(Neon.textSecondary).frame(width: sz(6), height: sz(6))
+                    .help("Edited").accessibilityLabel("Edited")
+            }
             Spacer(minLength: sz(8))
             // #1107: where the titled menus and Screenshot do not fit (UI scale 0.7 at the minimum width), the
             // menus show their icons only. Laid out before the name, which truncates first.
@@ -542,6 +697,11 @@ struct TextViewerHeader: View {
 
     private func actions(titles: Bool) -> some View {
         HStack(spacing: sz(10)) {
+            if model.isDirty {
+                Button { model.save() } label: { label("Save", "square.and.arrow.down", titles: titles) }
+                    .buttonStyle(.borderless).fixedSize()
+                    .help("Save (\u{2318}S)")
+            }
             Menu {
                 ForEach(model.copyItems, id: \.title) { item in
                     Button(item.title) { model.copy(item.title) }.disabled(!item.enabled)
@@ -559,9 +719,12 @@ struct TextViewerHeader: View {
                 label("Open With", "arrow.up.forward.app", titles: titles)
             }
             .menuStyle(.borderlessButton).fixedSize()
-            if model.mode == .read { TextViewerScreenshotButton(model: model) }
+            if Self.showsScreenshot(model.mode) { TextViewerScreenshotButton(model: model) }
         }
     }
+
+    /// Rider from #1107: Screenshot copies the rendered document, so it shows in Read only (never in Edit or the terminal).
+    static func showsScreenshot(_ mode: TextViewerModel.Mode) -> Bool { mode == .read }
 
     @ViewBuilder private func label(_ title: String, _ symbol: String, titles: Bool) -> some View {
         if titles {
@@ -572,8 +735,8 @@ struct TextViewerHeader: View {
     }
 }
 
-/// D15 (#1107): Screenshot, the whole document as one image on the clipboard. Read mode only: there is
-/// no Edit mode yet; P3 (#1108) hides this button in Edit.
+/// D15 (#1107): Screenshot, the whole document as one image on the clipboard. Read mode only
+/// (TextViewerHeader.showsScreenshot).
 struct TextViewerScreenshotButton: View {
     @ObservedObject var model: TextViewerModel
 
@@ -589,38 +752,20 @@ struct TextViewerScreenshotButton: View {
     }
 }
 
-/// Read | Edit, drawn like the old Agent Sessions detail picker's labels style (gone, #1471). Read is first (left) and the
-/// default. #1109: Edit opens the terminal editor when Settings › Text Viewer › Edit with is Terminal; otherwise it is
-/// drawn disabled until the built-in editor lands (P3).
+/// Read | Edit (D10): the CapsuleSwitch, Read first (left) and the default. Off, with its reason as the help, when the
+/// file cannot be edited; never off outside Read, so the way back is always there.
 struct TextViewerModeSwitch: View {
     @ObservedObject var model: TextViewerModel
-    struct Segment: Hashable { let title: String; let enabled: Bool }
-    static func segments(canEdit: Bool) -> [Segment] { [Segment(title: "Read", enabled: true), Segment(title: "Edit", enabled: canEdit)] }
+
+    /// The selected segment: Read, or Edit for either editor.
+    static func selected(_ mode: TextViewerModel.Mode) -> Int { mode == .read ? TextViewerMode.read.rawValue : TextViewerMode.edit.rawValue }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Self.segments(canEdit: model.canEdit), id: \.title) { seg in
-                let on = (seg.title == "Read") == (model.mode == .read)
-                Button { seg.title == "Read" ? model.showRead() : model.edit() } label: {
-                    Text(seg.title)
-                        .font(Neon.font(10.5, weight: .medium))
-                        .foregroundStyle(on ? Neon.textPrimary : Neon.textSecondary)
-                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-                        .background(Capsule().fill(on ? Neon.blue.opacity(0.2) : .clear))
-                        .contentShape(Capsule())
-                        .fixedSize()
-                }
-                .buttonStyle(.plain)
-                .disabled(!seg.enabled)
-                .opacity(seg.enabled ? 1 : 0.45)
-                .help(seg.enabled ? "\(seg.title) (\u{2318}T)" : "Editing comes in a later version")
-                .accessibilityLabel("\(seg.title) mode")
-                .accessibilityAddTraits(on ? .isSelected : [])
-            }
-        }
-        .padding(sz(2))
-        .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
-        .fixedSize()
+        let off = model.mode == .read ? model.editOff : nil
+        CapsuleSwitch(titles: TextViewerMode.allCases.map(\.title), selected: Self.selected(model.mode),
+                      set: { $0 == TextViewerMode.read.rawValue ? model.showRead() : model.edit() },
+                      help: CapsuleSwitch.textViewerHelp, off: off)
+            .disabled(off != nil)
     }
 }
 
