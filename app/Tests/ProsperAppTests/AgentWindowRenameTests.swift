@@ -758,9 +758,14 @@ extension AgentWindowD1Tests {
                                 let top = band ? AgentWindowBand.height : 0
                                 let line = Int((top + AgentSessionHeader.padTop) * px)..<Int((top + AgentSessionHeader.padTop + AgentSessionHeader.lineHeight) * px)
                                 let menuLeft = width - Int(sz(16 + 18 + 2) * px)
-                                XCTAssertTrue((menuLeft - Int(sz(4) * px)..<menuLeft).allSatisfy { blankColumn(plain, x: $0, line: line) },
+                                // #1476: the X-ray button's box before it: the line's spacing sz(8) and the button's frame.
+                                let xrayLeft = menuLeft - Int((sz(8) + AgentXrayButton.width) * px)
+                                // A blank column matches the header's own backdrop above the line, not the band's (#1488 d): with
+                                // the band, y 4 lay sz(30) further up the gradient, and at 0.7 min one dither step read as ink.
+                                let ref = Int(top * px) + 4
+                                XCTAssertTrue((menuLeft - Int(sz(4) * px)..<menuLeft).allSatisfy { blankColumn(plain, x: $0, line: line, ref: ref) },
                                               "nothing of the controls in the spacing before the \"⋯\" box (\(tag))")
-                                XCTAssertTrue((menuLeft..<width - Int(sz(16) * px)).contains { !blankColumn(plain, x: $0, line: line) },
+                                XCTAssertTrue((menuLeft..<width - Int(sz(16) * px)).contains { !blankColumn(plain, x: $0, line: line, ref: ref) },
                                               "the \"⋯\" in its box (\(tag))")
                                 // The controls' box: from the left edge of the controls (once the toggle's) to the menu button's
                                 // box, read off the plain render. It ends at the first sz(16) blank run left of the "⋯" box:
@@ -769,12 +774,13 @@ extension AgentWindowD1Tests {
                                 // spacing and the icons' insets, 14 at most (the menu tier at 1.0). #1103 r: the walk used
                                 // to start at the padding and take sz(14): with Open in terminal gone, the toggle's icon and
                                 // the "⋯" glyph stand 15 apart at 1.0, so it stopped at the "⋯" itself, right of menuLeft.
-                                let left = try XCTUnwrap(controlsLeft(plain, line: line, from: menuLeft, to: detail, gap: Int(sz(16) * px)), tag)
-                                // #1471 b: the mode toggle is gone (shownLine: the slot, a todos chip only with todos, the menu button;
-                                // these sessions have none): the box is empty, so the blank run starts at the menu button's box itself.
-                                XCTAssertGreaterThanOrEqual(left, menuLeft, "no control between the title slot and the \"\u{22EF}\" box (\(tag))")
-                                XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: menuLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
-                                               "\"⋯\" unmoved (\(tag))")
+                                let left = try XCTUnwrap(controlsLeft(plain, line: line, from: menuLeft, to: detail, gap: Int(sz(16) * px), ref: ref), tag)
+                                // #1471 b: the mode toggle is gone (shownLine: the slot, a todos chip only with todos, the X-ray
+                                // button, the menu button; these sessions have no todos): the box holds the X-ray button alone.
+                                XCTAssertGreaterThanOrEqual(left, xrayLeft, "no control between the title slot and the X-ray box (\(tag))")
+                                XCTAssertLessThan(left, menuLeft, "the X-ray button in its box (\(tag))")
+                                XCTAssertEqual([-1, 0, 1].map { differing(plain, editing, x: xrayLeft..<width, y: 0..<hb, dx: $0, tolerance: 0.06) }.min(), 0,
+                                               "X-ray and \"\u{22EF}\" unmoved (\(tag))")
                                 // The field shows, and only in the title line's band.
                                 if let slot = span(detail, min(left, menuLeft), "the title slot (\(tag))") {
                                     XCTAssertGreaterThan(differing(plain, editing, x: slot, y: line), 0, "the field shows (\(tag))")
@@ -881,23 +887,23 @@ extension AgentWindowD1Tests {
     }
 
     /// A column of the title line that holds nothing but the header's backdrop: controlsLeft's own test, on one column.
-    func blankColumn(_ rep: NSBitmapImageRep, x: Int, line: Range<Int>) -> Bool {
-        controlsLeft(rep, line: line, from: x, to: x, gap: 1) == x + 1
+    func blankColumn(_ rep: NSBitmapImageRep, x: Int, line: Range<Int>, ref: Int = 4) -> Bool {
+        controlsLeft(rep, line: line, from: x, to: x, gap: 1, ref: ref) == x + 1
     }
 
     /// Scanning the title line leftwards from `from`: the x where a run of `gap` columns of the
     /// header's own colour starts (the spacer between the title slot and the controls), plus one run.
     /// #860: the header sits on the window's backdrop gradient, so a column is blank when it matches its
     /// own pixel at y 4 (above every control), not one colour read at the right edge, within 0.06
-    /// (the gradient's dither and its 30-50 pt drift; a control's edge is far past that).
-    func controlsLeft(_ rep: NSBitmapImageRep, line: Range<Int>, from: Int, to: Int, gap: Int) -> Int? {
-        guard rep.colorAt(x: from + 2, y: 4) != nil else { return nil }
+    /// (the gradient's dither and its 30-50 pt drift; a control's edge is far past that). `ref`: that row (the header's top).
+    func controlsLeft(_ rep: NSBitmapImageRep, line: Range<Int>, from: Int, to: Int, gap: Int, ref: Int = 4) -> Int? {
+        guard rep.colorAt(x: from + 2, y: ref) != nil else { return nil }
         let raw = RawPixels(rep)
         var run = 0
         for x in stride(from: from, through: to, by: -1) {
-            let bg = rep.colorAt(x: x, y: 4)
+            let bg = rep.colorAt(x: x, y: ref)
             let blank = line.allSatisfy { (y: Int) -> Bool in
-                if let raw, x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh, raw.equal(x, y, raw, x, 4) { return true }
+                if let raw, x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh, raw.equal(x, y, raw, x, ref) { return true }
                 return rep.colorAt(x: x, y: y).map { p in bg.map { same(p, $0, tolerance: 0.06) } ?? true } ?? true
             }
             run = blank ? run + 1 : 0

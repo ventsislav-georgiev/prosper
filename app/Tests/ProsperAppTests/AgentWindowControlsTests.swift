@@ -409,8 +409,12 @@ extension AgentWindowD1Tests {
                 st.actions = [:]
                 let drows = diffRows(plain, dir)
                 XCTAssertFalse(drows.isEmpty)
-                XCTAssertGreaterThan(CGFloat(drows.min() ?? 0) / k, size.height - AgentWindowControls.stripHeight - 2,
+                // #1474: the mode switch sits under the strip's slot (its segment and sz(6) above and below).
+                let modeSwitch = AgentSidebarModeSwitch.segment.height + sz(12)
+                XCTAssertGreaterThan(CGFloat(drows.min() ?? 0) / k, size.height - modeSwitch - AgentWindowControls.stripHeight - 2,
                                      "only the sidebar's bottom line changed (\(label) \(scale))")
+                XCTAssertLessThan(CGFloat(drows.max() ?? 0) / k, size.height - modeSwitch + 2,
+                                  "the mode switch under the strip unchanged (\(label) \(scale))")
                 // QA #665 INFO-1: a row text (a busy refusal, then a running text) shows over the
                 // conversation's top: one band changes and nothing under it moves.
                 st.actions[s.key] = AgentIsland.restartBusyText
