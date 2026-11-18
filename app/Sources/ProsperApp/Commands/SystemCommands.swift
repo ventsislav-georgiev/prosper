@@ -79,16 +79,22 @@ enum AppLauncher {
 /// nor anything it started outlives the extension's timeout (unless the call opts out
 /// with `keep_running`).
 enum ShellRunner {
-    /// Captured output stops at the cap. Past it the pipe is still read and discarded,
-    /// not killed: a `> cmd` has no timeout and must finish its side effects, and a child
-    /// writing into a full pipe would block forever. `> cmd` is read by a human: 1 MiB
+    /// Captured output stops at the cap. Past it the pipe is still read and discarded, so a
+    /// `> cmd` with a lot of output still finishes its side effects, but only up to
+    /// `drainCap` bytes in all: then the read end is closed and the writer gets SIGPIPE,
+    /// as under `| head` (#1026: `> yes` drained forever). `> cmd` is read by a human: 1 MiB
     /// plus the marker. host.shell.run output is parsed (bookmarks JSON), so its cap is a
     /// memory guard only and truncation is reported as a flag, never in the text.
     static let outputCap = 1 << 20
     static let hostOutputCap = 64 << 20
+    static let drainCap = 256 << 20
     static let truncationMarker = "[output truncated at 1 MiB]"
     /// Tests never run a real login shell (it sources the operator's zprofile).
-    static let shellFlag = NSClassFromString("XCTestCase") == nil ? "-lc" : "-c"
+    static let shellFlag = loginFlag(underTest: NSClassFromString("XCTestCase") != nil)
+    static func loginFlag(underTest: Bool) -> String { underTest ? "-c" : "-lc" }
+    /// Test seam (#1026): the environment zsh gets, so a test points ZDOTDIR and HOME at a
+    /// dir it made and zsh reads no real dotfile. nil (production): inherit ours.
+    nonisolated(unsafe) static var testEnvironment: [String: String]?
 
     /// `> cmd`: 1 MiB, marker appended on truncation.
     static func run(_ command: String) async -> String {
@@ -96,16 +102,19 @@ enum ShellRunner {
         return r.truncated ? r.text + "\n" + truncationMarker : r.text
     }
 
-    static func run(_ command: String, cap: Int) async -> (text: String, truncated: Bool) {
+    static func run(_ command: String, cap: Int,
+                    shellFlag: String = ShellRunner.shellFlag) async -> (text: String, truncated: Bool) {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return ("", false) }
         let job = Job()
-        // The kill makes the read below hit EOF, so the single resume still runs: a cancel
-        // racing a normal exit can neither double-resume nor leak the continuation.
+        let environment = testEnvironment
+        // The kill ends zsh, and the reader stops once zsh is gone, so the single resume still
+        // runs: a cancel racing a normal exit can neither double-resume nor leak the continuation.
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(returning: job.execute(cmd, cap: cap))
+                    continuation.resume(returning: job.execute(cmd, cap: cap, shellFlag: shellFlag,
+                                                               environment: environment))
                 }
             }
         } onCancel: {
@@ -127,7 +136,8 @@ enum ShellRunner {
             if pid > 0 { CodexHarness.killGroup(pid, grace: 1) }
         }
 
-        func execute(_ cmd: String, cap: Int) -> (text: String, truncated: Bool) {
+        func execute(_ cmd: String, cap: Int, shellFlag: String,
+                     environment: [String: String]?) -> (text: String, truncated: Bool) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             // Login shell (`-l`): sources /etc/zprofile (path_helper adds
@@ -135,7 +145,8 @@ enum ShellRunner {
             // /opt/homebrew/bin). A GUI app launched by LaunchServices only
             // inherits PATH=/usr/bin:/bin:/usr/sbin:/sbin, so without this a
             // bare `code`, `cursor`, `gh`, etc. is not found.
-            process.arguments = [ShellRunner.shellFlag, cmd]
+            process.arguments = [shellFlag, cmd]
+            if let environment { process.environment = environment }
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
@@ -153,14 +164,29 @@ enum ShellRunner {
 
             var data = Data()
             var truncated = false
+            var seen = 0
             let reader = pipe.fileHandleForReading
-            while true {
-                let chunk = reader.availableData   // blocks until data or EOF
-                if chunk.isEmpty { break }
+            let fd = reader.fileDescriptor
+            var buf = [UInt8](repeating: 0, count: 1 << 16)
+            // #1026: EOF alone is not the end. A child that left zsh's group (setsid, set -m)
+            // holds the write end past zsh's exit or the group kill; once zsh is gone, read
+            // only what is already in the pipe and stop.
+            // shortcut: a 200 ms poll notices zsh's exit, upgrade to a termination fd if it shows in profiles.
+            while seen < ShellRunner.drainCap {
+                let exited = !process.isRunning   // before the poll: an empty pipe after it is final
+                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = poll(&pfd, 1, exited ? 0 : 200)
+                if ready < 0 { if errno == EINTR { continue }; break }
+                if ready == 0 { if exited { break }; continue }
+                let n = buf.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+                if n < 0 { if errno == EINTR || errno == EAGAIN { continue }; break }
+                if n == 0 { break }   // EOF
+                seen += n
                 let room = cap - data.count
-                if chunk.count > room { truncated = true }
-                data.append(chunk.prefix(room))
+                if n > room { truncated = true }
+                data.append(contentsOf: buf[0..<min(n, room)])
             }
+            try? reader.close()   // a writer still there gets SIGPIPE/EPIPE instead of a full pipe
             process.waitUntilExit()
             lock.lock()
             pid = 0   // reaped: a late cancel must not signal a recycled pid

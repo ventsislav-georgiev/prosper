@@ -1869,6 +1869,9 @@ tag from the now-released section and put it on the new top draft.
 - Text viewer: Edit now works in every window. Switch to Edit (or press ⌘T) to change the file in
   place, ⌘S saves it, and closing, quitting or updating with unsaved changes asks first. If the
   terminal editor cannot start, the built-in editor opens and says why. (#1544)
+- Shell commands (`> cmd` and extensions' host.shell.run) no longer hang when they leave a
+  background process running, and endless output such as `> yes` now stops after 256 MiB instead of
+  running forever. (#1026)
 
 ## v2.174.0
 

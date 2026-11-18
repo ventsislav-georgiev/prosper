@@ -4,9 +4,101 @@ import LuaRuntime
 
 /// #833: `host.shell.run` goes through `ExtensionHost.awaitSync` → `ShellRunner.run`. A timeout
 /// must take down zsh and everything it started, output is capped, and the continuation
-/// resumes exactly once however a cancel races the exit. Runs `zsh -c` (never a login shell
-/// under XCTest) and signals only pids the test's own commands recorded.
+/// resumes exactly once however a cancel races the exit. Runs `zsh -c` (the one `-lc` row is
+/// pinned to the ZDOTDIR below) and signals only pids the test's own commands recorded.
 final class ShellRunnerTests: XCTestCase {
+    /// #1026 (QA #671 INFO-5): zsh reads its dotfiles from a ZDOTDIR and HOME this test made,
+    /// never the real ~/.zshenv or ~/.zprofile.
+    private var zdotdir: URL!
+
+    override func setUpWithError() throws {
+        zdotdir = tempDir("zdotdir")
+        try "export PROSPER_TEST_ZSHENV=test-zshenv\n"
+            .write(to: zdotdir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
+        try "export PROSPER_TEST_ZPROFILE=test-zprofile\n"
+            .write(to: zdotdir.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
+        var env = ProcessInfo.processInfo.environment
+        env["ZDOTDIR"] = zdotdir.path
+        env["HOME"] = zdotdir.path
+        ShellRunner.testEnvironment = env
+    }
+
+    override func tearDown() {
+        ShellRunner.testEnvironment = nil
+        super.tearDown()
+    }
+
+    /// #1026: every row's zsh reads the test's .zshenv, so none reads the real one.
+    func testShellReadsTheTestZDOTDIRNotTheRealOne() async {
+        let out = await ShellRunner.run("echo $PROSPER_TEST_ZSHENV:$HOME:$PROSPER_TEST_ZPROFILE")
+        XCTAssertEqual(out, "test-zshenv:\(zdotdir.path):", "-c reads .zshenv only, from the test ZDOTDIR")
+    }
+
+    /// #1026 (QA #671 INFO-5): the production flag is a login shell, which sources .zprofile
+    /// (where `brew shellenv` puts /opt/homebrew/bin on PATH). Pinned against the test ZDOTDIR.
+    func testProductionFlagIsALoginShellThatReadsZprofile() async throws {
+        XCTAssertEqual(ShellRunner.shellFlag, "-c", "tests never run a login shell by default")
+        // Never a login shell on the real dotfiles: the seam must point at our dir first.
+        guard ShellRunner.testEnvironment?["ZDOTDIR"] == zdotdir.path,
+              ShellRunner.testEnvironment?["HOME"] == zdotdir.path else {
+            return XCTFail("the test ZDOTDIR is not set; refusing to run a login shell")
+        }
+        let out = await ShellRunner.run("echo $PROSPER_TEST_ZSHENV:$PROSPER_TEST_ZPROFILE",
+                                        cap: ShellRunner.outputCap,
+                                        shellFlag: ShellRunner.loginFlag(underTest: false))
+        XCTAssertEqual(out.text, "test-zshenv:test-zprofile")
+    }
+
+    /// #1026 (QA #671 INFO-1): a background child still holding the pipe after zsh exits does
+    /// not keep the reader (and the caller) waiting for the child's 30 s.
+    func testBackgroundChildDoesNotHoldTheReaderAfterTheShellExits() throws {
+        let file = tempDir().appendingPathComponent("pid").path
+        var child: pid_t?
+        defer { if let child { _ = killIfReal(child, group: false) } }   // our own recorded pid
+        let out = ExtensionHost.awaitSync(timeout: 10) {
+            await ShellRunner.run("/bin/sleep 30 & echo $! > '\(file)'")
+        }
+        child = parsePid(try? String(contentsOfFile: file, encoding: .utf8))
+        XCTAssertNotNil(child, "the sleep pid was not recorded")
+        XCTAssertEqual(out, "", "the reader waited for the background child past zsh's exit")
+    }
+
+    /// #1026 (QA #671 INFO-1): a cancel kills zsh's group; a grandchild in its own group
+    /// (`set -m`) survives it with the pipe open, and the run still returns.
+    func testCancelDoesNotWaitForAGrandchildThatLeftTheGroup() throws {
+        let file = tempDir().appendingPathComponent("pid").path
+        var child: pid_t?
+        defer { if let child { _ = killIfReal(child, group: false) } }   // our own recorded pid
+        let cmd = "/bin/sh -c 'set -m; /bin/sleep 30 & echo $! > \"\(file)\"; wait'"
+        let task = Task { await ShellRunner.run(cmd) }
+        let deadline = Date().addingTimeInterval(10)
+        while child == nil, Date() < deadline {
+            child = parsePid(try? String(contentsOfFile: file, encoding: .utf8))
+            if child == nil { usleep(10_000) }
+        }
+        guard let recorded = child else { task.cancel(); return XCTFail("the sleep pid was not recorded") }
+        XCTAssertEqual(getpgid(recorded), recorded, "precondition: the grandchild leads its own group")
+        task.cancel()
+        let out = ExtensionHost.awaitSync(timeout: 10) { await task.value }
+        XCTAssertEqual(out, "", "the reader waited for the detached grandchild past the group kill")
+    }
+
+    /// #1026 (QA #671 INFO-2): endless output stops at the drain cap (the writer gets SIGPIPE)
+    /// instead of being read and discarded forever.
+    func testEndlessOutputStopsAtTheDrainCap() throws {
+        let file = tempDir().appendingPathComponent("pid").path
+        var pid: pid_t?
+        defer { if let pid { _ = killIfReal(pid, group: false) } }   // our own recorded pid
+        let out = ExtensionHost.awaitSync(timeout: 60) {
+            await ShellRunner.run("echo $$ > '\(file)'; exec /usr/bin/yes")
+        }
+        pid = parsePid(try? String(contentsOfFile: file, encoding: .utf8))
+        XCTAssertNotNil(pid, "the yes pid was not recorded")
+        let text = try XCTUnwrap(out, "endless output was drained past the cap")
+        XCTAssertTrue(text.hasSuffix("\n" + ShellRunner.truncationMarker))
+        XCTAssertEqual(text.utf8.count, ShellRunner.outputCap - 1 + 1 + ShellRunner.truncationMarker.utf8.count)
+    }
+
     /// Polls `kill(pid, 0)` until ESRCH or the timeout.
     private func waitGone(_ pid: pid_t, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
