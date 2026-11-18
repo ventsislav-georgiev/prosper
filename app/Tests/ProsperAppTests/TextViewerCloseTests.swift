@@ -128,7 +128,7 @@ final class TextViewerCloseTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tvc-save", "a\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         ask(model, .save) { _ in }
         try XCTUnwrap(rig.windows.entries.last?.window).performClose(nil)
@@ -142,7 +142,7 @@ final class TextViewerCloseTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tvc-save-fail", "a\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         try Data("other\n".utf8).write(to: url)
         ask(model, .save) { _ in }
@@ -178,7 +178,7 @@ final class TextViewerCloseTests: XCTestCase {
     func testDirtyWindowHoldsQuitAndTheUpdate() async throws {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
-        let model = try rig.edit(viewerFile("tvc-quit", "a\n"))
+        let model = try await rig.editAsync(viewerFile("tvc-quit", "a\n"))
         try rig.type(model, "x")
         var answer: (@MainActor (Bool) -> Void)?
         rig.dirty.prompt = { _, a in answer = a }

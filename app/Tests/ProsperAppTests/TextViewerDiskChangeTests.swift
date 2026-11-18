@@ -12,7 +12,7 @@ final class TextViewerDiskChangeTests: XCTestCase {
     private func dirtyThenChanged(_ rig: TextViewerEditorRig, _ label: String, theirs: String = "theirs\n")
         async throws -> (URL, TextViewerModel) {
         let url = try viewerFile(label, "mine\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         try Data(theirs.utf8).write(to: url)
         XCTAssertTrue(rig.windows.changed(model))
@@ -53,7 +53,8 @@ final class TextViewerDiskChangeTests: XCTestCase {
         model.save()
         await model.saving?.value
         XCTAssertEqual(asked, 0)
-        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "ytheirs\n")
+        // Reload keeps the caret's offset, clamped (replaceText, D12): 1, after the dropped "x".
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "tyheirs\n")
     }
 
     /// D12 Keep Mine: the banner goes, the buffer stays dirty; the next save asks "Overwrite the newer file on disk?" and,
@@ -109,7 +110,7 @@ final class TextViewerDiskChangeTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tvd-deleted", "mine\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         try FileManager.default.removeItem(at: url)
         XCTAssertTrue(rig.windows.changed(model))
@@ -139,7 +140,7 @@ final class TextViewerDiskChangeTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tvd-clean", "mine\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try Data("theirs\n".utf8).write(to: url)
         XCTAssertTrue(rig.windows.changed(model))
         await model.job?.value
@@ -153,7 +154,7 @@ final class TextViewerDiskChangeTests: XCTestCase {
     func testUnchangedDiskWhileDirtyHasNoBanner() async throws {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
-        let model = try rig.edit(viewerFile("tvd-same", "mine\n"))
+        let model = try await rig.editAsync(viewerFile("tvd-same", "mine\n"))
         try rig.type(model, "x")
         model.showRead()
         await model.job?.value

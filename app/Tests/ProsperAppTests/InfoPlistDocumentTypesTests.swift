@@ -1,8 +1,8 @@
 import XCTest
 @testable import ProsperApp
 
-/// #1106 (design #1105 D2), #1132: scripts/Info.plist, read from the source tree. Prosper claims
-/// plain text only, as an Alternate Viewer, and is never the default: TextEdit's plain-text claim has
+/// #1106 (design #1105 D2), #1132, #1544: scripts/Info.plist, read from the source tree. Prosper claims
+/// plain text only, as an Alternate Editor, and is never the default: TextEdit's plain-text claim has
 /// no rank key (Default). Markdown is not claimed by name (Xcode claims it as Alternate, a tie);
 /// Finder offers Prosper for .md and .markdown because the system Markdown type conforms to plain
 /// text. No type is imported or exported. The URL types (default-browser picker, prosper://) are
@@ -29,7 +29,7 @@ final class InfoPlistDocumentTypesTests: XCTestCase {
         XCTAssertEqual(types.map { $0["LSItemContentTypes"] as? [String] ?? [] }, [["public.plain-text"]])
         XCTAssertEqual(types.map { $0["LSHandlerRank"] as? String }, ["Alternate"],
                        "Owner or Default, or no rank key (counts as Default), would take the user's default app")
-        XCTAssertEqual(types.map { $0["CFBundleTypeRole"] as? String }, ["Viewer"])
+        XCTAssertEqual(types.map { $0["CFBundleTypeRole"] as? String }, ["Editor"], "#1544: the built-in editor landed")
         XCTAssertEqual(types.map { $0["CFBundleTypeName"] as? String }, ["Plain text document"])
         XCTAssertEqual(Set(types.flatMap(\.keys)),
                        ["CFBundleTypeName", "CFBundleTypeRole", "LSHandlerRank", "LSItemContentTypes"],

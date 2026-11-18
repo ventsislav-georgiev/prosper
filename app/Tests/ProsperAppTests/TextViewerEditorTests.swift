@@ -3,15 +3,13 @@ import XCTest
 @testable import ProsperApp
 
 /// #1544 (#1108 P3d, design #1105 D11): one window's built-in editor, offscreen. Windows come from the build seam and
-/// are never shown, ordered or made key; the editor's view sits in a borderless window that is never ordered either (it
-/// gives the view an undo manager); typing is insertText on the view, no event is posted; files are fakes in a tempDir();
+/// are never shown, ordered or made key; the editor's view sits in its own window's Edit pane, as in the app (that
+/// window's undo manager keeps its history); typing is insertText on the view, no event is posted; files are fakes in a tempDir();
 /// dirty goes to the rig's own TextViewerDirty, never the app's; the close sheet is the model's seam.
 @MainActor
 final class TextViewerEditorRig {
     let windows = TextViewerWindows()
     let dirty = TextViewerDirty()
-    /// Never ordered front: it only gives the editor view a window (and so the window's undo manager).
-    private var hosts: [NSWindow] = []
 
     init() {
         windows.build = { TextViewerWindows.makeWindow($0, autosave: nil) }
@@ -34,19 +32,45 @@ final class TextViewerEditorRig {
         XCTAssertTrue(done(), "not within 5 s: \(what)", file: file, line: line)
     }
 
-    /// Opens `url`, waits for its first load and enters Edit; the editor's view is hosted offscreen.
+    /// The same wait for an async row. Its body runs as a main-queue job, and a run loop spun inside one does not drain
+    /// the main queue, so a main-actor hop or a DispatchQueue.main block never ran there: this one suspends between checks.
+    static func waitUntilAsync(_ what: String, _ done: () -> Bool, file: StaticString = #filePath,
+                               line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(5)
+        while !done(), Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(done(), "not within 5 s: \(what)", file: file, line: line)
+    }
+
+    /// Opens `url`, waits for its first load, enters Edit and waits for the window's Edit pane to hold the editor.
     func edit(_ url: URL, file: StaticString = #filePath, line: UInt = #line) throws -> TextViewerModel {
         windows.open(url)
         let model = try XCTUnwrap(windows.entries.last?.model, file: file, line: line)
         Self.waitUntil("loaded", { model.state != nil }, file: file, line: line)
+        let mounted = try enter(model, file: file, line: line)
+        Self.waitUntil("the Edit pane", mounted, file: file, line: line)
+        return model
+    }
+
+    /// `edit` for an async row (see waitUntilAsync).
+    func editAsync(_ url: URL, file: StaticString = #filePath, line: UInt = #line) async throws -> TextViewerModel {
+        windows.open(url)
+        let model = try XCTUnwrap(windows.entries.last?.model, file: file, line: line)
+        await Self.waitUntilAsync("loaded", { model.state != nil }, file: file, line: line)
+        let mounted = try enter(model, file: file, line: line)
+        await Self.waitUntilAsync("the Edit pane", mounted, file: file, line: line)
+        return model
+    }
+
+    /// Edit, and the check that the window's SwiftUI made the Edit pane (laid out on each check: the window is never shown).
+    /// A view hosted anywhere else is taken into that pane on a later turn, and its undo history stays behind.
+    private func enter(_ model: TextViewerModel, file: StaticString, line: UInt) throws -> () -> Bool {
         model.edit()
         XCTAssertEqual(model.mode, .edit, file: file, line: line)
-        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.borderless],
-                            backing: .buffered, defer: true)
-        host.isReleasedWhenClosed = false
-        host.contentView = model.makeEditor()
-        hosts.append(host)
-        return model
+        let window = try XCTUnwrap(windows.entries.last?.window, file: file, line: line)
+        return {
+            window.contentView?.layoutSubtreeIfNeeded()
+            return model.editorView?.window === window
+        }
     }
 
     /// Types `text` at the caret, as the key path's insertText does.
@@ -57,8 +81,6 @@ final class TextViewerEditorRig {
 
     func closeAll() {
         for e in windows.entries { e.window.close() }
-        for h in hosts { h.contentView = nil; h.close() }
-        hosts = []
     }
 }
 
@@ -138,7 +160,7 @@ final class TextViewerEditorTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tve-save", "a\r\nb\r\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "z")
         var saved: [Bool] = []
         model.save { saved.append($0) }
@@ -155,7 +177,7 @@ final class TextViewerEditorTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tve-race", "mine\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         try Data("theirs\n".utf8).write(to: url)
         model.save()
@@ -188,11 +210,11 @@ final class TextViewerEditorTests: XCTestCase {
         let rig = TextViewerEditorRig()
         defer { rig.closeAll() }
         let url = try viewerFile("tve-keep", "mine\n")
-        let model = try rig.edit(url)
+        let model = try await rig.editAsync(url)
         try rig.type(model, "x")
         try Data("theirs\n".utf8).write(to: url)
         XCTAssertTrue(rig.windows.changed(model))
-        TextViewerEditorRig.waitUntil("the load landed", { model.document?.text == "theirs\n" })
+        await TextViewerEditorRig.waitUntilAsync("the load landed", { model.document?.text == "theirs\n" })
         XCTAssertEqual(model.buffer, "xmine\n")
         XCTAssertEqual(model.editorView?.string, "xmine\n")
         XCTAssertTrue(model.isDirty)

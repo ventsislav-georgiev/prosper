@@ -125,6 +125,14 @@ final class TerminalEditorTests: XCTestCase {
         return model
     }
 
+    /// `open` for an async row: TextViewerEditorRig.waitUntilAsync says why a spun run loop does not do there.
+    private func openAsync(_ w: TextViewerWindows, _ url: URL) async throws -> TextViewerModel {
+        w.open(url)
+        let model = try XCTUnwrap(w.entries.last?.model, "no window")
+        await TextViewerEditorRig.waitUntilAsync("loaded", { model.state != nil })
+        return model
+    }
+
     // MARK: argv (N9)
 
     /// The path is ONE argv element after the editor's words, never interpreted; argv[0] is absolute on the login PATH.
@@ -287,7 +295,7 @@ final class TerminalEditorTests: XCTestCase {
         let rig = Rig()
         rig.shell.gateAnswer = .refused("needs dch 1.24.0")
         let w = windows(rig)
-        let model = try XCTUnwrap(open(w, file("te-refused")))
+        let model = try await openAsync(w, file("te-refused"))
         model.edit()
         await model.planning?.value
         XCTAssertEqual(model.mode, .edit)
@@ -304,7 +312,7 @@ final class TerminalEditorTests: XCTestCase {
         let rig = Rig()
         let w = windows(rig)
         let url = try file("te-exit")
-        let model = try XCTUnwrap(open(w, url))
+        let model = try await openAsync(w, url)
         model.edit()
         await model.planning?.value
         XCTAssertEqual(model.mode, .terminal)
@@ -314,7 +322,7 @@ final class TerminalEditorTests: XCTestCase {
         let loads = model.loads
         try Data("# changed\n".utf8).write(to: url)
         rig.ios.last?.exit(0)
-        waitUntil("back in Read", { model.mode == .read && model.loads > loads })
+        await TextViewerEditorRig.waitUntilAsync("back in Read", { model.mode == .read && model.loads > loads })
         XCTAssertTrue(model.terminal == nil, "the session is gone")
         XCTAssertEqual(model.document?.text, "# changed\n")
         for e in w.entries { e.window.close() }
@@ -325,7 +333,7 @@ final class TerminalEditorTests: XCTestCase {
     func testReadDetachesAndCloseEndsTheSession() async throws {
         let rig = Rig()
         let w = windows(rig)
-        let model = try XCTUnwrap(open(w, file("te-close")))
+        let model = try await openAsync(w, file("te-close"))
         model.edit()
         await model.planning?.value
         let name = try XCTUnwrap(rig.requests.last?.args.dropFirst(2).first)
@@ -348,7 +356,7 @@ final class TerminalEditorTests: XCTestCase {
         let gate = DispatchSemaphore(value: 0)
         rig.shell.hold = gate
         let w = windows(rig)
-        let model = try XCTUnwrap(open(w, file("te-race")))
+        let model = try await openAsync(w, file("te-race"))
         model.edit()
         let job = try XCTUnwrap(model.planning)
         for e in w.entries { e.window.close() }
@@ -364,9 +372,9 @@ final class TerminalEditorTests: XCTestCase {
     func testQuitEndsEveryEditSessionOnce() async throws {
         let rig = Rig()
         let w = windows(rig)
-        let first = try XCTUnwrap(open(w, file("te-quit-a", "a.md")))
-        let second = try XCTUnwrap(open(w, file("te-quit-b", "b.md")))
-        let readOnly = try XCTUnwrap(open(w, file("te-quit-c", "c.md")))
+        let first = try await openAsync(w, file("te-quit-a", "a.md"))
+        let second = try await openAsync(w, file("te-quit-b", "b.md"))
+        let readOnly = try await openAsync(w, file("te-quit-c", "c.md"))
         first.edit()
         await first.planning?.value
         second.edit()
@@ -391,13 +399,15 @@ final class TerminalEditorTests: XCTestCase {
 
     // MARK: R9: an editor session is not an agent
 
+    /// Both rows name the same Claude Code and transcript, so only the edit session's name keeps it from claudeReading.
     func testEditSessionIsNeverNeedsInputClaudeOrSidekick() {
         let edit = TerminalEditor.sessionName(path: "/Users/example/notes-qa.md")
         func row(_ name: String) -> String {
-            #"{"name":"\#(name)","alias":"","activity_epoch":1,"state":"blocked","version":"1.63.0","agents":1,"claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":null,"claude_foreground":true}"#
+            #"{"name":"\#(name)","alias":"","activity_epoch":1,"state":"blocked","version":"1.63.0","agents":1,"claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":"/Users/example/.claude/projects/-Users-example/0b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl","claude_foreground":true}"#
         }
         let json = Data(("[" + row(edit) + "," + row("api-qa") + "]").utf8)
-        let list = AgentIsland.list(dirs: ["/Users/example/.dch-test"], run: { args, _ in args == ["--ls-json"] ? json : nil })
+        let list = AgentIsland.list(dirs: ["/Users/example/.dch-test"], run: { args, _ in args == ["--ls-json"] ? json : nil },
+                                     modelIO: AgentModelEffort.IO(size: { _ in nil }, read: { _, _, _ in nil }))
         XCTAssertEqual(list.count, 2)
         let e = list.first { $0.key.name == edit }, other = list.first { $0.key.name == "api-qa" }
         XCTAssertEqual(e?.state, .idle, "never Needs input")

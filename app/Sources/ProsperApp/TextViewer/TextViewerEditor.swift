@@ -26,6 +26,8 @@ enum TextViewerEditor {
         view.isGrammarCheckingEnabled = false
         view.smartInsertDeleteEnabled = false
         view.string = text
+        // The caret opens at the start: AppKit leaves it at the end after `string =` (macOS 27.0.1 and 27.2).
+        view.setSelectedRange(NSRange(location: 0, length: 0))
         let font = NSFont.monospacedSystemFont(ofSize: 13 * ThemeRuntime.scale, weight: .regular)
         let color = NSColor(Neon.textPrimary)
         view.font = font
