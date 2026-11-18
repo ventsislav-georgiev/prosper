@@ -1941,6 +1941,9 @@ tag from the now-released section and put it on the new top draft.
   hidden or closed. (#1561)
 - Fixed a case where a request with an unusable path got a 400 that the usage record never counted.
   (#1572)
+- Agent Sessions: Command-K in a live terminal pane now clears the screen and also empties that
+  session's X-ray history, and the X-ray panel's header says what X-ray reads for the session (for
+  example "Shell · last 500 rows"). (#1566)
 
 ## v2.174.0
 

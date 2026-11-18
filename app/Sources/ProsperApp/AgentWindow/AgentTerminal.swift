@@ -310,6 +310,9 @@ final class AgentTerminalController: ObservableObject {
     var fontAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
     /// #1477 (7.6): the scrollback action an unfocused pane's wheel becomes (rows record it). Runs on main.
     var scrollAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
+    /// #1566: Command-K's local clear: libghostty's own clear_screen action (`keybind = clear` dropped its super+k).
+    /// Rows record it. Runs on main.
+    var clearAction: @MainActor (AgentTerminalHostView?) -> Void = { _ = $0?.surface?.performBindingAction("clear_screen") }
     /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
     var paneFocused: () -> Bool = { true }
     private var wheelRemainder = 0.0
@@ -755,6 +758,26 @@ final class AgentTerminalController: ObservableObject {
         fontAction(view, "set_font_size:\(Float(Self.fontSize))")
     }
 
+    /// #1566 (spec 5.7, dch README v1.99.0:1527-1552): Command-K. The local clear always; then, for a live attach
+    /// only, one `dch --xray <n> --clear --json` through XrayPanels.run, never a byte to the pty (dch clears its ring
+    /// and mirror over the control socket). Local: <n> is the session_id of the focused pane's follow snapshot when
+    /// it is this session's, else the name (dch matches a live ring's session_id first, then a name). Remote: the
+    /// clear is a request on the warm host:name connection (XrayRequests; busy or a failed dial runs it cold). An
+    /// ended, detached, failed or History pane, or no X-ray gate: the local clear alone.
+    func commandK() {
+        clearAction(view)
+        guard phase == .live, child != nil, let key, !key.name.isEmpty, !key.name.hasPrefix("-"), let dch = XrayPanels.dch() else { return }
+        let target: XrayTarget
+        if let h = remoteHost {
+            target = XrayTarget(name: "\(h):\(key.name)", dir: nil)
+        } else {
+            let own = XrayTarget(name: key.name, dir: key.dir), f = view?.marks.follow
+            target = XrayTarget(name: (f?.target == own ? f?.state?.corpus?.sessionID : nil) ?? key.name, dir: key.dir)
+        }
+        let run = XrayPanels.shared.requests.run(for: target, cold: XrayPanels.run), args = target.args("clear"), env = target.env
+        Task { _ = await run(dch, args, env) }
+    }
+
     func searchTotal(_ n: Int?) { findTotal = n }
     func searchSelected(_ n: Int?) { findSelected = n }
 
@@ -934,6 +957,18 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func mouseMoved(with event: NSEvent) { if !unfocused { super.mouseMoved(with: event) } }
     override func mouseDragged(with event: NSEvent) { if !unfocused { super.mouseDragged(with: event) } }
     override func mouseExited(with event: NSEvent) { if !unfocused { super.mouseExited(with: event) } }
+
+    /// #1566 (spec 5.7): Command-K in the focused pane (the window's first responder: a key equivalent visits every
+    /// view) is the owner's clear; every other key equivalent goes to libghostty as before.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, window?.firstResponder === self, let owner,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]) == [.command],
+           AgentsNSWindow.chordLetter(event) == "k" {
+            owner.commandK()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 
     // MARK: #1357 (P9): a Cmd-click on a ref on the grid
 

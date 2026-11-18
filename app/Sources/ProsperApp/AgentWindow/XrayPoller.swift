@@ -78,6 +78,7 @@ extension XrayPanelModel {
         dchChapters = r.status == 0 ? XrayChapters.parse(r.out) : nil
         chapterAnchors = r.status == 0 ? Self.anchors(r.out) : [:]   // #1472, #1475: every read's, not the open's alone
         if XrayPanels.refsTab() { refs = r.status == 0 ? XrayRefs.parse(r.out) : nil }   // #1415: the same bytes
+        corpus = r.status == 0 ? XrayChapters.corpus(r.out) : nil   // #1566: the header's label, from the same bytes
     }
 
     /// #1415: a Transcript pane's `--json` read: its refs only, by takeChapters' rules (4/7 keep the rows).

@@ -40,6 +40,69 @@ enum XrayChapters {
     /// #1487: dch's note for a cut middle: "\u{2026} N characters cut \u{2026}".
     static func cutLine(_ n: Int) -> String { "\u{2026} \(n) characters cut \u{2026}" }
 
+    /// #1566 (dch README v1.99.0:1444-1464): the snapshot's corpus fields, for the panel header's label and Cmd-K's
+    /// `--clear`. Every value is outside data; the label is drawn through OutsideText.shown (XrayPanelModel.corpusLine).
+    struct Corpus: Equatable {
+        /// dch's `session_id` when it is a plain id (letters, digits, "-", "_", "."); nil otherwise (it goes to argv).
+        var sessionID: String?
+        var corpus: String
+        var reason = ""
+        var mentionsOnly = false
+        var lines = 0
+        var complete = true
+        var why = ""
+        /// -1: not said (dch xview.c:194).
+        var claudes = -1
+
+        static let dot = " \u{00B7} "
+        static let clearNote = "a terminal's own clear-screen key may not clear X-ray; run `clear`"
+
+        /// dch's view words (xview.c xv_label, v1.100.0:2430-2481); nil where dch shows none (a lone Claude).
+        var label: String? {
+            let d = Self.dot
+            switch corpus {
+            case "claude" where claudes < 2: return nil
+            case "codex": return "Codex\(d)mentions only"
+            case "shell":
+                let head = mentionsOnly ? "Shell\(d)no shell integration\(d)mentions only" : "Shell\(d)last \(lines) rows"
+                return head + (why == "alt" ? d + "waiting for the shell prompt" : "") + d + Self.clearNote
+            case "screen": return "Screen\(d)last \(lines) lines\(d)mentions only"
+            case "none", "claude":
+                if claudes > 1 { return "\(claudes) Claude sessions run here; X-ray reads one" }
+                if reason == "ended" { return "Shell\(d)ended\(d)not kept" }
+                if reason.isEmpty && claudes == 0 { return "No Claude session found here" }
+                return reason == "lite" ? "X-ray needs the full dch build"
+                    : reason == "off" ? "X-ray is off for shells (xray_ring = 0)" : "No X-ray corpus for this session"
+            default: return "X-ray corpus not supported by this dch"
+            }
+        }
+
+        /// Design 3.9 / 5.5 (QA677 S16): a shell's counts while dch read only part of its ring.
+        var rangeNote: String? { corpus == "shell" && !complete && why == "range" ? "counts in the last \(lines) rows" : nil }
+    }
+
+    /// #1566: nil without schema 1 and a string `corpus` (an older dch, a reset's empty object).
+    static func corpus(_ o: [String: Any]) -> Corpus? {
+        guard o["schema"] as? Int == 1, let c = o["corpus"] as? String else { return nil }
+        // a JSON integer, not a boolean; a non-negative one for `lines` (dch: `lines > 0 ? lines : 0`)
+        func int(_ v: Any?) -> Int? {
+            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            return n as? Int
+        }
+        let sid = (o["session_id"] as? String).flatMap { s in
+            !s.isEmpty && s.utf8.count <= 128 && !s.hasPrefix("-")
+                && s.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)) } ? s : nil
+        }
+        return Corpus(sessionID: sid, corpus: c, reason: o["reason"] as? String ?? "", mentionsOnly: isTrue(o["mentions_only"]),
+                      lines: max(0, int(o["lines"]) ?? 0), complete: o["complete"] as? Bool != false,
+                      why: o["why"] as? String ?? "", claudes: int(o["claudes"]) ?? -1)
+    }
+
+    static func corpus(_ data: Data) -> Corpus? {
+        guard data.count <= maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return corpus(o)
+    }
+
     /// The parse: bytes in, never throws; nil (no tab) unless one object with schema 1 and a chapters array. A row that
     /// is not an object is skipped; a missing key reads as absent.
     static func parse(_ data: Data) -> [TranscriptOutline.Chapter]? {

@@ -24,6 +24,8 @@ final class XrayFollow: ObservableObject {
         /// #1475 c: the stream's tasks and memory blocks, parsed as the one-shot reads; nil: no block (yet).
         var tasks: XrayTasks? = nil
         var memory: XrayMemory? = nil
+        /// #1566: the snapshot's corpus fields (the panel header's label, Cmd-K's session_id).
+        var corpus: XrayChapters.Corpus? = nil
     }
 
     /// #1475 c: one tasks or memory block as dch's one-shot lines (header, rows with their ids, done line).
@@ -167,7 +169,7 @@ final class XrayFollow: ObservableObject {
         let memory = dirty.contains("memory") ? blocks["memory"].map { XrayMemory.parse($0.data) } : state?.memory
         dirty = []
         state = State(chapters: XrayChapters.parse(object), refs: XrayRefs.parse(object), anchors: XrayPanelModel.anchors(object),
-                      tasks: tasks, memory: memory)
+                      tasks: tasks, memory: memory, corpus: XrayChapters.corpus(object))
     }
 
     /// #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow);

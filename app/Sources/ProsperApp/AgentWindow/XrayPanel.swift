@@ -197,6 +197,8 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var memory: XrayMemory?
     /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
     @Published var dchChapters: [TranscriptOutline.Chapter]?
+    /// #1566: the corpus fields of the same read or snapshot (the header's second line); nil: none said.
+    @Published var corpus: XrayChapters.Corpus?
     /// #1415: the refs of dch's `--json` read (gate A on only); nil: none read. "Show all kinds" (dch `a`).
     @Published var refs: XrayRefs?
     @Published var showAllRefs = false
@@ -351,7 +353,7 @@ final class XrayPanelModel: ObservableObject {
     /// the open when Tasks and Memory answered; before them it draws the cached rows at once (no "Reading").
     func takeFollow(_ s: XrayFollow.State?) {
         guard let s, !stopped else { return }
-        if fromDch() { (dchChapters, chapterAnchors) = (s.chapters, s.anchors) }
+        if fromDch() { (dchChapters, chapterAnchors, corpus) = (s.chapters, s.anchors, s.corpus) }
         if XrayPanels.refsTab() { refs = s.refs }
         // #1475 c: the stream's Tasks and Memory replace the reads' (a reset keeps the rows until its blocks come)
         if let t = s.tasks { tasks = Self.tasksTab(t) }
@@ -463,6 +465,13 @@ final class XrayPanelModel: ObservableObject {
     var listTitle: String? {
         guard tasks?.source == "command", let t = tasks?.sessionTitle, !t.isEmpty else { return nil }
         return "Tasks \u{00B7} \(t)"
+    }
+
+    /// #1566 (design 3.9, 5.5): the header's second line: dch's corpus label, then a shell's "counts in the last N
+    /// rows" while dch read only part of its ring (why "range"); nil when dch's view shows none.
+    var corpusLine: String? {
+        let parts = [corpus?.label, corpus?.rangeNote].compactMap { $0 }
+        return parts.isEmpty ? nil : OutsideText.shown(parts.joined(separator: XrayChapters.Corpus.dot), max: 240)
     }
 
     /// The faint footer: the warnings, "partial", "N not shown".
@@ -939,6 +948,11 @@ struct XrayPanelView: View {
                 .accessibilityLabel("Close X-Ray")
             }
             .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+            if let l = panel.corpusLine {   // #1566: the corpus label, wrapped (a shell's carries the clear note)
+                Text(verbatim: l).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, sz(10)).padding(.bottom, sz(6))
+            }
             Rectangle().fill(Neon.stroke).frame(height: 1)
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
