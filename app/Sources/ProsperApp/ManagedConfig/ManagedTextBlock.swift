@@ -11,8 +11,11 @@ enum ManagedTextBlock {
     /// refused at plan time: a `#` marker would break a .json, .lua or .html file.
     static let markdownExtensions: Set<String> = ["md", "markdown"]
     static let hashExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "conf", "toml", "yaml", "yml"]
+    /// #922: shell rc files have no extension; a dotfile manager's target may drop the leading dot.
+    static let hashNames: Set<String> = [".zshrc", ".bashrc", "zshrc", "bashrc"]
 
     static func syntax(for url: URL) -> Syntax? {
+        if hashNames.contains(url.lastPathComponent.lowercased()) { return .hash }
         let ext = url.pathExtension.lowercased()
         if markdownExtensions.contains(ext) { return .markdown }
         return hashExtensions.contains(ext) ? .hash : nil

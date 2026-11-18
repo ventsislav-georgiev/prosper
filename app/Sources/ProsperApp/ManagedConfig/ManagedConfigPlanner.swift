@@ -201,7 +201,7 @@ struct ManagedConfigPlanner {
     private mutating func applyBlock(_ piece: ManagedConfigPiece, _ existing: ManagedConfigRecord?, _ repair: Bool, _ w: inout Work) throws(ManagedConfigRefusalReason) -> ManagedConfigPieceAction.Kind {
         guard let body = piece.text, ManagedTextBlock.bodyIsValid(body) else { throw .invalidPiece("a block needs text without prosper markers") }
         guard let syntax = ManagedTextBlock.syntax(for: w.url) else {
-            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files")
+            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files, or .zshrc or .bashrc")
         }
         let block = ManagedTextBlock.render(owner: owner.id, piece: piece.id, version: owner.version, body: body, syntax: syntax)
         let record = newRecord(piece, w, written: block, hash: OrderedJSON.sha256(Array(block.utf8)))

@@ -9,6 +9,8 @@ struct ManagedConfigRoots: Sendable, Equatable {
     var configHome: URL
     /// state.json and backups/ (errata C10).
     var stateDir: URL
+    /// #922: the `shellrc:` root (the user's home). nil: no shellrc: piece resolves; tests pass a temp dir.
+    var home: URL? = nil
 
     /// The only place in ManagedConfig that reads the user's home. `loginEnvironment` is Prosper's
     /// login-shell env (never the process env of a test). Called only by ManagedConfigProvider.live.
@@ -20,7 +22,8 @@ struct ManagedConfigRoots: Sendable, Equatable {
         return .success(ManagedConfigRoots(
             claude: dir.isEmpty ? home.appendingPathComponent(".claude", isDirectory: true) : URL(fileURLWithPath: dir, isDirectory: true),
             configHome: home.appendingPathComponent(".config", isDirectory: true),
-            stateDir: home.appendingPathComponent("Library/Application Support/Prosper/managed-config", isDirectory: true)))
+            stateDir: home.appendingPathComponent("Library/Application Support/Prosper/managed-config", isDirectory: true),
+            home: home))
     }
 }
 
@@ -39,6 +42,8 @@ struct ManagedConfigResolvedTarget: Sendable, Equatable {
 /// Path allowlist (spec 2.1, errata A8). Pure apart from reading file metadata.
 enum ManagedConfigPaths {
     static let kitMarkerFile = ".prosper-kit"
+    /// #922 (OQ-4): the shell rc files a `shellrc:` block may go in, directly under the home.
+    static let shellRCFiles: Set<String> = [".zshrc", ".bashrc"]
     private static let slugChars = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
     private static let idChars = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
@@ -96,6 +101,10 @@ enum ManagedConfigPaths {
             case .absent: kitDir = base
             case .foreign: return .failure(.foreignDir)
             }
+        case "shellrc":
+            guard kind == .block, shellRCFiles.contains(rel) else { return .failure(.wrongKind("shellrc: takes a block in .zshrc or .bashrc only")) }
+            guard let home = roots.home else { return .failure(.unwritable("no home root")) }
+            base = home
         case "ext":
             return .failure(.wrongKind("ext: is read-only"))
         default:

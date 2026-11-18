@@ -42,6 +42,8 @@ final class KitPaneModel: ObservableObject {
         var offTools: [String: Set<String>]
         /// #1421 carry: a market kit's source over the market byte cap (apply would refuse it): why; nil otherwise
         var sourceRefusal: String? = nil
+        /// #922: the kit's bin dir ({{kit_bin}}), for the shell-path piece's line shown before it is applied
+        var kitBin: String = ""
     }
 
     let extID: String
@@ -63,8 +65,9 @@ final class KitPaneModel: ObservableObject {
     /// A toggle waiting for its confirm: the off set it asks, and the pieces the closure switches off with it.
     @Published private(set) var pendingOff: Set<String>?
     @Published private(set) var alsoOff: [String] = []
-    /// The install selection of a never-applied kit: every piece on until unchecked.
+    /// The install selection of a never-applied kit: every piece on until unchecked, an opt-in one (#922) off until checked.
     @Published var installOff: Set<String> = []
+    private var optInSeeded = false
     /// The settings form: manifest key -> value (manifest default until .settings.env holds one).
     @Published var settings: [String: String] = [:]
 
@@ -121,6 +124,11 @@ final class KitPaneModel: ObservableObject {
             return
         }
         facts = f
+        // #922: once, for a never-applied kit: the opt-in pieces start unchecked
+        if !optInSeeded, f.status?.live == nil, case .ok(let v) = f.preview {
+            installOff.formUnion(KitPieceSelection(v).optIn)
+            optInSeeded = true
+        }
         var form: [String: String] = [:]
         for s in kit?.settings ?? [] {
             form[s.key] = f.settingsEnv["KIT_" + s.key.uppercased()] ?? Self.text(s.defaultValue)
@@ -166,7 +174,7 @@ final class KitPaneModel: ObservableObject {
         return Facts(status: status, preview: rt.preview(ext, source: source, otherKitSlugs: others), requirements: reqs,
                      overrides: hooksDir.flatMap { KitPaneFacts.overrides($0, uid: getuid()) }, inUse: inUse, hooksDisabled: hooksOff,
                      filesEdited: edited, updateAvailable: await rt.updateAvailable(ext), restoreRefusal: rt.restoreRefusal,
-                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools(), sourceRefusal: capped)
+                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools(), sourceRefusal: capped, kitBin: layout.bin)
     }
 
     // MARK: actions
@@ -284,7 +292,7 @@ final class KitPaneModel: ObservableObject {
         let t = act(needsTrust: true) { rt, ext in
             if let why = Self.select(rt, v, off: asked, offTools: tools) { return why }
             guard applied else { return "done" }
-            let after = rt.off()
+            let after = rt.off(v)
             let gone = after.subtracting(before), back = before.subtracting(after)
             var line = "done"
             if !gone.isEmpty { line = Self.line(await rt.remove(ext, ids: gone.sorted())) }

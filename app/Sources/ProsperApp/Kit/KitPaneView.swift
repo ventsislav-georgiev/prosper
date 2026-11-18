@@ -116,6 +116,8 @@ struct KitPaneView: View {
         var hook: String?
         var inUse: String?
         var tools: [String]
+        /// #922: a shell-path piece's exact rc line, shown before it is applied
+        var shellLine: String? = nil
     }
 
     static func pieceRows(_ m: KitPaneModel) -> [PieceRow] {
@@ -129,7 +131,8 @@ struct KitPaneView: View {
             let hook = p.kind == .hook ? [p.event, p.matcher].compactMap { $0 }.joined(separator: " ") : nil
             return PieceRow(id: p.id, kind: p.kind.rawValue, state: state,
                             target: st.map { OutsideText.shown($0.target, max: 120) }, hook: hook.map { OutsideText.shown($0, max: 120) },
-                            inUse: m.facts?.inUse[p.id], tools: (v.tools[p.id] ?? []).map(\.name).sorted())
+                            inUse: m.facts?.inUse[p.id], tools: (v.tools[p.id] ?? []).map(\.name).sorted(),
+                            shellLine: p.kind == .shellPath ? KitRender.shellPathLine(m.facts?.kitBin ?? "").map { "~/.zshrc gets: " + OutsideText.shown($0, max: 400) } : nil)
         }
     }
 
@@ -163,7 +166,7 @@ struct KitPaneView: View {
     }
 
     static func pieceLine(_ r: PieceRow) -> String {
-        [r.kind, r.state, r.target, r.hook, r.inUse].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " - ")
+        [r.kind, r.state, r.target, r.hook, r.inUse, r.shellLine].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " - ")
     }
 
     // MARK: settings and overrides

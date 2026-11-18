@@ -102,6 +102,10 @@ enum ManagedConfigLua {
                   let kind = (d["kind"] as? String).flatMap(ManagedConfigPiece.Kind.init(rawValue:)) else {
                 bad.append(.init(pieceID: id, target: target, reason: .invalidPiece("id, target and kind (block, json, seed) are required"))); continue
             }
+            // #922: a shell rc is written by the kit runtime only (an opt-in kit piece), never by an extension's Lua
+            guard !target.hasPrefix("shellrc:") else {
+                bad.append(.init(pieceID: id, target: target, reason: .wrongKind("shellrc: is for a kit's shell-path piece only"))); continue
+            }
             var piece = ManagedConfigPiece(id: id, kind: kind, target: target)
             piece.text = d["text"] as? String
             piece.source = d["source"] as? String

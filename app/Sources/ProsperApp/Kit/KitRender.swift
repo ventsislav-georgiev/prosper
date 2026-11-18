@@ -132,6 +132,15 @@ enum KitRender {
         "#!/bin/sh\nexec " + runnerLine(c, pieceID: pieceID, name: name, target: target) + " \"$@\"\n"
     }
 
+    /// #922 (OQ-4): the shell-path block's one line. Appends, never prepends (the user's own tools win), and only once,
+    /// so a nested shell does not grow PATH. nil when the path holds a newline, carriage return or NUL.
+    static let shellRCTarget = "shellrc:.zshrc"
+    static func shellPathLine(_ kitBin: String) -> String? {
+        guard !kitBin.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) else { return nil }
+        let q = shellQuote(kitBin)
+        return "case \":$PATH:\" in *:\(q):*) ;; *) export PATH=\"$PATH\":\(q) ;; esac"
+    }
+
     // MARK: (d) managed pieces
 
     static func seedPieceID(_ pieceID: String, _ under: String) -> String { pieceID + "." + under.replacingOccurrences(of: "/", with: ".") }
@@ -193,6 +202,9 @@ enum KitRender {
                 }
             case .agents:
                 plan.agents += (v.agents[p.id] ?? []).map { KitAgentPlan(pieceID: p.id, name: $0.name, path: $0.path) }
+            case .shellPath:
+                guard let line = shellPathLine(c.kitBin) else { plan.refusals.append(.init(subject: p.id, reason: .notImportable)); continue }
+                wiring.append(ManagedConfigPiece(id: p.id, kind: .block, target: shellRCTarget, text: line))
             }
         }
         if needsLocalSeed(v, off: off) {
@@ -248,6 +260,8 @@ enum KitRender {
             case .agents:
                 let names = (v.agents[p.id] ?? []).map { $0.name + ".md" }.joined(separator: ", ")
                 lines.append("\(p.id): installs agents \(names.isEmpty ? "(none)" : names) into \(c.home)/.claude/agents; a file you already have is never overwritten")
+            case .shellPath:
+                lines.append("\(p.id): only when you switch it on, a block at the bottom of \(c.home)/.zshrc appends \(c.kitBin) to PATH")
             }
         }
         if needsLocalSeed(v, off: off) {

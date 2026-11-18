@@ -380,7 +380,7 @@ enum KitValidator {
                 guard let rel = resolve(p.run ?? "", "\(p.id).run", .file) else { return }
                 executables.insert(rel)
 
-            case .permissions:
+            case .permissions, .shellPath:
                 break
 
             case .seed:

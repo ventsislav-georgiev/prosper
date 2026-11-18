@@ -109,7 +109,7 @@ final class KitManifestTests: XCTestCase {
         XCTAssertEqual(bad, [])
         XCTAssertEqual(kit.pieces.map(\.kind), [.claudeMD, .tools, .hook, .statusline, .permissions, .seed])
         // #920: the agents kind needs an agents/ dir the shared fixture does not ship; KitAgentsTests covers it
-        XCTAssertEqual(Set(kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases).subtracting([.agents]))
+        XCTAssertEqual(Set(kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases).subtracting([.agents, .shellPath]))
         XCTAssertEqual(kit.schema, 1)
         XCTAssertEqual(kit.homepage, "https://example.com/calm-agent")
         XCTAssertEqual(kit.requires, ["node"])

@@ -81,7 +81,7 @@ enum KitReason: String, Sendable, CaseIterable {
     case unknownKey = "unknown key: the kit schema does not list it"
     case wrongType = "wrong value type for this key"
     case missingKey = "a required key is missing"
-    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions, seed or agents"
+    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions, seed, agents or shell-path"
     case badID = "piece id must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case duplicateID = "piece id is used twice"
     case tooManyPieces = "a kit has at most 64 pieces"
@@ -168,6 +168,8 @@ struct KitManifest: Sendable, Equatable {
     struct Piece: Sendable, Equatable {
         enum Kind: String, Sendable, CaseIterable {
             case claudeMD = "claude-md", tools, hook, statusline, permissions, seed, agents
+            /// #922 (OQ-4): opt-in; a block in ~/.zshrc appends {{kit_bin}} to PATH
+            case shellPath = "shell-path"
         }
         var id: String
         var kind: Kind
@@ -247,6 +249,7 @@ struct KitManifest: Sendable, Equatable {
         .permissions: ["allow", "deny", "ask"],
         .seed: ["from"],
         .agents: ["dir"],
+        .shellPath: [],
     ]
     static let settingKeys: Set<String> = ["key", "title", "kind", "default", "values"]
 
@@ -471,6 +474,8 @@ struct KitManifest: Sendable, Equatable {
                 p.from = string(t, "from", at, required: true)
             case .agents:
                 p.dir = string(t, "dir", at) ?? "agents"
+            case .shellPath:
+                break
             }
             return refusals.count == before ? p : nil
         }

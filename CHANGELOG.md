@@ -1965,6 +1965,8 @@ tag from the now-released section and put it on the new top draft.
   and more than one pane is open, matching the key. (#1367)
 - The Agent Island shortcut (Settings > Agent Island) now toggles: press it again to close the
   island. (#1581)
+- Agent Kits can offer to put their tools on your shell PATH: an opt-in piece adds one marked line
+  to ~/.zshrc (shown first, backed up, removable). (#922)
 
 ## v2.174.0
 

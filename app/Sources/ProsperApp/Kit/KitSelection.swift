@@ -16,6 +16,9 @@ struct KitPieceSelection: Sendable {
 
     init(_ kit: KitValidated) { self.kit = kit }
 
+    /// #922: the opt-in pieces (shell-path): off until switched on, so a kit never edits a shell rc by default.
+    var optIn: Set<String> { Set(kit.kit.pieces.filter { $0.kind == .shellPath }.map(\.id)) }
+
     func closure(off asked: Set<String>) -> KitSelectionResult {
         let pieces = kit.kit.pieces
         let ids = Set(pieces.map(\.id))

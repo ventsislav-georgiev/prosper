@@ -197,7 +197,7 @@ final class KitRuntime: @unchecked Sendable {
 
     private func kit(_ version: String) -> KitValidated? { lock.withLock { kits[version] } }
 
-    private func plan(_ v: KitValidated) -> KitPlan { KitRender.plan(v, context(v.slug), off: off(), offTools: offTools()) }
+    private func plan(_ v: KitValidated) -> KitPlan { KitRender.plan(v, context(v.slug), off: off(v), offTools: offTools()) }
 
     // MARK: the S2 off set (kits/<ext-id>/pieces.json, Prosper's own file: no sheet)
 
@@ -205,6 +205,8 @@ final class KitRuntime: @unchecked Sendable {
     private struct Pieces: Codable {
         var off: [String]
         var offTools: [String: [String]]? = nil
+        /// #922: the opt-in pieces switched on; optional, so an older pieces.json reads as every one off
+        var on: [String]? = nil
     }
 
     /// R1421-i1: each key decodes alone, so a wrongly typed offTools drops only offTools, never the off set.
@@ -216,12 +218,18 @@ final class KitRuntime: @unchecked Sendable {
             return try? JSONDecoder().decode(t, from: data)
         }
         guard let off = part("off", [String].self) else { return nil }
-        return Pieces(off: off, offTools: part("offTools", [String: [String]].self))
+        return Pieces(off: off, offTools: part("offTools", [String: [String]].self), on: part("on", [String].self))
     }
 
     /// Outside data (stale or hand-edited): KitRender.plan takes its closure and ignores unknown ids.
     func off() -> Set<String> {
         Set((pieces()?.off ?? []).prefix(KitManifest.maxPieces))
+    }
+
+    /// #922: the off set the plan takes: the stored one plus every opt-in piece of `v` not switched on.
+    func off(_ v: KitValidated) -> Set<String> {
+        let on = Set((pieces()?.on ?? []).prefix(KitManifest.maxPieces))
+        return off().union(KitPieceSelection(v).optIn.subtracting(on))
     }
 
     /// #918 S1 (G1 c): tools piece id -> its tools switched off. Outside data as off(): at most maxPieces pieces, each
@@ -239,13 +247,14 @@ final class KitRuntime: @unchecked Sendable {
     func setOff(_ ids: Set<String>) throws {
         guard begin() else { throw KitRuntimeError.refused(Self.busyText) }
         defer { end() } // setOff
-        try writePieces(off: ids, offTools: offTools())
+        try writePieces(off: ids, offTools: offTools(), on: pieces()?.on ?? [])
     }
 
-    private func writePieces(off ids: Set<String>, offTools: [String: Set<String>]) throws {
+    private func writePieces(off ids: Set<String>, offTools: [String: Set<String>], on: [String]) throws {
         let tools = offTools.isEmpty ? nil : offTools.mapValues { $0.sorted() }
         try store.ensureLayout()
-        try store.fs.openDir(store.layout.root).write("pieces.json", try JSONEncoder().encode(Pieces(off: ids.sorted(), offTools: tools)), mode: KitStore.envMode)
+        try store.fs.openDir(store.layout.root).write("pieces.json", try JSONEncoder().encode(Pieces(off: ids.sorted(), offTools: tools, on: on.isEmpty ? nil : on.sorted())),
+                                                      mode: KitStore.envMode)
     }
 
     /// #918 S1 (G1 a, b): the CLOSED off set is written (the asked pieces and their dependents), never the asked one; a
@@ -262,7 +271,8 @@ final class KitRuntime: @unchecked Sendable {
             let mine = names.intersection(known)
             if !mine.isEmpty { tools[id] = mine }
         }
-        try writePieces(off: closed, offTools: tools)
+        // #922: an opt-in piece left out of the closed off set was switched on
+        try writePieces(off: closed, offTools: tools, on: Array(KitPieceSelection(v).optIn.subtracting(closed)))
         return r
     }
 
@@ -359,7 +369,7 @@ final class KitRuntime: @unchecked Sendable {
                 try store.installRunner()
                 let c = context(v.slug)
                 try store.writeKitEnv(c)
-                return KitRender.plan(v, c, off: off(), offTools: offTools()).shims
+                return KitRender.plan(v, c, off: off(v), offTools: offTools()).shims
             },
             applyWiring: { [self] _ in
                 if let why = lock.withLock({ wiring }) { throw KitRuntimeError.wiring(why) }
@@ -545,7 +555,7 @@ final class KitRuntime: @unchecked Sendable {
             return KitRuntimeStatus(pieces: mc.status(owner: who), off: off(), live: nil)
         }
         let p = plan(v)
-        return KitRuntimeStatus(pieces: mc.status(owner: owner(ext, v, dir: store.layout.live), declared: p.pieces), off: off(), live: live,
+        return KitRuntimeStatus(pieces: mc.status(owner: owner(ext, v, dir: store.layout.live), declared: p.pieces), off: off(v), live: live,
                                 agents: store.agentStates(p.agents, claude: mc.roots.claude))
     }
 }
