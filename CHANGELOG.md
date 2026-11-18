@@ -1432,7 +1432,7 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
-- Ships dch 1.99.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
+- Ships dch 1.100.0 (was 1.74.0). X-ray's full reference search keeps the newest mentions on very
   large transcripts, a capped search keeps every whole turn, a quick search's time budget also ends
   a slow folder lookup, and the X-ray view keeps more of a prompt's title on narrow terminals when
   an agent's name is long; X-ray Refs also list the terms a session keeps coming back to, no longer
@@ -1917,8 +1917,8 @@ tag from the now-released section and put it on the new top draft.
   another pane, and it counts toward the limit of 4 connected terminals. The "Opened on another
   device" card's button now reads "Take back". (#902)
 - X-ray's ref card groups a ref's mentions by turn, newest first, each showing who said it and the
-  sentence with the ref highlighted; click a turn's header to open that prompt (needs dch 1.100.0;
-  an older dch keeps the plain list). (#1528)
+  sentence with the ref highlighted; click a turn's header to open that prompt (an installed dch
+  older than 1.100.0 keeps the plain list). (#1528)
 - Account pool: removing an account now drops its usage reading together with the account, and the
   usage chart is faster on large histories. (#1571)
 - Account pool: sessions routed through the pool now keep your Anthropic API key and tokens in their
