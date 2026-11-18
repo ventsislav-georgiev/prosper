@@ -30,7 +30,8 @@ struct DchCommandOps: Sendable {
         /// Every other fan's engage (the popup's setManualReply), also without the modal (#728); its
         /// reply is the request's when it is not engaged (#926: a refusal is pending, no reply an error).
         var engage: @Sendable @MainActor (Int, Double) async -> FanManualReply = {
-            await FanControlHelper.setManualReply($0, rpm: $1, presentModal: false) }
+            await FanControlHelper.setManualReply($0, rpm: $1, presentModal: false,
+                                                  registrationCeiling: FanControlHelper.laterEngageCeiling) }
     }
 
     typealias Reply = DchControlOps.Reply

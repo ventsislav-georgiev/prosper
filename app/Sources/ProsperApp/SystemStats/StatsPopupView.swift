@@ -986,6 +986,7 @@ struct StatsPopupView: View {
         }
         fanError = nil
         fanBusy = true
+        let automatic = FanControlHelper.automaticGeneration   // entry 982: which drop the status line names
         Task {
             guard !targets.isEmpty else { fanBusy = false; return }
             // Engage ONE fan first. This is what registers/approves the helper and runs
@@ -1008,7 +1009,7 @@ struct StatsPopupView: View {
             let (saved, reply) = await Self.engageManual(targets)
             fanBusy = false
             guard saved else {
-                fanError = reply.errorText   // nil for an engage abandoned after a sleep: silently back on auto
+                fanError = Self.unsavedClickText(reply, automaticChosen: automatic != FanControlHelper.automaticGeneration)
                 return
             }
             fanManual = true
@@ -1017,6 +1018,19 @@ struct StatsPopupView: View {
             refreshFans()   // the pending line reads the fans: no stale pre-engage frame
         }
     }
+
+    /// Entry 982 (QA #91): the status line of a Manual click that saved nothing. A failed engage names its reply; a click
+    /// dropped with its fans engaged (a sleep since the click, or Automatic chosen on the phone meanwhile; popupEngage
+    /// handed the pins back) says why, where it used to leave the line empty.
+    static func unsavedClickText(_ reply: FanManualReply, automaticChosen: Bool) -> String {
+        if let text = reply.errorText { return text }
+        return automaticChosen ? droppedForAutomaticText : droppedForSleepText
+    }
+
+    nonisolated static let droppedForSleepText =
+        "The Mac went to sleep while manual control was turning on, so macOS keeps running the fans. Try again."
+    nonisolated static let droppedForAutomaticText =
+        "Automatic was chosen while manual control was turning on, so macOS keeps running the fans."
 
     /// Hand every fan back to the OS. Default: full reset + tear the daemon
     /// connection down. With the fast-re-engage pref: per-fan auto that keeps the
@@ -1054,7 +1068,8 @@ struct StatsPopupView: View {
         _ targets: [Int: Double],
         firstReply: @escaping @Sendable (Int, Double) async -> FanManualReply = {
             await FanControlHelper.setManualReply($0, rpm: $1, timeout: FanControlHelper.firstEngageTimeout) },
-        engage: (Int, Double) async -> FanManualReply = { await FanControlHelper.setManualReply($0, rpm: $1) }
+        engage: (Int, Double) async -> FanManualReply = {   // entry 982: a hung registration ends at the ceiling
+            await FanControlHelper.setManualReply($0, rpm: $1, registrationCeiling: FanControlHelper.laterEngageCeiling) }
     ) async -> (saved: Bool, reply: FanManualReply) {
         guard let first = FanControlHelper.engageOrder(targets).first else { return (false, .unavailable) }
         return await FanControlHelper.popupEngage(targets, first: first.key, engageFirst: {

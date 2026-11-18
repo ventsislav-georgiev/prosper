@@ -1967,6 +1967,9 @@ tag from the now-released section and put it on the new top draft.
   island. (#1581)
 - Agent Kits can offer to put their tools on your shell PATH: an opt-in piece adds one marked line
   to ~/.zshrc (shown first, backed up, removable). (#922)
+- Turning on manual fan control no longer stays on "Enabling manual control…" when the helper's
+  registration hangs on a later fan, and a Manual click dropped by a sleep or an Automatic chosen on
+  the phone now says why under the fan controls. (#982)
 
 ## v2.174.0
 

@@ -416,14 +416,42 @@ enum FanControlHelper {
     /// Returns nil when registration isn't available (e.g. unsigned dev build) — the
     /// caller then leaves fans on auto. `presentModal: false` is the phone's (#728): an
     /// unapproved helper comes back as `.needsApproval`, never as a modal on an unattended Mac.
-    private static func ensureConnection(presentModal: Bool = true) async -> (NSXPCConnection?, LidSleepHelper.RegisterOutcome) {
-        let outcome = await LidSleepHelper.ensureRegisteredOutcome(feature: "Manual fan control", presentModal: presentModal)
+    private static func ensureConnection(presentModal: Bool = true,
+                                         within ceiling: TimeInterval? = nil) async -> (NSXPCConnection?, LidSleepHelper.RegisterOutcome) {
+        let outcome = await registeredOutcome(presentModal: presentModal, within: ceiling)
         guard outcome == .enabled else { return (nil, outcome) }
         if connection == nil { fanConnectionMade() }   // entry 1208: a stale old verdict goes back to unknown
         let c = connection ?? makeConnection()
         connection = c
         return (c, outcome)
     }
+
+    /// Entry 982 (QA #211): a later fan's wait on the registration (an SMAppService call that can hang), at most
+    /// `ceiling` seconds; nil = no ceiling (the popup's first engage has its 45 s race around all of it). Past the
+    /// ceiling it reads `.failed` (the engage is `.unavailable`) and the registration finishes on its own: nothing
+    /// was sent to the helper, so there is no pin to hand back.
+    static func registeredOutcome(presentModal: Bool, within ceiling: TimeInterval?) async -> LidSleepHelper.RegisterOutcome {
+        guard let ceiling else {
+            return await LidSleepHelper.ensureRegisteredOutcome(feature: "Manual fan control", presentModal: presentModal)
+        }
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        var timer: Task<Void, Never>?
+        let outcome = await withCheckedContinuation { (cont: CheckedContinuation<LidSleepHelper.RegisterOutcome, Never>) in
+            let finish: @Sendable (LidSleepHelper.RegisterOutcome) -> Void = { outcome in
+                if resumed.withLock({ let first = !$0; $0 = true; return first }) { cont.resume(returning: outcome) }
+            }
+            Task { @MainActor in   // never cancelled or awaited, as StatsPopupView.raceFanTimeout's op
+                finish(await LidSleepHelper.ensureRegisteredOutcome(feature: "Manual fan control", presentModal: presentModal))
+            }
+            timer = Task { try? await Task.sleep(nanoseconds: UInt64(ceiling * 1_000_000_000)); finish(.failed) }
+        }
+        timer?.cancel()
+        return outcome
+    }
+
+    /// Entry 982 (QA #211): the registration ceiling of every popup and phone engage after the first fan's. A test
+    /// seam (a row lowers it). Above the time a registered helper takes to answer its status.
+    static var laterEngageCeiling: TimeInterval = 15
 
     // MARK: - Public ops (called from the settings pane + wake/sleep)
 
@@ -437,7 +465,9 @@ enum FanControlHelper {
     /// `setManual` keeping the helper's refusal apart from an unreachable helper.
     /// `macOSRPM` (the test seam) is read off-main, and only on a refusal. `arm` (R1234b-1, the test seam) arms the
     /// recovery lifecycle, on main before the call; a row passes a no-op so no real timer or observer is installed.
+    /// `registrationCeiling` (entry 982): `ensureConnection`'s wall-clock ceiling; nil = none.
     static func setManualReply(_ index: Int, rpm: Double, timeout: TimeInterval = 12, presentModal: Bool = true,
+                               registrationCeiling: TimeInterval? = nil,
                                macOSRPM: @escaping @Sendable (Int) -> Double? = { FanInfo.macOSRPM($0) },
                                arm: () -> Void = { armRecoveryLifecycle() }) async -> FanManualReply {
         // R1218-1: never send an unusable speed; a failure every caller hands back on (not the latch).
@@ -446,7 +476,7 @@ enum FanControlHelper {
         // waits there must still reset the fans an earlier engage pinned (#343).
         engagesInFlight += 1
         defer { engagesInFlight -= 1 }
-        let (opened, outcome) = await ensureConnection(presentModal: presentModal)
+        let (opened, outcome) = await ensureConnection(presentModal: presentModal, within: registrationCeiling)
         guard let c = opened else { return outcome == .needsApproval ? .needsApproval : .unavailable }
         // A manual write is manual intent, even before the popup saves the pref (it
         // saves it only after the first engage lands), so this arms unconditionally.
