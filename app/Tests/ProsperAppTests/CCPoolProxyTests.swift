@@ -156,6 +156,8 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
     private(set) var seen: [String] = []       // Authorization values answered, in order
     private(set) var apiKeys: [String] = []    // x-api-key values received
     private(set) var bodySizes: [Int] = []
+    private(set) var bodies: [Data] = []      // #1605: every request body received, raw
+    var fixedReply: (headers: [(String, String)], body: Data)?   // #1605: a 200 with exactly these headers and this body
     private(set) var paths: [String] = []
     private(set) var dropped = 0
     private(set) var onMain = false
@@ -172,6 +174,7 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
             seen.append(auth)
             if let k = head.header("x-api-key") { apiKeys.append(k) }
             bodySizes.append(body.count)
+            bodies.append(body)
             paths.append(head.path)
             heads.append(Dictionary(head.headers.map { ($0.name.lowercased(), $0.value) }, uniquingKeysWith: { a, _ in a }))
             let accept = head.header("accept-encoding")
@@ -204,6 +207,7 @@ final class CCPoolFakeAnthropic: @unchecked Sendable {
                 out = gz
                 gzipServed += 1
             }
+            if let f = fixedReply, !limited { return .respond(200, f.headers, f.body) }
             if has(cutAfterFirstBytes), !limited { return .respondCut(200, h, out) }
             return .respond(limited ? 429 : 200, h, out)
         }
@@ -429,6 +433,46 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertEqual(try upstreamBeta("oauth-2025-04-20"), "oauth-2025-04-20")
         XCTAssertEqual(CCPoolConnection.withOAuthBeta("  "), "oauth-2025-04-20", "a blank list is no list")
         XCTAssertEqual(CCPoolConnection.withOAuthBeta("oauth-2025-04-200"), "oauth-2025-04-200,oauth-2025-04-20", "whole tokens only")
+    }
+
+    // #1605: auto mode's server-side check. The client sends a "safeguards" body field and anthropic-beta as a pair: both
+    // must reach the upstream unchanged (the body byte for byte, the beta list kept plus oauth-2025-04-20), and the answer
+    // (safeguard_results, tool_use ids) must come back byte for byte.
+    private static let safeguardsBody = Data(#"{"model":"claude-opus-5","max_tokens":1,"safeguards":{"mode":"auto","rules":["r1","r2"],"nested":{"x":[1,2,{"y":null}]}},"unknown_future_field":{"a":"b"},"messages":[{"role":"user","content":"hi"}]}"#.utf8)
+    private static let safeguardsJSON = Data(#"{"type":"message","content":[{"type":"tool_use","id":"toolu_example01","name":"Bash","input":{"command":"ls"}}],"safeguard_results":[{"id":"toolu_example01","verdict":"allow","extra":{"k":[1,2]}}],"unknown_future_field":true}"#.utf8)
+    private static let safeguardsSSE = Data([
+        #"event: content_block_start"#, #"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_example01","name":"Bash","input":{}}}"#, "",
+        #"event: safeguard_results"#, #"data: {"type":"safeguard_results","results":[{"id":"toolu_example01","verdict":"allow"}],"future":1}"#, "",
+        #"event: message_stop"#, #"data: {"type":"message_stop","safeguard_results":[{"id":"toolu_example01"}]}"#, "", "",
+    ].joined(separator: "\n").utf8)
+
+    private func safeguardsExchange(contentType: String, reply: Data) throws -> (resp: CCPoolClientResponse, bodies: [Data], heads: [[String: String]]) {
+        let r = try rig()
+        r.setCurrent("two")
+        r.anthropic.set { $0.fixedReply = ([("content-type", contentType)], reply) }
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: [
+            ("content-type", "application/json"), ("anthropic-beta", "auto-mode-2026-01-01,safeguards-2026-01-01"),
+        ], body: Self.safeguardsBody))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        return (resp, r.anthropic.get { $0.bodies }, r.anthropic.get { $0.heads })
+    }
+
+    func testCCPoolSafeguardsRequestBodyAndBetaReachUpstreamUnchanged() throws {
+        let x = try safeguardsExchange(contentType: "application/json", reply: Self.safeguardsJSON)
+        XCTAssertEqual(x.bodies.count, 1)
+        XCTAssertTrue(x.bodies.last == Self.safeguardsBody, "the request body arrives byte-identical: \(String(decoding: x.bodies.last ?? Data(), as: UTF8.self))")
+        XCTAssertEqual(x.heads.last?["anthropic-beta"], "auto-mode-2026-01-01,safeguards-2026-01-01,oauth-2025-04-20", "the client list kept in order")
+    }
+
+    func testCCPoolSafeguardResultsJSONResponseByteIdentical() throws {
+        let x = try safeguardsExchange(contentType: "application/json", reply: Self.safeguardsJSON)
+        XCTAssertTrue(x.resp.body == Self.safeguardsJSON, "safeguard_results and tool_use ids kept: \(x.resp.text)")
+    }
+
+    func testCCPoolSafeguardResultsSSEResponseByteIdentical() throws {
+        let x = try safeguardsExchange(contentType: "text/event-stream", reply: Self.safeguardsSSE)
+        XCTAssertEqual(x.resp.header("content-type"), "text/event-stream")
+        XCTAssertTrue(x.resp.body == Self.safeguardsSSE, "every stream event kept: \(x.resp.text)")
     }
 
     // #1595: the usage probe still sends exactly oauth-2025-04-20 itself.
