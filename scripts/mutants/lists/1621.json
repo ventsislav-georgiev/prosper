@@ -1,0 +1,13 @@
+{
+ "entry": 1621,
+ "filter": "XraySearchScopeTests/testSearchFieldLabelFollowsTheScope|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "label-always-session",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "searchScoped ? \"Search this project\" : \"Search this session\"",
+   "new": "\"Search this session\"",
+   "expect": "killed"
+  }
+ ]
+}
