@@ -1432,7 +1432,11 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
-- Ships dch 1.108.0 (was 1.74.0). An X-ray excerpt no longer starts on a lone accent mark or splits
+- Ships dch 1.111.0 (was 1.74.0). The X-ray card names what a reference points to: a commit's
+  subject, author, age and whether it is on HEAD, a file's path and when it was modified, and an
+  issue's or pull request's title and state (through a read-only `gh` call; dch's xray_github setting
+  turns it off). X-ray search takes several words, lists exact-phrase hits first, searches the
+  project's other sessions and says where a topic was first and last mentioned. An X-ray excerpt no longer starts on a lone accent mark or splits
   a flag where a sentence is cut, the X-ray card counts emoji such as ❤️ and keycaps as two columns,
   and the X-ray card groups another session's mentions by that session even after it is renamed.
   X-ray's full reference search keeps the newest mentions on very large transcripts, a capped search
