@@ -229,7 +229,15 @@ final class TextViewerModel: ObservableObject {
     /// Never persisted: a window always opens in Read.
     @Published private(set) var mode = Mode.read
     /// The editor session this window started; kept after Read (it lives on) so the window's close ends it (OQ-118 Q3).
-    @Published private(set) var terminal: TextViewerTerminalEdit?
+    /// #1599: a live session holds Quit and an update as a dirty buffer does (its editor's buffer is not seen, so live
+    /// may be dirty). The new one reports before the old one goes, so a swap never lets a held update through.
+    @Published private(set) var terminal: TextViewerTerminalEdit? {
+        didSet {
+            guard oldValue !== terminal else { return }
+            if let t = terminal { dirtyRegistry.report(t, dirty: true) { [weak self] in self?.say($0) } }
+            if let t = oldValue { dirtyRegistry.report(t, dirty: false) }
+        }
+    }
     var editor = TerminalEditorSeams.current
     /// The plan of the Edit in flight (the login shell and dch are asked off main); a row awaits it.
     private(set) var planning: Task<Void, Never>?

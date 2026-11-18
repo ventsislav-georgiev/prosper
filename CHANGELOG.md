@@ -1984,6 +1984,9 @@ tag from the now-released section and put it on the new top draft.
   an older dch keeps the single Earlier list). (#1589)
 - Account pool: a Claude session started with an API key no longer gets pool accounts refused; the pool
   now sends the OAuth beta header its accounts need. (#1595)
+- An update or Quit no longer closes a file you are editing in the Text Viewer's terminal editor:
+  the update waits until the editor is quit or its window closed, and Quit asks first (Cancel keeps
+  the editor and its unsaved changes). (#1599)
 
 ## v2.174.0
 

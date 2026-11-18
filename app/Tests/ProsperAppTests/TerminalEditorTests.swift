@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import XCTest
 @testable import ProsperApp
 
@@ -383,9 +384,17 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertEqual(rig.requests.count, 2)
         let names = Set(rig.requests.compactMap { $0.args.dropFirst(2).first })
         XCTAssertEqual(names.count, 2)
-        let dirty = TextViewerDirty()
-        XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { _ in XCTFail("no later reply") }),
-                       .terminateNow)
+        // #1599: the live sessions are the window's registry's holders: Quit asks, and a confirmed quit ends them
+        let dirty = w.dirty()
+        var prompted: [Int] = [], replies: [Bool] = [], installs = 0
+        dirty.prompt = { count, answer in prompted.append(count); answer(true) }
+        dirty.holdUpdate { installs += 1 }
+        XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { replies.append($0) }),
+                       .terminateLater)
+        XCTAssertEqual(prompted, [2], "asked, with both sessions counted")
+        XCTAssertEqual(replies, [true])
+        XCTAssertEqual(installs, 0, "the sessions' end lets no held install fire into the quit")
+        XCTAssertFalse(dirty.isDirty)
         XCTAssertEqual(Set(rig.ended.map(\.key.name)), names, "both sessions end")
         XCTAssertEqual(rig.ended.count, 2, "once each")
         XCTAssertEqual(rig.children.map(\.terminated), [1, 1], "each client terminated once")
@@ -395,6 +404,56 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertTrue(first.planning == nil, "no Edit after Quit")
         for e in w.entries { e.window.close() }
         XCTAssertEqual(rig.ended.count, 2, "a later close ends nothing again")
+    }
+
+    /// #1599 (QA #1486 B5): a live edit session holds an unattended update (its editor's buffer is not seen), through Read
+    /// and a second Edit; no session is ended for it; the update installs once the editor quits.
+    func testLiveEditSessionHoldsTheUpdateUntilTheEditorQuits() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let model = try await openAsync(w, file("te-hold"))
+        model.edit()
+        await model.planning?.value
+        XCTAssertEqual(model.mode, .terminal)
+        let d = SilentUserDriver()
+        d.dirtyViewers = w.dirty()
+        var replies: [SPUUserUpdateChoice] = []
+        d.showReady { replies.append($0) }
+        XCTAssertEqual(replies, [], "held while the session is live")
+        XCTAssertEqual(model.notice, TextViewerDirty.updateWaiting)
+        model.showRead()
+        model.edit()
+        await model.planning?.value
+        XCTAssertEqual(rig.requests.count, 2)
+        XCTAssertEqual(replies, [], "still held through Read and a second Edit")
+        XCTAssertTrue(rig.ended.isEmpty, "no session is ended for the update")
+        rig.ios.last?.exit(0)
+        await TextViewerEditorRig.waitUntilAsync("editor quit", { model.terminal == nil })
+        XCTAssertEqual(replies, [.install], "installs once no session is live")
+        XCTAssertTrue(rig.ended.isEmpty)
+        for e in w.entries { e.window.close() }
+    }
+
+    /// #1599: Quit asks while an edit session is live; Cancel ends nothing and keeps the session.
+    func testQuitAsksWhileAnEditSessionIsLiveAndCancelEndsNothing() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let model = try await openAsync(w, file("te-ask"))
+        model.edit()
+        await model.planning?.value
+        let dirty = w.dirty()
+        var prompted: [Int] = [], replies: [Bool] = []
+        dirty.prompt = { count, answer in prompted.append(count); answer(false) }
+        XCTAssertEqual(dirty.terminateReply(endSessions: { w.endEditSessions() }, reply: { replies.append($0) }),
+                       .terminateLater)
+        XCTAssertEqual(prompted, [1], "asked")
+        XCTAssertEqual(replies, [false], "Cancel → .terminateCancel")
+        XCTAssertTrue(rig.ended.isEmpty, "nothing ended")
+        XCTAssertTrue(model.terminal != nil && model.mode == .terminal, "the session and its window stay")
+        XCTAssertTrue(dirty.isDirty)
+        for e in w.entries { e.window.close() }
+        XCTAssertEqual(rig.ended.count, 1, "the window's close still ends it")
+        XCTAssertFalse(dirty.isDirty)
     }
 
     // MARK: R9: an editor session is not an agent

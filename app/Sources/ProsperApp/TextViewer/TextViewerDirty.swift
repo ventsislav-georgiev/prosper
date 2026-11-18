@@ -1,7 +1,8 @@
 import AppKit
 
 /// #1108 P3c: the Text Viewer windows with unsaved edits, which hold Quit and an unattended update.
-/// Each window's model reports here (#1544, TextViewerModel.setDirty); with none dirty, Quit and updates go on at once (R6).
+/// Each window's model reports here (#1544, TextViewerModel.setDirty), and so does each live terminal edit session (#1599);
+/// with none dirty, Quit and updates go on at once (R6).
 @MainActor
 final class TextViewerDirty {
     static let shared = TextViewerDirty()
@@ -45,8 +46,11 @@ final class TextViewerDirty {
             endSessions()
             return .terminateNow
         }
-        prompt(owners.count) { quit in
-            if quit { endSessions() }
+        prompt(owners.count) { [self] quit in
+            if quit {
+                held = []   // #1599: an ended session reports clean; a held install must not fire into this quit
+                endSessions()
+            }
             reply(quit)
         }
         return .terminateLater
