@@ -400,6 +400,19 @@ final class AgentIslandControlsTests: XCTestCase {
                                         AgentSessionKey(dir: "/a", name: "old")])
     }
 
+    /// #1336: Resume under a new name is `--revive <rec> --as <new>` and nothing else. dch 1.79.0+ resume_argv rewrites the
+    /// recorded Claude -n/--name value to the new name when it equals the record's dch name and keeps a different one,
+    /// so Prosper never edits the record argv or adds a name flag itself, whatever the recorded Claude name is.
+    func testResumeUnderANewNameLeavesTheClaudeNameToDch() {
+        for argv in [["claude", "--name", "api"], ["claude", "-n", "api"], ["claude", "--name=api"], ["claude", "--name", "mine"], ["claude"]] {
+            var r = record("api")
+            r.argv = argv
+            let args = AgentIsland.reviveArgs(r, live: ["api"], records: [])
+            XCTAssertEqual(args, ["--revive", "api", "--as", "api-2", "--json"], "\(argv)")
+            XCTAssertTrue(args?.contains(where: { $0 == "-n" || $0 == "-cn" || $0.hasPrefix("--name") }) == false, "\(argv)")
+        }
+    }
+
     func testReviveArgsPickTheFirstFreeName() {
         let r = record("a")
         XCTAssertEqual(AgentIsland.reviveArgs(r, live: ["b"], records: []), ["--revive", "a", "--json"])
