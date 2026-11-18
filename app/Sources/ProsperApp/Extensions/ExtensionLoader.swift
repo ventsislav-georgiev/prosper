@@ -25,6 +25,8 @@ enum ExtensionLoadError: Error, Equatable {
     /// Extension targets an API level this host does not implement.
     case unsupportedAPILevel(need: Int, max: Int)
     case entryMissing(String)
+    /// #1548: the id is one of the app's own pref words (ExtensionLoader.reservedIDs).
+    case reservedID(String)
 }
 
 /// #984 (QA #160): what the Settings list and the marketplace show for a refused manifest: fixed sentences. A parse
@@ -50,6 +52,7 @@ extension ExtensionLoadError: LocalizedError {
         case let .unsupportedAPILevel(need, max):
             "The extension needs extension API level \(need); this Prosper supports up to \(max)."
         case .entryMissing(let main): "The extension's entry file \(OutsideText.shown(main, max: 80)) is missing."
+        case .reservedID(let id): "The extension's id \(OutsideText.shown(id, max: 80)) is reserved for Prosper's own settings."
         }
     }
 }
@@ -62,6 +65,11 @@ enum ExtensionLoader {
     static let supportedAPILevel = 1
 
     static let manifestFileName = "extension.toml"
+
+    /// #1548: the words after "ext." in the app's own pref keys ("ext.timers.v1", "ext.collapse.user"...). An extension
+    /// whose id is one of them would read and write those keys (the key is "ext.<id>.<key>", #1542). A test keeps this
+    /// equal to what the sources hold. Compared ignoring case, like the folder names.
+    static let reservedIDs: Set<String> = ["collapse", "timers"]
 
     static func load(
         directory: URL,
@@ -80,6 +88,8 @@ enum ExtensionLoader {
             throw ExtensionLoadError.parse(String(describing: error))
         }
         try validate(manifest, hostVersion: hostVersion)
+        // #1548: every entry point (install, market, hand-placed folder at discovery) loads through here.
+        if reservedIDs.contains(manifest.extension.id.lowercased()) { throw ExtensionLoadError.reservedID(manifest.extension.id) }
 
         let loaded = LoadedExtension(manifest: manifest, directory: directory, isSystem: isSystem)
         guard FileManager.default.fileExists(atPath: loaded.entryURL.path) else {

@@ -1858,6 +1858,8 @@ tag from the now-released section and put it on the new top draft.
 - Command-click a reference such as #12 in a live session's terminal to open its X-ray card.
   Prosper's server now also answers X-ray requests from phones and other Macs when that Mac's dch is
   1.91.0 or newer. (#1357)
+- An extension can no longer use the id "collapse" or "timers", which Prosper's own settings already
+  use. (#1548)
 
 ## v2.174.0
 
