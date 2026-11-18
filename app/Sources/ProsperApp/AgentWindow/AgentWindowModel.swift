@@ -808,6 +808,9 @@ final class AgentWindowModel: ObservableObject {
             guard l != layout else { return false }
             if paneRefusal != nil { paneRefusal = nil }
             keyFocus = .pane   // 7.2: every pane focus action, split and close
+            // #1617: a split (Command-D, the Split menu items) edits the layout it makes, so the next sidebar pick fills
+            // the new empty pane; set before adopt, so its autosave saves the split (locked, it would not).
+            if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }
             adopt(l)
             return true
         case let .failure(r):

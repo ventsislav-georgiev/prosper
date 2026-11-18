@@ -1993,6 +1993,9 @@ tag from the now-released section and put it on the new top draft.
   the app exits; while an update waits on an open editor the menu's version row and the About pane
   say so for as long as it waits; and the Quit alert calls a terminal editor session "an open
   editor" instead of "unsaved changes". (#1604)
+- Splitting a pane (Command-D or the Split menu items) now turns on Edit layout, so clicking a
+  session in the sidebar fills the new empty pane instead of switching away, and the split is saved.
+  (#1617)
 
 ## v2.174.0
 

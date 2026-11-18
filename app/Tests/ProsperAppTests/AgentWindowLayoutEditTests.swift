@@ -210,6 +210,45 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
+    /// #1617: Command-D (and the Split menu items, the same perform) on the lone one-pane layout opens Edit layout, so the
+    /// next sidebar click fills the new empty focused pane and the layout keeps both (saved). A refused split (no room)
+    /// changes nothing: still not editing, the click replaces the one pane as before.
+    @MainActor
+    func testAgentWindowLayoutEditSplitOpensEditModeAndAClickFillsTheNewPane() throws {
+        try withGate(true) {
+            let d = base.layoutSuite()
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("docs", .idle)]), layouts: d)
+            defer { m.close() }
+            m.setVisible(true)
+            m.setLayoutEditing(false)
+            m.click(row("api"))
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            XCTAssertTrue(m.perform(.split(.columns)))
+            XCTAssertTrue(m.layoutEditing, "a split opens Edit layout")
+            XCTAssertEqual(m.layout.panes.count, 2)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the split itself saved")
+            XCTAssertTrue(m.layout.panes.first { $0.id == m.layout.focused }?.target == nil, "the new empty pane focused")
+            let made = m.layout.id
+            m.click(row("docs"))
+            XCTAssertTrue(m.parked == nil, "no single-pane view")
+            XCTAssertEqual(m.layout.id, made)
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("api"), t("docs")], "the layout keeps both")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
+            let small = base.windowModel(base.store([base.session("api", .idle), base.session("docs", .idle)]),
+                                         layouts: base.layoutSuite())
+            defer { small.close() }
+            small.setVisible(true)
+            small.setLayoutEditing(false)
+            small.click(row("api"))
+            small.paneArea = CGRect(x: 0, y: 0, width: 10, height: 10)
+            XCTAssertTrue(small.perform(.split(.columns)), "the refusal is swallowed")
+            XCTAssertFalse(small.layoutEditing, "a refused split leaves Edit layout off")
+            XCTAssertEqual(small.layout.panes.count, 1)
+            small.click(row("docs"))
+            XCTAssertTrue(small.layout.panes.first?.target == t("docs"), "the click replaces the one pane as before")
+        }
+    }
+
     /// The Go menu's Edit Layout: with the split gate on only.
     @MainActor
     func testAgentWindowLayoutEditGoMenuItem() {
