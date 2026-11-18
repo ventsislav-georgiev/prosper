@@ -12,8 +12,8 @@
   {
    "name": "cancel-ends-sessions",
    "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
-   "old": "            if quit { endSessions() }",
-   "new": "            endSessions()",
+   "old": "            if quit {\n                held = []   // #1599: an ended session reports clean; a held install must not fire into this quit\n                endSessions()\n            }",
+   "new": "            if quit { held = [] }\n            endSessions()",
    "expect": "killed"
   },
   {
