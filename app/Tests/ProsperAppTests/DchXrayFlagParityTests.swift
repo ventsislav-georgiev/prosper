@@ -200,6 +200,34 @@ final class DchXrayFlagParityTests: XCTestCase {
         XCTAssertEqual(why(["--json", "--search", "ab", "--bogus"]), "--bogus is not allowed with --xray")
     }
 
+    /// #1562 (4.4): --clear's allowlist matrix, the session given by name or by its session_id (dch.c refuse_id_name
+    /// keeps a name from shadowing an id, so `--xray <id> --clear` is the id's; serve's ctl_name, rframe.c:561-570@v1.99.0,
+    /// takes both). Who may send it is the connection's owner gate (RemoteFramesGoldenTests), not this list.
+    func testClearMatrixWithIdentityForms() {
+        func w(_ name: String, _ a: [String]) -> String? { DchCtl.refusal(["--xray", name] + a, create: false) }
+        for id in ["api", "api-qa", "m0123456789abcdef", "M0123456789ABCDEF", "caf\u{E9}", String(repeating: "n", count: 255)] {
+            XCTAssertTrue(w(id, ["--clear", "--json"]) == nil, id)
+            XCTAssertTrue(w(id, ["--json", "--clear"]) == nil, id)
+        }
+        let dash = "a session name starting with - can't be passed to dch"
+        let names: [(String, String)] = [("-m0123456789abcdef", dash), ("-api", dash), ("host:api", "a session name with ':' is local only"),
+                                         ("mac:m0123456789abcdef", "a session name with ':' is local only"), ("serve", "invalid session name"),
+                                         ("", "invalid session name"), ("a/b", "invalid session name"), ("a\u{2028}b", "invalid session name"),
+                                         (String(repeating: "n", count: 256), "invalid session name")]
+        for (name, want) in names { XCTAssertEqual(w(name, ["--clear", "--json"]), want, name.debugDescription) }
+        let refused: [([String], String)] = [
+            (["--clear"], needsJSON), (["--clear", "--clear", "--json"], "--clear twice"), (["--clear", "x", "--json"], "unexpected x after --xray"),
+            (["--clear=1", "--json"], "--clear=1 is not allowed with --xray"), (["--Clear", "--json"], "--Clear is not allowed with --xray"),
+            (["--json", "--clear", "--follow"], exclusion), (["--json", "--clear", "--ref", "x"], exclusion),
+            (["--json", "--clear", "--chapter", "c1"], exclusion), (["--json", "--clear", "--search", "ab"], exclusion),
+            (["--json", "--clear", "--tasks"], exclusion), (["--json", "--clear", "--memory"], exclusion),
+            (["--json", "--clear", "--full"], withRef), (["--json", "--clear", "--scope", "all"], withRef),
+            (["--json", "--clear", "--budget-ms", "100"], withRef), (["--json", "--clear", "--all"], "--all is not allowed"),
+        ]
+        for (a, want) in refused { XCTAssertEqual(w("m0123456789abcdef", a), want, a.joined(separator: " ")) }
+        XCTAssertFalse(DchCtl.follows(["--xray", "api", "--clear", "--json"]), "--clear has the timeout and the cap")
+    }
+
     func testAcceptedArgvIsCarriedAsOwnElements() {
         // follow is read from the same scan; a search text equal to a flag name is a value, not a flag.
         XCTAssertFalse(DchCtl.follows(["--xray", "api", "--search", "--follow", "--json"]))

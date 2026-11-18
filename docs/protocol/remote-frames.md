@@ -28,8 +28,9 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   times: about 30 s (remote.c:2435-2465, serve.c:2476-2480@v1.58.0; a dead peer's idle `--follow`
   held a subscriber slot). Prosper probes after 120 s, every 10 s, 4 times: about 160 s, a
   deliberate difference (#767, kept in #885): each probe wakes the phone's radio, and Prosper
-  holds no slot a dead peer could keep from another (no connection slots, and no `--xray --follow`
-  cap, see [0x30 ctl](#0x30-ctl-gate-ctl)), and the newest attach to a session retires the older connections to it at once.
+  holds no slot a dead peer could keep from another (no connection slots; the `--xray --follow` cap
+  is per device and a third follow cuts that device's oldest, #1556, see [0x30 ctl](#0x30-ctl-gate-ctl)),
+  and the newest attach to a session retires the older connections to it at once.
 - A server must never bind a wider address than its Tailscale one on its own; `dch serve`
   binds another only when its operator names it (`--bind`). See
   [Decided defaults](#decided-defaults-for-dch-serve) for the rules `dch serve` follows.
@@ -592,6 +593,8 @@ appear in any order after the name.
 | `--xray` | `<name> --ref <text> [--scope session\|project\|all] [--full] [--budget-ms <n>] --json` | NDJSON on 0x31; 60 s (dch's own 10 s cap normally ends it first) |
 | `--xray` | `<name> --follow --json` | streams; no cap, no timeout |
 | `--xray` | `<name> --chapter <anchor> --json` | `<anchor>` as `--xray --json` gives it |
+| `--xray` | `<name> --clear --json` | empties the session's xray ring; `<name>` may be its session_id (#1562) |
+| `--xray` | `<name> --search <text> --json`, `<name> --tasks --json`, `<name> --memory --json` | `--follow` may take `--tasks` and `--memory` |
 
 The rules behind it:
 - `argv` has 2 to 1024 elements (dch's `CTL_ARGV_MAX`), every one a string.
@@ -612,7 +615,9 @@ The rules behind it:
 - Never `--config`, `serve`, `-h`/`--help`, `-f`, `--size`, `--env`, `--all` (but `--forget
   --all`), or any verb or flag not listed.
 - `--xray`'s flags may come in any order, each once: `--json` always, and at most one of `--ref`,
-  `--follow`, `--chapter`; `--scope`, `--full` and `--budget-ms` only with `--ref`. The values:
+  `--search`, `--tasks`, `--memory`, `--follow`, `--chapter` and `--clear`, but `--follow` takes
+  `--tasks` and `--memory` (ctl_xray, rframe.c:631-697@v1.99.0); `--scope`, `--full` and
+  `--budget-ms` only with `--ref`. The values:
   `--ref`'s text is 1-256 bytes of UTF-8 with no control character (C0, DEL, C1, U+200E, U+200F,
   U+202A-U+202E, U+2066-U+2069); `--scope` is exactly `session`, `project` or `all`;
   `--chapter`'s anchor is 1-128 bytes of `A-Z a-z 0-9 : _ . -`; `--budget-ms` is a whole number
@@ -738,7 +743,10 @@ other setting gates ctl on Prosper. "Run commands from iPhone" gates only the `c
 (0x28, 0x29); attach input (0x10), 0x04 kill and 0x06 rename are gated by nothing else, and
 ctl's verbs that type into a session (`--send`, `--run`, `--keys`, `--say`) or change one (`-k`,
 `-m`, `-d`, `--stop`, `--pin`, `--unpin`, `--forget`) follow them. `--spawn` and `--revive` follow
-create.
+create. `--xray --clear` (it empties a session's xray ring) has the same gate: it runs only for
+the owner's devices, as on `dch serve`, whose whois gate refuses another user's node before any
+ctl is read (`not_owner`, nothing run: tests/serve_test.py:309-319@v1.99.0). Prosper #1562 pins it
+for every identity the owner check refuses.
 
 **The dch client** (dch's, noted here for the reader): for `host:name` it exits 0-3 with the
 host dch's own code; 4 when the host refused the connection (the gate); 6 when the host lacks the
@@ -842,7 +850,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-39, 42: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-39, 42, 44, 45, 47: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -885,6 +893,14 @@ cancels the running one; 29 a 0x09 on a warm ctl connection gets `a ctl connecti
 frames` and the FIN; 30 (`unless_op` `xray`) a malformed `--xray` gets `xray not supported by this
 host` and the FIN. 26-29 `requires_op` `ctl-cancel` and `create`. dch's 43 (the 300 s idle close)
 needs the server's idle lowered, which a runner cannot do; Prosper's unit tests pin it.
+
+44-47 are the `--xray` set (#1562), each `requires_op` `ctl` and `xray`, the 0x30 byte for byte: 44
+`--xray <name> --json` and 45 `--xray <name> --clear --json` on a session the setup creates (0x31,
+then 0x33 with dch's exit; 45 is run only from the owner's device, as any runner that got in is); 46
+`--clear` without `--json` gets `--xray needs --json (the view is client-side only)` byte for byte and
+the FIN; 47 a 0x34 during `--xray <name> --follow --json` gets `{"exit":2,"why":"cancel"}` byte for
+byte, and a second 0x34 is ignored. 44, 45 and 47 need `create` too (47 `ctl-cancel` as well) and are
+mutating; each cleanup kills its `golden-1562-<n>`.
 
 15 assumes the session runs a shell (dch's default command) that reads input once it has
 started: it is a smoke check of exit and close. A shell whose rc files discard type-ahead, or

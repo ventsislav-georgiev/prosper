@@ -50,7 +50,10 @@ final class RemoteFramesGoldenTests: XCTestCase {
         // the trap runs at once (a shell defers it until a foreground child ends), on stdin kept through fd 3. The
         // trap is set before the repaint, so a 0x07 sent on seeing the repaint always finds it.
         try ("#!/bin/sh\n[ \"$1\" = --read ] && { printf 'golden screen of %s\\n' \"$2\"; exit 0; }\n"
-            + "[ \"$1\" = --follow ] && { printf 'golden follow of %s\\n' \"$2\"; exec /bin/sleep 30; }\nwhile [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
+            + "[ \"$1\" = --follow ] && { printf 'golden follow of %s\\n' \"$2\"; exec /bin/sleep 30; }\n"
+            // #1562: a ctl --xray prints one JSON line; with --follow it then runs until it is ended.
+            + "[ \"$1\" = --xray ] && { printf '{\"golden\":\"xray of %s\"}\\n' \"$2\"; case \" $* \" in *\" --follow \"*) exec /bin/sleep 30;; esac; exit 0; }\n"
+            + "while [ $# -gt 0 ]; do case $1 in -E|-f) shift;; -n) shift 2;; --) shift; break;; *) break;; esac; done\n"
             + "[ $# -gt 0 ] && exec \"$@\"\ntrap 'printf \"golden rearm\\r\\n\"' URG\n"
             + "printf '\\033[2J\\033[Hgolden repaint\\r\\n'\nexec 3<&0\n/bin/cat <&3 3<&- & c=$!\n"
             + "while kill -0 $c 2>/dev/null; do wait $c; done\n")
@@ -103,6 +106,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
         for file in files {
             let fx = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
             let id = fx["id"] as? String ?? file.lastPathComponent
+            // #1562: 44-47 need xray, which no XCTest server lists by default (testXrayFixturesPassWhereXrayIsListed).
+            if Self.requiredOps(fx).contains("xray"), !ops.contains("xray") { skipped.append(id); continue }
             for op in Self.requiredOps(fx) { XCTAssertTrue(ops.contains(op), "\(id) would be skipped") }
             // #838: 22 and 23 run only where create is off (testCtlFixturesAgainstAServerWithCreateOff).
             if let op = fx["unless_op"] as? String, ops.contains(op) { skipped.append(id); continue }
@@ -113,7 +118,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
                 _ = try c.frame()
             }
         }
-        XCTAssertEqual(skipped, Self.createOffOnly)
+        XCTAssertEqual(skipped, Self.createOffOnly + Self.xraySet)
         let calls = ran.all
         XCTAssertTrue(calls.contains(["-k", "golden-838-18"]), "18's cleanup: \(calls)")
         for n in 26...29 { XCTAssertTrue(calls.contains(["-k", "golden-841-\(n)"]), "\(n)'s cleanup: \(calls)") }
@@ -173,9 +178,10 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)", "--mutating"])
         XCTAssertEqual(status, 0, text)
         XCTAssertTrue(text.contains("server=prosper proto=1.1"), text)
-        // #838: only the create-off fixtures skip on a server that allows create.
-        XCTAssertEqual(text.components(separatedBy: "SKIP").count - 1, Self.createOffOnly.count, text)
+        // #838: only the create-off fixtures skip on a server that allows create; #1562: and the xray set, xray being off.
+        XCTAssertEqual(text.components(separatedBy: "SKIP").count - 1, Self.createOffOnly.count + Self.xraySet.count, text)
         for id in Self.createOffOnly { XCTAssertTrue(text.contains("SKIP \(id): 'create' in ops"), text) }
+        for id in Self.xraySet { XCTAssertTrue(text.contains("SKIP \(id): 'xray' not in ops"), text) }
         XCTAssertTrue(text.contains("PASS 18-ctl-read-round-trip"), text)
         XCTAssertFalse(text.contains("FAIL"), text)
         XCTAssertTrue(text.contains("OK (0 failed)"), text)
@@ -315,6 +321,98 @@ final class RemoteFramesGoldenTests: XCTestCase {
         XCTAssertEqual(reached.all, [])
     }
 
+    /// #1562: a server like setUp's whose ctl has --xray, so its 0x08 lists "xray"; `owner` decides who gets in, and
+    /// `reached` records every ctl that got as far as choosing a dch (the setUp fake).
+    private func xrayServer(_ owner: DchOwnerCheck, reached: Recorder) throws -> DchSessionServer {
+        let ran = ran, rows = Self.rows, sockDir = sockDir, script = DchCommand.dchPathOverride
+        let s = DchSessionServer(bindHost: { "127.0.0.1" }, port: 0, retryBase: 60, onReady: {}, allowPeer: { _ in true }, owner: owner,
+                                 configure: { c in
+                                     c.listSessions = { rows }
+                                     c.sessionSocketDir = { sockDir }
+                                     c.kill = { ran.add(["-k", $0]) }
+                                     c.rename = { ran.add(["-m", $0, $1]); return nil }
+                                     c.clipboard.enabled = { false }
+                                     c.commands.enabled = { false }
+                                     c.ctl.xray = { true }
+                                     c.ctl.path = { reached.add(["ctl"]); return script }
+                                     c.ctl.env = { ["DCH_SOCKET_DIR": sockDir, "PATH": "/usr/bin:/bin"] }
+                                 })
+        try s.start()
+        addTeardownBlock { s.stop(); _ = s.isRunning; s.queue.sync {} }
+        return s
+    }
+
+    /// #1562 (QA677 H5): `--xray <name> --clear --json` runs only for the owner's device, as dch serve's whois gate comes
+    /// before ctl (tests/serve_test.py:309-319@v1.99.0: another user's node gets not_owner, nothing run). Prosper's gate
+    /// is the connection's owner check, before any byte is read; every identity it refuses gets no frame and runs no dch.
+    func testXrayClearRunsOnlyForTheOwnersDevice() throws {
+        let mac = TailscaleNode(userID: 1, nodeID: "nMac", name: "mac")
+        let down: @Sendable () throws -> TailscaleWhois = { throw WhoisUnavailable(cause: "Tailscale isn't installed") }
+        func w(_ host: TailscaleNode, _ peer: TailscaleNode?) -> @Sendable () throws -> TailscaleWhois { { TailscaleWhois(host: host, peer: peer) } }
+        let cases: [(what: String, whois: @Sendable () throws -> TailscaleWhois, relax: Bool, runs: Bool)] = [
+            ("the owner's phone", w(mac, TailscaleNode(userID: 1, nodeID: "nPhone", name: "iphone")), false, true),
+            ("an owner whose user id is 0", w(TailscaleNode(userID: 0, nodeID: "nMac"), TailscaleNode(userID: 0, nodeID: "nPhone")), false, true),
+            ("Tailscale down, let in by the relax setting", down, true, true),
+            ("another user's node", w(mac, TailscaleNode(userID: 2, nodeID: "nBob", login: "bob@example.com", name: "bobs-phone")), false, false),
+            ("a tagged peer", w(mac, TailscaleNode(userID: 1, nodeID: "nTag", tagged: true)), false, false),
+            ("a tagged host", w(TailscaleNode(userID: 1, nodeID: "nMac", tagged: true), TailscaleNode(userID: 1, nodeID: "nPhone")), false, false),
+            ("this Mac's own node", w(mac, TailscaleNode(userID: 1, nodeID: "nMac")), false, false),
+            ("a peer whois gives no node id", w(mac, TailscaleNode(userID: 1)), false, false),
+            ("an address Tailscale doesn't know", w(mac, nil), false, false),
+            ("a negative host id, the peer's the same", w(TailscaleNode(userID: -1, nodeID: "nMac"), TailscaleNode(userID: -1, nodeID: "nPhone")), false, false),
+            ("Tailscale down", down, false, false),
+        ]
+        for k in cases {
+            let reached = Recorder(), whois = k.whois, relax = k.relax
+            let s = try xrayServer(DchOwnerCheck(whois: { _, _ in try whois() }, allowWhenDown: { relax }), reached: reached)
+            let c = try Client(port: try XCTUnwrap(s.boundPort))
+            try c.send(DchFrame.encode(DchFrame.ctl, json: ["argv": ["--xray", "golden-1562", "--clear", "--json"]]))
+            if k.runs {
+                let out = try c.frame(timeout: 5), end = try c.frame(timeout: 5)
+                XCTAssertEqual(out.0, DchFrame.ctlStdout, k.what)
+                XCTAssertEqual(end.0, DchFrame.ctlExit, k.what)
+                XCTAssertEqual(end.1, Data(#"{"exit":0}"#.utf8), k.what)
+                XCTAssertEqual(reached.all, [["ctl"]], k.what)
+            } else {
+                XCTAssertThrowsError(try c.frame(timeout: 5), "refused, closed with no frame: \(k.what)") {
+                    XCTAssertEqual($0 as? Client.Failure, .closed, k.what)
+                }
+                s.queue.sync {}
+                XCTAssertEqual(reached.all, [], "no dch chosen: \(k.what)")
+            }
+        }
+    }
+
+    /// #1562: 44-47 against a server that lists xray, in both runners: --json and --clear run, a --clear without
+    /// --json gets its 0x13 byte for byte and the FIN, a 0x34 during --xray --follow gets the cancel 0x33 byte for byte.
+    /// 30 (unless_op xray) skips there.
+    func testXrayFixturesPassWhereXrayIsListed() throws {
+        let reached = Recorder()
+        let s = try xrayServer(Self.owner(), reached: reached)
+        let port = try XCTUnwrap(s.boundPort)
+        let dir = tempDir("golden-1562-fixtures")
+        for id in Self.xraySet + ["30-ctl-xray-refused"] {
+            let src = try goldenDir().appendingPathComponent("\(id).json")
+            try FileManager.default.copyItem(at: src, to: dir.appendingPathComponent("\(id).json"))
+            guard id != "30-ctl-xray-refused" else { continue }
+            let fx = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: src)) as? [String: Any])
+            do { try run(fx, port: port) } catch { XCTFail("\(id): \(error)") }
+            for hex in fx["cleanup"] as? [String] ?? [] {
+                let c = try Client(port: port)
+                try c.send(Self.unhex(hex))
+                _ = try c.frame()
+            }
+        }
+        let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)",
+                                          "--mutating", "--fixtures", dir.path])
+        XCTAssertEqual(status, 0, text)
+        for id in Self.xraySet { XCTAssertTrue(text.contains("PASS \(id)"), text) }
+        XCTAssertTrue(text.contains("SKIP 30-ctl-xray-refused: 'xray' in ops"), text)
+        for n in [44, 45, 47] { XCTAssertTrue(ran.all.contains(["-k", "golden-1562-\(n)"]), "\(n)'s cleanup: \(ran.all)") }
+        // 46 is refused before a dch is chosen: two runners times 44, 45 and 47 reached one each.
+        XCTAssertEqual(reached.all.count, 6, "\(reached.all)")
+    }
+
     /// #852: DchSessionServer.stop (Remote Terminal turned off) cuts a running ctl with dch serve's 2 s grace
     /// (serve.c:1251@v1.45.1, :1480-1481@v1.45.1; v1.57.0 serve.c:1281-1286, :1522-1523), an agent verb's too, whose close or 0x34 gets 660 s.
     func testAServerStopCutsARunningAgentCtlWithTheShortGrace() throws {
@@ -366,7 +464,7 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let dir = tempDir("golden-838-fixtures")
         let files = try FileManager.default.contentsOfDirectory(at: try goldenDir(), includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.contains("-ctl-") }
-        XCTAssertEqual(files.count, 16, "17-30, 40, 41")
+        XCTAssertEqual(files.count, 20, "17-30, 40, 41, 44-47")
         for f in files { try FileManager.default.copyItem(at: f, to: dir.appendingPathComponent(f.lastPathComponent)) }
         let (status, text) = try python([try goldenDir().appendingPathComponent("run.py").path, "127.0.0.1:\(port)",
                                           "--mutating", "--fixtures", dir.path])
@@ -972,6 +1070,8 @@ final class RemoteFramesGoldenTests: XCTestCase {
     private static let createOffOnly = ["22-ctl-spawn-needs-create", "23-ctl-revive-needs-create"]
     /// #841: dch 1.42's cancel, busy and ctl-only set; each setup creates its session, so each needs create.
     private static let cancelSet = ["26-ctl-cancel-idle", "27-ctl-cancel", "28-ctl-busy", "29-ctl-only-ctl-frames"]
+    /// #1562: the --xray set (--json, --clear, a refused --clear, a 0x34 cancel); each requires_op xray.
+    private static let xraySet = ["44-ctl-xray-json", "45-ctl-xray-clear", "46-ctl-xray-clear-refused", "47-ctl-xray-cancel"]
 
     /// #838: "requires_op" is one op or an array of them.
     private static func requiredOps(_ fx: [String: Any]) -> [String] {

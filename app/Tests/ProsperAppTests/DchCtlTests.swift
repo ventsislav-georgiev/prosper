@@ -1113,6 +1113,32 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(Self.object(finals(r).first) as NSDictionary, ["exit": 2, "why": "cancel"] as NSDictionary)
     }
 
+    /// #1562: a 0x34 during an `--xray --ref` (not one of the four agent verbs) SIGTERMs dch, then SIGKILLs its group
+    /// after serve's 2 s CTL_GRACE_MS, not 660 s and not sooner; the request ends with the cancel 0x33 (README
+    /// :3176-3195@v1.99.0).
+    func testCancelDuringAnXrayRefSIGTERMsThenKillsTheGroupAfter2s() throws {
+        let f = try fake("""
+            echo $$ > "$D/pid"; /bin/sleep 30 & echo $! > "$D/kid"
+            trap 'echo term >> "$D/sig"' TERM
+            printf '{"ref":"working"}\\n'; while :; do /bin/sleep 0.05; done
+            """)
+        let r = rig(f.path)
+        r.conn.ctl.xray = { true }
+        send(r, Self.ctl(["--xray", "api", "--ref", "#831", "--json"]))
+        XCTAssertTrue(wait(5) { !bytes(r, DchFrame.ctlStdout).isEmpty })
+        let script = try XCTUnwrap(pid(f.dir, "pid")), kid = try XCTUnwrap(pid(f.dir, "kid"))
+        let sent = record(), start = Date()
+        send(r, DchFrame.encode(DchFrame.ctlCancel, []))
+        XCTAssertTrue(wait(10) { (try? String(contentsOf: f.dir.appendingPathComponent("sig"), encoding: .utf8)) != nil }, "the SIGTERM")
+        XCTAssertTrue(dead(script), "SIGKILLed within 10 s: the 2 s grace, not 660 s")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 1.9, "not inside the 2 s grace")
+        XCTAssertTrue(dead(kid), "its group too")
+        termThenKill(sent, script, grace: DchCtl.cancelGrace, "0x34 during --xray --ref")
+        XCTAssertTrue(wait(10) { finals(r).count == 1 })
+        XCTAssertEqual(finals(r).first.map(Self.body), Data(#"{"exit":2,"why":"cancel"}"#.utf8), "byte for byte")
+        XCTAssertEqual(r.closes.count, 0, "the connection stays warm")
+    }
+
     /// #852: a timeout's cut (a cap's too), as dch serve's ctl_cut (serve.c:1263-1264@v1.45.1): SIGTERM, then
     /// SIGKILL to the group CTL_GRACE_MS (2 s) later, not 1 s. Its 0x33 still goes out at once (#856).
     func testATimeoutCutGetsServesTwoSecondGrace() throws {

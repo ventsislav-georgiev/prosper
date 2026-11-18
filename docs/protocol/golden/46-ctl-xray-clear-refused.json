@@ -1,0 +1,22 @@
+{
+  "id": "46-ctl-xray-clear-refused",
+  "about": "#1562: --clear without --json answers exactly this 0x13 and runs nothing, then the FIN (ctl_xray, rframe.c:679-680@v1.99.0). Read-only: the scan refuses it before any dch runs.",
+  "requires_op": [
+    "ctl",
+    "xray"
+  ],
+  "steps": [
+    {
+      "send": "30 0000002e 7b2261726776223a5b222d2d78726179222c22676f6c64656e2d313536322d3436222c222d2d636c656172225d7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a222d2d78726179206e65656473202d2d6a736f6e2028746865207669657720697320636c69656e742d73696465206f6e6c7929227d"
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "44-ctl-xray-json",
+  "about": "#1562: ctl --xray <name> --json, the request byte for byte, on a session the setup creates: dch's JSON on 0x31, then 0x33 with dch's exit (the format checks an int). Needs xray in ops (dch serve 1.55.0+; Prosper while its dch has --xray, DchCtl.xrayMinDch).",
+  "requires_op": [
+    "ctl",
+    "xray",
+    "create"
+  ],
+  "mutating": true,
+  "setup": [
+    "02 00000068 7b226e616d65223a22676f6c64656e2d313536322d3434222c22636f6d6d616e64223a5b222f62696e2f7368222c222d63222c226563686f20676f6c64656e2d313536322d34343b206578656320636174225d2c22636f6c73223a38302c22726f7773223a32347d"
+  ],
+  "cleanup": [
+    "04 00000019 7b226e616d65223a22676f6c64656e2d313536322d3434227d"
+  ],
+  "steps": [
+    {
+      "send": "30 0000002d 7b2261726776223a5b222d2d78726179222c22676f6c64656e2d313536322d3434222c222d2d6a736f6e225d7d"
+    },
+    {
+      "expect": {
+        "type": "31",
+        "nonempty": true
+      }
+    },
+    {
+      "expect": {
+        "type": "33",
+        "json": {
+          "exit": "int"
+        }
+      }
+    }
+  ]
+}
