@@ -370,9 +370,9 @@ extension PaneLayout {
         panes.first { $0.target?.identity == target.identity }?.id
     }
 
-    /// Splits the focused pane: the new pane (empty, or `target`) goes right or below and takes focus.
-    /// Refused at the cap, for a target already shown, and when the result does not fit `area` (3.3).
-    func split(axis: PaneNode.Axis, target: PaneTarget? = nil, minimum: CGSize,
+    /// Splits the focused pane: the new pane (empty, or `target`) goes right or below (#1492: left or above when
+    /// `before`) and takes focus. Refused at the cap, for a target already shown, and when the result does not fit `area` (3.3).
+    func split(axis: PaneNode.Axis, target: PaneTarget? = nil, before: Bool = false, minimum: CGSize,
                in area: CGRect) -> Result<PaneLayout, PaneRefusal> {
         // A dangling focus would otherwise "split" nothing and focus a pane that is not in the tree.
         guard order.contains(focused) else { return .failure(.noSuchPane) }
@@ -381,7 +381,7 @@ extension PaneLayout {
         let new = Pane(id: UUID(), target: target)
         var out = self
         out.zoomed = nil   // 7.3: a split while zoomed unzooms first
-        out.tree = tree.replacing(focused) { .split(axis, ratio: 0.5, .leaf($0), .leaf(new)) }
+        out.tree = tree.replacing(focused) { before ? .split(axis, ratio: 0.5, .leaf(new), .leaf($0)) : .split(axis, ratio: 0.5, .leaf($0), .leaf(new)) }
         guard case .tiled = out.frames(in: area, minimum: minimum, splitsEnabled: true) else { return .failure(.noRoom) }
         out.setFocus(new.id)
         return .success(out)
@@ -737,6 +737,52 @@ extension PaneLayout {
             if !elsewhere.contains(ids[i]) { return rows[i] }
         }
         return nil
+    }
+}
+
+// MARK: - #1492 A sidebar row dropped on a pane
+
+/// Where a drop lands in a pane: the centre (replace) or an edge band (split on that side).
+enum PaneDropZone: Equatable {
+    case centre
+    case edge(PaneLayout.Direction)
+}
+
+extension PaneLayout {
+    /// The edge band's depth: a quarter of the pane's side, at most sz(100).
+    static func dropBand(_ side: CGFloat) -> CGFloat { min(side / 4, sz(100)) }
+
+    /// The zone of point `p` in a pane of `size` (top-left origin). A corner, inside two bands, goes to the edge it is
+    /// deeper into relative to that band (the smaller distance / band); an exact tie goes left or right before up or down.
+    static func dropZone(at p: CGPoint, in size: CGSize) -> PaneDropZone {
+        let bw = dropBand(size.width), bh = dropBand(size.height)
+        guard bw > 0, bh > 0, p.x.isFinite, p.y.isFinite else { return .centre }
+        let depth: [(Direction, CGFloat)] = [(.left, p.x / bw), (.right, (size.width - p.x) / bw),
+                                             (.up, p.y / bh), (.down, (size.height - p.y) / bh)]
+        guard let near = depth.filter({ $0.1 < 1 }).min(by: { $0.1 < $1.1 }) else { return .centre }
+        return .edge(near.0)
+    }
+
+    /// The indicator's rect for `zone` in a pane of `size`: the edge band, or the pane inside the four bands.
+    static func dropRect(_ zone: PaneDropZone, in size: CGSize) -> CGRect {
+        let bw = dropBand(size.width), bh = dropBand(size.height)
+        switch zone {
+        case .centre: return CGRect(origin: .zero, size: size).insetBy(dx: bw, dy: bh)
+        case .edge(.left): return CGRect(x: 0, y: 0, width: bw, height: size.height)
+        case .edge(.right): return CGRect(x: size.width - bw, y: 0, width: bw, height: size.height)
+        case .edge(.up): return CGRect(x: 0, y: 0, width: size.width, height: bh)
+        case .edge(.down): return CGRect(x: 0, y: size.height - bh, width: size.width, height: bh)
+        }
+    }
+
+    /// An edge drop of `target` on pane `id`: the browse rule's `.side` rule 1 first (a session already shown in a pane
+    /// focuses that pane; nothing moves or splits), else `id` splits on `side` with `target` in the new pane, which takes
+    /// focus. Refused as `split` is (the cap, no room).
+    func split(_ id: UUID, side: Direction, target: PaneTarget, minimum: CGSize, in area: CGRect) -> Result<PaneLayout, PaneRefusal> {
+        if let shown = pane(showing: target) { return focus(shown) }
+        guard case let .success(base) = focus(id) else { return .failure(.noSuchPane) }
+        return base.split(axis: side == .left || side == .right ? .columns : .rows, target: target,
+                          before: side == .left || side == .up, minimum: minimum, in: area)
     }
 }
 

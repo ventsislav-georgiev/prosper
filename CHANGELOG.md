@@ -1785,6 +1785,8 @@ tag from the now-released section and put it on the new top draft.
   to reset). (#1473)
 - Agent Sessions: click a pane's title to choose which session it shows, with a search field and the
   arrow keys; picking a session that another pane already shows swaps the two panes. (#1491)
+- Agent Sessions: drag a session from the sidebar onto a pane: drop it in the middle to replace that
+  pane's session, or on an edge to split the pane there. (#1492)
 
 ## v2.174.0
 

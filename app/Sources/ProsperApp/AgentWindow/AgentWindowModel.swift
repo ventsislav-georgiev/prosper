@@ -1859,6 +1859,64 @@ final class AgentWindowModel: ObservableObject {
         focusSelection()
     }
 
+    /// #1492: the drop indicator: the pane a sidebar row is dragged over and the zone it would take; nil, none.
+    @Published private(set) var dropHover: (pane: UUID, zone: PaneDropZone)?
+
+    /// #1492: a row's drag payload: a live or remote row's id as text; a History row has none (not draggable).
+    static func dragToken(_ id: AgentSidebar.RowID) -> String? {
+        if case .history = id { return nil }
+        return String(describing: id)
+    }
+
+    /// #1492: the zone at `p` in pane of `size`; the split gate off, only the centre.
+    func dropZone(at p: CGPoint, in size: CGSize) -> PaneDropZone {
+        AgentPaneLayout.splitsEnabled ? PaneLayout.dropZone(at: p, in: size) : .centre
+    }
+
+    /// #1492: a drag over pane `pane` at `p` (its own coordinates): the indicator follows the zone.
+    func dropOver(_ pane: UUID, at p: CGPoint, in size: CGSize) {
+        let z = dropZone(at: p, in: size)
+        if dropHover?.pane != pane || dropHover?.zone != z { dropHover = (pane, z) }
+    }
+
+    /// #1492: the drag left pane `pane` (or ended there): its indicator goes; another pane's stays.
+    func dropExit(_ pane: UUID) {
+        if dropHover?.pane == pane { dropHover = nil }
+    }
+
+    /// #1492: the dropped text `token` at `p` in pane `pane`: matched against this window's rows only (outside data is
+    /// never parsed). False: no such draggable row, nothing changed but the indicator.
+    @discardableResult
+    func drop(_ token: String, into pane: UUID, at p: CGPoint, in size: CGSize) -> Bool {
+        dropExit(pane)
+        guard let id = rows.first(where: { Self.dragToken($0.id) == token })?.id else { return false }
+        return drop(id, into: pane, zone: dropZone(at: p, in: size))
+    }
+
+    /// #1492: row `id` dropped on pane `pane`. The centre (or any drop with the split gate off) is the title switcher's
+    /// choose (put: a session shown in another pane swaps). An edge splits `pane` on that side with the row in the new
+    /// pane (PaneLayout.split(_:side:); a session already shown focuses its pane, as Open to the Side does); a refusal
+    /// is the split verbs' notice and nothing else changes. The pane the drop lands in takes the focus and the keys.
+    @discardableResult
+    func drop(_ id: AgentSidebar.RowID, into pane: UUID, zone: PaneDropZone) -> Bool {
+        dropHover = nil
+        guard !closed, Self.dragToken(id) != nil, row(id) != nil, layout.order.contains(pane) else { return false }
+        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }
+        switch layout.split(pane, side: side, target: target(id), minimum: paneMinimum,
+                            in: CGRect(origin: .zero, size: paneArea.size)) {
+        case let .failure(r):
+            paneRefusal = r
+        case let .success(l):
+            removing = nil; pendingSpawn = nil; newSession = nil
+            if paneRefusal != nil { paneRefusal = nil }
+            layout = l
+            if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
+            follow()
+            focusSelection()
+        }
+        return true
+    }
+
     /// #845: a sidebar row's click: the human's pick, and the keyboard moves into it. #900 B2 step 6b1 (7.1, 15.0):
     /// `flags`, the click's event modifiers (outside data), are read only with the split gate on, and Option alone (no
     /// Command, Control or Shift) opens to the side; the gate off or any other set is today's click.

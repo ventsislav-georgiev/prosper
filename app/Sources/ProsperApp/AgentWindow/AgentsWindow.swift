@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 // #797 Agent window D1: the "Agent Sessions" window. A sidebar of every dch session (fed by
 // Agent Island's store, no new fork or poll) and the selected session's read-only
@@ -1015,6 +1016,7 @@ struct AgentSidebarView: View {
                                 tip: mini ? model.miniTip : nil)   // #1457
         }
         .buttonStyle(.plain)
+        .modifier(AgentRowDrag(token: AgentWindowModel.dragToken(row.id)))   // #1492: onto a pane
         .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
             if let s = row.session, let store = model.store {
                 // #1103: the header's list, Open in terminal first (selects the row, as ask does).
@@ -2563,6 +2565,9 @@ struct AgentPaneArea: View {
                         .overlay { mark(id, compact: compact) }
                         // #901 B3 step 5 (section 10): an unfocused pane's blocked session: the 3·s top-edge bar.
                         .overlay(alignment: .top) { attentionBar(id, compact: compact) }
+                        // #1492: a sidebar row dragged over the pane: the zone it would take; the drop goes to the model.
+                        .overlay(alignment: .topLeading) { dropMark(id, f.size) }
+                        .onDrop(of: [.plainText], delegate: AgentPaneDropDelegate(model: model, pane: id, size: f.size))
                         // 13: more than one pane shown: each pane one container, "<title>, pane i of n".
                         .modifier(AgentPaneContainer(label: label))
                         .modifier(AgentPaneProbe(kind: "pane"))
@@ -2671,6 +2676,15 @@ struct AgentPaneArea: View {
         }
     }
 
+    /// #1492: the drop indicator over pane `id` while a row is dragged over it: Neon.blue over the zone, no hits.
+    @ViewBuilder func dropMark(_ id: UUID, _ size: CGSize) -> some View {
+        if let h = model.dropHover, h.pane == id {
+            let r = PaneLayout.dropRect(h.zone, in: size)
+            Rectangle().fill(Neon.blue.opacity(0.25)).frame(width: r.width, height: r.height).offset(x: r.minX, y: r.minY)
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+    }
+
     /// 13: the pane's name for its container: the row's title, the record's, the gone target's name; "Empty" for none.
     func title(_ id: UUID) -> String {
         switch model.runtimes[id]?.content {
@@ -2680,6 +2694,38 @@ struct AgentPaneArea: View {
         case let .removed(t)?: AgentPanePlaceholder.name(t)
         case nil: "Empty"
         }
+    }
+}
+
+/// #1492: a pane as a drop target for a sidebar row's text: every call goes to the model (location in the pane's own
+/// coordinates). The text loads off the main thread, so its closure is @Sendable and hops to the main actor.
+struct AgentPaneDropDelegate: DropDelegate {
+    let model: AgentWindowModel, pane: UUID, size: CGSize
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
+    func dropEntered(info: DropInfo) { model.dropOver(pane, at: info.location, in: size) }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        model.dropOver(pane, at: info.location, in: size)
+        return DropProposal(operation: .move)
+    }
+    func dropExited(info: DropInfo) { model.dropExit(pane) }
+    func performDrop(info: DropInfo) -> Bool {
+        let (model, pane, size, at) = (model, pane, size, info.location)
+        model.dropExit(pane)
+        guard let p = info.itemProviders(for: [.plainText]).first else { return false }
+        _ = p.loadObject(ofClass: NSString.self) { @Sendable obj, _ in
+            let token = (obj as? NSString).map { String($0) } ?? ""
+            Task { @MainActor in model.drop(token, into: pane, at: at, in: size) }
+        }
+        return true
+    }
+}
+
+/// #1492: a draggable sidebar row (a live or remote row's token); no token (History), no drag.
+struct AgentRowDrag: ViewModifier {
+    let token: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let token { content.onDrag { NSItemProvider(object: token as NSString) } } else { content }
     }
 }
 
