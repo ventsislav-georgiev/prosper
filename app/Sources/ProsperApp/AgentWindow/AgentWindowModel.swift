@@ -297,9 +297,7 @@ enum AgentSidebar {
         s.transcriptPath != nil || s.modelCarried > 0 ? s.model.map(AgentModelEffort.shortName) : nil
     }
 
-    /// #1558: `shells` is the session's dch `shells` ([] until AgentSession carries them, see the entry's pending patch).
-    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil,
-                    shells: [DchShell] = []) -> Row {
+    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil) -> Row {
         // #829 G0: "Stopping…", "Pausing…" while a Restart or Stop runs (from the island or the window).
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
         let prs = chips.prefix(2).map(\.label) + (chips.count + more > 2 ? ["+\(chips.count + more - 2)"] : [])
@@ -310,7 +308,7 @@ enum AgentSidebar {
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, prLinks: Array(chips.prefix(2)),
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
-                   shells: shells, session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
+                   shells: details.shells ? s.shells : [], session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
     }
 
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {

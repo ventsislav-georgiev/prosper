@@ -2278,7 +2278,8 @@ final class AgentIslandController {
                      autoAllowed: s.autoAllowed, claudeSessionID: s.claudeSessionID, transcriptPath: s.transcriptPath,
                      claudeForeground: s.claudeForeground,
                      cwd: s.cwd, harness: s.harness,   // #1220: the phone's list frame carries it
-                     wireState: "working")   // QA #606 INFO-1a: deliberate, the cached list says it too
+                     wireState: "working",   // QA #606 INFO-1a: deliberate, the cached list says it too
+                     shells: s.shells)   // #1583: the card keeps its shells chip while the island answers
     }
 
     private func publish() {

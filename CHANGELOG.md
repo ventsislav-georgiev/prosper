@@ -1974,6 +1974,9 @@ tag from the now-released section and put it on the new top draft.
   view when the top band appears or goes away. (#1586)
 - Agent Sessions Mini: a long session name now uses the whole row up to its Command number, with no
   empty gap before the needs-you dot. (#1585)
+- Agent Sessions rows and the Agent Island cards show how many shells a Claude session is running
+  (beside the sub-agents count); hover the count to see the commands grouped by who started them,
+  and turn it off under Row details > Shells. (#1558, #1583)
 
 ## v2.174.0
 

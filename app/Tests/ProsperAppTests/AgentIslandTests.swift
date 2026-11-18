@@ -2756,9 +2756,9 @@ final class AgentIslandTests: XCTestCase {
     @MainActor
     func testRowDetailsTogglesBindTheirOwnDetail() {
         XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.label),
-                       ["Model", "Effort", "State", "Agents", "Merged", "Open PRs", "Age", "Shortcut"])
+                       ["Model", "Effort", "State", "Agents", "Shells", "Merged", "Open PRs", "Age", "Shortcut"])
         XCTAssertEqual(AgentIslandRowDetailsSection.toggles.map(\.path),
-                       [\.model, \.effort, \.state, \.agents, \.merged, \.openPRs, \.age, \.shortcut])
+                       [\.model, \.effort, \.state, \.agents, \.shells, \.merged, \.openPRs, \.age, \.shortcut])
     }
 
     /// Visual evidence: the island with the default row details (all on) and with all off,

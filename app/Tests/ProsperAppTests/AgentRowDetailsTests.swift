@@ -46,7 +46,7 @@ final class AgentRowDetailsTests: XCTestCase {
     @MainActor
     func testSettingsAndSidebarMenuListTheSameParts() throws {
         let settings = AgentIslandRowDetailsSection.toggles.map(\.label)
-        XCTAssertEqual(settings, ["Model", "Effort", "State", "Agents", "Merged", "Open PRs", "Age", "Shortcut"])
+        XCTAssertEqual(settings, ["Model", "Effort", "State", "Agents", "Shells", "Merged", "Open PRs", "Age", "Shortcut"])
         let st = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
         let menu = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
         let items = menu.compactMap { e -> [AgentSidebarMenuEntry]? in
@@ -57,7 +57,7 @@ final class AgentRowDetailsTests: XCTestCase {
             if case .item(let label, _, _, _) = e { return label }
             return nil
         }
-        XCTAssertEqual(labels, ["Model", "Effort", "State", "Agents", "Merged", "Open PRs", "Age", "Shortcut"])
+        XCTAssertEqual(labels, ["Model", "Effort", "State", "Agents", "Shells", "Merged", "Open PRs", "Age", "Shortcut"])
         XCTAssertEqual(Set(labels), Set(settings))
         XCTAssertEqual(labels.count, settings.count)
         XCTAssertFalse(AgentIslandRowDetailsSection.footer.contains("besides its title, state and age"),
@@ -67,7 +67,7 @@ final class AgentRowDetailsTests: XCTestCase {
     // MARK: Stored values
 
     static let newKeys = ["agentIslandShowModel", "agentIslandShowEffort", "agentIslandShowState", "agentIslandShowAge",
-                          "agentIslandShowShortcut"]
+                          "agentIslandShowShortcut", "agentIslandShowShells"]
     static let oldKeys = ["agentIslandShowAgents", "agentIslandShowOpenPRs", "agentIslandShowMerged"]
     static let defaultKeys = ["agentIslandDefaultModel", "agentIslandDefaultEffort"]
 
@@ -97,6 +97,7 @@ final class AgentRowDetailsTests: XCTestCase {
         XCTAssertTrue(d.state, "State on")
         XCTAssertTrue(d.age, "Age on")
         XCTAssertTrue(d.shortcut, "Shortcut on")
+        XCTAssertTrue(d.shells, "#1583: Shells on")
         for k in Self.newKeys { XCTAssertFalse(SyncedKeys.isSynced(k), "\(k): per Mac") }
     }
 
@@ -105,7 +106,7 @@ final class AgentRowDetailsTests: XCTestCase {
         clearKeys()
         let paths: [(WritableKeyPath<AgentIslandRowDetails, Bool>, String)] = [
             (\.model, "agentIslandShowModel"), (\.effort, "agentIslandShowEffort"), (\.state, "agentIslandShowState"),
-            (\.age, "agentIslandShowAge"), (\.shortcut, "agentIslandShowShortcut"),
+            (\.age, "agentIslandShowAge"), (\.shortcut, "agentIslandShowShortcut"), (\.shells, "agentIslandShowShells"),
         ]
         for (path, key) in paths {
             Self.newKeys.forEach(Preferences.defaults.removeObject(forKey:))

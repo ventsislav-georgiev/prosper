@@ -161,6 +161,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             .item("Effort", enabled: true, checked: true, verb: .rowDetail(\.effort)),
             .item("State", enabled: true, checked: true, verb: .rowDetail(\.state)),
             .item("Agents", enabled: true, checked: true, verb: .rowDetail(\.agents)),
+            .item("Shells", enabled: true, checked: true, verb: .rowDetail(\.shells)),   // #1583
             .item("Merged", enabled: true, checked: true, verb: .rowDetail(\.merged)),
             .item("Open PRs", enabled: true, checked: false, verb: .rowDetail(\.openPRs)),
             .item("Age", enabled: true, checked: true, verb: .rowDetail(\.age)),

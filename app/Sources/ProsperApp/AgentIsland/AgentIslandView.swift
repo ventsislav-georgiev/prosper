@@ -1334,7 +1334,7 @@ struct AgentIslandRow: View {
         let r = AgentSidebar.row(s, details: show, now: now)
         guard let notice else { return r }
         return AgentSidebar.Row(id: r.id, title: r.title, state: r.state, detail: notice, age: r.age, prs: r.prs,
-                                prCount: r.prCount, prLinks: r.prLinks, agents: r.agents, merged: r.merged, session: r.session,
+                                prCount: r.prCount, prLinks: r.prLinks, agents: r.agents, merged: r.merged, shells: r.shells, session: r.session,
                                 modelSlot: r.modelSlot, model: r.model, effort: r.effort)
     }
 

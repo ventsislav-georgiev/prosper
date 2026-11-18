@@ -117,6 +117,8 @@ struct AgentSession: Equatable, Identifiable {
     var wireState: String? = nil
     /// #896: dch's `cols`/`rows`/`clients` (AgentTranscriptMapping.ptySizes); nil when dch leaves them out.
     var pty: AgentSessionPty? = nil
+    /// #1558: dch 1.101's `shells` (DchListRow.shells), newest first; [] when dch leaves the key out or runs none.
+    var shells: [DchShell] = []
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -154,6 +156,8 @@ struct AgentIslandRowDetails: Equatable {
     var state = true
     var age = true
     var shortcut = true
+    /// #1558/#1583: the running shells' count (its help the commands) in Agent Sessions and on the island card.
+    var shells = true
     var defaultModel = ""
     var defaultEffort = ""
 
@@ -601,7 +605,8 @@ enum AgentIsland {
         // #1137: the counts in the Agent Sessions window's words ("3 agents", "192 merged pull requests").
         let agents: String? = agentsCount(s, show: d).map { AgentSidebar.Count.agents.words($0) }
         let merged: String? = mergedCount(s.meta, show: d).map { AgentSidebar.Count.merged.words($0) }
-        return [s.title, s.state.label, d.age ? ago(age) : nil, agents, merged,
+        let shells: String? = d.shells && !s.shells.isEmpty ? AgentSidebar.Count.shells.words(s.shells.count) : nil   // #1583
+        return [s.title, s.state.label, d.age ? ago(age) : nil, agents, shells, merged,
                 chips.isEmpty ? nil : "open pull requests " + prs]
             .compactMap { $0 }.joined(separator: ", ")
     }
@@ -799,7 +804,8 @@ enum AgentIsland {
                              claudeSessionID: edit ? nil : mapping[row.name]?.sessionID,
                              transcriptPath: edit ? nil : mapping[row.name]?.path,
                              claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
-                             wireState: edit ? "idle" : row.state, pty: ptys[row.name])
+                             wireState: edit ? "idle" : row.state, pty: ptys[row.name],
+                             shells: edit ? [] : row.shells ?? [])
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }

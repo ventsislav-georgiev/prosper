@@ -1005,7 +1005,7 @@ struct AgentIslandRowDetailsSection: View {
 
     /// #596 (QA #465 INFO-3): label -> the detail its toggle binds, in drawn order. #1455: every part of a session row.
     static let toggles: [(label: String, path: WritableKeyPath<AgentIslandRowDetails, Bool>)] = [
-        ("Model", \.model), ("Effort", \.effort), ("State", \.state), ("Agents", \.agents), ("Merged", \.merged),
+        ("Model", \.model), ("Effort", \.effort), ("State", \.state), ("Agents", \.agents), ("Shells", \.shells), ("Merged", \.merged),
         ("Open PRs", \.openPRs), ("Age", \.age), ("Shortcut", \.shortcut),
     ]
     static let footer = "Model and effort show only where they differ from the Default model and effort. "

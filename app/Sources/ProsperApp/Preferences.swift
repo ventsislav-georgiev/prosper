@@ -435,6 +435,7 @@ enum Preferences {
         // #534: the row details the island draws (AgentIslandRowDetails); per Mac,
         // so not in SyncedKeys.
         static let agentIslandShowAgents = "agentIslandShowAgents"
+        static let agentIslandShowShells = "agentIslandShowShells"   // #1558
         static let agentIslandShowOpenPRs = "agentIslandShowOpenPRs"
         static let agentIslandShowMerged = "agentIslandShowMerged"
         // #1455: the rest of the row's parts; per Mac too.
@@ -1275,6 +1276,7 @@ enum Preferences {
                 state: on(Keys.agentIslandShowState, d.state),
                 age: on(Keys.agentIslandShowAge, d.age),
                 shortcut: on(Keys.agentIslandShowShortcut, d.shortcut),
+                shells: on(Keys.agentIslandShowShells, d.shells),
                 // #1455: the rows compare against these (read here, so the pure functions never read defaults).
                 defaultModel: agentIslandDefaultModel,
                 defaultEffort: agentIslandDefaultEffort)
@@ -1290,6 +1292,7 @@ enum Preferences {
             put(newValue.state, old.state, Keys.agentIslandShowState)
             put(newValue.age, old.age, Keys.agentIslandShowAge)
             put(newValue.shortcut, old.shortcut, Keys.agentIslandShowShortcut)
+            put(newValue.shells, old.shells, Keys.agentIslandShowShells)
         }
     }
 

@@ -105,14 +105,23 @@ final class DchShellsTests: XCTestCase {
 
     // MARK: The row
 
-    func session(agents: Int = 1) -> AgentSession {
-        AgentSession(key: AgentSessionKey(dir: "/Users/example/.dch", name: "api"), alias: "", activity: 0,
-                     state: .working, agents: agents, meta: DchSessionMeta(openPRs: [], merged: 2))
+    /// #1583: the session carries its shells (AgentSession.shells), as AgentIsland.list fills it.
+    func session(agents: Int = 1, shells: [DchShell] = [], state: AgentState = .working) -> AgentSession {
+        var s = AgentSession(key: AgentSessionKey(dir: "/Users/example/.dch", name: "api"), alias: "", activity: 0,
+                             state: state, agents: agents, meta: DchSessionMeta(openPRs: [], merged: 2))
+        s.shells = shells
+        return s
+    }
+
+    func shellsOff() -> AgentIslandRowDetails {
+        var d = AgentIslandRowDetails.all
+        d.shells = false
+        return d
     }
 
     func testRowCountsTheShellsBesideTheAgents() throws {
         let shells = try XCTUnwrap(rows(Self.newRow).first?.shells)
-        let r = AgentSidebar.row(session(), details: .all, now: 0, shells: shells)
+        let r = AgentSidebar.row(session(shells: shells), details: .all, now: 0)
         XCTAssertEqual(r.counts.map { $0.0 }, [.agents, .shells, .merged], "shells right after the sub-agents")
         XCTAssertEqual(r.counts.map { $0.1 }, [1, 3, 2])
         XCTAssertTrue(r.countWords.contains("3 running shells"), "\(r.countWords)")
@@ -121,10 +130,18 @@ final class DchShellsTests: XCTestCase {
 
     func testNoShellsDrawNoGroupAndKeepTheRow() {
         let plain = AgentSidebar.row(session(), details: .all, now: 0)
-        let none = AgentSidebar.row(session(), details: .all, now: 0, shells: [])
-        XCTAssertEqual(none, plain)
         XCTAssertEqual(plain.counts.map { $0.0 }, [.agents, .merged])
         XCTAssertTrue(plain.countHelp.isEmpty)
+        XCTAssertTrue(plain.shells.isEmpty)
+    }
+
+    /// #1583: Row details "Shells" off draws no chip and no list, the shells still on the session.
+    func testShellsOffDrawsNoChip() throws {
+        let shells = try XCTUnwrap(rows(Self.newRow).first?.shells)
+        let r = AgentSidebar.row(session(shells: shells), details: shellsOff(), now: 0)
+        XCTAssertEqual(r.counts.map { $0.0 }, [.agents, .merged])
+        XCTAssertTrue(r.countHelp.isEmpty)
+        XCTAssertTrue(r.shells.isEmpty)
     }
 
     func testCountWords() {
@@ -172,5 +189,66 @@ final class DchShellsTests: XCTestCase {
         XCTAssertEqual(lines.first, "25 running shells")
         XCTAssertEqual(lines.count, 1 + 20 + 1)
         XCTAssertEqual(lines.last, "and 5 more")
+    }
+
+    // MARK: The island card (#1583)
+
+    /// The card draws the Agent Sessions row's own detail line (AgentIslandRow.sidebarRow): the shells chip right after
+    /// the sub-agents count, its help the same list; a notice in the state word's place keeps it. VoiceOver says it in
+    /// drawn order.
+    @MainActor
+    func testIslandCardCountsTheShellsBesideTheAgents() throws {
+        let shells = try XCTUnwrap(rows(Self.newRow).first?.shells)
+        let s = session(shells: shells)
+        for notice in [nil, "Attach command copied"] {
+            let r = AgentIslandRow.sidebarRow(s, show: .all, now: 0, notice: notice)
+            XCTAssertEqual(r.counts.map { $0.0 }, [.agents, .shells, .merged], notice ?? "no notice")
+            XCTAssertEqual(r.counts.map { $0.1 }, [1, 3, 2], notice ?? "no notice")
+            XCTAssertEqual(r.countHelp[.shells], AgentSidebar.shellList(shells), notice ?? "no notice")
+        }
+        let label = AgentIslandRow.accessibilityLabel(s, now: 0, show: .all)
+        XCTAssertTrue(label.contains("1 agent, 3 running shells, 2 merged pull requests"), label)
+    }
+
+    /// The key left out (an older dch): AgentIsland.list gives the session no shells and the card draws nothing; the same
+    /// row with the key carries them through. A fake runner, no dch; no claude_session_id, so no transcript is read.
+    @MainActor
+    func testIslandAbsentKeyDrawsNothing() throws {
+        let with = #"[{"name":"api","alias":"","activity_epoch":1,"state":"working","agents":1,"#
+            + #""shells":[{"id":"b1","pid":7,"started":1,"command":"make"}]}]"#
+        let without = with.replacingOccurrences(of: #""shells":"#, with: #""x":"#)
+        let old = try XCTUnwrap(AgentIsland.list(dirs: ["/Users/example/.dch"]) { _, _ in Data(without.utf8) }.first)
+        XCTAssertTrue(old.shells.isEmpty)
+        let r = AgentIslandRow.sidebarRow(old, show: .all, now: 0, notice: nil)
+        XCTAssertEqual(r.counts.map { $0.0 }, [.agents])
+        XCTAssertTrue(r.countHelp.isEmpty)
+        XCTAssertFalse(AgentIslandRow.accessibilityLabel(old, now: 0, show: .all).contains("shell"))
+        let new = try XCTUnwrap(AgentIsland.list(dirs: ["/Users/example/.dch"]) { _, _ in Data(with.utf8) }.first)
+        XCTAssertEqual(new.shells.map(\.command), ["make"])
+        XCTAssertEqual(AgentIslandRow.sidebarRow(new, show: .all, now: 0, notice: nil).counts.map { $0.0 }, [.agents, .shells])
+    }
+
+    /// Row details "Shells" off: no chip, no list and no words on the card.
+    @MainActor
+    func testIslandShellsOffDrawsNoChip() throws {
+        let s = session(shells: try XCTUnwrap(rows(Self.newRow).first?.shells))
+        let r = AgentIslandRow.sidebarRow(s, show: shellsOff(), now: 0, notice: "Attach command copied")
+        XCTAssertEqual(r.counts.map { $0.0 }, [.agents, .merged])
+        XCTAssertTrue(r.countHelp.isEmpty)
+        XCTAssertFalse(AgentIslandRow.accessibilityLabel(s, now: 0, show: shellsOff()).contains("shell"))
+    }
+
+    /// The card's list cleans a bidi override, a zero-width space and a control from the command.
+    @MainActor
+    func testIslandListTextIsCleaned() {
+        let s = session(shells: [DchShell(id: "1", pid: 1, started: 0, command: "echo \u{202E}hi\u{200B}\u{7}")])
+        XCTAssertEqual(AgentIslandRow.sidebarRow(s, show: .all, now: 0, notice: nil).countHelp[.shells], "1 running shell\n  echo hi")
+    }
+
+    /// A blocked session the island answers is published as working with its shells kept (the controller copies the
+    /// session field by field).
+    func testAnsweringKeepsTheShells() {
+        let s = session(shells: [DchShell(id: "1", pid: 1, started: 0, command: "make")], state: .blocked)
+        XCTAssertEqual(AgentIslandController.answering(s).shells, s.shells)
     }
 }
