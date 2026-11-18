@@ -1,0 +1,27 @@
+{
+ "entry": 1612,
+ "filter": "XrayResolvedKindsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "missing-word",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        case \"missing\": \"Missing\"",
+   "new": "        case \"missing\": nil",
+   "expect": "killed"
+  },
+  {
+   "name": "no-subtitle",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "([r.title, r.subtitle] + r.lines)",
+   "new": "([r.title] + r.lines)",
+   "expect": "killed"
+  },
+  {
+   "name": "raw-title",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "title: text(r[\"title\"], lineCap) ?? \"\"",
+   "new": "title: (r[\"title\"] as? String) ?? \"\"",
+   "expect": "killed"
+  }
+ ]
+}
