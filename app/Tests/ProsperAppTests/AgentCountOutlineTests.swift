@@ -3,8 +3,8 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1360 (operator 2026-11-16, "make the agents number a bit more outlined"): on a sidebar row the subagents count wears
-/// a capsule outline (stroke, no fill) and the PR counts do not. Offscreen only: rows hosted in never-shown windows or
+/// #1360 (operator 2026-11-16, "make the agents number a bit more outlined"), #1531 (operator 2026-11-18, "remove the
+/// robot white border"): on a sidebar row the subagents count wears a soft filled capsule (no stroke) and the PR counts do not. Offscreen only: rows hosted in never-shown windows or
 /// measured; no event, no file. Fakes only.
 extension AgentRowModelEffortTests {
     /// The operator's row: Working, N agents, 199 merged, 7 open PRs whose chips never fit (long names).
@@ -17,7 +17,8 @@ extension AgentRowModelEffortTests {
 
     /// At the sidebar's width (sz(274)), 0.7 / 0.85 / 1.0, 1x and 2x, for 5 and 128 agents, by the probes and pixels: the
     /// capsule is on the agents group alone (no capsule on the merged or open group), as wide as the group (its padding
-    /// inside the group's width, so the ladder counts it), on line two, drawn whole (its stroke lit at both ends); the
+    /// inside the group's width, so the ladder counts it), on line two, drawn whole with no stroke (#1531: its edge pixel
+    /// is its interior fill, and the fill differs from the row behind it); the
     /// row's height is its own with no agents, and TIP's literal 31 / 39 / 45 on TIP's idle Claude row with the count; the
     /// row's VoiceOver label is TIP's text. 5 agents keep the open count at every scale (the operator's row); for 128 the
     /// step shown prints as ROW1360-LADDER.
@@ -31,7 +32,7 @@ extension AgentRowModelEffortTests {
             for n in [5, 128] {
                 let r = outlined1360(agents: n)
                 let v = AgentSidebarRowView(row: r, selected: false)
-                let alone = ideal(AgentCountGroups(counts: [(.agents, n)], size: 10.5, outline: .white)).width
+                let alone = ideal(AgentCountGroups(counts: [(.agents, n)], size: 10.5, fill: AgentSidebarRowView.countPillFill())).width
                 for px: CGFloat in [1, 2] {
                     let tag = "\(n) agents (\(scale), \(Int(px))x)"
                     let h = hosted1345(r, number: 1, width: (AgentWindowModel.fullSidebarWidth - sz(16)), backing: px)
@@ -39,7 +40,7 @@ extension AgentRowModelEffortTests {
                     print("ROW1360-LADDER \(tag) line \(column(sz(274))) count \(ideal(v.detailLine([], open: r.prCount)).width)"
                           + " none \(ideal(v.detailLine([])).width) capsuleAlone \(alone) shown \(h.frames["count.open"] == nil ? "none" : "count")"
                           + " \(h.frames.filter { $0.key.hasPrefix("c") }.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" })")
-                    XCTAssertEqual(capsules, ["capsule.agents"], "the agents group alone is outlined: \(tag)")
+                    XCTAssertEqual(capsules, ["capsule.agents"], "the agents group alone is a pill: \(tag)")
                     // Ticket 1 read this Working row at 36 / 42 / 46 (not TIP's idle-row literals), so the literal is read on
                     // TIP's own idle Claude row below; here the height is the same row's with no agents (no capsule).
                     var bare = r
@@ -54,18 +55,24 @@ extension AgentRowModelEffortTests {
                     XCTAssertGreaterThan(c.minY, t.maxY - 1, "on line two: \(c) under \(t) \(tag)")
                     XCTAssertLessThanOrEqual(c.maxX, m.minX, "before the merged group: \(c) \(m) \(tag)")
                     let k = CGFloat(rep.pixelsWide) / (AgentWindowModel.fullSidebarWidth - sz(16)).rounded(.up)
-                    for (end, x) in [("left", c.minX), ("right", c.maxX - 1.5)] {
-                        let strip = CGRect(x: x, y: c.midY - 1, width: 1.5, height: 2)
-                        XCTAssertTrue(ink1345(rep, k: k, in: strip) != nil, "the stroke drawn at the \(end) end: \(strip) \(tag)")
+                    // #1531: no stroke: the pixel at the capsule's left edge (mid height) is no brighter than its interior fill, and the fill
+                    // is not the black behind the capsule's corner.
+                    func pix(_ x: CGFloat, _ y: CGFloat) -> [CGFloat] {
+                        guard let col = rep.colorAt(x: Int(x * k), y: Int(y * k))?.usingColorSpace(.sRGB) else { return [] }
+                        return [col.redComponent, col.greenComponent, col.blueComponent]
                     }
+                    let edge = pix(c.minX + 1 / px, c.midY), inside = pix(c.minX + sz(3), c.midY), corner = pix(c.minX, c.minY)
+                    XCTAssertTrue(edge.count == 3 && inside.count == 3 && corner.count == 3, "pixels read: \(tag)")
+                    XCTAssertTrue(zip(edge, inside).allSatisfy { $0 <= $1 + 0.02 }, "no stroke, the edge is no brighter than the fill (a partly covered edge pixel is darker): \(edge) \(inside) \(tag)")
+                    XCTAssertGreaterThan(zip(inside, corner).map { $0 - $1 }.reduce(0, +), 0.05, "a visible fill: \(inside) over \(corner) \(tag)")
                     if n == 5 { XCTAssertTrue(h.frames["count.open"] != nil, "5 agents keep the open count: \(tag)") }
                 }
-                // TIP's literal heights (testRowHeightIsTipsAtEveryScale's idle Claude row) with the outlined count on it.
+                // TIP's literal heights (testRowHeightIsTipsAtEveryScale's idle Claude row) with the pill count on it.
                 var claude = row(session("api", model: "claude-fable-9-2-20991231", effort: "high"))
                 claude.agents = n
                 claude.merged = 199
                 XCTAssertEqual(height(claude), tip[scale] ?? -1, accuracy: 0.01, "TIP's height with \(n) agents (\(scale))")
-                // VoiceOver: the row's one label, literally TIP's (the capsule adds no element and no word).
+                // VoiceOver: the row's one label, literally TIP's (the pill adds no element and no word).
                 let tree = AXTreeSupport.tree(AgentSidebarRowView(row: r, selected: false).frame(width: (AgentWindowModel.fullSidebarWidth - sz(16))),
                                               CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: sz(60))) { t in t.contains { $0.label.hasPrefix("sec-1") } }
                 XCTAssertEqual(tree.first(where: { $0.label.hasPrefix("sec-1") })?.label,
@@ -76,20 +83,20 @@ extension AgentRowModelEffortTests {
 }
 
 extension AgentRowSelectedTextTests {
-    /// The outline's ink against the row on every theme, unselected (the sidebar) and selected (the accent at 0.14 over
-    /// it): at least 3:1 (non-text contrast); and on an unselected row stronger than the quiet ink of the counts beside it
-    /// (the quiet ink itself would not stand out). The number keeps its ink (AgentRowSelectedTextTests' count group row).
-    func testAgentsCountOutlineContrastOnEveryTheme() throws {
+    /// #1531: the pill's fill (textSecondary at countPillOpacity) over the row on every theme, unselected (the sidebar) and
+    /// selected (the accent at 0.14 over it): it differs from the row by at least 1.12:1 (a visible pill), and the number's
+    /// ink (unchanged, AgentRowSelectedTextTests' count group row) stays at least 3:1 over the fill.
+    func testAgentsCountPillFillIsVisibleOnEveryTheme() throws {
         var pairs = 0
         try onEveryTheme { d, p in
             for selected in [false, true] {
                 let bg = selected ? over(rgba(p.sidebar), p.blue, 0.14) : rgba(p.sidebar)
-                let row = ns((bg.r, bg.g, bg.b, 1))
-                let stroke = ThemeContrastTests.contrast(NSColor(AgentSidebarRowView.outlineInk(selected: selected)), on: row)
-                let number = ThemeContrastTests.contrast(NSColor(AgentSidebarRowView.ink(.quiet, selected: selected)), on: row)
-                let tag = "\(d.title) selected \(selected): outline \(stroke):1, number \(number):1"
-                XCTAssertGreaterThanOrEqual(stroke, 3, tag)
-                if selected { XCTAssertGreaterThanOrEqual(stroke, number - 0.01, tag) } else { XCTAssertGreaterThan(stroke, number + 0.1, tag) }
+                let pill = over(bg, p.textSecondary, AgentSidebarRowView.countPillOpacity)
+                let margin = ThemeContrastTests.contrast(ns((pill.r, pill.g, pill.b, 1)), on: ns((bg.r, bg.g, bg.b, 1)))
+                let number = ThemeContrastTests.contrast(NSColor(AgentSidebarRowView.ink(.quiet, selected: selected)), on: ns((pill.r, pill.g, pill.b, 1)))
+                let tag = "\(d.title) selected \(selected): fill over row \(margin):1, number over fill \(number):1"
+                XCTAssertGreaterThanOrEqual(margin, 1.12, tag)
+                XCTAssertGreaterThanOrEqual(number, 3, tag)
                 pairs += 1
             }
         }

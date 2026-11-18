@@ -1846,9 +1846,11 @@ extension AgentSidebarRowView {
     static func prChipInk(selected: Bool) -> Color { ink(.blocked, selected: selected) }
     static let prChipFillOpacity = 0.14
     static var prChipFill: Color { agentStateColor(.blocked).opacity(prChipFillOpacity) }
-    /// #1360: the subagents count's outline: textPrimary, selected or not (3:1 over the row on all 22 themes, and stronger
-    /// than the quiet ink of the counts beside it on an unselected row; AgentCountOutlineTests).
-    static func outlineInk(selected: Bool) -> Color { Neon.textPrimary }
+    /// #1531: the subagents count's pill: no stroke, a soft fill of the neutral badge's family (textSecondary, as
+    /// `neutralLook`) at 0.16 instead of the badge's 0.06, so it reads as a pill over the row and the selected row on all
+    /// 22 themes, selected or not (AgentCountOutlineTests). The number keeps its quiet ink.
+    static let countPillOpacity = 0.16
+    static func countPillFill(_ quiet: Color = Neon.textSecondary) -> Color { quiet.opacity(countPillOpacity) }
 
     /// #1203: the model slot's width. #1268: the widest known short name and the widest effort word, each in its badge
     /// (not a model id); a longer name is cut in the middle inside its badge.
@@ -1963,7 +1965,7 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), outline: inks?.primary ?? Self.outlineInk(selected: selected))
+                             quiet: ink(.quiet), open: ink(.blue), fill: Self.countPillFill(inks?.quiet ?? Neon.textSecondary))
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
                 let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced))
@@ -2093,23 +2095,23 @@ struct AgentCountGroups: View {
     /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
     var quiet = Neon.textSecondary
     var open = Neon.blue
-    /// #1360: the agents group's outline ink (a capsule, stroke only, its padding in the group's width); nil: none (the header).
-    var outline: Color?
+    /// #1531: the agents group's pill fill (a capsule, no stroke, its padding in the group's width); nil: none (the header).
+    var fill: Color?
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
-                    let ring = g.0 == .agents ? outline : nil
+                    let pill = g.0 == .agents ? fill : nil
                     HStack(spacing: sz(2)) {
                         // #1453: the sub-agents count is a robot emoji, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { Text("\u{1F916}").font(Neon.font(size - 1)) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
-                    .padding(.horizontal, ring == nil ? 0 : sz(4))
+                    .padding(.horizontal, pill == nil ? 0 : sz(4))
                     .background {   // no vertical padding: the line's height stays (31/39/45)
-                        if let ring {
-                            Capsule().strokeBorder(ring, lineWidth: 1)
+                        if let pill {
+                            Capsule().fill(pill)
                                 .modifier(AgentSidebarRowProbe(kind: "capsule.\(g.0)", title: g.0.words(g.1)))
                         }
                     }

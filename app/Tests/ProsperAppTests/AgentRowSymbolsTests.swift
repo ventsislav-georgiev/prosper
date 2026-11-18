@@ -141,7 +141,7 @@ extension AgentWindowD1Tests {
         let first = AgentIsland.firstSendingText   // #1369: longer than "Relaunching\u{2026}", so cut wherever it is
         let calm: Set<String> = ["Done", "Idle"]
         // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
-        // #1360: every cell's agents group is outlined, its capsule's padding (sz(4) each side) in the line's width, so
+        // #1360: every cell's agents group is a filled pill, its capsule's padding (sz(4) each side) in the line's width, so
         // the count gives way sooner: from TIP's prints plus 2 * sz(4) (BADGE1268C-FIT reads the new widths).
         let drops: [Int: [CGFloat: Set<String>]] = [
             999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm).subtracting(["Working", "Exiting\u{2026}"])],   // #1453: the robot group is narrower than the people symbol was, so two more states keep the count at 1.0

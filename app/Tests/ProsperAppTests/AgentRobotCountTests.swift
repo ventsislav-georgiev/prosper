@@ -11,19 +11,19 @@ private final class Window1453: NSWindow {
 }
 
 /// #1453 (operator 2026-11-17, "use robot emoji here for subagents"): the sub-agent count on a sidebar row and an island
-/// card draws the robot emoji (U+1F916) in the same capsule outline, not the people symbol; VoiceOver keeps the words.
+/// card draws the robot emoji (U+1F916) in the same filled capsule, not the people symbol; VoiceOver keeps the words.
 /// Offscreen only: ImageRenderer, or views hosted in windows that are never shown; no event, no file. Fakes only.
 extension AgentRowModelEffortTests {
     static let robot1453 = "\u{1F916}"
 
-    /// The agents group as AgentCountGroups draws it, with `lead` in front of the number (the outline, the paddings, the ink).
+    /// The agents group as AgentCountGroups draws it, with `lead` in front of the number (the pill fill, the paddings, the ink).
     func group1453<L: View>(_ n: Int, _ lead: L) -> some View {
         HStack(spacing: sz(2)) {
             lead.font(Neon.font(10.5 - 1))
             Text(AgentIsland.count(n)).font(Neon.font(10.5).monospacedDigit())
         }
         .padding(.horizontal, sz(4))
-        .background { Capsule().strokeBorder(Color.white, lineWidth: 1) }
+        .background { Capsule().fill(AgentSidebarRowView.countPillFill()) }
         .foregroundStyle(Neon.textSecondary)
         .fixedSize()
     }
@@ -41,7 +41,7 @@ extension AgentRowModelEffortTests {
     func testRobot1453TheCountDrawsTheEmojiNotThePeopleIcon() throws {
         try atScales { scale in
             for n in [3, 128] {
-                let got = try pixels1453(AgentCountGroups(counts: [(.agents, n)], size: 10.5, outline: .white))
+                let got = try pixels1453(AgentCountGroups(counts: [(.agents, n)], size: 10.5, fill: AgentSidebarRowView.countPillFill()))
                 let robot = try pixels1453(group1453(n, Text(Self.robot1453)))
                 let people = try pixels1453(group1453(n, Image(systemName: "person.2")))
                 XCTAssertTrue(got.0 == robot.0 && got.1 == robot.1 && got.2 == robot.2, "the robot and the number: \(n) agents (\(scale))")
@@ -50,10 +50,10 @@ extension AgentRowModelEffortTests {
         }
     }
 
-    /// The outline is the capsule it was: the group's frame plus the 4 pt padding each side, its height the group's, within
+    /// The pill is the capsule it was: the group's frame plus the 4 pt padding each side, its height the group's, within
     /// one device pixel; on the real sidebar row.
     @MainActor
-    func testRobot1453TheOutlineIsUnchangedOnTheRow() {
+    func testRobot1453ThePillIsUnchangedOnTheRow() {
         let pixel = AXTreeSupport.devicePixel
         atScales { scale in
             for n in [3, 128] {
@@ -77,7 +77,7 @@ extension AgentRowModelEffortTests {
     func testRobot1453VoiceOverKeepsTheWordsOnTheRowAndTheCard() {
         let box = CGSize(width: 300, height: 60)
         func reads(_ t: [AXTreeNode], _ s: String) -> Bool { t.contains { n in [n.label, n.title, n.value, n.help].contains { $0.contains(s) } } }
-        let group = AXTreeSupport.tree(AgentCountGroups(counts: [(.agents, 3)], size: 10.5, outline: .white), box) { t in t.contains { $0.label == "3 agents" } }
+        let group = AXTreeSupport.tree(AgentCountGroups(counts: [(.agents, 3)], size: 10.5, fill: AgentSidebarRowView.countPillFill()), box) { t in t.contains { $0.label == "3 agents" } }
         XCTAssertTrue(group.contains { $0.label == "3 agents" }, "the words: \(group.map(\.label))")
         XCTAssertFalse(reads(group, Self.robot1453) || reads(group, "robot"), "no emoji, no emoji name: \(group.map(\.label))")
         let row = AXTreeSupport.tree(AgentSidebarRowView(row: outlined1360(agents: 3), selected: false).frame(width: AgentWindowModel.fullSidebarWidth - sz(16)),
@@ -101,7 +101,7 @@ extension AgentRowModelEffortTests {
         let r = AgentIslandRow.sidebarRow(s, show: .all, now: Self.now, notice: nil)
         XCTAssertEqual(r.counts.first.map { "\($0.0) \($0.1)" }, "agents 3", "the card's row carries the agents count")
         let line = AgentSidebarRowView(row: r, selected: false, inks: AgentIslandRow.inks).detailLine([])
-        // The robot is a colour glyph; the symbol, the outline and the text are one ink: a chromatic pixel is the emoji's.
+        // The robot is a colour glyph; the symbol and the text are one ink: a chromatic pixel is the emoji's.
         let (w, h, data) = try pixels1453(line)
         let lit = stride(from: 0, to: data.count - 3, by: 4).filter { i in
             let c = [data[i], data[i + 1], data[i + 2]], hi = c.max() ?? 0, lo = c.min() ?? 0
