@@ -1,8 +1,8 @@
 import XCTest
 @testable import ProsperApp
 
-/// #1247: the Mac's remote --xray scanner takes and refuses --search, --clear, --tasks and --memory as dch serve
-/// 1.66.0's ctl_xray does (rframe.c:629-695). Pure calls of DchCtl.refusal with literal argv values; the table
+/// #1247: the Mac's remote --xray scanner takes and refuses every flag as dch serve's ctl_xray does, in its order
+/// and with its words (rframe.c:631-697 and serve.c ctl_request's --ref check, both at v1.99.0). Pure calls of DchCtl.refusal with literal argv values; the table
 /// is written out, never read from the product's own lists. Fakes only.
 final class DchXrayFlagParityTests: XCTestCase {
     private func why(_ a: [String]) -> String? { DchCtl.refusal(["--xray", "api"] + a, create: true) }
@@ -15,7 +15,7 @@ final class DchXrayFlagParityTests: XCTestCase {
     func testAcceptedForms() {
         let ok: [[String]] = [
             ["--json", "--search", "example"], ["--search", "example", "--json"], ["--json", "--search", "--json"],
-            ["--json", "--search", "-k"], ["--json", "--search", "ab"], ["--json", "--search", "naïve é ✓"],
+            ["--json", "--search", "-k"], ["--json", "--search", "ab"], ["--json", "--search", "na\u{EF}ve \u{E9} \u{2713}"],
             ["--json", "--clear"], ["--clear", "--json"],
             ["--json", "--tasks"], ["--tasks", "--json"],
             ["--json", "--memory"], ["--memory", "--json"],
@@ -25,7 +25,7 @@ final class DchXrayFlagParityTests: XCTestCase {
 
     func testSearchLimits() {
         let max200 = String(repeating: "a", count: 200), over = String(repeating: "a", count: 201)
-        let multi = String(repeating: "é", count: 100), multiOver = String(repeating: "é", count: 100) + "a"
+        let multi = String(repeating: "\u{E9}", count: 100), multiOver = String(repeating: "\u{E9}", count: 100) + "a"
         XCTAssertTrue(why(["--json", "--search", max200]) == nil)
         XCTAssertEqual(why(["--json", "--search", over]), badSearch)
         XCTAssertTrue(why(["--json", "--search", multi]) == nil, "200 bytes in 100 scalars")
@@ -80,16 +80,109 @@ final class DchXrayFlagParityTests: XCTestCase {
     }
 
     func testUnknownStillUnlisted() {
-        XCTAssertEqual(why(["--json", "--bogus"]), "ctl does not allow --bogus with --xray")
-        XCTAssertEqual(why(["--json", "--tasks", "--task"]), "ctl does not allow --task with --xray")
-        XCTAssertEqual(why(["--json", "--searches", "ab"]), "ctl does not allow --searches with --xray")
-        XCTAssertEqual(why(["--json", "-k"]), "ctl does not allow -k with --xray")
+        XCTAssertEqual(why(["--json", "--bogus"]), "--bogus is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "--tasks", "--task"]), "--task is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "--searches", "ab"]), "--searches is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "-k"]), "-k is not allowed with --xray")
     }
 
-    func testOldFlagsKeepTheirWords() {
-        XCTAssertEqual(why(["--json", "--ref", "x", "--follow"]), "--xray takes one of --ref, --follow, --chapter")
-        XCTAssertEqual(why(["--json", "--full"]), "--full goes with --ref")
-        XCTAssertEqual(why(["--ref", "x"]), "--xray needs --json")
+    /// Red on the old line `ctl does not allow \(shown(w)) with \(verb)` (every word, a dash or not).
+    func testUnknownWordsAsRframeWordsThem() {
+        for w in ["--config", "serve", "-h", "--help", "-f", "--all"] {
+            XCTAssertEqual(why(["--json", w]), "\(w) is not allowed", w)
+        }
+        XCTAssertEqual(why(["--json", "x"]), "unexpected x after --xray")
+        XCTAssertEqual(why(["--json", "--"]), "-- is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "-"]), "- is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "api"]), "unexpected api after --xray")
+        let w60 = String(repeating: "a", count: 60), w61 = w60 + "b"
+        XCTAssertEqual(why(["--json", w60]), "unexpected \(w60) after --xray", "60 bytes whole")
+        XCTAssertEqual(why(["--json", w61]), "unexpected \(w60) after --xray", "61 bytes cut to 60 (%.60s)")
+        XCTAssertEqual(why(["--json", "-" + w60]), "-" + String(w60.dropLast()) + " is not allowed with --xray")
+        XCTAssertEqual(why(["--json", "--search", "ab", "--bogus"]), "--bogus is not allowed with --xray")
+    }
+
+    /// Red on the old order: the old scan checked every value inline, so a bad --scope beat a missing --json, and a
+    /// bad --budget-ms beat the exclusion.
+    func testOrderOfChecksIsRframes() {
+        XCTAssertEqual(why(["--bogus"]), "--bogus is not allowed with --xray", "the scan before --json")
+        XCTAssertEqual(why(["--clear", "--clear"]), "--clear twice")
+        XCTAssertEqual(why(["--json", "--json"]), "--json twice")
+        XCTAssertEqual(why(["--ref", "x", "--ref", "y", "--json"]), "--ref twice")
+        XCTAssertEqual(why(["--scope"]), "--scope needs a value", "the scan before --json")
+        XCTAssertEqual(why(["--ref", "x", "--scope", "global"]), needsJSON, "json before the scope value")
+        XCTAssertEqual(why(["--ref", "\u{202E}"]), needsJSON, "json before the ref bytes")
+        XCTAssertEqual(why(["--chapter", "a b"]), needsJSON, "json before the anchor")
+        XCTAssertEqual(why(["--json", "--ref", "x", "--follow", "--scope", "global"]), exclusion, "exclusion before the scope value")
+        XCTAssertEqual(why(["--json", "--ref", "x", "--chapter", "a b"]), exclusion, "exclusion before the anchor")
+        XCTAssertEqual(why(["--json", "--follow", "--scope", "global"]), withRef, "with-ref before the scope value")
+        XCTAssertEqual(why(["--json", "--chapter", "a b", "--budget-ms", "1"]), withRef, "with-ref before the anchor")
+        XCTAssertEqual(why(["--json", "--ref", "x", "--scope", "global", "--budget-ms", "1"]), "bad scope", "scope before budget")
+        XCTAssertEqual(why(["--json", "--ref", "x", "--budget-ms", "1"]), "bad budget")
+        XCTAssertEqual(why(["--json", "--ref", "\u{202E}", "--scope", "global"]), "bad scope", "the values before the ref bytes")
+        XCTAssertEqual(why(["--json", "--chapter", "a b"]), "bad anchor")
+        XCTAssertEqual(why(["--json", "--ref", "x", "--scope", "Session"]), "bad scope")
+    }
+
+    /// Red on the old exclusion: --follow beside --tasks or --memory was refused (rframe.c:674-675, #446).
+    func testFollowTakesTasksAndMemory() {
+        for a in [["--follow", "--tasks"], ["--follow", "--memory"], ["--follow", "--tasks", "--memory"], ["--tasks", "--follow", "--memory"]] {
+            XCTAssertTrue(why(["--json"] + a) == nil, a.joined(separator: " "))
+        }
+        for a in [["--follow", "--clear"], ["--follow", "--search", "ab"], ["--follow", "--ref", "x"], ["--follow", "--chapter", "c1"],
+                  ["--follow", "--tasks", "--clear"], ["--follow", "--memory", "--ref", "x"], ["--tasks", "--memory", "--clear"]] {
+            XCTAssertEqual(why(["--json"] + a), exclusion, a.joined(separator: " "))
+        }
+        XCTAssertTrue(DchCtl.follows(["--xray", "api", "--follow", "--tasks", "--json"]))
+    }
+
+    /// Red on the old rule `value.utf8.count <= 3`: dch takes a run of any length, clamps at 1000, then wants 50 to 300.
+    func testBudgetIsADigitRunClampedAt1000() {
+        func b(_ v: String) -> String? { why(["--json", "--ref", "x", "--budget-ms", v]) }
+        for ok in ["50", "300", "0050", "00100", "000300", String(repeating: "0", count: 40) + "50", "100"] { XCTAssertTrue(b(ok) == nil, ok) }
+        for bad in ["49", "301", "0", "", "1000", "1001", "99999999999999999999", String(repeating: "9", count: 400), "1e2", "-50", "+50",
+                    "5 0", "50 ", "\u{FF15}\u{FF10}", "0x32", "100.0", "\u{0665}\u{0660}"] {
+            XCTAssertEqual(b(bad), "bad budget", bad.debugDescription)
+        }
+    }
+
+    /// Red on the old refOK: U+061C, U+2028 and U+2029 (dch's cp_ctl) passed; "bad ref" was another text.
+    func testRefBytesAndTheCodePointsRefOKGained() {
+        func r(_ v: String) -> String? { why(["--json", "--ref", v]) }
+        for bad in ["", "a\u{061C}b", "a\u{2028}b", "a\u{2029}b", "\u{061C}", "a\u{200E}", "a\u{200F}", "a\u{202A}", "a\u{202E}", "a\u{2066}",
+                    "a\u{2069}", "a\u{1F}", "a\u{7F}", "a\u{80}", "a\u{9F}", String(repeating: "r", count: 257)] {
+            XCTAssertEqual(r(bad), "bad ref", bad.debugDescription)
+        }
+        // each neighbour of a refused code point is no control: accepted
+        for ok in ["a\u{061B}b", "a\u{061D}b", "a\u{2027}b", "a\u{202F}b", "a\u{2065}b", "a\u{206A}b", "a\u{200D}b", "a\u{A0}b", "a b",
+                   "#831", "API-12", "a-b", String(repeating: "r", count: 256)] {
+            XCTAssertTrue(r(ok) == nil, ok.debugDescription)
+        }
+    }
+
+    /// "not a ref" (serve.c ctl_request, after the bytes): a blank text has no span; the Mac also refuses a leading "-".
+    func testBlankOrDashTextIsNotARef() {
+        for t in [" ", "   ", "\u{2003}", "\u{A0}", "\u{3000}", "\u{A0}\u{2003}", "-", "-x", "--ref", "--json"] {
+            XCTAssertEqual(why(["--json", "--ref", t]), "not a ref", t.debugDescription)
+        }
+        XCTAssertEqual(why(["--json", "--ref", "\t"]), "bad ref", "a control is the byte rule first")
+        XCTAssertTrue(why(["--json", "--ref", " x "]) == nil)
+    }
+
+    /// Red on the old texts "--xray takes one of --ref, --follow, --chapter", "--full goes with --ref", "--xray needs --json".
+    func testOlderFlagsUseServesWords() {
+        XCTAssertEqual(why(["--json", "--ref", "x", "--follow"]), exclusion)
+        XCTAssertEqual(why(["--json", "--follow", "--chapter", "c1"]), exclusion)
+        XCTAssertEqual(why(["--json", "--ref", "x", "--chapter", "c1"]), exclusion)
+        for f in [["--full"], ["--scope", "all"], ["--budget-ms", "100"]] {
+            XCTAssertEqual(why(["--json"] + f), withRef, f.joined(separator: " "))
+            XCTAssertEqual(why(["--json", "--follow"] + f), withRef, f.joined(separator: " "))
+            XCTAssertEqual(why(["--json", "--chapter", "c1"] + f), withRef, f.joined(separator: " "))
+        }
+        XCTAssertEqual(why(["--ref", "x"]), needsJSON)
+        XCTAssertEqual(why(["--follow"]), needsJSON)
+        XCTAssertEqual(why(["--chapter", "c1"]), needsJSON)
+        XCTAssertEqual(why([]), needsJSON)
     }
 
     func testFlagSetEqualsRframeTable() {
@@ -104,7 +197,7 @@ final class DchXrayFlagParityTests: XCTestCase {
         }
         XCTAssertTrue(why(["--json", "--ref", "x", "--full", "--scope", "all", "--budget-ms", "50"]) == nil)
         XCTAssertTrue(why(["--json", "--chapter", "c1"]) == nil)
-        XCTAssertEqual(why(["--json", "--search", "ab", "--bogus"]), "ctl does not allow --bogus with --xray")
+        XCTAssertEqual(why(["--json", "--search", "ab", "--bogus"]), "--bogus is not allowed with --xray")
     }
 
     func testAcceptedArgvIsCarriedAsOwnElements() {

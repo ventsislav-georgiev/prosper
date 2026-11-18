@@ -69,8 +69,10 @@ enum DchCtl {
     /// Out of reach on purpose: dch has shipped --xray since 1.44.0, with the --ref/--scope/--budget-ms forms
     /// `.xray` allows since 1.50.0, and dch serve runs a peer's --xray since 1.55.0 (ctl_xray, v1.57.0
     /// rframe.c:609-667), but "xray" stays off until Prosper's X-ray client ships AND `.xray`'s allowlist
-    /// matches dch serve's (it does not: no --clear, other refusal words, no --ref grammar check, a 3-digit
-    /// --budget-ms; #879 item 4). A bundled dch that has --xray is not a reason to lower it (QA #720, #879).
+    /// matches dch serve's. #1247 closed the flag list, the refusal words, the order of checks, --budget-ms and
+    /// refOK's code points (rframe.c@v1.99.0); what is left is xr_ref_parse's grammar ("not a ref": only a blank text and
+    /// a text starting with "-" are refused here, dch itself refuses the rest when it runs) and a 60-byte cut of a
+    /// shown word at a scalar boundary. A bundled dch that has --xray is not a reason to lower it (QA #720, #879).
     static let xrayMinDch = [999, 0, 0]
     static func hasXray(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, xrayMinDch) } ?? false }
 
@@ -218,17 +220,19 @@ enum DchCtl {
     /// dch's CTL_JSON: --json is required (the flags were already checked, so any "--json" is one).
     private static func json(_ words: [String], _ verb: String) -> String? { words.contains("--json") ? nil : "\(verb) needs --json" }
 
-    static let refText = "--ref takes 1-256 bytes of text with no control characters"
-    static let anchorShape = "--chapter takes an anchor: 1-128 of A-Z a-z 0-9 : _ . -"
-    static let budgetRange = "--budget-ms takes a whole number from 50 to 300"
+    static let refText = "bad ref"                 // serve.c ctl_request: xr_ref_ok
+    static let notARef = "not a ref"               // serve.c ctl_request: xr_ref_parse
+    static let anchorShape = "bad anchor"          // rframe.c:688
+    static let scopeShape = "bad scope"            // :690
+    static let budgetRange = "bad budget"          // :692
 
     /// --ref's text (amendment 4): 1-256 bytes of UTF-8, no C0, DEL, C1 or bidi control
-    /// (U+200E/F, U+202A-E, U+2066-9).
+    /// (U+200E/F, U+202A-E, U+2066-9), and (#1247, dch's cp_ctl) U+061C, U+2028, U+2029.
     static func refOK(_ t: String) -> Bool {
         (1...256).contains(t.utf8.count) && !t.unicodeScalars.contains { c in
             let v = c.value
             return v < 0x20 || (0x7f..<0xa0).contains(v) || v == 0x200e || v == 0x200f
-                || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v)
+                || (0x202a...0x202e).contains(v) || (0x2066...0x2069).contains(v) || v == 0x061c || v == 0x2028 || v == 0x2029
         }
     }
 
@@ -239,18 +243,16 @@ enum DchCtl {
         }
     }
 
-    /// dch serve 1.66.0's ctl_xray flag list (rframe.c:632-638), and which take a value (k 4...8).
+    /// dch serve's ctl_xray flag list (rframe.c:631-692@v1.99.0), and which take a value (k 4...8).
     static let xrayFlags: Set<String> = ["--json", "--follow", "--clear", "--full", "--ref", "--chapter", "--scope", "--budget-ms",
                                          "--search", "--tasks", "--memory"]
     static let xrayValued: Set<String> = ["--ref", "--chapter", "--scope", "--budget-ms", "--search"]
-    /// The flags added to the Mac after the first scanner; they carry serve's own refusal texts.
-    static let xrayNewFlags: Set<String> = ["--search", "--clear", "--tasks", "--memory"]
-    static let xrayNeedsJSON = "--xray needs --json (the view is client-side only)"   // rframe.c:675-676
-    static let xrayExclusion = "--ref, --search, --tasks, --memory, --follow, --chapter and --clear exclude each other"   // :677-679
-    static let xrayWithRef = "--scope, --full and --budget-ms come with --ref"   // :681-682
-    static let searchShape = "bad search: 2 to 200 bytes, no control character"   // :689-691
+    static let xrayNeedsJSON = "--xray needs --json (the view is client-side only)"   // rframe.c:679-680
+    static let xrayExclusion = "--ref, --search, --tasks, --memory, --follow, --chapter and --clear exclude each other"   // :682-683
+    static let xrayWithRef = "--scope, --full and --budget-ms come with --ref"   // :685-686
+    static let searchShape = "bad search: 2 to 200 bytes, no control character"   // :694-695
 
-    /// dch's xray_search_ok (rframe.c:590-602): 2 to 200 bytes of UTF-8, no cp_ctl code point (cp_ctl, rframe.c:75-81:
+    /// dch's xray_search_ok (rframe.c:591-604): 2 to 200 bytes of UTF-8, no cp_ctl code point (cp_ctl, rframe.c:75-81:
     /// C0, DEL, C1, U+202A-E, U+2066-9, U+200E/F, U+061C, U+2028/9). A Swift String is valid UTF-8 already.
     static func searchOK(_ t: String) -> Bool {
         (2...200).contains(t.utf8.count) && !t.unicodeScalars.contains { c in
@@ -260,30 +262,42 @@ enum DchCtl {
         }
     }
 
-    /// --xray after its name: each flag once, in any order, its value checked. `seen`: flag to value.
+    /// dch's xray_budget (rframe.c:607-617): a run of ASCII digits of any length, clamped at 1000 as it is read, then 50 to 300.
+    static func budgetOK(_ s: String) -> Bool {
+        var v = 0
+        for b in s.utf8 {
+            guard (0x30...0x39).contains(b) else { return false }
+            v = min(v * 10 + Int(b - 0x30), 1000)   // v <= 1000 before the step: no overflow
+        }
+        return !s.isEmpty && (50...300).contains(v)
+    }
+
+    /// rframe.c:656-661: "%.60s", the first 60 bytes (here cut at a scalar boundary: a String holds no torn scalar).
+    private static func xrayShown(_ w: String) -> String {
+        var out = "", n = 0
+        for c in w.unicodeScalars { n += String(c).utf8.count; if n > 60 { break }; out.unicodeScalars.append(c) }
+        return out
+    }
+
+    /// An element that is no --xray flag, as rframe.c:656-661 words it.
+    private static func xrayUnlisted(_ w: String) -> String {
+        let s = xrayShown(w)
+        if ["--config", "serve", "-h", "--help", "-f", "--all"].contains(w) { return "\(s) is not allowed" }
+        return w.hasPrefix("-") ? "\(s) is not allowed with --xray" : "unexpected \(s) after --xray"
+    }
+
+    /// --xray after its name: each flag once, in any order, a value taken as the next element. `seen`: flag to value.
     private static func xrayScan(_ after: [String]) -> (seen: [String: String], why: String?) {
         var seen: [String: String] = [:], i = 0
         while i < after.count {
             let w = after[i]
-            guard xrayFlags.contains(w) else { return (seen, unlisted(w, "--xray")) }
-            // The four 1.66.0 flags: serve's "%s twice" (rframe.c:661); the older ones keep the Mac's words.
-            guard seen[w] == nil else { return (seen, xrayNewFlags.contains(w) ? "\(w) twice" : "--xray takes \(w) once") }
+            guard xrayFlags.contains(w) else { return (seen, xrayUnlisted(w)) }
+            guard seen[w] == nil else { return (seen, "\(w) twice") }
             var value = ""
             if xrayValued.contains(w) {
                 guard i + 1 < after.count else { return (seen, "\(w) needs a value") }
                 value = after[i + 1]
                 i += 1
-            }
-            switch w {
-            // R1348-i1: a leading "-" as runRef refuses it (dch 1.83.0 reads "--ref -" from stdin, here /dev/null: exit 2)
-            case "--ref" where !refOK(value) || value.hasPrefix("-"): return (seen, refText)
-            case "--scope" where !["session", "project", "all"].contains(value):
-                return (seen, "--scope takes session, project or all")
-            case "--chapter" where !anchorOK(value): return (seen, anchorShape)
-            case "--budget-ms" where !(value.utf8.count <= 3 && value.utf8.allSatisfy({ (0x30...0x39).contains($0) })
-                                       && (50...300).contains(Int(value) ?? 0)):
-                return (seen, budgetRange)
-            default: break
             }
             seen[w] = value
             i += 1
@@ -291,19 +305,27 @@ enum DchCtl {
         return (seen, nil)
     }
 
-    /// --xray after its name: --json, and at most one of --ref (with --scope, --full, --budget-ms),
-    /// --follow, --chapter.
+    /// --xray after its name, in rframe.c's order (ctl_xray :631-697, then ctl_request's --ref check): the scan (unknown, twice,
+    /// needs a value), --json, the exclusion (--follow takes --tasks and --memory, #446), --scope/--full/--budget-ms
+    /// with --ref, then the values (anchor, scope, budget, search), then --ref's bytes and shape.
     private static func xrayRefusal(_ after: [String]) -> String? {
         let (seen, why) = xrayScan(after)
         if let why { return why }
-        let modes = ["--ref", "--follow", "--chapter", "--search", "--clear", "--tasks", "--memory"].filter { seen[$0] != nil }
-        let new = modes.contains { xrayNewFlags.contains($0) }   // a 1.66.0 flag is in play: serve's own words
-        guard seen["--json"] != nil else { return new ? xrayNeedsJSON : "--xray needs --json" }
-        guard modes.count <= 1 else { return new ? xrayExclusion : "--xray takes one of --ref, --follow, --chapter" }
-        if seen["--ref"] == nil, let extra = ["--scope", "--full", "--budget-ms"].first(where: { seen[$0] != nil }) {
-            return new ? xrayWithRef : "\(extra) goes with --ref"
+        guard seen["--json"] != nil else { return xrayNeedsJSON }
+        var one = ["--follow", "--clear", "--ref", "--chapter", "--search", "--tasks", "--memory"].filter { seen[$0] != nil }
+        if seen["--follow"] != nil { one.removeAll { $0 == "--tasks" || $0 == "--memory" } }
+        guard one.count <= 1 else { return xrayExclusion }
+        if seen["--ref"] == nil, ["--scope", "--full", "--budget-ms"].contains(where: { seen[$0] != nil }) { return xrayWithRef }
+        if let v = seen["--chapter"], !anchorOK(v) { return anchorShape }
+        if let v = seen["--scope"], !["session", "project", "all"].contains(v) { return scopeShape }
+        if let v = seen["--budget-ms"], !budgetOK(v) { return budgetRange }
+        if let v = seen["--search"], !searchOK(v) { return searchShape }
+        if let v = seen["--ref"] {
+            if !refOK(v) { return refText }
+            // R1348-i1: a leading "-" as runRef refuses it (dch 1.83.0 reads "--ref -" from stdin, here /dev/null: exit 2);
+            // a blank text parses to no ref in dch's grammar (trim of White_Space, then no span).
+            if v.hasPrefix("-") || v.unicodeScalars.allSatisfy({ $0.properties.isWhitespace }) { return notARef }
         }
-        if let text = seen["--search"], !searchOK(text) { return searchShape }
         return nil
     }
 

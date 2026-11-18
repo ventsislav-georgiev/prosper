@@ -320,28 +320,30 @@ final class DchCtlTests: XCTestCase {
             XCTAssertNil(DchCtl.refusal(argv, create: true), "\(argv)")
             XCTAssertNil(DchCtl.refusal(argv, create: false), "not behind create: \(argv)")
         }
-        let scope = "--scope takes session, project or all"
+        let scope = "bad scope", needsJSON = "--xray needs --json (the view is client-side only)"
+        let withRef = "--scope, --full and --budget-ms come with --ref"
+        let exclusion = "--ref, --search, --tasks, --memory, --follow, --chapter and --clear exclude each other"
         let refused: [([String], String)] = [
-            (["--xray", "alpha"], "--xray needs --json"), (["--xray", "alpha", "--ref", "x"], "--xray needs --json"),
-            (["--xray", "alpha", "--json", "-k"], "ctl does not allow -k with --xray"),
-            (["--xray", "alpha", "--json", "--config"], "ctl does not allow --config with --xray"),
-            (["--xray", "alpha", "--json", "x"], "ctl does not allow x with --xray"),
-            (["--xray", "alpha", "--json", "--all"], "ctl does not allow --all with --xray"),
-            (["--xray", "alpha", "--json", "--"], "ctl does not allow -- with --xray"),
-            (["--xray", "alpha", "--scope", "session", "--json"], "--scope goes with --ref"),
-            (["--xray", "alpha", "--full", "--json"], "--full goes with --ref"),
-            (["--xray", "alpha", "--follow", "--full", "--json"], "--full goes with --ref"),
-            (["--xray", "alpha", "--budget-ms", "100", "--json"], "--budget-ms goes with --ref"),
+            (["--xray", "alpha"], needsJSON), (["--xray", "alpha", "--ref", "x"], needsJSON),
+            (["--xray", "alpha", "--json", "-k"], "-k is not allowed with --xray"),
+            (["--xray", "alpha", "--json", "--config"], "--config is not allowed"),
+            (["--xray", "alpha", "--json", "x"], "unexpected x after --xray"),
+            (["--xray", "alpha", "--json", "--all"], "--all is not allowed"),
+            (["--xray", "alpha", "--json", "--"], "-- is not allowed with --xray"),
+            (["--xray", "alpha", "--scope", "session", "--json"], withRef),
+            (["--xray", "alpha", "--full", "--json"], withRef),
+            (["--xray", "alpha", "--follow", "--full", "--json"], withRef),
+            (["--xray", "alpha", "--budget-ms", "100", "--json"], withRef),
             (["--xray", "alpha", "--ref", "x", "--scope", "global", "--json"], scope),
             (["--xray", "alpha", "--ref", "x", "--scope", "Session", "--json"], scope),
             (["--xray", "alpha", "--ref", "x", "--scope", "", "--json"], scope),
-            (["--xray", "alpha", "--ref", "x", "--scope", "--json"], scope),
+            (["--xray", "alpha", "--ref", "x", "--scope", "--json"], needsJSON),
             (["--xray", "alpha", "--ref", "x", "--json", "--scope"], "--scope needs a value"),
             (["--xray", "alpha", "--json", "--chapter"], "--chapter needs a value"),
-            (["--xray", "alpha", "--ref", "x", "--follow", "--json"], "--xray takes one of --ref, --follow, --chapter"),
-            (["--xray", "alpha", "--follow", "--chapter", "1", "--json"], "--xray takes one of --ref, --follow, --chapter"),
-            (["--xray", "alpha", "--json", "--json"], "--xray takes --json once"),
-            (["--xray", "alpha", "--ref", "x", "--ref", "y", "--json"], "--xray takes --ref once"),
+            (["--xray", "alpha", "--ref", "x", "--follow", "--json"], exclusion),
+            (["--xray", "alpha", "--follow", "--chapter", "1", "--json"], exclusion),
+            (["--xray", "alpha", "--json", "--json"], "--json twice"),
+            (["--xray", "alpha", "--ref", "x", "--ref", "y", "--json"], "--ref twice"),
             (["--xray", "-alpha", "--json"], DchControlOps.dashNameRefusal), (["--xray", "--json"], DchControlOps.dashNameRefusal),
             (["--xray", "a/b", "--json"], "invalid session name"), (["--xray"], "ctl needs a verb and its arguments"),
         ]
@@ -355,12 +357,15 @@ final class DchCtlTests: XCTestCase {
         }
         // R1348-i1: red with the hasPrefix("-") guard gone ("-" and "-x" pass refOK); the phone path's stdin is /dev/null
         for bad in ["-", "-x", "-k", "--follow", "--json"] {
-            XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", bad, "--json"], create: true), DchCtl.refText, bad.debugDescription)
+            XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", bad, "--json"], create: true), "not a ref", bad.debugDescription)
         }
         XCTAssertNil(DchCtl.refusal(["--xray", "alpha", "--ref", "a-b", "--json"], create: true), "a dash inside the text runs")
-        for bad in ["49", "301", "0", "", "1e2", "0050", "-50", "100.0", "abc", "\u{FF15}0"] {
+        for bad in ["49", "301", "0", "", "1e2", "-50", "100.0", "abc", "\u{FF15}0", "1000", "99999999999999999999"] {
             XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", "x", "--budget-ms", bad, "--json"], create: true), DchCtl.budgetRange,
                            bad.debugDescription)
+        }
+        for good in ["0050", "00100", "300", "0000000000000000000300"] {   // dch's digit run: any length, clamped at 1000, then 50...300
+            XCTAssertNil(DchCtl.refusal(["--xray", "alpha", "--ref", "x", "--budget-ms", good, "--json"], create: true), good)
         }
         XCTAssertTrue(DchCtl.follows(["--xray", "alpha", "--follow", "--json"]))
         XCTAssertTrue(DchCtl.follows(["--follow", "alpha"]))
