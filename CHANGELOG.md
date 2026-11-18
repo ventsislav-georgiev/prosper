@@ -1893,6 +1893,9 @@ tag from the now-released section and put it on the new top draft.
   earlier in the session are not loaded, so some may be missing or out of date.". (#1270)
 - Extensions: host.shell.run now also tells how the command ended (exit code, signal, or timed out),
   so the Hammerspoon example's hs.execute returns a real success flag, type and exit code. (#1055)
+- Uninstalling an extension no longer stops on a block of it in your config file that Prosper has no
+  record of: the extension is removed, the block stays in the file as it is, and Extensions settings
+  tells you which blocks were left and how to delete them yourself. (#1232)
 
 ## v2.174.0
 

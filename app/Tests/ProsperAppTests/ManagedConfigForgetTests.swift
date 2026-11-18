@@ -126,7 +126,7 @@ final class ManagedConfigForgetTests: XCTestCase {
         let broken = try await brokenBlock(env)
         let asked = env.consent.seen.count
 
-        let stop = await ExtensionRegistry.removeManagedPieces(owner: env.owner, provider: ManagedConfigProvider(env.mc))
+        let stop = await ExtensionRegistry.removeManagedPieces(owner: env.owner, provider: ManagedConfigProvider(env.mc)).stop
 
         XCTAssertTrue(stop == nil, stop ?? "")
         XCTAssertEqual(env.consent.seen.count, asked + 1, "the forget sheet is asked once")
@@ -138,7 +138,7 @@ final class ManagedConfigForgetTests: XCTestCase {
         let good = makeMCEnv()
         try good.write("# mine\n", good.claudeMD)
         _ = await good.mc.apply([MCPieces.block()], owner: good.owner)
-        let removed = await ExtensionRegistry.removeManagedPieces(owner: good.owner, provider: ManagedConfigProvider(good.mc))
+        let removed = await ExtensionRegistry.removeManagedPieces(owner: good.owner, provider: ManagedConfigProvider(good.mc)).stop
         XCTAssertTrue(removed == nil, removed ?? "")
         XCTAssertFalse(good.consent.seen.last?.files.first?.leftAsItIs ?? true)
         XCTAssertEqual(good.read(good.claudeMD), "# mine\n")

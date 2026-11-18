@@ -191,11 +191,12 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         let (_, edited) = try await Self.lostAndEdited(env, o)
         let provider = ManagedConfigProvider(env.mc)
         let silent = await ExtensionRegistry.removeManagedPieces(owner: o, provider: provider)
-        XCTAssertTrue(silent == nil, "the premise: with no declared pieces the block is not seen")
+        XCTAssertTrue(silent.stop == nil && silent.left == nil, "the premise: with no declared pieces the block is not seen")
         let named = await ExtensionRegistry.removeManagedPieces(owner: o, declared: [MCPieces.block()], provider: provider)
-        let kept = try XCTUnwrap(named)
+        XCTAssertTrue(named.stop == nil, "OQ-144 (b): the uninstall goes on")
+        let kept = try XCTUnwrap(named.left)
         XCTAssertTrue(kept.contains(#"rules in "claude:CLAUDE.md""#), kept)
-        XCTAssertTrue(kept.hasPrefix("Not uninstalled"), kept)
+        XCTAssertTrue(kept.hasPrefix("Uninstalled com.test.kit. "), kept)
         XCTAssertEqual(env.bytes(env.claudeMD), edited, "the person's bytes are unchanged")
         XCTAssertTrue(env.consent.seen.count == 1, "only the setup's apply asked")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.state.appendingPathComponent("state.json").path), "no state written")
@@ -207,7 +208,8 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         let withOther = edited + Array(block.utf8)
         try Data(withOther).write(to: env.claudeMD)
         let twice = await ExtensionRegistry.removeManagedPieces(owner: o, declared: [MCPieces.block(), piece], provider: provider)
-        let both = try XCTUnwrap(twice)
+        XCTAssertTrue(twice.stop == nil, "no record of the edited one: no sheet, nothing stops")
+        let both = try XCTUnwrap(twice.left)
         XCTAssertTrue(both.contains(#"rules in "claude:CLAUDE.md""#), both)
         XCTAssertFalse(both.contains("other in "), both)
         XCTAssertEqual(env.mc.ownerIDs(), [o.id], "the byte-equal block is adopted in Prosper's state")
@@ -243,10 +245,10 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         return (registry, record.loaded.directory)
     }
 
-    /// The production path: the extension's status call declares its pieces, the uninstall reads them and stops, naming
-    /// the block; after Repair (Allow) the uninstall's Remove sheet takes it and the folder goes.
+    /// The production path: the extension's status call declares its pieces, the uninstall reads them and (OQ-144 b) goes
+    /// on, leaving the edited block in the file untouched and naming it afterwards in Extensions settings' notices.
     @MainActor
-    func testUninstallNamesAnUnrecordedBlockThenRemovesItAfterRepair() async throws {
+    func testUninstallLeavesAnUnrecordedBlockAndNamesItAfterward() async throws {
         let env = makeMCEnv()
         let saved = ManagedConfigRefresh.current
         defer { ManagedConfigRefresh.current = saved }
@@ -255,29 +257,20 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         ManagedConfigRefresh.current = refresh
         let (registry, dir) = try installedRegistry(env)
         let o = try XCTUnwrap(registry.record(id: Self.extID)).loaded.managedConfigOwner
-        let (applied, edited) = try await Self.lostAndEdited(env, o)
+        let (_, edited) = try await Self.lostAndEdited(env, o)
         let services = MCHostServices(env.mc)
         _ = try await Self.runOnLane(services, env, configOwner: o, "return { n = #host.config.status{ pieces = { \(blockPiece) } } }")
         for _ in 0..<1000 where refresh.declared[Self.extID] == nil { await Task.yield() }
         XCTAssertEqual(refresh.declared[Self.extID], [MCPieces.block()], "the status call's declaration is kept")
 
-        do {
-            try await registry.uninstall(id: Self.extID)
-            XCTFail("uninstalled with an unrecorded block left in the file")
-        } catch ExtensionError.managedConfigKept(let id, let reason) {
-            XCTAssertEqual(id, Self.extID)
-            XCTAssertTrue(reason.contains(#"rules in "claude:CLAUDE.md""#), reason)
-        }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path), "the folder stays")
-        XCTAssertEqual(env.bytes(env.claudeMD), edited, "the person's bytes are unchanged")
-        XCTAssertEqual(env.consent.seen.map(\.action), [.apply], "no sheet from the uninstall")
-
-        let r = try await Self.runOnLane(services, env, configOwner: o, lists("host.config.repair{ pieces = { \(blockPiece) } }"))
-        XCTAssertEqual(r["status"] as? String, "done", "\(r)")
-        XCTAssertEqual(env.bytes(env.claudeMD), applied)
         try await registry.uninstall(id: Self.extID)
-        XCTAssertEqual(env.consent.seen.map(\.action), [.apply, .repair, .remove])
-        XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path), "the folder is removed")
+        XCTAssertEqual(env.bytes(env.claudeMD), edited, "the block is left, the person's bytes are unchanged")
+        XCTAssertEqual(env.consent.seen.map(\.action), [.apply], "no sheet from the uninstall")
+        XCTAssertEqual(registry.uninstallNotices.count, 1)
+        let notice = registry.uninstallNotices.last ?? ""
+        XCTAssertTrue(notice.contains(#"rules in "claude:CLAUDE.md""#), notice)
+        XCTAssertTrue(notice.contains("delete it from the file yourself"), notice)
+        XCTAssertTrue(refresh.declared[Self.extID] == nil, "dropped with the uninstall")
     }
 }

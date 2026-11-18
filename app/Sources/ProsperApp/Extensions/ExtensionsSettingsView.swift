@@ -99,6 +99,17 @@ struct ExtensionsPane: View {
                         }.rowAction().accessibilityLabel(Self.revealLabel(refused))
                     }
                 }
+                // OQ-144: after an uninstall, the blocks it left in a person's file (no record of them); Dismiss only.
+                ForEach(Array(registry.uninstallNotices.enumerated()), id: \.offset) { index, notice in
+                    NeonDivider()
+                    HStack(alignment: .top, spacing: sz(12)) {
+                        Text(verbatim: notice)
+                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Dismiss") { registry.dismissUninstallNotice(at: index) }.rowAction()
+                    }
+                }
             }
 
             NeonSection("System Extensions", collapsed: $systemCollapsed) {

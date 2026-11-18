@@ -1166,13 +1166,14 @@ final class ExtensionRegistry: ObservableObject {
     func uninstall(id: String) async throws {
         guard let first = record(id: id) else { throw ExtensionError.notFound(id) }
         guard !first.isSystem else { throw ExtensionError.cannotUninstallSystem(id) }
+        var left: String?
         if let provider = managedConfig {
             // #1232: the pieces the extension last declared (host.config.status), read on main while its folder is here
             // r2 (F1232-2): a disabled extension makes no status calls, so a declaration of it is stale: none is passed
             let declared = first.enabled ? (ManagedConfigRefresh.current?.declared[id] ?? []) : []
-            if let kept = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, declared: declared, provider: provider) {
-                throw ExtensionError.managedConfigKept(id: id, reason: kept)
-            }
+            let outcome = await Self.removeManagedPieces(owner: first.loaded.managedConfigOwner, declared: declared, provider: provider)
+            if let kept = outcome.stop { throw ExtensionError.managedConfigKept(id: id, reason: kept) }
+            left = outcome.left
             ManagedConfigRefresh.current?.declared[id] = nil // r2: dropped with the uninstall (a reinstall starts with none)
             ManagedConfigRefresh.current?.rescan()
         }
@@ -1191,50 +1192,65 @@ final class ExtensionRegistry: ObservableObject {
         teardown(record)
         try FileManager.default.removeItem(at: record.loaded.directory)
         discover()
+        // OQ-144 (b): said after the uninstall, in Extensions settings; the newest last, at most maxUninstallNotices
+        if let left { uninstallNotices = Array((uninstallNotices + [left]).suffix(Self.maxUninstallNotices)) }
     }
 
-    /// nil: nothing of `owner` is left in the managed config. Otherwise why the uninstall stops.
+    /// OQ-144: what an uninstall left in a person's file (blocks Prosper had no record of), shown in Extensions settings
+    /// until dismissed.
+    @Published private(set) var uninstallNotices: [String] = []
+    static let maxUninstallNotices = 5
+    func dismissUninstallNotice(at index: Int) {
+        if uninstallNotices.indices.contains(index) { uninstallNotices.remove(at: index) }
+    }
+
+    /// `stop` nil: nothing of `owner` that Prosper has a record of is left in the managed config; otherwise why the
+    /// uninstall stops. `left`: the notice for the unrecorded blocks it leaves in the file (OQ-144), nil when none.
     /// Runs off the main actor (status and remove take the write lock, A-INFO-13); only the
     /// consent sheet hops to main.
     /// r2 (R2-1): a provider that cannot resolve (slow or fish login shell, relative
     /// CLAUDE_CONFIG_DIR) stops only an owner the state has records for.
-    /// #1232: a declared block of the owner with no record (lost, edited or not) is one Remove cannot take: the
-    /// uninstall names it and stops before any sheet, writing no person's file.
+    /// #1232: a declared block of the owner with no record (lost, edited or not) is one Remove cannot take.
     /// r2 (F1232-1): status with the declared pieces first adopts a byte-equal block (a record in Prosper's own state
-    /// file, as the extension's status call does), so only the edited ones stop it; at most five are named.
+    /// file, as the extension's status call does), so only the edited ones are left; at most five are named.
+    /// OQ-144 (b): an edited one no longer stops the uninstall: it is left in the file untouched and named afterwards.
     nonisolated static func removeManagedPieces(owner: ManagedConfigOwner, declared: [ManagedConfigPiece] = [],
-                                                provider: ManagedConfigProvider) async -> String? {
+                                                provider: ManagedConfigProvider) async -> (stop: String?, left: String?) {
         let config: ManagedConfig
         switch await provider.resolve() {
         case .failure(let why):
-            guard let state = provider.stateOnly() else { return why.description }
-            guard state.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
-            return state.ownerIDs().contains(owner.id) ? "Its config changes cannot be removed now: \(why.description)" : nil
+            guard let state = provider.stateOnly() else { return (why.description, nil) }
+            guard state.stateIsReadable() else { return (ManagedConfigRefusalReason.stateUnreadable.description, nil) }
+            return (state.ownerIDs().contains(owner.id) ? "Its config changes cannot be removed now: \(why.description)" : nil, nil)
         case .success(let c): config = c
         }
-        guard config.stateIsReadable() else { return ManagedConfigRefusalReason.stateUnreadable.description }
+        guard config.stateIsReadable() else { return (ManagedConfigRefusalReason.stateUnreadable.description, nil) }
         if !declared.isEmpty { _ = config.status(owner: owner, declared: declared) } // the adopt; writes state.json only
         let recorded = config.status(owner: owner) // recomputed: the adopted ones are recorded now
+        var left: String?
         let blocks = declared.filter { p in p.kind == .block && !recorded.contains { $0.id == p.id } }
         if !blocks.isEmpty {
             let plan = config.plan(blocks, owner: owner) // adopt: byte-equal, drifted: edited; both on disk with no record
             let named = blocks.filter { p in
                 plan.actions.contains { $0.id == p.id && $0.action == .adopt } || plan.refusals.contains { $0.pieceID == p.id && $0.reason == .drifted }
             }
-            if !named.isEmpty {
-                let names = named.map { "\($0.id) in \(String(reflecting: $0.target))" }
-                return "Not uninstalled: Prosper has no record of these blocks of the extension, so Remove cannot take them out: "
-                    + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? " and \(names.count - 5) more" : "")
-                    + ". Nothing was changed. Repair them from the extension (they are then recorded and uninstall removes them), "
-                    + "or delete them from the file yourself (only their two prosper marker lines, to keep your text), then uninstall again. "
-                    + "Or turn the extension off, then uninstall it: Prosper then leaves these blocks in the file as they are."
-            }
+            if !named.isEmpty { left = leftNotice(extensionID: owner.id, named) }
         }
-        guard !recorded.isEmpty else { return nil }
+        guard !recorded.isEmpty else { return (nil, left) }
         // #1244: a block with broken markers is forgotten (its file left as it is) after a sheet that says so, not refused
         let result = await config.uninstall(owner: owner)
-        if result.ok { return nil }
-        return result.status == .denied ? "Remove was cancelled: the extension and its config stay" : result.message
+        if result.ok { return (nil, left) }
+        return (result.status == .denied ? "Remove was cancelled: the extension and its config stay" : result.message, nil)
+    }
+
+    /// OQ-144: the after-uninstall notice: one name per block (id and target, as the stop named them), at most five,
+    /// then "and n more"; the extension id cleaned and cut at 80 as a refused folder's name (refusedNameMax, main-isolated).
+    nonisolated static func leftNotice(extensionID: String, _ blocks: [ManagedConfigPiece]) -> String {
+        let names = blocks.map { "\($0.id) in \(String(reflecting: $0.target))" }
+        return "Uninstalled \(OutsideText.shown(extensionID, max: 80)). Prosper had no record of these blocks of it, "
+            + "so they were left in the file as they are: "
+            + names.prefix(5).joined(separator: ", ") + (names.count > 5 ? " and \(names.count - 5) more" : "")
+            + ". To remove one, delete it from the file yourself; to keep its text as your own, delete only its two prosper marker lines."
     }
 
     /// Install (or upgrade) a user extension by copying a validated source
