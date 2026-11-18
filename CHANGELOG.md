@@ -1755,8 +1755,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray Refs list terms, identifiers and backticked words from the conversation, with where they
   were first mentioned (dch 1.93.0 or newer). (#1489)
 - Resuming a session now routes it through the account pool, as a new session is (Resume interrupted
-  still is not). A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL
-  or an API key. (#1219, #1499)
+  still is not), even when your shell startup files set ANTHROPIC_BASE_URL or an API key. (#1219,
+  #1499)
 - Agent Island > Row details now has a toggle for every part of a session row: model, effort, state,
   agents, merged, open PRs, age and the Command 1-9 shortcut chip; model and effort show only where
   they differ from your Default model and effort. (#1455)
@@ -1774,8 +1774,6 @@ tag from the now-released section and put it on the new top draft.
 - The small Command number in the Mini sidebar is readable on every theme. (#1505)
 - A session row's detail line (state, counts, age) now follows the UI size: at a smaller size the
   row is no longer held 14 pt tall by an empty age slot. (#1500)
-- A resumed Agent Session stays on the Account pool even when your shell startup files set
-  ANTHROPIC_BASE_URL or an API key (needs dch 1.94.0). (#1499)
 
 ## v2.174.0
 
