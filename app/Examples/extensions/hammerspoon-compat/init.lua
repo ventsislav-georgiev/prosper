@@ -264,13 +264,20 @@ local function build_hs(ctx)
     -- ref to the table so hs_url_open can read that closure after a (re)run.
     ctx.urlevent = hs.urlevent
     hs.openURL = function(url) if allowed() then host.url.open(url) end end
-    -- Granted: the output only (the host has no exit status to report). Refused: the
-    -- shape of a Hammerspoon command that could not run (output, status, type, rc):
-    -- "", nil, "exit", 126 (sh's "cannot execute"), never the refusal sentence as output.
+    -- Hammerspoon's (output, status, type, rc): status true only for exit 0, type "exit"
+    -- (rc = exit code) or "signal" (rc = signal number), from host.shell.run's state.
+    -- A host timeout has no true type or rc: output, nil. Refused (no state, the
+    -- sentence): "", nil, "exit", 126 (sh's "cannot execute"), never the sentence as output.
     hs.execute = function(cmd)
         if not allowed() then return "" end
-        local out = host.shell.run(cmd)
-        if out ~= SHELL_REFUSED then return out or "" end
+        local out, _, st = host.shell.run(cmd)
+        out = out or ""
+        if st then
+            if st.type == "exit" then return out, st.code == 0 or nil, "exit", st.code end
+            if st.type == "signal" then return out, nil, "signal", st.code end
+            return out, nil
+        end
+        if out ~= SHELL_REFUSED then return out end
         if not shell_refusal_warned then
             shell_refusal_warned = true
             host.log.warn("hammerspoon-compat: hs.execute needs \"Grant System Access\" "

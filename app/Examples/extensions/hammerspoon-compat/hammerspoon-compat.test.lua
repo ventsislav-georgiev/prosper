@@ -23,6 +23,7 @@ local hidden = {}           -- host.apps.hide calls (bundleID) — window API
 local window_count = 0      -- what host.apps.windows returns (AX window count)
 local SHELL_REFUSED = "error: host.shell is restricted to system extensions" -- the host's whole answer
 local shell_answer, shell_trunc = SHELL_REFUSED, nil -- what host.shell.run returns
+local shell_state = nil -- its third value (#1055); nil = nothing ran (refused)
 local shell_calls = 0
 local warns = {}            -- host.log.warn messages
 local FAKE_INIT = [[
@@ -73,7 +74,7 @@ host = {
     env = { get = function() return nil end },
     log = { info = function() end, warn = function(m) warns[#warns + 1] = m end,
             error = function(m) print("ERR " .. tostring(m)) end },
-    shell = { run = function() shell_calls = shell_calls + 1; return shell_answer, shell_trunc end },
+    shell = { run = function() shell_calls = shell_calls + 1; return shell_answer, shell_trunc, shell_state end },
     keys = { set_rules = function() end, stroke = function() end },
     timer = { cancel = function(id) cancelled[#cancelled + 1] = id; armed[id] = nil end,
               schedule = function(spec) scheduled[#scheduled + 1] = spec; armed[spec.id] = spec end, -- doAfter/doEvery
@@ -463,22 +464,31 @@ check(exec_notices() == 1, "notice exactly once across 4 refused calls and 2 con
 for _, a in ipairs(alerts) do
     check(not a:find("restricted", 1, true), "refusal sentence never returned as output")
 end
--- granted host: the output, one value (the host has no exit status), no new notice
-shell_answer, shell_trunc = "file-a\nfile-b", true
-alerts = {}
-hs_dispatch(tostring(x_idx))
-check(alerts[1] == "1|file-a\nfile-b", "granted hs.execute -> the output only (" .. tostring(alerts[1]) .. ")")
+-- granted host (#1055): Hammerspoon's four values from the host's state, no new notice
+local function granted(answer, trunc, state)
+    shell_answer, shell_trunc, shell_state = answer, trunc, state
+    alerts = {}
+    hs_dispatch(tostring(x_idx))
+    return alerts[1]
+end
+local got = granted("file-a\nfile-b", true, { type = "exit", code = 0 })
+check(got == "4|file-a\nfile-b|true|exit|0", "granted exit 0 -> out, true, 'exit', 0 (" .. tostring(got) .. ")")
+got = granted("no such file", nil, { type = "exit", code = 1 })
+check(got == "4|no such file|nil|exit|1", "granted exit 1 -> out, nil, 'exit', 1 (" .. tostring(got) .. ")")
+got = granted("", nil, { type = "signal", code = 9 })
+check(got == "4||nil|signal|9", "granted signal -> '', nil, 'signal', 9 (" .. tostring(got) .. ")")
+got = granted("", nil, { type = "timeout" })
+check(got == "2||nil", "granted host timeout -> '', nil: no true type or rc (" .. tostring(got) .. ")")
 -- real output that merely contains "restricted" / the sentence is output, not a refusal
-shell_answer, shell_trunc = "access restricted by policy", nil
-alerts = {}
-hs_dispatch(tostring(x_idx))
-check(alerts[1] == "1|access restricted by policy", "output containing 'restricted' passes through")
-shell_answer = "log: " .. SHELL_REFUSED
-alerts = {}
-hs_dispatch(tostring(x_idx))
-check(alerts[1] == "1|log: " .. SHELL_REFUSED, "output containing the sentence passes through")
+got = granted("access restricted by policy", nil, { type = "exit", code = 0 })
+check(got == "4|access restricted by policy|true|exit|0", "output containing 'restricted' passes through")
+got = granted("log: " .. SHELL_REFUSED, nil, { type = "exit", code = 0 })
+check(got == "4|log: " .. SHELL_REFUSED .. "|true|exit|0", "output containing the sentence passes through")
+-- with a state the sentence itself is the command's output (it ran), not the refusal
+got = granted(SHELL_REFUSED, nil, { type = "exit", code = 0 })
+check(got == "4|" .. SHELL_REFUSED .. "|true|exit|0", "a command that printed the sentence ran: its output")
 check(exec_notices() == 1, "granted calls add no notice")
-shell_answer, shell_trunc = SHELL_REFUSED, nil
+shell_answer, shell_trunc, shell_state = SHELL_REFUSED, nil, nil
 
 -- 9l. app:hide() gates on the ctx its app object was made under, never on the ctx a
 --     previous run left published while a rebuild runs the config's top level (#1149):

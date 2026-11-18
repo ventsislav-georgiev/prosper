@@ -17,7 +17,7 @@ private final class RetiredCallRecorder: ExtensionHostServices, @unchecked Senda
     func llmTranslate(_ text: String, target: String, source: String?) async -> String { act("llmTranslate"); return "" }
     func llmChat(_ prompt: String) async -> String { act("llmChat"); return "" }
     func shellRun(_ command: String) async -> String { act("shellRun"); return "" }
-    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) { act("shellRun"); return ("", false) }
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool, exit: ShellRunner.Exit?) { act("shellRun"); return ("", false, .exit(0)) }
     func httpRequest(method: String, url: String, headers: [String: String],
                      body: String?, timeout: TimeInterval) async -> HTTPResponse? { act("httpRequest"); return nil }
     func currentEpochSeconds() -> Double { 0 }

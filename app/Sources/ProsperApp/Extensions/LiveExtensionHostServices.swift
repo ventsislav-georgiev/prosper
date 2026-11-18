@@ -122,7 +122,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         await shellRunCapped(command).text
     }
 
-    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) {
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool, exit: ShellRunner.Exit?) {
         await ShellRunner.run(command, cap: ShellRunner.hostOutputCap)
     }
 

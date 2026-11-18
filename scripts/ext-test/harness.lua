@@ -223,7 +223,8 @@ local function uiNode(kind)
 end
 
 -- A shellRouter (or shellOut) returns M.TIMEOUT for "this command hit the host
--- timeout": the call answers "" like the real host, and env.shellCalls records it
+-- timeout": the call answers "", nil, { type = "timeout" } like the real host
+-- ({ type = "running" } with keep_running), and env.shellCalls records it
 -- (killed unless the call passed keep_running).
 local TIMEOUT = setmetatable({}, { __tostring = function() return "TIMEOUT" end })
 M.TIMEOUT = TIMEOUT
@@ -248,7 +249,7 @@ end
 
 local PROCESS_REFUSED = "host.process is restricted to system extensions"
 
--- Build a stub host. opts: { power, pct, shellOut, shellTruncated, screens, date, now, frame,
+-- Build a stub host. opts: { power, pct, shellOut, shellTruncated, shellExit, screens, date, now, frame,
 -- apps, files, fsDirs, fsExists, translateResult, agentResult, httpResponse,
 -- setDefaultOK, perms, snippets, shellRouter, privileged, trusted }.
 -- The level, named after the real host's words (ExtensionHost.privileged / .trusted):
@@ -295,11 +296,14 @@ function M.makeHost(opts)
         snippetConfig = opts.snippetConfig or { enabled = true, autoExpand = true,
             wordBoundary = true, restoreClipboard = false },
         windowClosed = 0,
-        -- shellRouter(cmd) -> string [, truncated] lets a test return different output
-        -- per command; return h.TIMEOUT to say the command hit the host timeout.
+        -- shellRouter(cmd) -> string [, truncated [, state]] lets a test return different
+        -- output per command; return h.TIMEOUT to say the command hit the host timeout.
         -- shellTruncated = true makes the canned shellOut come back truncated.
+        -- state / shellExit: how the command ended, { type = "exit"|"signal", code = n };
+        -- absent = { type = "exit", code = 0 }.
         shellRouter = opts.shellRouter,
         shellTruncated = opts.shellTruncated,
+        shellExit = opts.shellExit,
         shellCalls = {},                      -- every host.shell.run: { cmd, keep_running, timed_out, killed }
         privileged = (opts.privileged ~= false), -- false = the system-only functions refuse
         trusted = (opts.trusted ~= false),       -- false with privileged = false: automation refuses too
@@ -333,7 +337,9 @@ function M.makeHost(opts)
     -- - cmd goes through lua_tostring: a number runs as its string ("42"), nil / table /
     --   boolean become ""; the cmd is trimmed of Swift's .whitespacesAndNewlines (ShellRunner.run)
     --   and "" (or all-blank) spawns nothing and answers one "";
-    -- - two returns at most, (output, true) only when truncated; a timeout answers "".
+    -- - a command that ran answers three values (#1055): output, true | nil (truncated), and
+    --   its state, a fresh { type =, code = } table; a timeout answers "", nil, { type =
+    --   "timeout" } ({ type = "running" } with keep_running).
     -- env.calls.shell counts every bridge hop that passed the opts checks (refused and
     -- empty calls included); env.shellCalls lists only commands that ran, as
     -- { cmd =, keep_running =, timed_out =, killed = }, so #env.shellCalls == 0 = nothing ran.
@@ -361,16 +367,16 @@ function M.makeHost(opts)
         elseif type(cmd) ~= "string" then cmd = "" end
         cmd = swiftTrim(cmd)
         if cmd == "" then return "" end
-        local out, truncated
-        if env.shellRouter then out, truncated = env.shellRouter(cmd)
-        else out, truncated = env.shellOut, env.shellTruncated end
+        local out, truncated, state
+        if env.shellRouter then out, truncated, state = env.shellRouter(cmd)
+        else out, truncated, state = env.shellOut, env.shellTruncated, env.shellExit end
         local timedOut = out == TIMEOUT
         env.shellCalls[#env.shellCalls + 1] = { cmd = cmd, keep_running = keep,
             timed_out = timedOut, killed = timedOut and not keep }
-        -- The host answers a timeout with one "" either way; keep_running only spares the command.
-        if timedOut or out == nil then return "" end
-        if truncated == true then return out, true end
-        return out
+        -- A timeout has no exit status: the host killed it, or keep_running left it going.
+        if timedOut then return "", nil, { type = keep and "running" or "timeout" } end
+        if type(state) ~= "table" then state = { type = "exit", code = 0 } end
+        return out or "", truncated == true or nil, { type = state.type, code = state.code }
     end
     local settings = {
         ui = uiNode("settings.ui"),

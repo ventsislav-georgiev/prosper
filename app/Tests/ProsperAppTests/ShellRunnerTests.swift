@@ -219,11 +219,11 @@ final class ShellRunnerTests: XCTestCase {
         let file = tempDir().appendingPathComponent("pid").path
         let out = try hostShell("""
             function t()
-                local s = host.shell.run([[echo $$ > '\(file)'; exec /bin/sleep 30]], { keep_running = true })
-                return s
+                local s, cut, st = host.shell.run([[echo $$ > '\(file)'; exec /bin/sleep 30]], { keep_running = true })
+                return s .. "|" .. tostring(cut) .. "|" .. st.type .. "|" .. tostring(st.code)
             end
             """, callTimeout: 1)
-        XCTAssertEqual(out, "", "the timeout returns control with empty output")
+        XCTAssertEqual(out, "|nil|running|nil", "the timeout returns control: empty output, state running, no code")
         var pid: pid_t?
         defer { if let pid { _ = killIfReal(pid, group: false) } }   // our own recorded pid, armed before the read
         let recorded = try XCTUnwrap(parsePid(try? String(contentsOfFile: file, encoding: .utf8)))
@@ -239,10 +239,11 @@ final class ShellRunnerTests: XCTestCase {
         defer { live.forEach { _ = killIfReal($0, group: false) } }   // armed before the pid file is read
         let out = try hostShell("""
             function t()
-                return host.shell.run([[echo $$ > '\(file)'; /bin/sleep 30 & echo $! >> '\(file)'; wait]])
+                local s, cut, st = host.shell.run([[echo $$ > '\(file)'; /bin/sleep 30 & echo $! >> '\(file)'; wait]])
+                return s .. "|" .. tostring(cut) .. "|" .. st.type .. "|" .. tostring(st.code)
             end
             """, callTimeout: 1)
-        XCTAssertEqual(out, "", "the timeout returns empty output")
+        XCTAssertEqual(out, "|nil|timeout|nil", "the timeout returns empty output and state timeout, never an exit")
         live = (try? String(contentsOfFile: file, encoding: .utf8))?
             .split(separator: "\n").compactMap { parsePid(String($0)) } ?? []
         XCTAssertEqual(live.count, 2, "expected the zsh pid and the sleep pid")
@@ -250,12 +251,50 @@ final class ShellRunnerTests: XCTestCase {
         XCTAssertEqual(live, [], "these pids outlived the default-opts timeout by 2 s")
     }
 
-    /// QA #671 r2: an uncapped call returns exactly one value, so `f(host.shell.run(x))` sees one arg.
-    func testUncappedCallReturnsExactlyOneValue() throws {
+    /// #1055 (was QA #671 r2's one value): a command that ran answers three values, output,
+    /// nil (not truncated) and its state; a blank command ran nothing and still answers one.
+    func testRanCallReturnsThreeValuesBlankCallOne() throws {
         let out = try hostShell("""
-            function t() return tostring(select('#', host.shell.run("echo hi"))) end
+            function t()
+                return tostring(select('#', host.shell.run("echo hi"))) .. "," .. tostring(select('#', host.shell.run("  ")))
+            end
             """, callTimeout: 10)
-        XCTAssertEqual(out, "1")
+        XCTAssertEqual(out, "3,1")
+    }
+
+    /// #1055: the third return is how the command ended: exit 0, a non-zero exit, a signal.
+    private func shellState(_ cmd: String) throws -> String? {
+        try hostShell("""
+            function t()
+                local s, cut, st = host.shell.run([[\(cmd)]])
+                return s .. "|" .. tostring(cut) .. "|" .. st.type .. "|" .. tostring(st.code)
+            end
+            """, callTimeout: 10)
+    }
+
+    func testHostShellReportsExitZero() throws {
+        XCTAssertEqual(try shellState("echo hi"), "hi|nil|exit|0")
+    }
+
+    func testHostShellReportsNonZeroExit() throws {
+        XCTAssertEqual(try shellState("echo out; exit 3"), "out|nil|exit|3")
+    }
+
+    func testHostShellReportsSignal() throws {
+        // zsh kills itself: terminated by SIGKILL (9), not an exit.
+        XCTAssertEqual(try shellState("echo out; kill -KILL $$"), "out|nil|signal|9")
+    }
+
+    /// #1055: ShellRunner's own answer; nil = nothing ran.
+    func testRunReportsHowTheShellEnded() async {
+        let ok = await ShellRunner.run("true", cap: ShellRunner.hostOutputCap)
+        XCTAssertTrue(ok.exit == .exit(0))
+        let failed = await ShellRunner.run("exit 7", cap: ShellRunner.hostOutputCap)
+        XCTAssertTrue(failed.exit == .exit(7))
+        let killed = await ShellRunner.run("kill -TERM $$", cap: ShellRunner.hostOutputCap)
+        XCTAssertTrue(killed.exit == .signal(SIGTERM))
+        let blank = await ShellRunner.run(" \n ", cap: ShellRunner.hostOutputCap)
+        XCTAssertTrue(blank.exit == nil, "a blank command ran nothing")
     }
 
     /// QA #671 r2 R2: a bad opts raises a Lua error naming the key; nil and a boolean pass.
@@ -278,7 +317,7 @@ final class ShellRunnerTests: XCTestCase {
     }
 
     /// QA #714 INFO-1: `false` opts (from `cond and { keep_running = true }`) is no opts:
-    /// one return value, and the timeout kills zsh and its background child.
+    /// the timeout answers "", nil, { type = "timeout" } (#1055) and kills zsh and its child.
     func testFalseOptsIsNoOptsAndKillsAtTheTimeout() throws {
         let file = tempDir().appendingPathComponent("pids").path
         var live: [pid_t] = []
@@ -286,10 +325,10 @@ final class ShellRunnerTests: XCTestCase {
         let out = try hostShell("""
             function t()
                 local r = table.pack(host.shell.run([[echo $$ > '\(file)'; /bin/sleep 30 & echo $! >> '\(file)'; wait]], false))
-                return r.n .. ":" .. r[1]
+                return r.n .. ":" .. r[1] .. ":" .. tostring(r[2]) .. ":" .. r[3].type
             end
             """, callTimeout: 1)
-        XCTAssertEqual(out, "1:", "one empty return at the timeout")
+        XCTAssertEqual(out, "3::nil:timeout", "empty output, no cut, state timeout")
         live = (try? String(contentsOfFile: file, encoding: .utf8))?
             .split(separator: "\n").compactMap { parsePid(String($0)) } ?? []
         XCTAssertEqual(live.count, 2, "expected the zsh pid and the sleep pid")

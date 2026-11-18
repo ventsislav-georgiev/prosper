@@ -37,8 +37,9 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     func llmChat(_ prompt: String) async -> String
     // Shell (user-permissioned).
     func shellRun(_ command: String) async -> String
-    /// host.shell.run: output plus whether it hit the cap (never marked in the text).
-    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool)
+    /// host.shell.run: output, whether it hit the cap (never marked in the text), and how
+    /// the command ended (nil: nothing ran).
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool, exit: ShellRunner.Exit?)
     // Process control (privileged). Both route through `KillProcessSupport`, the
     // one place the refusal rules live — `processKill` re-checks them itself, so
     // an extension can never reach a signal past a guard.
@@ -241,9 +242,9 @@ protocol ExtensionHostServices: AnyObject, Sendable {
 }
 
 extension ExtensionHostServices {
-    /// Default (test fakes): the plain shellRun, never truncated.
-    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) {
-        (await shellRun(command), false)
+    /// Default (test fakes): the plain shellRun, never truncated, exit 0.
+    func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool, exit: ShellRunner.Exit?) {
+        (await shellRun(command), false, .exit(0))
     }
 
     /// Default: no application index (test / minimal hosts). The live host
@@ -636,11 +637,28 @@ struct ExtensionHost {
                 let out = ExtensionHost.awaitSync(timeout: timeout, cancelOnTimeout: !keepRunning) {
                     await services.shellRunCapped(cmd)
                 }
-                rt.push(out?.text ?? "")
+                // #1055: third return, how it ended. A timeout has no exit status: the
+                // default kill ended it ("timeout"), or keep_running left it going ("running").
+                guard let out else {
+                    rt.push("")
+                    rt.pushNil()
+                    rt.pushJSON(["type": keepRunning ? "running" : "timeout"])
+                    return 3
+                }
+                rt.push(out.text)
                 // Second return: true when the output hit the cap, nil otherwise.
-                guard out?.truncated == true else { return 1 }
-                rt.push(true)
-                return 2
+                guard let exit = out.exit else {
+                    // Nothing ran (blank command, zsh not launched): no state, today's shape.
+                    guard out.truncated else { return 1 }
+                    rt.push(true)
+                    return 2
+                }
+                if out.truncated { rt.push(true) } else { rt.pushNil() }
+                switch exit {
+                case .exit(let code): rt.pushJSON(["type": "exit", "code": Int(code)] as [String: Any])
+                case .signal(let sig): rt.pushJSON(["type": "signal", "code": Int(sig)] as [String: Any])
+                }
+                return 3
             }
         } else {
             lua.register("__h_shell_run") { rt in
@@ -1233,7 +1251,9 @@ struct ExtensionHost {
             translate = __h_llm_translate,
             chat      = __h_llm_chat,
         },
-        -- run(cmd [, { keep_running = true }]) -> output, truncated (true | nil)
+        -- run(cmd [, { keep_running = true }]) -> output, truncated (true | nil), state
+        -- state (#1055): { type = "exit"|"signal", code = n } | { type = "timeout" }
+        -- | { type = "running" }; absent when nothing ran (blank cmd, zsh not launched).
         -- A bad opts raises (naming the key) rather than silently killing at the timeout.
         shell  = { run = function(cmd, opts)
             if opts == false then opts = nil end   -- `cond and { keep_running = true }`

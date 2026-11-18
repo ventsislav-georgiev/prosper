@@ -126,32 +126,45 @@ do  -- the record: per call, the command and whether keep_running was set
     h.eq(env.shellCalls[1].timed_out, false, "a normal call did not time out")
     h.eq(env.shellCalls[1].killed, false, "a normal call was not killed")
 end
-do  -- return shape: one value by default, (out, true) when truncated, never nil
-    local host = h.makeHost{ shellOut = "out" }
-    local r = table.pack(host.shell.run("x"))
-    h.eq(r.n .. ":" .. r[1], "1:out", "canned output: one value")
-    host = h.makeHost{ shellOut = "big", shellTruncated = true }
-    r = table.pack(host.shell.run("x"))
-    h.eq(r.n .. ":" .. r[1] .. ":" .. tostring(r[2]), "2:big:true", "canned truncated: two values")
-    host = h.makeHost{ shellRouter = function(cmd) return cmd .. "!" end }
-    r = table.pack(host.shell.run("one"))
-    h.eq(r.n .. ":" .. r[1], "1:one!", "a one-value router keeps working, one value")
-    host = h.makeHost{ shellRouter = function() return "cut", true end }
-    r = table.pack(host.shell.run("x"))
-    h.eq(r.n .. ":" .. r[1] .. ":" .. tostring(r[2]), "2:cut:true", "router truncated: two values")
-    host = h.makeHost{ shellRouter = function() return "x", false, "junk" end }
-    r = table.pack(host.shell.run("x"))
-    h.eq(r.n .. ":" .. r[1], "1:x", "false truncated and extra values are dropped")
-    host = h.makeHost{ shellRouter = function() return nil end }
-    r = table.pack(host.shell.run("x"))
-    h.eq(r.n .. ":" .. r[1], "1:", "the host never answers nil: \"\"")
+-- "n:out:truncated:type:code" of one host.shell.run answer
+local function shape(...)
+    local r = table.pack(...)
+    local st = r[3] or {}
+    return r.n .. ":" .. tostring(r[1]) .. ":" .. tostring(r[2]) .. ":" .. tostring(st.type) .. ":" .. tostring(st.code)
 end
-do  -- h.TIMEOUT: "" (one value) like the host, recorded, killed unless keep_running
+do  -- return shape (#1055): a command that ran answers out, true | nil, state; never nil out
+    local host = h.makeHost{ shellOut = "out" }
+    h.eq(shape(host.shell.run("x")), "3:out:nil:exit:0", "canned output: three values, exit 0")
+    host = h.makeHost{ shellOut = "big", shellTruncated = true }
+    h.eq(shape(host.shell.run("x")), "3:big:true:exit:0", "canned truncated: true second")
+    host = h.makeHost{ shellRouter = function(cmd) return cmd .. "!" end }
+    h.eq(shape(host.shell.run("one")), "3:one!:nil:exit:0", "a one-value router keeps working: exit 0")
+    host = h.makeHost{ shellRouter = function() return "cut", true end }
+    h.eq(shape(host.shell.run("x")), "3:cut:true:exit:0", "router truncated")
+    host = h.makeHost{ shellRouter = function() return "x", false, "junk" end }
+    h.eq(shape(host.shell.run("x")), "3:x:nil:exit:0", "false truncated is nil; a non-table state is exit 0")
+    host = h.makeHost{ shellRouter = function() return nil end }
+    h.eq(shape(host.shell.run("x")), "3::nil:exit:0", "the host never answers nil: \"\"")
+end
+do  -- the state a router or shellExit gives: exit code, signal; a fresh table per call
+    local host = h.makeHost{ shellRouter = function(cmd)
+        if cmd == "fail" then return "boom", nil, { type = "exit", code = 3 } end
+        if cmd == "killed" then return "", nil, { type = "signal", code = 9 } end
+        return "ok"
+    end }
+    h.eq(shape(host.shell.run("fail")), "3:boom:nil:exit:3", "non-zero exit")
+    h.eq(shape(host.shell.run("killed")), "3::nil:signal:9", "signal")
+    h.eq(shape(host.shell.run("fine")), "3:ok:nil:exit:0", "default exit 0")
+    host = h.makeHost{ shellOut = "x", shellExit = { type = "exit", code = 1 } }
+    local _, _, a = host.shell.run("x")
+    a.code = 99
+    h.eq(shape(host.shell.run("x")), "3:x:nil:exit:1", "canned shellExit; a caller's edit does not leak")
+end
+do  -- h.TIMEOUT: "", nil, timeout | running like the host, recorded, killed unless keep_running
     local host, env = h.makeHost{ shellRouter = function() return h.TIMEOUT end }
-    local r = table.pack(host.shell.run("slow"))
-    h.eq(r.n .. ":" .. r[1], "1:", "timeout answers one empty value")
-    r = table.pack(host.shell.run("slow", { keep_running = true }))
-    h.eq(r.n .. ":" .. r[1], "1:", "keep_running timeout answers the same")
+    h.eq(shape(host.shell.run("slow")), "3::nil:timeout:nil", "timeout: empty, state timeout, no code")
+    h.eq(shape(host.shell.run("slow", { keep_running = true })), "3::nil:running:nil",
+         "keep_running timeout: state running, no code")
     local a, b = env.shellCalls[1], env.shellCalls[2]
     h.eq(tostring(a.timed_out) .. "," .. tostring(a.killed), "true,true", "timeout without keep_running kills")
     h.eq(tostring(b.timed_out) .. "," .. tostring(b.killed), "true,false", "keep_running timeout leaves it running")
@@ -189,7 +202,7 @@ do  -- system level (control) and the default when the option is absent
     h.eq(host.shell.run("echo hi"), "ran:echo hi", "privileged = true runs")
     host, env = h.makeHost{ shellRouter = router }
     h.eq(env.privileged, true, "default level is the system one")
-    h.eq(select("#", host.shell.run("echo hi")), 1, "default: one value")
+    h.eq(select("#", host.shell.run("echo hi")), 3, "default: out, nil, state")
     h.eq(seen.n .. ":" .. #env.shellCalls, "2:1", "default: routed and recorded")
 end
 do  -- a cmd that is not a string, privileged: lua_tostring semantics (ExtensionHostAPI.swift:507)

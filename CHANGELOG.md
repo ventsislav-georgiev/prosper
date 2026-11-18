@@ -1891,6 +1891,8 @@ tag from the now-released section and put it on the new top draft.
   lets the Mac sleep again, even when that request was still being applied. (#1549)
 - Agent Sessions: the task list note for a partly loaded session now reads "Partial list: tasks from
   earlier in the session are not loaded, so some may be missing or out of date.". (#1270)
+- Extensions: host.shell.run now also tells how the command ended (exit code, signal, or timed out),
+  so the Hammerspoon example's hs.execute returns a real success flag, type and exit code. (#1055)
 
 ## v2.174.0
 

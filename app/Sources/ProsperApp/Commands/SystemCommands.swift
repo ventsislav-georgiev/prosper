@@ -95,6 +95,11 @@ enum ShellRunner {
     /// Test seam (#1026): the environment zsh gets, so a test points ZDOTDIR and HOME at a
     /// dir it made and zsh reads no real dotfile. nil (production): inherit ours.
     nonisolated(unsafe) static var testEnvironment: [String: String]?
+    /// How zsh ended (#1055): its exit status, or the signal that killed it.
+    enum Exit: Equatable, Sendable {
+        case exit(Int32)
+        case signal(Int32)
+    }
 
     /// `> cmd`: 1 MiB, marker appended on truncation.
     static func run(_ command: String) async -> String {
@@ -103,9 +108,10 @@ enum ShellRunner {
     }
 
     static func run(_ command: String, cap: Int,
-                    shellFlag: String = ShellRunner.shellFlag) async -> (text: String, truncated: Bool) {
+                    shellFlag: String = ShellRunner.shellFlag) async -> (text: String, truncated: Bool, exit: Exit?) {
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty else { return ("", false) }
+        // exit nil = nothing ran: a blank command, a cancel before the spawn, zsh not launched.
+        guard !cmd.isEmpty else { return ("", false, nil) }
         let job = Job()
         let environment = testEnvironment
         // The kill ends zsh, and the reader stops once zsh is gone, so the single resume still
@@ -137,7 +143,7 @@ enum ShellRunner {
         }
 
         func execute(_ cmd: String, cap: Int, shellFlag: String,
-                     environment: [String: String]?) -> (text: String, truncated: Bool) {
+                     environment: [String: String]?) -> (text: String, truncated: Bool, exit: Exit?) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             // Login shell (`-l`): sources /etc/zprofile (path_helper adds
@@ -152,12 +158,12 @@ enum ShellRunner {
             process.standardError = pipe
             // Spawn under the lock so a cancel either sees the pid or stops the spawn.
             lock.lock()
-            guard !cancelled else { lock.unlock(); return ("", false) }
+            guard !cancelled else { lock.unlock(); return ("", false, nil) }
             do {
                 try process.run()
             } catch {
                 lock.unlock()
-                return ("error: \(error.localizedDescription)", false)
+                return ("error: \(error.localizedDescription)", false, nil)
             }
             pid = process.processIdentifier
             lock.unlock()
@@ -191,8 +197,10 @@ enum ShellRunner {
             lock.lock()
             pid = 0   // reaped: a late cancel must not signal a recycled pid
             lock.unlock()
+            let status = process.terminationStatus
+            let exit: Exit = process.terminationReason == .uncaughtSignal ? .signal(status) : .exit(status)
             // decoding (not String(data:)): a cap cut inside a UTF-8 sequence must not blank the output.
-            return (String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), truncated)
+            return (String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines), truncated, exit)
         }
     }
 }
