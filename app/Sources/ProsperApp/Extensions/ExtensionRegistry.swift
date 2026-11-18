@@ -60,6 +60,9 @@ enum ExtensionError: Error, Equatable {
     case marketKitRefused(id: String, KitListingRefusal)
     /// #919 S3: the listing a kit is checked against could not be loaded: nothing installed, a later try can pass.
     case marketListingUnavailable(id: String)
+    /// An update's archive is a kit where the installed record is not, or the reverse: the id is stored as shown (OutsideText).
+    /// A refusal of the content (RefusedUpdates.isRefusal); installLocal would keep trust and privilege across the change.
+    case marketKindChanged(id: String)
 }
 
 extension ExtensionError: LocalizedError {
@@ -77,6 +80,8 @@ extension ExtensionError: LocalizedError {
             return "Not installed: \(id): " + why.sentence + (why.isRefusal ? " Nothing was changed." : "")
         case let .marketListingUnavailable(id):
             return "Not installed: the Marketplace listing of \(id) could not be loaded to check the kit. Try again."
+        case let .marketKindChanged(id):
+            return "Not installed: \(id) changed kind; install it again from the Marketplace. Nothing was changed."
         default:
             return nil
         }
@@ -1377,11 +1382,16 @@ final class ExtensionRegistry: ObservableObject {
     /// Fetch, bind and recheck; on a throw the work folder is already removed. `listedKind`: the kind the caller's
     /// listing shows (nil: not known, as in the update check); "kit" makes a non-kit archive fetch the listing too.
     /// A non-kit archive not listed as a kit makes no listing call.
-    func prepareFromMarket(id: String, version: String, listedKind: String? = nil) async throws -> PreparedMarketInstall {
+    /// `installedKit` (the update check only): whether the installed record is a kit; an archive of the other kind is refused.
+    func prepareFromMarket(id: String, version: String, listedKind: String? = nil,
+                           installedKit: Bool? = nil) async throws -> PreparedMarketInstall {
         let prepared = PreparedMarketInstall(id: id, version: version, directory: try await marketFetch(id, version))
         do {
             let loaded = try bindMarketIdentity(extDir: prepared.directory, expected: id, expectedVersion: version)
             try await recheckKitListing(prepared, manifest: loaded.manifest, listedKind: listedKind)
+            if let installedKit, installedKit != (loaded.manifest.contributes?.kit != nil) {
+                throw ExtensionError.marketKindChanged(id: OutsideText.shown(id))
+            }
         } catch {
             discard(prepared)
             throw error
@@ -1470,7 +1480,7 @@ final class ExtensionRegistry: ObservableObject {
         /// try could pass (no network, a timeout, a server answer, a cut or undecodable body, a local unpack or install failure).
         static func isRefusal(_ error: Error) -> Bool {
             switch error {
-            case ExtensionError.marketIdMismatch, ExtensionError.marketVersionMismatch: return true
+            case ExtensionError.marketIdMismatch, ExtensionError.marketVersionMismatch, ExtensionError.marketKindChanged: return true
             case ExtensionError.marketKitRefused(_, let why): return why.isRefusal   // #919 S3
             case ExtensionLoadError.unreadable: return false   // R1182-q4: a failed open or read is local, may pass next time
             case is ExtensionLoadError: return true
@@ -1586,8 +1596,11 @@ final class ExtensionRegistry: ObservableObject {
                     guard step == .install, let latest = marketIndex?[pkgID] else { continue }
                     tried = (pkgID, latest)
                     // An installed kit gets its listing read whatever the new archive is (it may have turned into a non-kit).
-                    let kind = record(id: cand.id)?.manifest.contributes?.kit != nil ? "kit" : nil
-                    try await installFromMarket(id: pkgID, version: latest, listedKind: kind)
+                    let wasKit = record(id: cand.id)?.manifest.contributes?.kit != nil
+                    let prepared = try await prepareFromMarket(id: pkgID, version: latest, listedKind: wasKit ? "kit" : nil,
+                                                               installedKit: wasKit)
+                    defer { discard(prepared) }
+                    _ = try install(prepared)
                     tally.record(Self.outcome(threwAt: nil))
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue

@@ -218,6 +218,66 @@ final class MarketKitRecheckTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path))
     }
 
+    /// QA R1535 s1: a trusted installed kit whose next archive is a plain extension, with a listing that says extension
+    /// too (listing and archive agree: the author controls both): refused, nothing installed, noted, folder removed.
+    func testUpdateCheckRefusesATrustedKitTurningIntoAnExtension() async throws {
+        let (registry, market, user) = try updating(newVersion: "1.1.0") { f in
+            try f.write("extension.toml", KitFixture.head.replacingOccurrences(of: "\"1.0.0\"", with: "\"1.1.0\"") + "\n")
+            try f.write("init.lua", "return {}\n")
+        }
+        try registry.trust(id: extID)
+        market.detail = MarketClient.PackageDetail(kind: "extension", latest_version: "1.1.0", preview: nil, status: "active")
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(registry.record(id: extID)?.manifest.extension.version, "1.0.0")
+        XCTAssertTrue(registry.record(id: extID)?.manifest.contributes?.kit != nil, "the installed kit was replaced")
+        XCTAssertEqual(registry.updateStatus, "1 update could not be installed.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path), "the refused download was kept")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: user.appendingPathComponent(extID).path))
+        XCTAssertEqual(market.fetchCount, 1)
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(market.fetchCount, 1, "a refused kind change was downloaded again")
+        // The refusal is the kind change, in plain words; the manual Install path (no installedKit) is unchanged.
+        let error = await prepareError(registry, installedKit: true)
+        XCTAssertEqual(error as? ExtensionError, .marketKindChanged(id: extID))
+        XCTAssertEqual((error as? LocalizedError)?.errorDescription,
+                       "Not installed: \(extID) changed kind; install it again from the Marketplace. Nothing was changed.")
+        XCTAssertTrue(ExtensionRegistry.RefusedUpdates.isRefusal(error))
+        let manual = try await registry.installFromMarket(id: extID, version: "1.1.0")
+        XCTAssertEqual(manual.manifest.extension.version, "1.1.0")
+    }
+
+    /// The reverse: an installed plain extension whose next archive is a kit (its listing matches): refused the same way.
+    func testUpdateCheckRefusesAnExtensionTurningIntoAKit() async throws {
+        let root = tempDir()
+        let user = root.appendingPathComponent("user", isDirectory: true)
+        let registry = makeRegistry(user)
+        let old = root.appendingPathComponent("old", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data((KitFixture.head.replacingOccurrences(of: "[extension]\n", with: "[extension]\nupdate_url = \"prosper://market/\(extID)\"\n"))
+            .utf8).write(to: old.appendingPathComponent("extension.toml"))
+        try Data("return {}\n".utf8).write(to: old.appendingPathComponent("init.lua"))
+        _ = try registry.installLocal(from: old)
+        XCTAssertTrue(registry.record(id: extID)?.manifest.contributes?.kit == nil)
+        let new = try kitFolder(under: root.appendingPathComponent("new", isDirectory: true)) { f in
+            try f.write("extension.toml", KitFixture.head.replacingOccurrences(of: "\"1.0.0\"", with: "\"1.1.0\"")
+                        + "\n" + KitFixture.kit + "\n")
+        }
+        let shown = try expectedListing()
+        let market = FakeMarket(source: new.kit, work: root,
+                                detail: detail(summary: shown.summary, readme: shown.readme, version: "1.1.0"))
+        market.wire(registry, index: [extID: "1.1.0"])
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(registry.record(id: extID)?.manifest.extension.version, "1.0.0")
+        XCTAssertTrue(registry.record(id: extID)?.manifest.contributes?.kit == nil, "the extension was replaced by a kit")
+        XCTAssertEqual(registry.updateStatus, "1 update could not be installed.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: market.workFolder.path), "the refused download was kept")
+        XCTAssertEqual(market.fetchCount, 1)
+        await registry.checkForUpdates(force: true)
+        XCTAssertEqual(market.fetchCount, 1, "a refused kind change was downloaded again")
+        let error = await prepareError(registry, installedKit: false)
+        XCTAssertEqual(error as? ExtensionError, .marketKindChanged(id: extID))
+    }
+
     /// The listing could not be loaded: an error, nothing installed, and not remembered as a refusal.
     func testFailedListingReadIsTransient() async throws {
         let (registry, market, user) = try served(kit: true)
@@ -368,6 +428,15 @@ final class MarketKitRecheckTests: XCTestCase {
             return KitListingPreview(summary: [], readme: "")
         }
         return KitListingPreview.make(v, readme: KitDirFixture.readme)
+    }
+
+    /// The error prepareFromMarket throws for the fixture id at 1.1.0 with `installedKit` (nil: it did not throw).
+    private func prepareError(_ registry: ExtensionRegistry, installedKit: Bool) async -> Error {
+        do {
+            let p = try await registry.prepareFromMarket(id: extID, version: "1.1.0", installedKit: installedKit)
+            registry.discard(p)
+            return NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: "did not throw"])
+        } catch { return error }
     }
 
     /// installFromMarket throws (the refusal `want` when given) and leaves no installed folder or record. Returns the error.
