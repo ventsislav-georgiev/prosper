@@ -1,0 +1,48 @@
+{
+ "entry": 1604,
+ "filter": "TerminalEditorTests|TextViewerCloseTests|AppUpdaterHoldTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-quit-wait",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        _ = done.wait(timeout: .now() + wait)\n",
+   "new": "        _ = wait\n",
+   "expect": "killed"
+  },
+  {
+   "name": "longer-bound",
+   "file": "app/Sources/ProsperApp/TextViewer/TerminalEditor.swift",
+   "old": "    static let quitWait: TimeInterval = 2\n",
+   "new": "    static let quitWait: TimeInterval = 20\n",
+   "expect": "killed"
+  },
+  {
+   "name": "session-is-file",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "owners.updateValue((say, owner is TextViewerTerminalEdit), forKey: id)",
+   "new": "owners.updateValue((say, false), forKey: id)",
+   "expect": "killed"
+  },
+  {
+   "name": "sessions-say-unsaved",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "        if sessions == 0 { return (unsaved,",
+   "new": "        if true { return (unsaved,",
+   "expect": "killed"
+  },
+  {
+   "name": "title-ignores-held",
+   "file": "app/Sources/ProsperApp/MenuBarController.swift",
+   "old": "        held ? \"\\(base) \u2014 \\(TextViewerDirty.updateHeld)\" : downloading",
+   "new": "        false ? \"\\(base) \u2014 \\(TextViewerDirty.updateHeld)\" : downloading",
+   "expect": "killed"
+  },
+  {
+   "name": "holding-is-dirty",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerDirty.swift",
+   "old": "    var isHoldingUpdate: Bool { !held.isEmpty }\n",
+   "new": "    var isHoldingUpdate: Bool { isDirty }\n",
+   "expect": "killed"
+  }
+ ]
+}
