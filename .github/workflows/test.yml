@@ -1,4 +1,12 @@
-# Headless-safe test suite on every push to main (#172).
+# FAST suite on every push to main, push to ci/** and pull request (#1577). The
+# heavy rows (HeavyTests.swift) skip themselves because PROSPER_HEAVY_TESTS is not
+# set here; heavy.yml runs them daily on main (and on demand on any ref), so PRs and
+# releases do not wait for them. One job, not a matrix: every macOS job pays its own
+# 6-8 min debug build (a SwiftPM build tree is not shareable across jobs without a
+# multi-GB artifact), the suite is serial by design (shared process-wide state), and
+# the heavy rows are already off the PR path.
+#
+# Headless-safe test suite (#172).
 #
 # Runs `swift test` on the same xcode-27 image as release.yml, minus the suites
 # that cannot pass on a GitHub-hosted runner (the --skip regex below, from the
@@ -23,13 +31,16 @@
 # disk or a TCC grant skip themselves and need no filter. No TMPDIR override and
 # no PROSPER_* variable (PreferencesScratchStoreTests scans $TMPDIR/prosper-tests).
 #
+# PROSPER_HEAVY_TESTS is deliberately unset (see heavy.yml).
+#
 # Advisory for now: a red run notifies, it gates nothing. Once it has stayed
 # green, release.yml can require it on the tagged commit.
 name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -98,9 +109,6 @@ jobs:
           # Line-buffered xctest output through the tee pipe, so the last test
           # that started is in the log when the step is killed.
           NSUnbufferedIO: "YES"
-          # #710: run the tests a local `swift test` skips (HeavyTests.swift); the
-          # timing budgets among them still fall to --skip below.
-          PROSPER_HEAVY_TESTS: "1"
           # The --skip regex (#172 survey); see the header comment for each group.
           SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|AutocompleteContinuationTests/test(CompleteButUnspacedWordStillGetsItsSpace|LastWordEchoWithStraySpaceStripped|NewWordAfterCompleteWordGetsSpaced|NewWordWhenModelAlreadySpacedStaysSingleSpaced|MidWordContinuationNoSpace|MidWordWholeWordRepeatLowercaseDeduped|MidWordContinuationFromBareFragment|MidWordNewWordAgainstUnfinishedFragmentSuppressed|WholeRestatementStripped)|AutocompleteWordBoundaryTests/test(NewWordAfterCompleteWordGetsSpace|MidWordContinuationKeepsNoSpace|CrossLanguageGlueStillGetsSpace)|CompletionCandidatesTests/testDeriveIncludesTypoCorrection|CoreBridgeSanitizeTests/testRussianOnlyWordGate|RussianGateFragmentTests/testStandaloneRussianWordStillRejected|MidWordCyrillicTests/|ModelIdleUnloaderTests/test(FireWithDefaultUnloadActionDrivesRealTeardown|UnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded|MallocPressureReliefIsCallableAndFast)|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
         run: |

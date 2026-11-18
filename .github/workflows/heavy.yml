@@ -1,0 +1,166 @@
+# HEAVY suite, daily cron (#1577). The fast suite (test.yml) runs on every push and
+# PR without PROSPER_HEAVY_TESTS; this workflow runs the same job with
+# PROSPER_HEAVY_TESTS=1 (the HeavyTests.swift rows, #710), once a day on main and
+# on demand on any ref (workflow_dispatch input `ref`, default main). Failures are
+# fixed retroactively when seen: nothing is gated on this run. It exists so PRs and
+# releases do not wait ~35 min for the slow rows, and the repo is public so the
+# runner minutes are free.
+#
+# Headless-safe test suite (#172).
+#
+# Runs `swift test` on the same xcode-27 image as release.yml, minus the suites
+# that cannot pass on a GitHub-hosted runner (the --skip regex below, from the
+# #172 survey of all 198 test classes):
+#   - LogitProcessorTests: runs MLX GPU kernels, which need the default.metallib
+#     that only scripts/build.sh stages; without it MLX aborts the whole xctest
+#     process.
+#   - ScreenToolsTests text-OCR cases: the first Vision text request on macOS 27
+#     waits ~25 s on the ANE compiler and the runner VM has no Neural Engine.
+#   - Timing-budget classes and tests (ns-to-ms wall-clock asserts): a shared
+#     VM cannot hold them.
+#   - The tests whose answer is NSSpellChecker's (under swift test the word list
+#     is not loaded, so the checker decides even "brown"): the runner's spell
+#     server times out mid-run ("NSSpellServer findMisspelledWordInString timed
+#     out"), a timed-out check reads as a misspelling, and its Bulgarian
+#     dictionary flags nothing, so a canary at the start of a test cannot vouch
+#     for the call inside it. The #172 survey (work/172g-survey.md) lists them.
+#   - ModelIdleUnloaderTests' real unload rows: MLXEngine.unload clears the MLX
+#     cache even with nothing loaded, which needs the metallib (see above); and
+#     its 2 s malloc-relief wall-clock row.
+# Tests gated on PROSPER_E2E / PROSPER_QAT_E2E / PROSPER_LLAMA_SMOKE, a model on
+# disk or a TCC grant skip themselves and need no filter. No TMPDIR override and
+# no PROSPER_* variable (PreferencesScratchStoreTests scans $TMPDIR/prosper-tests).
+#
+# Advisory for now: a red run notifies, it gates nothing. Once it has stayed
+# green, release.yml can require it on the tagged commit.
+name: heavy
+
+on:
+  schedule:
+    - cron: "30 1 * * *" # daily, off-peak UTC; scheduled runs use the default branch (main)
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to test
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: heavy-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false # a scheduled run is never cancelled by a manual one
+
+jobs:
+  test:
+    runs-on: xcode-27 # same image as release.yml: Xcode 27.0 = Swift 6.4
+    timeout-minutes: 80 # step Test is 60; build 6-8 min (CI logs 2026-11-17), tests 35-39 min, setup + cache restore ~2 min
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Select Xcode 27 (Swift 6.4 toolchain)
+        id: xcode
+        run: |
+          # Same selection as release.yml: pin the GA 27.0, not a 27.x beta.
+          XC=/Applications/Xcode_27.app
+          if [[ ! -d "$XC" ]]; then
+            echo "::error::$XC not found on runner"; ls -d /Applications/Xcode_*.app; exit 1
+          fi
+          sudo xcode-select -s "$XC/Contents/Developer"
+          swift --version
+          TC=$(swift --version 2>/dev/null | tr -d ' \n' | shasum -a 256 | cut -c1-12)
+          echo "toolchain=$TC" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unset}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache SwiftPM dependencies
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore only
+        with:
+          # Read-only view of the cache cache-warm.yml saves; paths and keys stay
+          # byte-identical to release.yml and cache-warm.yml.
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}
+          restore-keys: |
+            spm-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-
+            spm-deps-v1-${{ runner.os }}-
+
+      - name: Cache debug build tree
+        id: debugtree
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, restore half
+        with:
+          # Own key family: tests build debug, release.yml and cache-warm.yml build
+          # release, so their tree is no starting point. Saved on main, so later
+          # pushes hit it; the restore-key drops only the image version (#443).
+          # Split restore/save: the combined action saves only on a green job, so
+          # every red run rebuilt cold (~4.5 min); the save step below runs always.
+          path: app/.build
+          key: spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-${{ steps.xcode.outputs.image }}
+          restore-keys: |
+            spm-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.xcode.outputs.toolchain }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift') }}-
+
+      - name: Test
+        id: test
+        working-directory: app
+        # Shorter than the job so a hung suite still reaches Summary with the log
+        # (run 3 sat 52 min in one test and the job limit left nothing behind).
+        timeout-minutes: 60
+        env:
+          # Line-buffered xctest output through the tee pipe, so the last test
+          # that started is in the log when the step is killed.
+          NSUnbufferedIO: "YES"
+          # #710: run the tests a local `swift test` skips (HeavyTests.swift); the
+          # timing budgets among them still fall to --skip below.
+          PROSPER_HEAVY_TESTS: "1"
+          # The --skip regex (#172 survey); see the header comment for each group.
+          SKIP: 'LogitProcessorTests|ScreenToolsTests/test(VisionOCR|Prewarm|RejectedRequest|Accurate)|AutocompleteContinuationTests/test(CompleteButUnspacedWordStillGetsItsSpace|LastWordEchoWithStraySpaceStripped|NewWordAfterCompleteWordGetsSpaced|NewWordWhenModelAlreadySpacedStaysSingleSpaced|MidWordContinuationNoSpace|MidWordWholeWordRepeatLowercaseDeduped|MidWordContinuationFromBareFragment|MidWordNewWordAgainstUnfinishedFragmentSuppressed|WholeRestatementStripped)|AutocompleteWordBoundaryTests/test(NewWordAfterCompleteWordGetsSpace|MidWordContinuationKeepsNoSpace|CrossLanguageGlueStillGetsSpace)|CompletionCandidatesTests/testDeriveIncludesTypoCorrection|CoreBridgeSanitizeTests/testRussianOnlyWordGate|RussianGateFragmentTests/testStandaloneRussianWordStillRejected|MidWordCyrillicTests/|ModelIdleUnloaderTests/test(FireWithDefaultUnloadActionDrivesRealTeardown|UnloadIdleEnginesIsSafeAndIdempotentWithNothingLoaded|MallocPressureReliefIsCallableAndFast)|(ExtensionPerf|StatsHotPathBudget|AutocompleteHotPathBudget|RemoteWakeCorePerf)Tests/|/test\w*(HotPath|Performance|_perf|IsFast|(BiasesLookup|Builder)IsCheap|ScalesLinearlyWith|(Under|Meets|Lookup|Render|Perf|Accumulation|Index|Frames|DidMove)Budget|DispatchBudgetAborts)'
+        run: |
+          # --build-system native: the backend scripts/build.sh ships with (the
+          # swiftbuild default links against SDK 14.0, see build.sh). Serial, not
+          # --parallel: suites share process-wide state (defaults, pasteboard seam).
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"; export SDKROOT
+          swift test --disable-keychain --build-system native --skip "$SKIP" 2>&1 | tee test.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Plugin host test (bun pin)
+        # After Test, and on a red Test too: a failed download here must not skip the Swift
+        # suite or the cache save (QA #833).
+        if: ${{ !cancelled() }}
+        # A stalled download must not sit until the job limit, whose cancel skips the cache save.
+        timeout-minutes: 5
+        run: |
+          # Same pin and hash as BunHarness.swift (bunVersion, bunSHA256) and bundle-bun.sh
+          # PINNED_BUN; bump all three together.
+          BUN_VERSION=bun-v1.4.3
+          BUN_SHA256=80afd4c069b46a6fa8f3ec520bebc750a7843e4a8d5b9583d29ad436c00a3403   # bun-darwin-aarch64.zip
+          [[ "$(uname -m)" == arm64 ]] || { echo "::error::pinned hash is for aarch64"; exit 1; }
+          d="$RUNNER_TEMP/bun"; mkdir -p "$d"
+          curl -fsSL -o "$d/bun.zip" "https://github.com/oven-sh/bun/releases/download/$BUN_VERSION/bun-darwin-aarch64.zip"
+          echo "$BUN_SHA256  $d/bun.zip" | shasum -a 256 -c -
+          unzip -q -o "$d/bun.zip" -d "$d"
+          "$d/bun-darwin-aarch64/bun" --version
+          "$d/bun-darwin-aarch64/bun" test ./app/plugin-host/plugin-host.test.js
+
+      - name: Summary
+        if: always()
+        working-directory: app
+        run: |
+          # The suite total follows the 'All tests' line; the last per-class
+          # "Executed N tests" reads like a total when xctest exits early.
+          { grep -A1 -E "^Test Suite '(All|Selected) tests' (passed|failed)" test.log | grep -E 'Executed [0-9]+ tests' \
+            || echo "no suite total: xctest exited early"; } | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -E ' error: |failed \(' test.log | head -40 | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Save debug build tree
+        # Red runs save (the tree is complete), cancelled ones never do: a cancel
+        # mid-build would freeze a partial tree under the real key, and every
+        # later run is then an exact hit that skips its own save.
+        if: ${{ !cancelled() && steps.debugtree.outputs.cache-primary-key != '' && steps.debugtree.outputs.cache-hit != 'true' && steps.test.outcome != 'skipped' }}
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5, save half
+        with:
+          path: app/.build
+          key: ${{ steps.debugtree.outputs.cache-primary-key }}
