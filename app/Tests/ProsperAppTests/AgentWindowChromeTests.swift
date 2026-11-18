@@ -34,12 +34,17 @@ extension AgentWindowD1Tests {
     /// on the next turn re-marks the view), bounded at 0.3 s.
     @MainActor
     func snapshot(_ v: NSView, backing: CGFloat) throws -> NSBitmapImageRep {
-        func pending(_ v: NSView) -> Bool { v.needsLayout || v.needsDisplay || v.subviews.contains(where: pending) }
+        // #1592: after a theme select, layout and display clear every NSView flag while the views' layers still need
+        // display until the CA commit (a CALayer flag no NSView shows), so the layer tree counts too.
+        func pendingLayer(_ l: CALayer) -> Bool { l.needsLayout() || l.needsDisplay() || (l.sublayers ?? []).contains(where: pendingLayer) }
+        func pendingView(_ v: NSView) -> Bool { v.needsLayout || v.needsDisplay || v.subviews.contains(where: pendingView) }
+        func pending(_ v: NSView) -> Bool { pendingView(v) || v.layer.map(pendingLayer) == true }
         let start = Date(), deadline = start.addingTimeInterval(0.3)
         var turns = 0
         repeat {
             v.layoutSubtreeIfNeeded()
             v.displayIfNeeded()
+            CATransaction.flush()   // #1592: commit this turn's layer changes (their layout and display run in the commit)
             RunLoop.current.run(until: Date().addingTimeInterval(0.005))
             turns += 1
         } while pending(v) && Date() < deadline
