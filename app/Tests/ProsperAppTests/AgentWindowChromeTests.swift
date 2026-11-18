@@ -23,6 +23,9 @@ extension AgentWindowD1Tests {
         return try snapshot(h, backing: backing)
     }
 
+    /// #1592: how the last snapshot's settle ended (see snapshot); failure messages print it.
+    @MainActor static var lastSettle = ""
+
     /// The view drawn into a bitmap at an explicit backing scale (r6: 1 is CI's runner, 2 is Retina),
     /// so one local run proves both. Not bitmapImageRepForCachingDisplay: that follows the main
     /// screen's scale, which is the only thing it would add.
@@ -32,12 +35,17 @@ extension AgentWindowD1Tests {
     @MainActor
     func snapshot(_ v: NSView, backing: CGFloat) throws -> NSBitmapImageRep {
         func pending(_ v: NSView) -> Bool { v.needsLayout || v.needsDisplay || v.subviews.contains(where: pending) }
-        let deadline = Date().addingTimeInterval(0.3)
+        let start = Date(), deadline = start.addingTimeInterval(0.3)
+        var turns = 0
         repeat {
             v.layoutSubtreeIfNeeded()
             v.displayIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+            turns += 1
         } while pending(v) && Date() < deadline
+        // #1592: how the settle ended, for a failure message (a CI-only red: cut at the bound, or settled and still stale).
+        Self.lastSettle = String(format: "%@ after %d turns, %.3f s", pending(v) ? "cut at the bound, still pending" : "settled",
+                                 turns, Date().timeIntervalSince(start))
         v.layoutSubtreeIfNeeded()
         v.displayIfNeeded()
         let rep = try XCTUnwrap(NSBitmapImageRep(
@@ -809,9 +817,9 @@ extension AgentWindowD1Tests {
                 XCTAssertLessThan(old, 1.25, "no pixel of the other accent in the rows (\(tag), \(new) pt2 of the new)")
                 let bg = try XCTUnwrap(pixel(rep, terminal, in: size))
                 if dark {
-                    XCTAssertLessThan(bg.redComponent, 0.3, "the terminal pane is the dark theme's (\(tag), \(rgba(bg)))")
+                    XCTAssertLessThan(bg.redComponent, 0.3, "the terminal pane is the dark theme's (\(tag), \(rgba(bg)); \(Self.lastSettle))")
                 } else {
-                    XCTAssertGreaterThan(bg.redComponent, 0.8, "the terminal pane is the light theme's (\(tag), \(rgba(bg)))")
+                    XCTAssertGreaterThan(bg.redComponent, 0.8, "the terminal pane is the light theme's (\(tag), \(rgba(bg)); \(Self.lastSettle))")
                 }
             } }
         }
