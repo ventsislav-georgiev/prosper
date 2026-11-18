@@ -1,0 +1,18 @@
+{
+  "id": "43-control-frame-over-64k-closes",
+  "about": "A 0x01 header one byte over 64 KiB (65537) answers exactly this 0x13 and closes, on the header alone: dch serve holds 0x01-0x09, 0x2e, 0x30, 0x34 and 0x35 whole and closes one over RF_CTRL_MAX (dch 1.99.0 rframe.h:21, rframe.c:189-190, serve.c:1933-1938). Prosper #1136.",
+  "steps": [
+    {
+      "send": "01 00010001"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a226672616d6520746f6f206c61726765227d"
+      }
+    },
+    {
+      "expect_close": true
+    }
+  ]
+}

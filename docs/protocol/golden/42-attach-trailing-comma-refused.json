@@ -1,0 +1,19 @@
+{
+  "id": "42-attach-trailing-comma-refused",
+  "about": "0x01 whose object ends in a trailing comma answers exactly this 0x13 and starts nothing: json_parse_object wants a key after every comma (dch 1.99.0 json.c:185-189; serve.c:1009-1013). JSONSerialization reads it; Prosper refuses it since #951. #1136. Mutating: a server that reads the comma would start golden-1136-42.",
+  "mutating": true,
+  "cleanup": [
+    "04 00000019 7b226e616d65223a22676f6c64656e2d313133362d3432227d"
+  ],
+  "steps": [
+    {
+      "send": "01 0000002e 7b226e616d65223a22676f6c64656e2d313133362d3432222c22636f6c73223a38302c22726f7773223a32342c7d"
+    },
+    {
+      "expect": {
+        "type": "13",
+        "payload": "7b226d657373616765223a226d616c666f726d6564206174746163682072657175657374227d"
+      }
+    }
+  ]
+}

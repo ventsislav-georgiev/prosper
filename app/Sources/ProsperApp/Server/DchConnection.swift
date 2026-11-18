@@ -92,6 +92,12 @@ enum DchFrame {
     /// shipped phone sends a pasted photo as one 0x0a putClipboard (17 MB for a 4032 px PNG)
     /// and a big paste as one 0x10 frame; a larger length prefix closes the connection.
     static let maxRequestFrame = 256 << 20
+    /// #1136: dch serve's RF_CTRL_MAX (v1.99.0 rframe.h:21): the frames it holds whole (rf_control, rframe.c:134-141)
+    /// close past 64 KiB with "frame too large" (rframe.c:189-190, serve.c:1933-1938). Prosper closes the same ones.
+    static let maxControlFrame = 64 << 10
+    static func isServeControl(_ type: UInt8) -> Bool {
+        (0x01...0x09).contains(type) || type == watch || type == ctl || type == ctlCancel || type == 0x35   // 0x35: dch's RF_VIEW
+    }
 
     /// #591: the requests beyond the original set this Mac answers, in machineInfoResp's
     /// "ops" (an older phone ignores the key; a newer one hides what an older Mac lacks).
@@ -150,8 +156,14 @@ enum DchFrame {
 
     /// listResp's payload, from dch's rows (a fork) or the island's (#765). Keys sorted, so the
     /// same rows are the same bytes and the watch stream can compare payloads.
-    static func listPayload(_ rows: [DchListRow]) -> Data {
-        let o = rows.map { row -> [String: Any] in
+    /// #1136: the smaller of the list's two readers: a dch remote client drops the host past RF_LIST_MAX 1 MiB (v1.99.0
+    /// rframe.h:26, rframe.c:189); the phone reads up to maxFrame (8 MiB).
+    static let maxListFrame = 1 << 20
+
+    /// #1136 (R1220-8): past `limit` rows lose "harness", the largest encoded one first, until the frame fits or none is
+    /// left; the title itself is never cut, so the phone splits it as the Mac does.
+    static func listPayload(_ rows: [DchListRow], limit: Int = maxListFrame) -> Data {
+        var o = rows.map { row -> [String: Any] in
             var o: [String: Any] = ["name": row.name]
             if !row.alias.isEmpty { o["alias"] = row.alias }
             // #1220: the title on its own, for the phone's Sidekicks split, only when the alias does not already carry
@@ -171,7 +183,17 @@ enum DchFrame {
             if minute > 0 { o["activity"] = minute }
             return o
         }
-        return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data("[]".utf8)
+        func encoded(_ v: Any) -> Data? { try? JSONSerialization.data(withJSONObject: v, options: [.sortedKeys]) }
+        guard let data = encoded(o) else { return Data("[]".utf8) }
+        guard data.count > limit else { return data }
+        // A row always has "name", so a "harness" key costs its `"harness":"…"` (an object of it, less "{}") and a comma.
+        let cost = o.indices.compactMap { i in (o[i]["harness"] as? String).map { (i, (encoded(["harness": $0])?.count ?? 2) - 1) } }
+        var over = data.count - limit
+        for (i, c) in cost.sorted(by: { $0.1 > $1.1 }) where over > 0 {
+            o[i]["harness"] = nil
+            over -= c
+        }
+        return encoded(o) ?? data
     }
 
     /// #885: a request payload of a frame dch serve also reads (0x01, 0x02, 0x04, 0x05, 0x06, 0x2e, 0x30), as serve
@@ -435,7 +457,8 @@ final class DchConnection: @unchecked Sendable {
             }
             // #617: a length past maxRequestFrame is garbage, whatever the frame type.
             // #776: its error goes before the FIN (an immediate cancel dropped it on the wire).
-            guard len <= DchFrame.maxRequestFrame else {
+            // #1136: serve's core control frames past 64 KiB too, on the header alone, as serve.
+            guard len <= (DchFrame.isServeControl(type) ? DchFrame.maxControlFrame : DchFrame.maxRequestFrame) else {
                 return close(after: DchControlOps.error("frame too large"))
             }
             guard buffer.count >= 5 + len else { return }   // wait for the rest

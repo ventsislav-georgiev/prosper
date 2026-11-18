@@ -29,7 +29,7 @@ The conformance set in [`golden/`](golden/) runs against any server: see
   held a subscriber slot). Prosper probes after 120 s, every 10 s, 4 times: about 160 s, a
   deliberate difference (#767, kept in #885): each probe wakes the phone's radio, and Prosper
   holds no slot a dead peer could keep from another (no connection slots, and no `--xray --follow`
-  runs), and the newest attach to a session retires the older connections to it at once.
+  cap, see [0x30 ctl](#0x30-ctl-gate-ctl)), and the newest attach to a session retires the older connections to it at once.
 - A server must never bind a wider address than its Tailscale one on its own; `dch serve`
   binds another only when its operator names it (`--bind`). See
   [Decided defaults](#decided-defaults-for-dch-serve) for the rules `dch serve` follows.
@@ -102,11 +102,14 @@ Every frame, in both directions:
   close; other servers may, and a client must not rely on it. This is a guard, not a size
   anyone should send: the phone does send a pasted photo as one 0x0a (17 MB for a 4032 px PNG)
   and a big paste as one 0x10.
-- **Core control requests stay under 64 KiB.** A client keeps every core-subset control
-  request (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e, 0x30) under 64 KiB (`64 << 10`). A server
-  may answer a larger one with `0x13 {"message": "frame too large"}` and close; `dch serve`
-  does. 0x10 data and the Mac-only frames are bounded only by the server's own receive guard
-  (Prosper's is the 256 MiB above, `maxRequestFrame`).
+- **Core control requests: at most 64 KiB.** A client keeps every core-subset control
+  request (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e, 0x30, 0x34) within 64 KiB
+  (`64 << 10`, 65536 bytes). A length prefix over it on one of these, or on 0x35 (dch's own view
+  frame), gets `0x13 {"message": "frame too large"}` and a close, on the header alone, from both
+  servers: `dch serve` (RF_CTRL_MAX, v1.99.0 rframe.h:21, rframe.c:134-141 and :189-190,
+  serve.c:1933-1938) and Prosper since #1136 (`maxControlFrame`). A length of exactly 64 KiB is
+  read. 0x10 data and the Mac-only frames are bounded only by the receive guard above (Prosper's
+  `maxRequestFrame`).
 
 ## Connections
 
@@ -125,8 +128,8 @@ Every frame, in both directions:
   - 0x08 → 0x18, 0x03 → 0x11 and 0x09 → 0x19 never answer 0x13, so they may be pipelined
     with each other. The exceptions: `dch serve` answers a 0x08 that states a newer major
     `proto` with 0x13 (see [Versioning](#versioning)), and a frame over a size guard may get
-    0x13 then a close: Prosper's receive guard on any type, the 64 KiB core-request limit on
-    `dch serve` (see [Framing](#framing)).
+    0x13 then a close: the receive guard on any type, the 64 KiB core-request limit on both
+    servers (see [Framing](#framing)).
   - Prosper answers 0x03, 0x04 and 0x06 at once, in the order they arrive; 0x09 too on a
     connection that has not attached.
   - These replies can trail replies to frames sent after them: 0x08 (Prosper waits up to
@@ -162,14 +165,16 @@ Every frame, in both directions:
   json.c:142-171), nesting deeper than 1024 (json.c:59, :262-263) and a trailing comma before `}` or
   `]` (json.c:185-189, :218-221; Prosper since #951). Prosper also refuses what serve reads in two
   cases: nesting deeper than 513 (its JSON parser's limit) and a number past a double's range
-  (`1e400`). A value given twice, or a string that decodes to a NUL or holds a lone surrogate
+  (`1e400`); both stay (#1136: no client sends either, and reading them needs a JSON reader of
+  Prosper's own). A value given twice, or a string that decodes to a NUL or holds a lone surrogate
   escape (`\ud800` with no low half), is no readable value: that one key reads as of the wrong type
   (json.c:288-384, rframe.c:301-322), as each frame's section says.
 - **When Prosper closes a connection.** A client must expect a close at any time. Only 0x12
   exit means the session's client ended (the session too, unless it carries `"why": "detach"`);
   every other close is a refusal, a dropped link or the
   client's own FIN. Prosper closes:
-  - on a length prefix over the receive guard (0x13 `frame too large` first);
+  - on a length prefix over the receive guard, or over 64 KiB on a core control request (0x13
+    `frame too large` first; see [Framing](#framing));
   - after 0x12 exit (the FIN follows the frame);
   - when an attach or create fails to spawn (0x13 first, see below);
   - after a refused 0x30 (0x13 first; not a busy one, nor `ctl needs its own connection`), after
@@ -255,7 +260,7 @@ Prosper's ops and their frames:
 | `paste_image` | 0x0a | always (dch serve: only once it supports 0x0a) |
 | `ctl` | 0x30 (replies 0x31, 0x32, 0x33) | always, since #838 (dch serve: 1.41.0+) |
 | `ctl-cancel` | 0x34 | always, since #838 (dch serve: the release after 1.41.0) |
-| `xray` | 0x30 with `--xray` | dch serve 1.55.0+; Prosper: off, its version gate set out of reach until its `--xray` allowlist matches dch serve's (see [the xray gate](#0x30-ctl-gate-ctl)) |
+| `xray` | 0x30 with `--xray` | dch serve 1.55.0+; Prosper while the dch its ctl runs is 1.91.0 or later (#1357, see [the xray gate](#0x30-ctl-gate-ctl)) |
 
 ## Core subset and Mac-only frames
 
@@ -619,11 +624,11 @@ The rules behind it:
   `--allow-create`. `--xray` is read-only and not behind it.
 - **The xray gate.** `--xray` runs only where the server lists `xray` in `ops`. `dch serve` lists it
   since 1.55.0. Prosper lists it while the dch ctl runs answers `--version` with at least its minimum
-  (`DchCtl.xrayMinDch`), a placeholder set out of reach, so it is off today: the bundled dch has
-  `--xray`, but Prosper's allowlist above does not match `dch serve`'s yet (no `--clear`, other
-  refusal words, no `--ref` grammar check, at most 3 digits of `--budget-ms`), and the minimum
-  stays out of reach until it does. Without it, a well-formed `--xray` gets `0x13 xray not supported
-  by this host` and nothing runs.
+  (`DchCtl.xrayMinDch`), 1.91.0 since #1357: the first dch whose serve checks `--xray` as Prosper's
+  allowlist above does (ctl_xray, byte-identical from v1.91.0 to v1.99.0). Prosper still leaves
+  `--ref`'s grammar to the dch child (only a blank text or one starting with `-` is refused here).
+  Without it (an older dch, or no version answer), a well-formed `--xray` gets `0x13 xray not
+  supported by this host` and nothing runs.
 
 Refusals, each a single 0x13 and nothing runs. Since the amendment of 2026-11-10 (`dch serve`
 1.42.0) every one but the first two (busy, and `ctl needs its own connection`) is followed by the
@@ -678,12 +683,12 @@ for an agent, and a client shows it as it comes.
   Prosper sends output up to exactly 8 MiB, then the 0x33; no 0x31 or 0x32 follows it.
 - Every 0x31 and 0x32 is within the 8 MiB send limit.
 - `dch serve` 1.58.0 runs at most 2 `--xray --follow` of one session per device: a third closes
-  that device's oldest as a timeout would (#202, serve.c:41-45, MAX_FOLLOW_PER_DEV :97). Prosper
-  needs no such cap while its xray gate is off (below): every `--xray` is refused there, so no
-  `--xray --follow` runs (#885). Since 1.60.0 serve counts one session by its socket's inode and
-  device as well as by name (kids_note, serve.c:2414-2460 at v1.61.0: `svf` and `SVF` on a
-  case-insensitive volume are one session, one count; QA 1.58.0 LOW-R6). Prosper has no count to key
-  (#951); a cap added when its xray gate opens keys the same way.
+  that device's oldest as a timeout would (#202, serve.c:41-45, MAX_FOLLOW_PER_DEV :97; :100 at
+  v1.99.0). Since 1.60.0 serve counts one session by its socket's inode and device as well as by
+  name (kids_note, serve.c:2414-2460 at v1.61.0, :2498-2540 at v1.99.0: `svf` and `SVF` on a
+  case-insensitive volume are one session, one count; QA 1.58.0 LOW-R6). Prosper's xray gate opens
+  at dch 1.91.0 (#1357), and Prosper has no such count yet (#1136, a known gap): every `--xray
+  --follow` a device sends runs. A cap added there keys sessions the same way.
 - **`--follow`** and **`--xray --follow`** have neither limit. Each streams 0x31 until the session ends (dch exits: 0x33 with
   its real exit code) or the client closes the connection (below). The server reads dch's pipe
   only as fast as the socket takes the frames, so a slow client slows dch rather than filling the
@@ -831,7 +836,7 @@ never attaches. A 0x23 or 0x1f on an attached connection gets 0x13
 
 ```
 python3 docs/protocol/golden/run.py 100.x.y.z:8771             # read-only fixtures
-python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-39: they run dch
+python3 docs/protocol/golden/run.py 100.x.y.z:8771 --mutating  # also 07, 08, 12, 14-16, 18, 26-29, 31-39, 42: they run dch
 ```
 
 Without `--mutating` the runner skips, and prints as SKIP, every fixture marked `mutating`:
@@ -850,7 +855,9 @@ start the session), and 37 (#885: an attach to `golden-885`, then a 0x07, which 
 output once the attach's repaint has drained: the re-armed client's repaint; its cleanup kills it),
 and 38 and 39 (#885: an attach whose object follows a UTF-8 BOM gets `malformed attach request`,
 one giving `name` twice `attach needs a session name`; one without the checks would start the
-session, which each cleanup kills). Run `--mutating` only against a test server, never a host with sessions someone uses.
+session, which each cleanup kills), and 42 (#1136: an attach whose object ends in a trailing comma
+gets `malformed attach request`; its cleanup kills `golden-1136-42`). 43 (#1136, read-only) sends
+a 0x01 header one byte over 64 KiB and wants `frame too large`, then the close. Run `--mutating` only against a test server, never a host with sessions someone uses.
 
 17-25 are the `ctl` set (#838), each `requires_op` `ctl`: 17 a server listing `ctl` speaks proto
 1.1 or later; 18 a `--read` round trip (0x31, then 0x33); 19 a flag off the verb's allowlist,
@@ -946,9 +953,12 @@ rules above; each item is either a known limit of the code or a decision still o
 ### Known gaps
 
 - **M1. No general send limit.** Prosper checks the 8 MiB limit only on libraryResp and the
-  clipboard frames. listResp, historyResp (thousands of pinned records), snapshotResp,
-  commandsResp, modelsResp and chatDelta are sent unchecked; one over 8 MiB makes the phone
-  drop the connection.
+  clipboard frames, and on listResp in part: past 1 MiB, the smaller of its two readers (a dch
+  client drops the host past RF_LIST_MAX, v1.99.0 rframe.h:26, rframe.c:189; the phone reads up to
+  8 MiB), its rows lose `harness`, the largest encoded title first, until the frame fits (#1136; a
+  title is never cut, so the phone splits it as the Mac does). A list still over 1 MiB without any
+  title goes out as it is. historyResp (thousands of pinned records), snapshotResp, commandsResp,
+  modelsResp and chatDelta are sent unchecked; one over 8 MiB makes the phone drop the connection.
 - **M2. Prosper refuses no client version.** The phone states `{"proto": "1.0"}` in 0x08 and
   `dch serve` refuses a newer major (Q1), but Prosper ignores the payload, so a newer-major
   client is answered as a 1.0 one.

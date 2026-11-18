@@ -139,7 +139,10 @@ final class DchServeParityTests: XCTestCase {
         var closes = 0
     }
 
-    private func sendRaw(_ type: UInt8, _ bytes: [UInt8]) -> Calls {
+    private func sendRaw(_ type: UInt8, _ bytes: [UInt8]) -> Calls { ingest(DchFrame.encode(type, bytes)) }
+
+    /// Raw bytes on a fresh connection, as they come off the socket (#1136: a header alone).
+    private func ingest(_ bytes: Data) -> Calls {
         let queue = DispatchQueue(label: "test.dchconn.parity")
         let calls = Calls()
         let conn = DchConnection(conn: NWConnection(host: "127.0.0.1", port: 9, using: .tcp), queue: queue,
@@ -157,7 +160,7 @@ final class DchServeParityTests: XCTestCase {
         }
         conn.ctl.path = { calls.lock.withLock { calls.ctl += 1 }; return "/nonexistent/dch" }
         addTeardownBlock { queue.sync { conn.close() } }
-        queue.sync { conn.ingest(DchFrame.encode(type, bytes)) }
+        queue.sync { conn.ingest(bytes) }
         return calls
     }
 
@@ -525,6 +528,109 @@ final class DchServeParityTests: XCTestCase {
             let m = (try? JSONSerialization.jsonObject(with: c.frames.first?.dropFirst(5) ?? Data())) as? [String: String]
             XCTAssertTrue(m?["message"]?.hasPrefix("malformed ctl request: send") == true, "\(m ?? [:])")
         }
+    }
+
+    // MARK: - #1136 serve's 64 KiB guard on the frames it holds whole (RF_CTRL_MAX, v1.99.0 rframe.h:21, rframe.c:134-141, :189-190)
+
+    private static func header(_ type: UInt8, _ len: Int) -> Data {
+        Data([type, UInt8(len >> 24 & 0xff), UInt8(len >> 16 & 0xff), UInt8(len >> 8 & 0xff), UInt8(len & 0xff)])
+    }
+
+    /// Literal: rf_control's client set at v1.99.0 (0x35 is its RF_VIEW, rframe.h:33).
+    private static let serveControl: [UInt8] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x2e, 0x30, 0x34, 0x35]
+
+    /// A header of exactly 64 KiB waits for its payload; one byte more answers "frame too large" and closes at once, on
+    /// the header alone (serve.c:1933-1938), nothing run.
+    func testServeControlFramesCloseOneByteOver64KiB() {
+        XCTAssertEqual(DchFrame.maxControlFrame, 65_536)
+        for type in Self.serveControl {
+            let at = ingest(Self.header(type, 65_536))
+            at.lock.withLock { XCTAssertEqual(at.frames, [], "\(type)"); XCTAssertEqual(at.closes, 0, "\(type)") }
+            let over = ingest(Self.header(type, 65_537))
+            over.lock.withLock {
+                XCTAssertEqual(over.frames, [DchControlOps.error("frame too large")], "\(type)")
+                XCTAssertEqual(over.closes, 1, "\(type)")
+                XCTAssertEqual(over.spawned, [], "\(type)")
+                XCTAssertEqual(over.ctl, 0, "\(type)")
+            }
+        }
+    }
+
+    /// A whole 64 KiB 0x03 is still read and answered; 0x03 ignores its payload, so 64 KiB of space is a list request.
+    func testAWhole64KiBListRequestIsAnswered() {
+        let at = sendRaw(DchFrame.list, [UInt8](repeating: 0x20, count: 65_536))
+        at.lock.withLock {
+            XCTAssertEqual(at.frames, [DchFrame.encode(DchFrame.listResp, Array("[]".utf8))])
+            XCTAssertEqual(at.closes, 0)
+        }
+    }
+
+    /// Every other type keeps the 256 MiB receive guard: one byte past 64 KiB waits for its payload, the neighbours of
+    /// serve's set included; past 256 MiB still closes.
+    func testOtherFramesKeepTheReceiveGuard() {
+        for type: UInt8 in [0x00, DchFrame.data, DchFrame.putClipboard, DchFrame.history, DchFrame.clipboardUpload, 0x2d, 0x2f,
+                            DchFrame.ctlStdout, DchFrame.ctlExit, 0x36, 0xff] {
+            let r = ingest(Self.header(type, 65_537))
+            r.lock.withLock { XCTAssertEqual(r.frames, [], "\(type)"); XCTAssertEqual(r.closes, 0, "\(type)") }
+        }
+        let past = ingest(Self.header(DchFrame.data, DchFrame.maxRequestFrame + 1))
+        past.lock.withLock {
+            XCTAssertEqual(past.frames, [DchControlOps.error("frame too large")])
+            XCTAssertEqual(past.closes, 1)
+        }
+    }
+
+    // MARK: - #1136 (R1220-8) the list frame's size guard
+
+    private static func row(_ name: String, _ title: String) -> DchListRow {
+        DchListRow(name: name, alias: "", activityEpoch: 0, state: "idle", agents: 0, harness: title)
+    }
+
+    private static func titles(_ d: Data) -> [String: String] {
+        let rows = (try? JSONSerialization.jsonObject(with: d)) as? [[String: Any]] ?? []
+        var out: [String: String] = [:]
+        for r in rows { if let n = r["name"] as? String, let t = r["harness"] as? String { out[n] = t } }
+        return out
+    }
+
+    /// By counted bytes, against a small limit passed in: a "harness" key costs `"harness":"<escaped>"` and a comma.
+    /// "b" is 20 quotes (20 bytes, 40 escaped: cost 53), "a" 30 x's (cost 43), "c" "short" (cost 18). The largest
+    /// encoded title goes first, so "b" before "a", though its UTF-8 is shorter.
+    func testTheListFrameDropsTheLargestTitlesFirstPastItsLimit() {
+        let x30 = String(repeating: "x", count: 30)
+        let rows = [Self.row("a", x30), Self.row("b", String(repeating: "\"", count: 20)), Self.row("c", "short"), Self.row("d", "")]
+        let full = DchFrame.listPayload(rows)
+        XCTAssertEqual(Self.titles(full).count, 3)
+        XCTAssertEqual(DchFrame.listPayload(rows, limit: full.count), full, "at the limit nothing is dropped")
+        let table: [(limit: Int, kept: [String: String])] = [
+            (full.count - 1, ["a": x30, "c": "short"]),        // one byte over: the largest encoded title
+            (full.count - 53, ["a": x30, "c": "short"]),       // exactly b's cost
+            (full.count - 54, ["c": "short"]),                 // a byte more: a goes too
+            (full.count - 96, ["c": "short"]),                 // exactly b's and a's
+            (full.count - 97, [:]),
+        ]
+        for (limit, kept) in table {
+            let got = DchFrame.listPayload(rows, limit: limit)
+            XCTAssertEqual(Self.titles(got), kept, "limit \(full.count) - \(full.count - limit)")
+            XCTAssertLessThanOrEqual(got.count, limit, "limit \(full.count) - \(full.count - limit)")
+        }
+        XCTAssertEqual(DchFrame.listPayload(rows, limit: 0), DchFrame.listPayload(rows.map { Self.row($0.name, "") }),
+                       "past every title the rest of the frame is unchanged, and goes out over the limit (M1)")
+    }
+
+    /// The default is dch's RF_LIST_MAX (1 MiB, v1.99.0 rframe.h:26), the smaller reader, not the phone's 8 MiB: 140 rows
+    /// of a 7,860-7,999-byte title (about 1.1 MiB, the largest allocation here) lose the largest titles until it fits.
+    func testTheListFrameDefaultsToDchsOneMiBListLimit() {
+        XCTAssertEqual(DchFrame.maxListFrame, 1 << 20)
+        let rows = (0..<140).map { Self.row(String(format: "s%03d", $0), String(repeating: "t", count: 7_860 + $0)) }
+        let full = DchFrame.listPayload(rows, limit: DchFrame.maxFrame)
+        XCTAssertGreaterThan(full.count, 1 << 20)
+        XCTAssertEqual(Self.titles(full).count, 140, "within the phone's 8 MiB nothing drops")
+        let got = DchFrame.listPayload(rows)
+        XCTAssertLessThanOrEqual(got.count, 1 << 20)
+        let kept = Self.titles(got)
+        XCTAssertTrue(kept.count > 0 && kept.count < 140, "\(kept.count)")
+        XCTAssertTrue(kept["s139"] == nil && kept["s000"] != nil, "the longest titles go first")
     }
 
     // MARK: - #951 the all-requests' answers (#886 round 2 review)

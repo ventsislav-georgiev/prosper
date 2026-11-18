@@ -1896,6 +1896,9 @@ tag from the now-released section and put it on the new top draft.
 - Uninstalling an extension no longer stops on a block of it in your config file that Prosper has no
   record of: the extension is removed, the block stays in the file as it is, and Extensions settings
   tells you which blocks were left and how to delete them yourself. (#1232)
+- Remote Terminal: a session list too large for the iPhone now drops the longest session titles from
+  the list frame instead of making the phone disconnect, and the Mac now refuses oversized control
+  requests from a remote client the same way dch serve does. (#1136)
 
 ## v2.174.0
 
