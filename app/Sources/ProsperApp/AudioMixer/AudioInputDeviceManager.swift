@@ -45,6 +45,9 @@ final class AudioInputDeviceManager: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var micMuted = false
 
+    /// Recorded microphones the last unmute could not reach; the device list
+    /// listener finishes the restore when one of them shows up.
+    private var owedMuteUIDs: Set<String> = []
     private var listenerInstalled = false
     private var globalListeners: [AudioObjectPropertySelector] = []
     private var refresh = MixerRefreshCoordinator()
@@ -233,6 +236,7 @@ final class AudioInputDeviceManager: ObservableObject {
         }
         let error = snapshot.applyStatus.map { "Could not switch microphone: OSStatus \($0)" }
         if lastError != error { lastError = error }
+        if !owedMuteUIDs.isDisjoint(with: snapshot.devices.map(\.uid)) { unmuteRecordedInputs() }
     }
 
     // MARK: - Mute every input
@@ -267,6 +271,12 @@ final class AudioInputDeviceManager: ObservableObject {
             savedVolumes[device.uid] = Double(volume)
             recorded.append(device.uid)
         }
+        // A mic still owed from an earlier unmute stays in the new record with its level.
+        let owedLevels = Preferences.defaults.dictionary(forKey: MixerDefaultsKey.micSavedInputVolumes) as? [String: Double] ?? [:]
+        for uid in owedMuteUIDs where !recorded.contains(uid) {
+            recorded.append(uid)
+            if let level = owedLevels[uid] { savedVolumes[uid] = level }
+        }
         guard !recorded.isEmpty else {
             lastError = "No microphone could be muted."
             return
@@ -283,18 +293,29 @@ final class AudioInputDeviceManager: ObservableObject {
         // this was tracked) restores everything: leaving someone muted with no
         // way back is the worse failure. A record that exists but is empty means
         // the sweep found every device already silent by the user's own hand.
-        let recorded = defaults.stringArray(forKey: MixerDefaultsKey.micMutedDevices).map(Set.init)
+        let recorded = defaults.stringArray(forKey: MixerDefaultsKey.micMutedDevices)
         let savedVolumes = defaults.dictionary(forKey: MixerDefaultsKey.micSavedInputVolumes)
             as? [String: Double] ?? [:]
-        for device in Self.inputDevices(defaultUID: nil) {
-            guard recorded?.contains(device.uid) ?? true else { continue }
+        let devices = Self.inputDevices(defaultUID: nil)
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: recorded, presentUIDs: devices.map(\.uid))
+        for device in devices where plan.restore.contains(device.uid) {
             if let volume = savedVolumes[device.uid] {
                 _ = Self.setInputVolume(Float(volume), of: device.audioObjectID)
             }
             _ = Self.setMuteSwitch(false, of: device.audioObjectID)
         }
-        defaults.removeObject(forKey: MixerDefaultsKey.micMutedDevices)
-        defaults.removeObject(forKey: MixerDefaultsKey.micSavedInputVolumes)
+        // A microphone the read did not list keeps its record and saved level
+        // until it is seen, silently.
+        owedMuteUIDs = Set(plan.owed)
+        if plan.owed.isEmpty {
+            defaults.removeObject(forKey: MixerDefaultsKey.micMutedDevices)
+            defaults.removeObject(forKey: MixerDefaultsKey.micSavedInputVolumes)
+        } else {
+            defaults.set(plan.owed, forKey: MixerDefaultsKey.micMutedDevices)
+            defaults.set(savedVolumes.filter { owedMuteUIDs.contains($0.key) },
+                         forKey: MixerDefaultsKey.micSavedInputVolumes)
+        }
+        // Every listed microphone is live again, so the UI must not say "muted".
         micMuted = false
     }
 

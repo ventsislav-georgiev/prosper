@@ -1823,6 +1823,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: in the Mini sidebar a session's name now uses the whole width of the rail (cut
   with "…" only where it runs out) instead of stopping at eight characters, and the Full/Mini/Slide
   switch at the bottom stays on one line when it fits. (#1539)
+- Unmuting the microphones no longer forgets one that was unplugged or asleep: it stays muted and is
+  restored, with its saved level, when it comes back. (#1044)
 
 ## v2.174.0
 

@@ -711,4 +711,43 @@ final class MixerApplySeamTests: XCTestCase {
         let pass = processPass(listened: [5], raw: [5, 6])
         XCTAssertEqual(pass.recorder.followUps, 1)
     }
+
+    // MARK: - Mic unmute plan (#1044)
+
+    func testMicUnmutePlanAllRecordedPresentRestoresAllAndOwesNone() {
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: ["a", "b"], presentUIDs: ["b", "a", "c"])
+        XCTAssertEqual(plan.restore, ["b", "a"])
+        XCTAssertEqual(plan.owed, [])
+    }
+
+    func testMicUnmutePlanOneMissingIsOwedAndOthersRestored() {
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: ["a", "b"], presentUIDs: ["a"])
+        XCTAssertEqual(plan.restore, ["a"])
+        XCTAssertEqual(plan.owed, ["b"])
+    }
+
+    func testMicUnmutePlanOwedDeviceIsRestoredOnceItIsSeen() {
+        let first = MixerRoutingSupport.micUnmutePlan(recorded: ["a", "b"], presentUIDs: ["a"])
+        let second = MixerRoutingSupport.micUnmutePlan(recorded: first.owed, presentUIDs: ["a", "b"])
+        XCTAssertEqual(second.restore, ["b"])
+        XCTAssertEqual(second.owed, [])
+    }
+
+    func testMicUnmutePlanNonePresentOwesEverything() {
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: ["a", "b"], presentUIDs: [])
+        XCTAssertEqual(plan.restore, [])
+        XCTAssertEqual(plan.owed, ["a", "b"])
+    }
+
+    func testMicUnmutePlanNoRecordRestoresEverythingListed() {
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: nil, presentUIDs: ["a", "c"])
+        XCTAssertEqual(plan.restore, ["a", "c"])
+        XCTAssertEqual(plan.owed, [])
+    }
+
+    func testMicUnmutePlanEmptyRecordRestoresAndOwesNothing() {
+        let plan = MixerRoutingSupport.micUnmutePlan(recorded: [], presentUIDs: ["a"])
+        XCTAssertEqual(plan.restore, [])
+        XCTAssertEqual(plan.owed, [])
+    }
 }

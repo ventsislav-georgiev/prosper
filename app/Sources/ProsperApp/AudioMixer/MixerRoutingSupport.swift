@@ -511,6 +511,17 @@ enum MixerRoutingSupport {
         return originalUID
     }
 
+    /// Which recorded microphones an unmute may restore now and which are still
+    /// owed because the device read did not list them. A nil record (settings
+    /// carried over, state from before tracking) restores every listed device;
+    /// an empty one restores and owes nothing.
+    static func micUnmutePlan(recorded: [String]?, presentUIDs: [String]) -> (restore: [String], owed: [String]) {
+        guard let recorded else { return (presentUIDs, []) }
+        let present = Set(presentUIDs)
+        return (presentUIDs.filter(Set(recorded).contains),
+                recorded.filter { !present.contains($0) })
+    }
+
     /// A volume the app lowered on its own only goes back up while it is still
     /// the value the app set. Anything else means the volume was changed since,
     /// and that choice wins.
