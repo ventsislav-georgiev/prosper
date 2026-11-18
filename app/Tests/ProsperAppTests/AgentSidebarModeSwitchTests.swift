@@ -17,8 +17,8 @@ final class AgentSidebarModeSwitchTests: XCTestCase {
         t.filter { !$0.ignored && $0.role == "AXButton" && Self.labels.contains($0.label) }
     }
 
-    /// The switch sits at the bottom of the drawn sidebar in Full, in Mini (stacked, inside the rail) and in Slide's
-    /// slid-in sidebar (a row), at 0.7, 0.85 and 1.0; every segment keeps its sz(20) by sz(18) target.
+    /// The switch sits at the bottom of the drawn sidebar in Full, in Mini (#1539: a row too, inside the rail) and in Slide's
+    /// slid-in sidebar, one row in each, at 0.7, 0.85 and 1.0; every segment keeps its sz(20) by sz(18) target.
     func testSwitchSitsAtTheBottomOfTheSidebarInEveryModeAndScale() throws {
         try modes.withModeRow {
             for scale in AgentSidebarModeTests.scales {
@@ -47,10 +47,41 @@ final class AgentSidebarModeSwitchTests: XCTestCase {
                         let bottom = (found.map(\.frame.minY).min() ?? .infinity) - frame.minY
                         XCTAssertEqual(bottom, sz(6), accuracy: pixel + 1, "at the very bottom, \(mode) at \(scale)")
                         let xs = Set(found.map { ($0.frame.minX * 2).rounded() }), ys = Set(found.map { ($0.frame.minY * 2).rounded() })
-                        if mode == .mini {
-                            XCTAssertTrue(xs.count == 1 && ys.count == 3, "Mini: stacked, \(found.map(\.frame))")
+                        XCTAssertTrue(xs.count == 3 && ys.count == 1, "\(mode): a row, \(found.map(\.frame))")
+                    }
+                }
+            }
+        }
+    }
+
+    /// #1539: the switch alone at 0.7, 0.85 and 1.0: one row at Mini's rail width (and Full's), stacked only at a forced
+    /// width narrower than the row (Mini has no side padding, Full sz(14) a side), the three segments whole either way.
+    func testSwitchStacksOnlyWhenTheRowDoesNotFit() throws {
+        try modes.withModeRow {
+            for mode in [AgentSidebarMode.mini, .full] {
+                Preferences.agentSidebarMode = mode
+                let m = d1.windowModel(d1.store([d1.session("api", .idle)]))
+                defer { m.close() }
+                XCTAssertEqual(m.sidebarMode, mode)
+                for scale in AgentSidebarModeTests.scales {
+                    ThemeRuntime.scale = scale
+                    let seg = AgentSidebarModeSwitch.segment, pad = mode == .mini ? 0 : 2 * sz(14)
+                    let rail = mode == .mini ? AgentWindowModel.miniSidebarWidth : AgentWindowModel.fullSidebarWidth
+                    let pixel = AXTreeSupport.devicePixel
+                    for (width, row) in [(rail, true), (pad + 2 * seg.width, false)] {
+                        let size = CGSize(width: width.rounded(.up), height: sz(100))
+                        let found = ours(AXTreeSupport.tree(AgentSidebarModeSwitch(model: m).frame(width: width), size) { ours($0).count >= 3 })
+                        let tag = "\(mode) at \(scale), width \(width): \(found.map(\.frame))"
+                        XCTAssertEqual(found.count, 3, tag)
+                        let xs = Set(found.map { ($0.frame.minX * 2).rounded() }), ys = Set(found.map { ($0.frame.minY * 2).rounded() })
+                        if row {
+                            XCTAssertTrue(xs.count == 3 && ys.count == 1, "a row: \(tag)")
                         } else {
-                            XCTAssertTrue(xs.count == 3 && ys.count == 1, "\(mode): a row, \(found.map(\.frame))")
+                            XCTAssertTrue(xs.count == 1 && ys.count == 3, "stacked: \(tag)")
+                        }
+                        for n in found {
+                            XCTAssertGreaterThanOrEqual(n.frame.width, seg.width - pixel, "whole: \(tag)")
+                            XCTAssertGreaterThanOrEqual(n.frame.height, seg.height - pixel, "whole: \(tag)")
                         }
                     }
                 }

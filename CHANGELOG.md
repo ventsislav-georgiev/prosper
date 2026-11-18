@@ -1820,6 +1820,9 @@ tag from the now-released section and put it on the new top draft.
   editor comes from your login shell's VISUAL or EDITOR, or the command you type there. Quitting the
   editor returns to Read with the file reloaded, and closing the window ends the editor session.
   (#1109)
+- Agent Sessions: in the Mini sidebar a session's name now uses the whole width of the rail (cut
+  with "…" only where it runs out) instead of stopping at eight characters, and the Full/Mini/Slide
+  switch at the bottom stays on one line when it fits. (#1539)
 
 ## v2.174.0
 

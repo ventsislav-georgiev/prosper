@@ -3,8 +3,9 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1457 (operator 2026-11-17, "the mini mode is not useful"): a Mini row shows the session's name cut to eight characters
-/// with its Command number as a superscript, the rail is measured to fit eight wide characters at every UI scale, and a
+/// #1457 (operator 2026-11-17, "the mini mode is not useful"): a Mini row shows the session's name (#1539: cut by the
+/// row's width, not at eight characters) with its Command number as a superscript, the rail is measured to fit eight wide
+/// characters at every UI scale, and a
 /// quick tooltip shows the whole name beside the row. Offscreen only: every window is built and never shown, ordered in or
 /// made key; the hover goes through the row's own handler, no event is posted.
 @MainActor
@@ -25,35 +26,34 @@ final class AgentMiniNamesTests: XCTestCase {
         }
     }
 
-    /// The first eight Characters plus an ellipsis, a name of eight or fewer whole; through OutsideText (a bidi control goes);
-    /// a grapheme at character 8 (a flag, a skin-toned emoji, a ZWJ family, whose joiners OutsideText drops) whole or not at all.
-    func testMiniNameIsCutToEightCharactersNeverInsideAGrapheme() {
-        let dots = "\u{2026}"
+    /// #1539: the name is OutsideText's whole (a bidi control and the joiners go), never cut at a character count; the
+    /// line cuts it by width (testMiniRowNameFillsTheRowUpToTheSuperscript).
+    func testMiniNameIsTheWholeShownNameNotACharacterCut() {
         XCTAssertEqual(AgentSidebarRowView.miniName("api"), "api")
-        XCTAssertEqual(AgentSidebarRowView.miniName("api-sess"), "api-sess", "eight: whole")
-        XCTAssertEqual(AgentSidebarRowView.miniName("api-sessi"), "api-sess" + dots, "nine: cut")
-        XCTAssertEqual(AgentSidebarRowView.miniName(Self.long), "api-sess" + dots)
-        XCTAssertEqual(AgentSidebarRowView.miniName("api\u{202E}-session"), "api-sess" + dots, "the bidi override dropped first")
-        let flag = "\u{1F1E7}\u{1F1EC}", thumb = "\u{1F44D}\u{1F3FD}"
-        XCTAssertEqual(AgentSidebarRowView.miniName("api-tes" + flag + "xy"), "api-tes" + flag + dots, "the flag whole")
-        XCTAssertEqual(AgentSidebarRowView.miniName("api-tes" + thumb + "xy"), "api-tes" + thumb + dots, "the toned thumb whole")
+        XCTAssertEqual(AgentSidebarRowView.miniName("api-sessi"), "api-sessi", "nine: whole")
+        XCTAssertEqual(AgentSidebarRowView.miniName(Self.long), Self.long)
+        XCTAssertEqual(AgentSidebarRowView.miniName("api\u{202E}-session"), "api-session", "the bidi override dropped")
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
-        let cut = AgentSidebarRowView.miniName("api-tes" + family + "x")
-        XCTAssertEqual(cut, "api-tes\u{1F468}" + dots, "OutsideText drops the joiners: the man is character 8, whole")
-        XCTAssertEqual(cut.count, 9)
-        for c in cut { XCTAssertFalse(c.unicodeScalars.contains("\u{200D}"), "no joiner left half-joined: \(cut.unicodeScalars.map(\.value))") }
+        let shown = AgentSidebarRowView.miniName("api-tes" + family + "x")
+        XCTAssertEqual(shown, OutsideText.shown("api-tes" + family + "x"))
+        XCTAssertFalse(shown.unicodeScalars.contains("\u{200D}"), "no joiner left: \(shown.unicodeScalars.map(\.value))")
+        XCTAssertFalse(shown.hasSuffix("\u{2026}"), "no ellipsis of its own: \(shown)")
     }
 
     /// A short and a long title (and twelve W's, the widest Latin letter) at 0.7, 0.85 and 1.0, backed at 1x and 2x, at the
-    /// measured rail's row width: the name drawn is the cut name at its whole ideal width (nothing clipped or squeezed), inside
-    /// the row; the superscript sits right after the name and only for rows 1-9 with Shortcut on; the needs-you mark inside.
-    func testMiniRowDrawsTheCutNameAndTheSuperscriptInsideTheRail() throws {
+    /// measured rail's row width: a short name is drawn at its whole ideal width; a long one is cut by the row's width (#1539:
+    /// narrower than its whole, its end reaching the superscript's slot, which ends at the needs-you slot: no empty space
+    /// left), all inside the row; the superscript sits right after the name, drawn whole, and only for rows 1-9 with
+    /// Shortcut on; the needs-you mark inside.
+    func testMiniRowNameFillsTheRowUpToTheSuperscript() throws {
         let blocked = AgentSidebar.row(d1.session("api", .blocked), details: .all, now: AgentWindowD1Tests.now)
         var noShortcut = AgentIslandRowDetails.all
         noShortcut.shortcut = false
         try atScales { scale in
             let rail = AgentWindowModel.miniSidebarWidth
             let width = rail - 2 * sz(8)   // the list's padding
+            let digit = Self.exact(AgentSidebarRowView.miniSuperscript(2, selected: false))
+            let slot = Self.exact(ZStack { ForEach(1...9, id: \.self) { AgentSidebarRowView.miniSuperscript($0, selected: false) } })
             for backing: CGFloat in [1, 2] {
                 let pixel: CGFloat = 1 / backing
                 for title in ["api", Self.long, Self.wide] {
@@ -62,7 +62,11 @@ final class AgentMiniNamesTests: XCTestCase {
                     let p = parts(AgentSidebarRowView(row: r, selected: false, number: 2, mini: true), width: width, backing: backing)
                     let name = try XCTUnwrap(p["miniName"], "the name drawn: \(p.keys.sorted()) \(tag)")
                     let ideal = Self.exact(Text(AgentSidebarRowView.miniName(title)).font(Neon.font(11, weight: .medium)))
-                    XCTAssertEqual(name.width, ideal, accuracy: pixel, "the cut name whole, never squeezed: \(name) \(tag)")
+                    if title == "api" {
+                        XCTAssertEqual(name.width, ideal, accuracy: pixel, "a short name whole, never squeezed: \(name) \(tag)")
+                    } else {
+                        XCTAssertLessThan(name.width, ideal - pixel, "a long name cut by width: \(name) \(tag)")
+                    }
                     XCTAssertGreaterThanOrEqual(name.minX, -pixel, tag)
                     XCTAssertLessThanOrEqual(name.maxX, width + pixel, "inside the row: \(tag)")
                     let sup = try XCTUnwrap(p["miniSup"], "row 2's superscript: \(p.keys.sorted()) \(tag)")
@@ -72,6 +76,11 @@ final class AgentMiniNamesTests: XCTestCase {
                     let needs = try XCTUnwrap(p["miniNeeds"], tag)
                     XCTAssertGreaterThanOrEqual(needs.minX, sup.maxX - pixel, "the needs-you mark last: \(tag)")
                     XCTAssertLessThanOrEqual(needs.maxX, width + pixel, "inside the row: \(tag)")
+                    XCTAssertEqual(sup.width, digit, accuracy: pixel, "the number drawn whole: \(sup) \(tag)")
+                    if title != "api" {   // #1539: the name fills the row: only the digit slot's rest and the spacing before the mark
+                        XCTAssertLessThanOrEqual(needs.minX - sup.maxX, slot - digit + sz(4) + 2 * pixel,
+                                                 "no empty space after the name: \(name) \(sup) \(needs) \(tag)")
+                    }
                 }
                 for (n, show, drawn) in [(9, AgentIslandRowDetails.all, true), (10, .all, false), (18, .all, false),
                                          (2, noShortcut, false), (nil, .all, false)] as [(Int?, AgentIslandRowDetails, Bool)] {

@@ -815,8 +815,9 @@ enum AgentSidebarMode: String, CaseIterable {
 }
 
 /// #1474 (operator 2026-11-17): the sidebar's mode switch at its bottom edge, radio-like and icon only (no text drawn; the
-/// mode's label on hover and to VoiceOver). A row in Full and in Slide's slid-in sidebar, stacked in Mini's rail; dimmed
-/// until the pointer is over it. A click is the model's setter, which Settings and the Go menu use too.
+/// mode's label on hover and to VoiceOver). A row wherever it fits (#1539: Mini's rail too), stacked only when the width
+/// given is narrower than the row; dimmed until the pointer is over it. A click is the model's setter, which Settings and
+/// the Go menu use too.
 struct AgentSidebarModeSwitch: View {
     @ObservedObject var model: AgentWindowModel
     @State private var hover = false
@@ -839,13 +840,15 @@ struct AgentSidebarModeSwitch: View {
 
     var body: some View {
         let mini = model.sidebarMode == .mini
-        let stack = mini ? AnyLayout(VStackLayout(spacing: sz(2))) : AnyLayout(HStackLayout(spacing: sz(2)))
-        stack { ForEach(AgentSidebarMode.allCases, id: \.self) { button($0) } }
-            .onHover { hover = $0 }
-            .padding(.horizontal, mini ? 0 : sz(14)).padding(.vertical, sz(6))
-            .frame(maxWidth: .infinity, alignment: mini ? .center : .leading)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Sidebar mode")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: sz(2)) { ForEach(AgentSidebarMode.allCases, id: \.self) { button($0) } }
+            VStack(spacing: sz(2)) { ForEach(AgentSidebarMode.allCases, id: \.self) { button($0) } }   // too narrow for the row
+        }
+        .onHover { hover = $0 }
+        .padding(.horizontal, mini ? 0 : sz(14)).padding(.vertical, sz(6))
+        .frame(maxWidth: .infinity, alignment: mini ? .center : .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sidebar mode")
     }
 
     func button(_ m: AgentSidebarMode) -> some View {
@@ -1460,7 +1463,7 @@ struct AgentSidebarRowView: View {
         }
     }
 
-    /// #1379 Mini: the state mark, #1457 the name cut to `miniNameLength` characters with its Command number as a superscript
+    /// #1379 Mini: the state mark, #1539 the name cut to the rail's width with its Command number as a superscript
     /// (rows 1-9 with Shortcut on), and the needs-you mark (blocked or done); the full row's words are its tooltip and its one
     /// VoiceOver label, and the hover shows the whole name beside the row after `AgentMiniTip.delay` (`hover`).
     var miniBody: some View {
@@ -1700,14 +1703,12 @@ extension AgentSidebarRowView {
         ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
     }
 
-    /// #1457 (operator 2026-11-17): the characters of a session's name Mini shows.
+    /// #1457 (operator 2026-11-17): the wide characters Mini's rail is measured to fit (`miniWidestLine`); #1539: no
+    /// longer a cut, a name takes the row's width.
     static let miniNameLength = 8
 
-    /// #1457: the name as Mini shows it: OutsideText's, cut to `miniNameLength` Characters (never inside a grapheme) plus "...".
-    static func miniName(_ title: String) -> String {
-        let s = OutsideText.shown(title)
-        return s.count > miniNameLength ? String(s.prefix(miniNameLength)) + "\u{2026}" : s
-    }
+    /// #1457: the name as Mini shows it, OutsideText's; #1539: whole, the line cuts it by width with "...".
+    static func miniName(_ title: String) -> String { OutsideText.shown(title) }
 
     /// #1457: Mini's line: the mark's slot, the name with the Command number's superscript after it (the widest digit's slot
     /// kept), then the needs-you slot at the trailing edge. The rail is measured from this very line (`miniWidestLine`).
@@ -1723,6 +1724,7 @@ extension AgentSidebarRowView {
                     if let number { miniSuperscript(number, selected: selected).modifier(AgentSidebarRowProbe(kind: "miniSup", title: title)) }
                 }
             }
+            .layoutPriority(1)   // #1539: the name takes the row up to the needs-you slot before the spacer gets any
             Spacer(minLength: 0)
             needs()
         }
@@ -1737,9 +1739,9 @@ extension AgentSidebarRowView {
             .foregroundStyle(miniSuperscriptInk(selected: selected)).fixedSize()
     }
 
-    /// #1457: the widest Mini line: a name of `miniNameLength` W's cut as a longer name is, the mark's and needs-you slots.
+    /// #1457: the widest Mini line: `miniNameLength` W's and "...", the mark's and needs-you slots (#1539: the same rail).
     static var miniWidestLine: some View {
-        miniLine(mark: Color.clear.frame(width: sz(14), height: 0), name: miniName(String(repeating: "W", count: miniNameLength + 1)),
+        miniLine(mark: Color.clear.frame(width: sz(14), height: 0), name: String(repeating: "W", count: miniNameLength) + "\u{2026}",
                  number: nil, selected: false, ink: .clear, title: "") { Color.clear.frame(width: sz(6), height: sz(6)) }
     }
 
