@@ -3271,6 +3271,8 @@ final class AgentWindowModel: ObservableObject {
         for r in ranked where r.pane != layout.focused && r.ended == nil {
             let want = unfocusedTerminalKey(r, shown)
             if let k = want, taken.contains(k) || room == 0 { refused.insert(r.pane) }
+            // #902 (11.2 remote column): a shown, listed remote pane nobody picked since it was last shown: Connect, 0 spawns
+            if want == nil, shown.contains(r.pane), paneRemote(r.pane) != nil { refused.insert(r.pane) }
             guard let k = want, !refused.contains(r.pane) else {
                 restPending[r.pane] = nil
                 if r.terminal?.key != nil {
@@ -3296,8 +3298,31 @@ final class AgentWindowModel: ObservableObject {
     }
 
     private func unfocusedTerminalKey(_ r: AgentPaneRuntime, _ shown: Set<UUID>) -> AgentSessionKey? {
-        guard shown.contains(r.pane), case .live(let s)? = r.content else { return nil }
+        guard shown.contains(r.pane) else { return nil }
+        // #902 (11.2): a remote pane keeps its client unfocused only while the human's pick (its arm) holds, and the arm
+        // goes with any detach (zoomed away, hidden, over the cap), so it never reattaches by itself; it counts in the cap.
+        if let x = paneRemote(r.pane) {
+            let k = AgentTerminalSpawn.remoteKey(host: x.host, name: x.name)
+            return r.terminal?.armed == k ? k : nil
+        }
+        guard case .live(let s)? = r.content else { return nil }
         return s.key
+    }
+
+    /// #902: pane `pane`'s remote session while the remote list has it; nil for any other target (a remote target the
+    /// list lacks stays "isn't running", 4.1).
+    func paneRemote(_ pane: UUID) -> AgentSidebar.Remote? {
+        guard case let .remote(h, n)? = layout.panes.first(where: { $0.id == pane })?.target else { return nil }
+        return row(.remote(host: h, name: n))?.remote
+    }
+
+    /// #902 (11.2, 11.3): Connect on an unfocused pane is the human's pick: a remote pane's attach is armed, then the pane
+    /// takes the focus (and so attaches, the least recently focused other pane going over the cap).
+    func connectPane(_ pane: UUID) {
+        if let x = paneRemote(pane), let r = runtimes[pane] {
+            paneTerminal(r).arm(AgentTerminalSpawn.remoteKey(host: x.host, name: x.name))
+        }
+        focusPane(pane)
     }
 
     /// 11.2: the start order, the focused pane first, then the others in tree order.

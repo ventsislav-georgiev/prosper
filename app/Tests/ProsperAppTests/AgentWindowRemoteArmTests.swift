@@ -233,4 +233,163 @@ final class AgentWindowRemoteArmTests: XCTestCase {
         XCTAssertEqual(m.remoteResumeText[rec.record.id], OutsideText.shown(raw))
         XCTAssertTrue(m.remoteResumeText[rec.record.id]?.contains("\u{202E}") == false)
     }
+
+    // MARK: #902 remote panes in splits (spec 15 C; 11.2's remote column, 11.3, R2.4, R6.4, R6.11)
+
+    /// #902: the local "web" focused, the listed remote "api" beside it (a restored layout: nothing picked).
+    @MainActor
+    func remoteSplit(_ m: AgentWindowModel) -> (local: Pane, remote: Pane) {
+        m.paneArea = Self.wideArea
+        let local = Pane(id: UUID(), target: .session(dir: AgentWindowRemoteRowsTests.dir, name: "web"))
+        let remote = Pane(id: UUID(), target: .remote(host: "host-a", name: "api"))
+        m.adopt(PaneLayout(id: UUID(), name: nil, tree: .split(.columns, ratio: 0.5, .leaf(local), .leaf(remote)),
+                           focused: local.id, zoomed: nil))
+        m.refresh()
+        return (local, remote)
+    }
+
+    /// Attaches to host-a's "api" (the local panes' spawns are not counted).
+    @MainActor
+    func apiSpawns(_ log: AgentWindowRemoteRowsTests.Log) -> Int { log.spawns.filter { $0.args == Self.apiArgs }.count }
+
+    /// 11.2 "visible, shown, unfocused" (R2.4): a listed remote pane nobody picked is the remote session with Connect, never
+    /// "isn't running" and never an attach; a re-show and an unzoom: 0 more.
+    @MainActor
+    func testAnUnfocusedRemotePaneShowsConnectAndNeverAttachesByItself() throws {
+        XCTAssertTrue(AgentPaneLayout.splitsEnabled)
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: [rows.session("web")])
+        defer { m.close() }
+        let (_, remote) = remoteSplit(m)
+        XCTAssertEqual(m.paneRemote(remote.id)?.name, "api", "the listed remote session draws, not a placeholder")
+        XCTAssertTrue(m.connectPanes.contains(remote.id), "Connect")
+        XCTAssertEqual(apiSpawns(log), 0)
+        m.setVisible(false)
+        m.setVisible(true)
+        m.refresh()
+        XCTAssertEqual(apiSpawns(log), 0, "a re-show: 0")
+        XCTAssertTrue(m.connectPanes.contains(remote.id))
+        m.adopt(m.layout.toggleZoom())   // the local pane zoomed: the remote one hidden
+        XCTAssertFalse(m.connectPanes.contains(remote.id), "hidden: no card")
+        m.adopt(m.layout.toggleZoom())
+        XCTAssertEqual(apiSpawns(log), 0, "an unzoom: 0")
+        XCTAssertTrue(m.connectPanes.contains(remote.id))
+    }
+
+    /// 11.2: a plain focus of a restored remote pane keeps #1330's Attach card; Connect is the human's pick: exactly one
+    /// attach, in that pane's own terminal. R6.4's remote part: dch leaves a remote row's size out, so no Fit here chip.
+    @MainActor
+    func testConnectOnAnUnfocusedRemotePaneAttachesItExactlyOnce() throws {
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: [rows.session("web")])
+        defer { m.close() }
+        let (local, remote) = remoteSplit(m)
+        m.focusPane(remote.id)
+        XCTAssertEqual(apiSpawns(log), 0, "a focus alone: the Attach card (#1330)")
+        XCTAssertEqual(m.terminal.held, Self.apiKey)
+        m.focusPane(local.id)
+        XCTAssertEqual(apiSpawns(log), 0)
+        m.connectPane(remote.id)
+        XCTAssertEqual(m.layout.focused, remote.id, "Connect focuses the pane")
+        XCTAssertEqual(apiSpawns(log), 1, "Connect: exactly one attach")
+        XCTAssertEqual(m.terminal.key, Self.apiKey)
+        XCTAssertFalse(m.connectPanes.contains(remote.id))
+        m.refresh()
+        XCTAssertEqual(apiSpawns(log), 1, "the next refresh keeps the one attach")
+        XCTAssertEqual(m.terminal.phase, .live)
+        m.terminal.sessionPty = AgentSessionPty(cols: 1, rows: 1, clients: 2)
+        XCTAssertFalse(m.terminal.sizedElsewhere, "a remote pane never shows Fit here")
+    }
+
+    /// 11.2: picked since it was last shown, an unfocused remote pane keeps its client (focus away and back: the same
+    /// one); zoomed away it detaches and the pick goes, so the unzoom shows Connect and attaches nothing.
+    @MainActor
+    func testAPickedRemotePaneStaysAttachedUnfocusedUntilItIsHidden() throws {
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: [rows.session("web")])
+        defer { m.close() }
+        let (local, remote) = remoteSplit(m)
+        m.click(Self.api)
+        XCTAssertEqual(m.layout.focused, remote.id)
+        XCTAssertEqual(apiSpawns(log), 1)
+        let t = m.terminal
+        let child = try XCTUnwrap(log.children.last)
+        m.focusPane(local.id)
+        XCTAssertEqual(t.key, Self.apiKey, "picked since it was last shown: still attached")
+        XCTAssertEqual(child.terminated, 0)
+        XCTAssertFalse(m.connectPanes.contains(remote.id))
+        m.focusPane(remote.id)
+        XCTAssertEqual(apiSpawns(log), 1, "focus back: the same client")
+        m.focusPane(local.id)
+        m.adopt(m.layout.toggleZoom())
+        XCTAssertTrue(t.key == nil, "zoomed away: detached")
+        XCTAssertEqual(child.terminated, 1)
+        m.adopt(m.layout.toggleZoom())
+        XCTAssertEqual(apiSpawns(log), 1, "an unzoom never reattaches a remote pane")
+        XCTAssertTrue(m.connectPanes.contains(remote.id))
+    }
+
+    /// 11.3: an attached remote pane counts in the cap of 4 clients; over it, it detaches like a local pane and its pick
+    /// goes (Connect, 0 spawns after).
+    @MainActor
+    func testAnAttachedRemotePaneCountsInTheCapOfFour() throws {
+        XCTAssertEqual(AgentWindowModel.attachCap, 4)
+        let names = ["web", "w2", "w3", "w4"]
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: names.map { rows.session($0) })
+        defer { m.close() }
+        m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 3000)
+        let targets: [PaneTarget?] = [PaneTarget.remote(host: "host-a", name: "api")] + names.map {
+            PaneTarget.session(dir: AgentWindowRemoteRowsTests.dir, name: $0)
+        }
+        let l = AgentWindowD1Tests().paneLayout(targets)
+        m.adopt(l)
+        m.refresh()
+        func pane(_ i: Int) -> UUID { l.order[i] }   // 0 the remote pane, 1...4 web, w2, w3, w4
+        XCTAssertEqual(l.order.count, 5)
+        XCTAssertEqual(m.layout.focused, pane(0))
+        XCTAssertEqual(apiSpawns(log), 0, "a restored focus never attaches")
+        m.click(Self.api)
+        XCTAssertEqual(apiSpawns(log), 1)
+        let t = m.terminal
+        let child = try XCTUnwrap(log.children.last)
+        m.focusPane(pane(1))
+        XCTAssertEqual(t.key, Self.apiKey, "the remote pane (focused last) is one of the 4")
+        XCTAssertEqual(m.connectPanes, [pane(4)], "web, the remote pane, w2, w3: w4 over the cap")
+        m.focusPane(pane(2))
+        m.focusPane(pane(3))
+        XCTAssertEqual(t.key, Self.apiKey)
+        m.focusPane(pane(4))
+        XCTAssertTrue(t.key == nil, "least recently focused: over the cap")
+        XCTAssertEqual(child.terminated, 1)
+        XCTAssertEqual(m.connectPanes, [pane(0)])
+        m.focusPane(pane(3))
+        XCTAssertEqual(apiSpawns(log), 1, "its pick went with the client: no attach by itself")
+        XCTAssertTrue(m.connectPanes.contains(pane(0)))
+    }
+
+    /// R6.11 (QA R6.5, INFO-10): after dch exit 5 the pane shows "Opened on another device" (Take back) and spawns 0
+    /// times on its own across a focus, an unzoom and a window re-show; Take back (retry) is exactly one.
+    @MainActor
+    func testATakenRemotePaneNeverAttachesByItself() throws {
+        let (m, _, log) = rows.model(Lister(AgentWindowRemoteRowsTests.fixture), sessions: [rows.session("web")])
+        defer { m.close() }
+        let (local, remote) = remoteSplit(m)
+        m.connectPane(remote.id)
+        XCTAssertEqual(apiSpawns(log), 1)
+        let t = m.terminal
+        log.ios.last?.exit(5)
+        rows.spin { t.phase == .detached("Opened on another device") }
+        XCTAssertEqual(t.phase, .detached("Opened on another device"))
+        m.focusPane(local.id)
+        m.focusPane(remote.id)
+        XCTAssertEqual(apiSpawns(log), 1, "a focus: 0")
+        m.focusPane(local.id)
+        m.adopt(m.layout.toggleZoom())
+        m.adopt(m.layout.toggleZoom())
+        XCTAssertEqual(apiSpawns(log), 1, "an unzoom: 0")
+        m.focusPane(remote.id)
+        m.setVisible(false)
+        m.setVisible(true)
+        m.refresh()
+        XCTAssertEqual(apiSpawns(log), 1, "a re-show: 0")
+        m.terminal.attachHeld()
+        XCTAssertEqual(apiSpawns(log), 2, "the human's Attach: exactly one")
+    }
 }

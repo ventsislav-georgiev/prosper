@@ -1231,7 +1231,9 @@ struct AgentTerminalPane: View {
             AgentTerminalCard(icon: "stop.circle", text: "Session ended")
         case .detached(let why):
             AgentTerminalCard(icon: "rectangle.portrait.and.arrow.right", text: why) {
-                AgentPillButton(title: "Reattach", icon: "arrow.clockwise", tint: Neon.blue) { controller.retry() }
+                // #902 (R6.11, 9.3): a remote exit 5 (taken by another device) is the one remote .detached: Take back
+                AgentPillButton(title: controller.remoteHost != nil ? "Take back" : "Reattach", icon: "arrow.clockwise",
+                                tint: Neon.blue) { controller.retry() }
             }
         case .failed(let why) where controller.remoteHost != nil:
             // #896: a lost link retries by itself a few times (the card says so); Reconnect is now. No Open in terminal:

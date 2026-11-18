@@ -1912,6 +1912,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: with dch 1.62.0 or later, sessions on other machines now update as soon as dch
   sees a change, through one live list while the window is open, instead of a fresh lookup on each
   refresh. (#1555)
+- Agent Sessions: a session from another machine in a split pane now shows its terminal with a
+  Connect button instead of "isn't running"; once you connect it stays attached when you click
+  another pane, and it counts toward the limit of 4 connected terminals. The "Opened on another
+  device" card's button now reads "Take back". (#902)
 
 ## v2.174.0
 

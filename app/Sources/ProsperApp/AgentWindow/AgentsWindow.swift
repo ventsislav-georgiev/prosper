@@ -2960,6 +2960,24 @@ struct AgentUnfocusedPane: View {
                     AgentTerminalCard(icon: "stop.circle", text: "Session ended")
                         .frame(maxWidth: .infinity, maxHeight: .infinity).background(Neon.bgBottom)
                 }
+            } else if let x = model.paneRemote(runtime.pane), let row = model.row(.remote(host: x.host, name: x.name)) {
+                // #902 (11.2 remote column): a listed remote pane, unfocused: its terminal while the human's pick holds,
+                // else Connect (arms the attach and focuses the pane); never "isn't running", never an attach by itself.
+                AgentRemoteHeader(row: row, remote: x, pane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))
+                    .modifier(AgentPaneProbe(kind: "header"))
+                Rectangle().fill(Neon.stroke).frame(height: 1)
+                AgentTerminalPane(controller: model.paneTerminal(runtime), open: {})
+                    .overlay {
+                        if model.connectPanes.contains(runtime.pane) {
+                            AgentTerminalCard(icon: "pause.circle", text: "Not connected") {
+                                AgentPillButton(title: "Connect", icon: "arrow.right.circle", tint: Neon.blue) {
+                                    model.connectPane(runtime.pane)
+                                }
+                            }
+                        }
+                    }
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                    .modifier(AgentPaneProbe(kind: "terminal"))
             } else {
                 let title = AgentPanePlaceholder.title(runtime.content)
                 AgentCompactHeader(title: historyTitle ?? title ?? "").modifier(AgentPaneProbe(kind: "header"))
