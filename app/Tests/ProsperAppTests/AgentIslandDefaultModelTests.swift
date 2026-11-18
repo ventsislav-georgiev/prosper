@@ -503,6 +503,85 @@ final class AgentIslandDefaultModelTests: XCTestCase {
         defer { nameWin.close() }
         XCTAssertEqual(nativeFields(name).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString), ["api"])
     }
+
+    /// #1522 s1 (QA R1531): the Find bar and the Layout name field take the keyboard focus once hosted: the field has its
+    /// field editor, i.e. the window's first responder is the field, with no event (a window never shown or made key).
+    /// Else the terminal keeps the focus and the typed search goes into the session.
+    @MainActor
+    func testTheFindBarAndLayoutNameFieldTakeTheFocusInAnOffscreenWindow() {
+        _ = ThemeStore.shared
+        let size = CGSize(width: 420, height: 60)
+        let (barWin, bar) = AXTreeSupport.hosted(AgentTerminalFindBar(controller: AgentTerminalController()), size)
+        defer { barWin.close() }
+        let (nameWin, name) = AXTreeSupport.hosted(AgentLayoutNameField(placeholder: "api", text: "api", end: { _ in }), size)
+        defer { nameWin.close() }
+        for (what, host) in [("Find", bar as NSView), ("Layout name", name as NSView)] {
+            guard let field = nativeFields(host).first(where: { $0.delegate is ScaledTextField.Coordinator }) else {
+                XCTFail("\(what): no ScaledTextField"); continue
+            }
+            XCTAssertTrue(field.currentEditor() != nil, "\(what): the field took the focus (its field editor is up)")
+        }
+    }
+
+    /// #1522 s2: the Layout name field through its delegate. Return (the end-editing notification, then the action) ends
+    /// with the typed name; any other movement ends with nil; Escape is consumed and ends with nil once.
+    @MainActor
+    private func layoutNameField(_ ends: EndRecorder) -> (NSWindow, NSTextField, ScaledTextField.Coordinator?) {
+        _ = ThemeStore.shared
+        let (win, host) = AXTreeSupport.hosted(AgentLayoutNameField(placeholder: "api", text: "api", end: { ends.got.append($0) }), CGSize(width: 420, height: 60))
+        let field = nativeFields(host).first(where: { $0.delegate is ScaledTextField.Coordinator }) ?? NSTextField()
+        return (win, field, field.delegate as? ScaledTextField.Coordinator)
+    }
+
+    private final class EndRecorder { var got: [String?] = [] }
+
+    private func ended(_ field: NSTextField, _ movement: NSTextMovement) -> Notification {
+        Notification(name: NSControl.textDidEndEditingNotification, object: field, userInfo: ["NSTextMovement": movement.rawValue])
+    }
+
+    @MainActor
+    func testLayoutNameReturnEndsWithTheTypedNameNotAsALeave() {
+        let ends = EndRecorder()
+        let (win, field, coordinator) = layoutNameField(ends)
+        defer { win.close() }
+        guard let c = coordinator else { return XCTFail("no coordinator") }
+        field.stringValue = "Example Org"
+        c.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        c.controlTextDidEndEditing(ended(field, .return))   // AppKit ends the editing before it sends the action
+        XCTAssertTrue(ends.got.isEmpty, "Return's end-editing is not a leave: nothing ended yet")
+        c.submit()
+        XCTAssertEqual(ends.got, ["Example Org"], "Return ends once, with the typed name")
+    }
+
+    @MainActor
+    func testLayoutNameOtherMovementEndsWithNil() {
+        for movement in [NSTextMovement.tab, .backtab, .other] {
+            let ends = EndRecorder()
+            let (win, field, coordinator) = layoutNameField(ends)
+            defer { win.close() }
+            guard let c = coordinator else { return XCTFail("no coordinator") }
+            c.controlTextDidEndEditing(ended(field, movement))
+            XCTAssertEqual(ends.got.count, 1, "movement \(movement.rawValue) ends once")
+            XCTAssertTrue(ends.got.first == .some(nil), "movement \(movement.rawValue) ends with nil")
+        }
+    }
+
+    @MainActor
+    func testLayoutNameEscapeIsConsumedAndEndsWithNilOnce() {
+        let ends = EndRecorder()
+        let (win, field, coordinator) = layoutNameField(ends)
+        defer { win.close() }
+        guard let c = coordinator else { return XCTFail("no coordinator") }
+        XCTAssertTrue(c.control(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:))),
+                      "Escape is consumed (no field-editor completion)")
+        XCTAssertEqual(ends.got.count, 1, "Escape ends once")
+        XCTAssertTrue(ends.got.first == .some(nil), "Escape ends with nil")
+        c.controlTextDidEndEditing(ended(field, .other))   // the focus leaving after the cancel
+        XCTAssertEqual(ends.got.count, 1, "a later leave is ignored: still once")
+        XCTAssertFalse(c.control(field, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))),
+                       "other commands keep AppKit's default")
+    }
 }
 
 /// #1228: the window's New session form shows the command with the Default model and starts exactly that argv.
