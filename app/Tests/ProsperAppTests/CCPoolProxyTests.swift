@@ -13,7 +13,7 @@ final class CCPoolFakeServer: @unchecked Sendable {
         case respond(Int, [(String, String)], Data)
         /// Read the request, close without answering (a stale pooled connection).
         case drop
-        /// A reply that declares 100 more body bytes than it sends, then hangs up: the upstream dies after its first bytes.
+        /// A chunked reply whose first chunk is whole and whose next chunk is cut by a hang-up (sent on releaseCut()).
         case respondCut(Int, [(String, String)], Data)
     }
 
@@ -24,6 +24,8 @@ final class CCPoolFakeServer: @unchecked Sendable {
     private var _accepted = 0
     private var _dropReused = 0
     private var _reusedDropped = 0
+    private var cutReleased = false
+    private var pendingCut: (() -> Void)?
     private(set) var port: UInt16 = 0
     let handler: @Sendable (CCPoolRequestHead, Data) -> Reply
 
@@ -59,6 +61,17 @@ final class CCPoolFakeServer: @unchecked Sendable {
         }
     }
 
+    /// #1594: a .respondCut sends its hang-up only now. URLSession drops bytes that arrive with the hang-up before it
+    /// hands them to its delegate, so the cut waits until the caller has seen the first bytes go through.
+    func releaseCut() {
+        let cut = lock.withLock { () -> (() -> Void)? in
+            cutReleased = true
+            defer { pendingCut = nil }
+            return pendingCut
+        }
+        cut?()
+    }
+
     func stop() {
         listener.cancel()
         lock.withLock { live }.forEach { $0.cancel() }
@@ -89,16 +102,22 @@ final class CCPoolFakeServer: @unchecked Sendable {
                     return
                 case .respondCut(let status, let headers, let body):
                     // #1588: the first bytes go out as one whole chunk; the hang-up inside the next chunk is a second
-                    // send, after the first is out (as UsageTapStub's dropMidChunk). A body short of its Content-Length
-                    // sent with the hang-up never reached URLSession's data callback, so no bytes were "first".
+                    // send. #1594: that send waits for releaseCut(): on a loaded host both sends reached URLSession
+                    // together and it failed the task without handing the first chunk on (DIAG1594 in ticket2.log).
                     var head = "HTTP/1.1 \(status) X\r\n"
                     for (k, v) in headers { head += "\(k): \(v)\r\n" }
                     head += "Transfer-Encoding: chunked\r\n\r\n" + String(body.count, radix: 16) + "\r\n"
                     var out = Data(head.utf8)
                     out.append(body)
                     out.append(Data("\r\n".utf8))
-                    c.send(content: out, completion: .contentProcessed { _ in
-                        c.send(content: Data("40\r\npartial".utf8), completion: .contentProcessed { _ in c.cancel() })
+                    let cut = { c.send(content: Data("40\r\npartial".utf8), completion: .contentProcessed { _ in c.cancel() }) }
+                    c.send(content: out, completion: .contentProcessed { [weak self] _ in
+                        guard let self else { return }
+                        let now = self.lock.withLock { () -> Bool in
+                            if !self.cutReleased { self.pendingCut = cut }
+                            return self.cutReleased
+                        }
+                        if now { cut() }
                     })
                     return
                 case .respond(let status, let headers, let body):
@@ -242,14 +261,16 @@ enum CCPoolTestClient {
 
     final class Box: @unchecked Sendable { var data = Data(); var ok = false }
 
-    static func exchange(port: UInt16, send: Data, readAtMost: Int? = nil, timeout: TimeInterval) -> Data? {
+    /// `onData` sees everything read so far after each read (on the client's queue).
+    static func exchange(port: UInt16, send: Data, readAtMost: Int? = nil, timeout: TimeInterval,
+                         onData: (@Sendable (Data) -> Void)? = nil) -> Data? {
         let q = DispatchQueue(label: "ccpool.test.client")
         let c = NWConnection(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
         let box = Box()
         let sem = DispatchSemaphore(value: 0)
         @Sendable func read() {
             c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { d, _, done, err in
-                if let d { box.data.append(d) }
+                if let d { box.data.append(d); onData?(box.data) }
                 if let n = readAtMost, box.data.count >= n { box.ok = true; sem.signal(); return }
                 if done || err != nil { box.ok = err == nil || done; sem.signal(); return }
                 read()
@@ -444,7 +465,10 @@ final class CCPoolProxyTests: XCTestCase {
         r.anthropic.set { $0.cutAfterFirstBytes = ["tok-one"] }
         r.setCurrent("one")
         let req = Data("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:\(r.port)\r\ncontent-type: application/json\r\nContent-Length: 2\r\n\r\n{}".utf8)
-        let raw = try XCTUnwrap(CCPoolTestClient.exchange(port: r.port, send: req, timeout: 15))
+        // #1594: the upstream hangs up once the client holds the first bytes; if they never come, no cut, and the 15 s ends it red.
+        let raw = try XCTUnwrap(CCPoolTestClient.exchange(port: r.port, send: req, timeout: 15, onData: { [up = r.up] got in
+            if got.range(of: Data(#"{"type":"message""#.utf8)) != nil { up.releaseCut() }
+        }))
         XCTAssertEqual(r.anthropic.get { $0.seen }, ["Bearer tok-one"], "one upstream attempt, no replay to two")
         let text = String(decoding: raw, as: UTF8.self)
         XCTAssertTrue(text.hasPrefix("HTTP/1.1 200"), "the head went out before the cut: \(text.prefix(80))")

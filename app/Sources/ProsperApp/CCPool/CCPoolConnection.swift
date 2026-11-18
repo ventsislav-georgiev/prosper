@@ -654,7 +654,12 @@ final class CCPoolConnection: @unchecked Sendable {
         case .streaming:
             exchange = nil
             recordRow(ex, done: error == nil)
-            guard error == nil else { return close() }
+            // #1594: a cut upstream still hands the client every frame already queued: sends complete in order, so the
+            // hang-up (FIN, no terminating chunk) and the cancel come after them. A bare close() could drop them.
+            guard error == nil else {
+                return conn.send(content: nil, contentContext: .finalMessage, isComplete: true,
+                                 completion: .contentProcessed { [weak self] _ in self?.close() })
+            }
             conn.send(content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { [weak self] _ in self?.close() })
             learn(ex)
         }
