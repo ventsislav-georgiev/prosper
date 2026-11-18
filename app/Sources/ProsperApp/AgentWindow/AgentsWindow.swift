@@ -2502,6 +2502,7 @@ let agentPaneAreaSpace = "agentPaneArea"
 
 private struct AgentComposerTwoLinesKey: EnvironmentKey { static let defaultValue = false }
 private struct AgentPaneIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
+private struct AgentPaneModelKey: EnvironmentKey { static let defaultValue: AgentWindowModel? = nil }
 
 extension EnvironmentValues {
     /// 5.1: more than one row of panes is shown: the composer row is 44·s.
@@ -2513,6 +2514,11 @@ extension EnvironmentValues {
     var agentPaneID: UUID? {
         get { self[AgentPaneIDKey.self] }
         set { self[AgentPaneIDKey.self] = newValue }
+    }
+    /// #1492 (QA m1): the window model of the pane a view is drawn in, for a terminal's row drop; nil outside a pane.
+    var agentPaneModel: AgentWindowModel? {
+        get { self[AgentPaneModelKey.self] }
+        set { self[AgentPaneModelKey.self] = newValue }
     }
 }
 
@@ -2567,11 +2573,12 @@ struct AgentPaneArea: View {
                         .overlay(alignment: .top) { attentionBar(id, compact: compact) }
                         // #1492: a sidebar row dragged over the pane: the zone it would take; the drop goes to the model.
                         .overlay(alignment: .topLeading) { dropMark(id, f.size) }
-                        .onDrop(of: [.plainText], delegate: AgentPaneDropDelegate(model: model, pane: id, size: f.size))
+                        .onDrop(of: [.agentRow], delegate: AgentPaneDropDelegate(model: model, pane: id, size: f.size))
                         // 13: more than one pane shown: each pane one container, "<title>, pane i of n".
                         .modifier(AgentPaneContainer(label: label))
                         .modifier(AgentPaneProbe(kind: "pane"))
                         .environment(\.agentPaneID, id)
+                        .environment(\.agentPaneModel, model)   // #1492 (QA m1): the terminal's own row drop
                         .environment(\.agentComposerTwoLines, twoLines)
                         .position(x: f.midX, y: f.midY)
                 }
@@ -2697,24 +2704,37 @@ struct AgentPaneArea: View {
     }
 }
 
-/// #1492: a pane as a drop target for a sidebar row's text: every call goes to the model (location in the pane's own
-/// coordinates). The text loads off the main thread, so its closure is @Sendable and hops to the main actor.
+extension UTType {
+    /// #1492 (QA m1, i1): a sidebar row's drag: Prosper's own type and no text, so no text field or other app takes it as
+    /// text and a session name never leaves as text. Not declared in Info.plist: it only travels inside Prosper.
+    static var agentRow: UTType { UTType(exportedAs: "eu.illegible.prosper.agent-row") }
+}
+
+extension NSPasteboard.PasteboardType {
+    /// #1492: the same type on a drag pasteboard (AgentTerminalHostView's own drop).
+    static var agentRow: Self { Self(UTType.agentRow.identifier) }
+}
+
+/// #1492: a pane as a drop target for a sidebar row (its own type only): every call goes to the model (location in the
+/// pane's own coordinates). The token loads off the main thread, so its closure is @Sendable and hops to the main actor.
 struct AgentPaneDropDelegate: DropDelegate {
     let model: AgentWindowModel, pane: UUID, size: CGSize
+    /// QA s1: a copy, never a move (a move takes the dragged item away from where it came from).
+    static var proposal: DropProposal { DropProposal(operation: .copy) }
 
-    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.agentRow]) }
     func dropEntered(info: DropInfo) { model.dropOver(pane, at: info.location, in: size) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
         model.dropOver(pane, at: info.location, in: size)
-        return DropProposal(operation: .move)
+        return Self.proposal
     }
     func dropExited(info: DropInfo) { model.dropExit(pane) }
     func performDrop(info: DropInfo) -> Bool {
         let (model, pane, size, at) = (model, pane, size, info.location)
         model.dropExit(pane)
-        guard let p = info.itemProviders(for: [.plainText]).first else { return false }
-        _ = p.loadObject(ofClass: NSString.self) { @Sendable obj, _ in
-            let token = (obj as? NSString).map { String($0) } ?? ""
+        guard let p = info.itemProviders(for: [.agentRow]).first else { return false }
+        _ = p.loadDataRepresentation(forTypeIdentifier: UTType.agentRow.identifier) { @Sendable data, _ in
+            let token = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
             Task { @MainActor in model.drop(token, into: pane, at: at, in: size) }
         }
         return true
@@ -2725,7 +2745,12 @@ struct AgentPaneDropDelegate: DropDelegate {
 struct AgentRowDrag: ViewModifier {
     let token: String?
     @ViewBuilder func body(content: Content) -> some View {
-        if let token { content.onDrag { NSItemProvider(object: token as NSString) } } else { content }
+        if let token { content.onDrag { Self.item(token) } } else { content }
+    }
+
+    /// QA m1, i1: the token as Prosper's own row type only, never text.
+    static func item(_ token: String) -> NSItemProvider {
+        NSItemProvider(item: Data(token.utf8) as NSData, typeIdentifier: UTType.agentRow.identifier)
     }
 }
 

@@ -747,6 +747,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override init(frame: NSRect) {
         super.init(frame: frame)
         delegate = self
+        registerForDraggedTypes(registeredDraggedTypes + [.agentRow])   // #1492: libghostty's own types and a row's
         setAccessibilityRole(.textArea)
         setAccessibilityLabel("Terminal")
     }
@@ -817,6 +818,49 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func mouseMoved(with event: NSEvent) { if !unfocused { super.mouseMoved(with: event) } }
     override func mouseDragged(with event: NSEvent) { if !unfocused { super.mouseDragged(with: event) } }
     override func mouseExited(with event: NSEvent) { if !unfocused { super.mouseExited(with: event) } }
+
+    // MARK: #1492 (QA m1): a sidebar row dragged over the terminal
+
+    /// The window model and pane this terminal is drawn in (AgentPaneArea's environment); nil outside a pane.
+    weak var dropModel: AgentWindowModel?
+    var dropPane: UUID?
+    /// Tests: each drop handed on to libghostty's own drop (it pastes); nil in the product.
+    var pastedDrop: ((any NSDraggingInfo) -> Void)?
+
+    /// A row's drag over a terminal in a pane: the model, the pane and the point in the terminal's top-left space. Nil
+    /// (any other drag, or no pane): libghostty's drop as before (files, links, text and images paste).
+    private func rowDrop(_ s: any NSDraggingInfo) -> (AgentWindowModel, UUID, CGPoint)? {
+        guard let m = dropModel, let pane = dropPane, s.draggingPasteboard.availableType(from: [.agentRow]) != nil
+        else { return nil }
+        let p = convert(s.draggingLocation, from: nil)
+        return (m, pane, CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard case let (m, pane, p)? = rowDrop(sender) else { return super.draggingEntered(sender) }
+        m.dropOver(pane, at: p, in: bounds.size)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard case let (m, pane, p)? = rowDrop(sender) else { return super.draggingUpdated(sender) }
+        m.dropOver(pane, at: p, in: bounds.size)
+        return .copy
+    }
+
+    /// Only this pane's indicator goes. No super: libghostty keeps no drag state and NSView need not implement it.
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        if let dropPane { dropModel?.dropExit(dropPane) }
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        if case let (m, pane, p)? = rowDrop(sender) {
+            let token = sender.draggingPasteboard.data(forType: .agentRow).map { String(decoding: $0, as: UTF8.self) }
+            return m.drop(token ?? "", into: pane, at: p, in: bounds.size)
+        }
+        pastedDrop?(sender)
+        return super.performDragOperation(sender)
+    }
 
     // MARK: Pasteboard (⌘C/⌘V/⌘A arrive through the Edit menu)
 
@@ -1001,6 +1045,8 @@ struct AgentTerminalRepresentable: NSViewRepresentable {
     func updateNSView(_ v: AgentTerminalHostView, context: Context) {
         v.owner = controller
         controller.view = v
+        v.dropModel = context.environment.agentPaneModel   // #1492
+        v.dropPane = context.environment.agentPaneID
         v.show(screen as? AgentGhosttyScreen)
     }
 }
