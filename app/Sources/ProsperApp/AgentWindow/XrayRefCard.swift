@@ -455,8 +455,13 @@ extension XrayPanelModel {
     static let refNotARef = "dch did not read this as a ref"
     static let refTooLong = "Too long to look up here"
     static let refFailed = "The ref read failed"
+    /// #1568: a remote --xray's exit 6 (dch README v1.99.0:1267-1269: the host's hello lacks the `xray` token).
+    static let refNoXray = "The host's dch has no X-ray: needs dch serve 1.55.0+"
+    /// #1568 (K4.1): a remote hover card's note: it runs no read; Pin runs the full one.
+    static let pinForPassages = "Pin for passages"
 
-    /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; else failed.
+    /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; #1568: a remote 6: the
+    /// host's dch has no X-ray; else failed.
     /// #1560: a `scope` "all" read adds its extra groups to the card's context (XrayRefContext.with(others:)).
     /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent). #1567: not a `cached` one (no spawn); the
     /// context says it is light (its footer's end slot).
@@ -470,6 +475,7 @@ extension XrayPanelModel {
             refContext = scope == "project" ? c : refContext?.with(others: c)
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef
+        case 6 where target.dir == nil: refNote = Self.refNoXray
         case _ where unreached(r.status): refNote = "host unreachable"
         default: refNote = Self.refFailed
         }

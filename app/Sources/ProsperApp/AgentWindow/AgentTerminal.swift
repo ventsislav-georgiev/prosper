@@ -354,15 +354,15 @@ final class AgentTerminalController: ObservableObject {
         begin()
     }
 
-    /// #1559 (X-T a): pane focus. The window's focused pane holds its local session's follow (XrayFollows.focus), whose
-    /// refs mark the grid and answer a Cmd-click; no session, a remote one or gate B off holds none (the window's follow
-    /// is detached). The terminal that held the window's focus before loses its marks (blur). An unfocused pane changes
+    /// #1559 (X-T a): pane focus. The window's focused pane holds its session's follow (XrayFollows.focus), whose
+    /// refs mark the grid and answer a Cmd-click; no session or gate B off holds none (the window's follow is detached).
+    /// #1568 (X-R a): a remote session's too, keyed "host:name" (XrayRefLink.target). The terminal that held the window's focus before loses its marks (blur). An unfocused pane changes
     /// nothing: its attach after the rest must not take the focused pane's follow. No view or window yet: nothing
     /// (viewDidMoveToWindow asks again).
     func followFocus() {
         guard paneFocused(), let view, let w = view.window else { return }
         let id = ObjectIdentifier(w)
-        let target = XrayRefLink.decorate() && remoteHost == nil ? key.map { XrayTarget(name: $0.name, dir: $0.dir) } : nil
+        let target = XrayRefLink.decorate() ? key.flatMap(XrayRefLink.target) : nil
         if let old = Self.focusHolders[id]?.terminal, old !== self { old.view?.marks.follow = nil }
         Self.focusHolders[id] = FocusHolder(terminal: self)
         view.marks.follow = focusFollow(target, id)
@@ -970,6 +970,19 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         return super.performKeyEquivalent(with: event)
     }
 
+    /// #1568: a plain Esc while a card is up closes it (XrayGridMarksView.escape) and goes no further; with no card it
+    /// goes on to libghostty and the pty as before.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {
+            return
+        }
+        passedKey?(event)
+        super.keyDown(with: event)
+    }
+
+    /// Tests: each key handed on to libghostty (keyDown); nil in the product.
+    var passedKey: ((NSEvent) -> Void)?
+
     // MARK: #1357 (P9): a Cmd-click on a ref on the grid
 
     /// The grid as libghostty last laid it out (terminalDidResize): a click's cell.
@@ -1002,11 +1015,11 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         super.mouseDown(with: event)
     }
 
-    /// The ref under top-left point `p` of a local session's grid opens its card. False: gate B off, a remote row, no
-    /// grid yet, off the grid, or no ref there.
+    /// The ref under top-left point `p` of the session's grid opens its card (#1568: a remote row's too). False: gate B
+    /// off, no grid yet, off the grid, or no ref there.
     @discardableResult
     func refClick(at p: CGPoint) -> Bool {
-        guard XrayRefLink.decorate(), let owner, owner.remoteHost == nil, let key = owner.key, let g = gridMetrics,
+        guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics,
               let c = Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2) else { return false }
         let lines = (viewportText() ?? "").components(separatedBy: "\n")
         guard c.row < lines.count else { return false }

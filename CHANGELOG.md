@@ -1951,6 +1951,10 @@ tag from the now-released section and put it on the new top draft.
 - X-ray ref cards open instantly when you look up the same ref again within 30 seconds, and the
   card's footer now shows how many times the ref is on screen, in this session and in other
   sessions, while it is still searching. (#1567)
+- X-ray now works on remote sessions in the Terminal: refs get their dotted marks, hovering shows
+  the cached card without running anything on the host (Pin reads the full card over the open
+  connection), a Command-click opens the card, other sessions in a remote card show their host, a
+  host whose dch has no X-ray says so, and Esc in the terminal closes an open card. (#1568)
 
 ## v2.174.0
 

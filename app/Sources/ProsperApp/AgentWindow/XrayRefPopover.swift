@@ -314,7 +314,7 @@ struct XrayRefPopover: View {
     /// Today's list (a dch before 1.100.0): per session, each mention's line.
     @ViewBuilder func flatMentions(_ groups: [XrayRefContext.Group], _ c: XrayRefContext) -> some View {
         ForEach(Array(groups.enumerated()), id: \.offset) { _, g in
-            faint(g.session).accessibilityAddTraits(.isHeader)
+            faint(Self.groupTitle(g.session, own: c.session, target: panel.target)).accessibilityAddTraits(.isHeader)
             ForEach(Array(g.mentions.enumerated()), id: \.offset) { _, m in
                 // Return or a click: this session's mention jumps (jumpRef); another session's does nothing
                 Button { panel.jumpRef(m, in: c) } label: {
@@ -325,6 +325,14 @@ struct XrayRefPopover: View {
                 .accessibilityLabel("Mention: \(m.line)")
             }
         }
+    }
+
+    /// #1568 (4.5): a remote card's other-session group names its host ("example-host:api-qa"): those sessions are the
+    /// host's, not this Mac's. A local card's, and the card's own session's, as dch sent it.
+    /// shortcut: the host is the target name before its first ":"; a host holding ":" (IPv6) shows cut, key it by row if seen.
+    static func groupTitle(_ session: String, own: String?, target: XrayTarget) -> String {
+        guard target.dir == nil, session != own, let i = target.name.firstIndex(of: ":") else { return session }
+        return OutsideText.shown(String(target.name[..<i])) + ":" + session
     }
 
     /// A labelled field: the label faint, the value plain text.

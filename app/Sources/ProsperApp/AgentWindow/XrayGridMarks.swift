@@ -13,6 +13,7 @@ import SwiftUI
 // #1565 (X-T b, plan 905 phase B, spec 6.2): the overlay's own tracking area (no hitTest needed: AppKit sends a tracking
 // area's moves to its owner) feeds XrayHover, the hover card's dwell, settle and close items. Moves, entries and exits
 // stop here (never passed on: the terminal's own tracking area already has them).
+// #1568 (X-R a, plan 905 phase G): a remote pane too, its follow keyed "host:name"; its hover runs nothing (K4.1).
 
 @MainActor
 final class XrayGridMarksView: NSView {
@@ -104,9 +105,9 @@ final class XrayGridMarksView: NSView {
         if now != marks { marks = now; needsDisplay = true }
     }
 
-    /// Gate B on, a live local session in the window's focused pane, the pane and its window on screen.
+    /// Gate B on, a live session in the window's focused pane (#1568: a remote one too), the pane and its window on screen.
     func shown() -> Bool {
-        guard XrayRefLink.decorate(), let host, let owner = host.owner, owner.phase == .live, owner.remoteHost == nil,
+        guard XrayRefLink.decorate(), let host, let owner = host.owner, owner.phase == .live,
               owner.paneFocused(), !host.isHiddenOrHasHiddenAncestor else { return false }
         return windowShown(host.window)
     }
@@ -139,9 +140,14 @@ final class XrayGridMarksView: NSView {
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) { hover.point(nil) }
 
-    /// #1565: Esc in the terminal closes any card and kills its read. shortcut: AgentTerminalHostView's keyDown calls
-    /// this once #1566 frees AgentTerminal.swift; until then the card's own Esc (onExitCommand) is the path.
-    func escape() { hover.close(all: true) }
+    /// #1565: Esc in the terminal closes any card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
+    /// (no hover card, and no card of the hover's panel up) leaves the Esc to the pty.
+    @discardableResult
+    func escape() -> Bool {
+        guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }
+        hover.close(all: true)
+        return true
+    }
 
     /// #1565: pane hide closes any card.
     override func viewDidHide() {

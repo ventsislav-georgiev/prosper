@@ -61,7 +61,8 @@ enum XrayRefLink {
     static func panel(_ pane: UUID, _ target: XrayTarget, _ refs: XrayRefs) -> XrayPanelModel {
         if let m = XrayPanels.shared.open[pane], m.target == target { return m }
         let m = XrayPanelModel(target: target, tab: .refs)
-        (m.dch, m.run, m.refs) = (XrayPanels.dch(), XrayPanels.run, refs)
+        // #1568: a remote target's --ref goes over the warm host:name connection (XrayRequests; cold when busy or failed)
+        (m.dch, m.run, m.refs) = (XrayPanels.dch(), XrayPanels.shared.requests.run(for: target, cold: XrayPanels.run), refs)
         XrayPanels.shared.wire(m, pane)
         return m
     }
@@ -69,11 +70,19 @@ enum XrayRefLink {
     /// #1357 (P9): the refs for `key` when it is the window's focused pane's session (a Cmd-click reaches only the
     /// focused pane: the window's first-click rule takes a focusing down), its target and that pane. #1559: from the
     /// follow that pane's focus attached (XrayFollows.focus), not the transcript, so a shell or Codex pane has them too.
-    /// Nil: gate B off, no window, another session, a remote row (never focused into a follow), or no snapshot yet.
+    /// Nil: gate B off, no window, another session, or no snapshot yet. #1568: a remote row's follow is "host:name".
     static func terminalRefs(_ w: AgentsNSWindow?, _ key: AgentSessionKey?) -> (refs: XrayRefs, target: XrayTarget, pane: UUID)? {
         guard decorate(), let w, let key, let m = w.model, let f = XrayPanels.shared.follows.focused(in: ObjectIdentifier(w)),
-              f.target == XrayTarget(name: key.name, dir: key.dir), let refs = f.state?.refs else { return nil }
+              f.target == target(key), let refs = f.state?.refs else { return nil }
         return (refs, f.target, m.layout.focused)
+    }
+
+    /// #1568 (X-R a): a terminal session's X-ray target: a remote row's "host:name" with no dir (dch dials the host), a
+    /// local one's name and socket dir. Nil: no name, or a host or name dch would read as a flag (XrayTarget.of's rule).
+    static func target(_ key: AgentSessionKey) -> XrayTarget? {
+        guard !key.name.isEmpty, !key.name.hasPrefix("-") else { return nil }
+        guard let host = AgentTerminalSpawn.remoteHost(key) else { return XrayTarget(name: key.name, dir: key.dir) }
+        return host.isEmpty || host.hasPrefix("-") ? nil : XrayTarget(name: "\(host):\(key.name)", dir: nil)
     }
 
     /// #1357: a Cmd-click on grid column `column` of the viewport line `line`: the ref there opens its card. False: none.
@@ -110,8 +119,17 @@ extension XrayPanelModel {
 
     /// #1565 (6.2, 6.3): the hover card's one light read (XrayPanels.budget()); a refused text says why as openRef's
     /// does. The read in flight, nil when none ran.
+    /// #1568 (K4.1): a remote target's hover runs nothing: the window's cached answer (XrayRefResults, a full one first)
+    /// when there is one, and "Pin for passages" (Pin runs the full read).
     @discardableResult
     func hoverRead(_ e: XrayRefs.Entry) -> Task<Void, Never>? {
+        if target.dir == nil {
+            if let hit = refResults()?.get(XrayRefResults.Key(target: target, ref: e.text, light: true, scope: "project")) {
+                takeRef((0, hit.out), text: e.text, light: hit.light, cached: true)
+            }
+            refNote = Self.pinForPassages
+            return nil
+        }
         let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text   // as openRef sends it
         guard panels?.runRef(sent, shown: e.text, budget: XrayPanels.budget(), for: self) == true else {
             refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef

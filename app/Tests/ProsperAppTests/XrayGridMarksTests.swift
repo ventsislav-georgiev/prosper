@@ -163,7 +163,7 @@ final class XrayGridMarksTests: XCTestCase {
             let far = rig(AgentSessionKey(dir: "@example-host", name: "api"))
             far.v.marks.follow = r.v.marks.follow
             far.v.marks.place()
-            XCTAssertTrue(far.v.marks.marks.isEmpty, "remote row")
+            XCTAssertEqual(Self.keys(far.v).count, 2, "#1568: a remote row marks too")
         }
     }
 

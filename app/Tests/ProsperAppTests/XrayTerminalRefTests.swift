@@ -68,8 +68,8 @@ final class XrayTerminalRefTests: XCTestCase {
         return (v, t)
     }
 
-    /// Red if refClick reads another row or column than the one under the point (no window: scale 2), runs for a remote
-    /// row, or runs with gate B off.
+    /// Red if refClick reads another row or column than the one under the point (no window: scale 2), skips a remote
+    /// row (#1568: it opens its card too), or runs with gate B off.
     func testRefClickHandsTheRowAndColumnUnderThePoint() {
         let opened = Opened()
         let (v, t) = view(local, opened)
@@ -89,9 +89,10 @@ final class XrayTerminalRefTests: XCTestCase {
         let far = Opened()
         let (rv, rt) = view(remote, far)
         withExtendedLifetime(rt) {
-            F.gateOn { XCTAssertFalse(rv.refClick(at: CGPoint(x: 4 + 8 * 4 + 2, y: 2 + 17 + 3))) }
+            F.gateOn { XCTAssertTrue(rv.refClick(at: CGPoint(x: 4 + 8 * 4 + 2, y: 2 + 17 + 3))) }
         }
-        XCTAssertEqual(far.calls.count, 0, "a remote row's grid opens no card")
+        XCTAssertEqual(far.calls.count, 1, "#1568: a remote row's grid opens its card")
+        XCTAssertEqual(far.calls.last?.key, remote)
     }
 
     /// Red if a Cmd-down skips refClick or a plain down runs it. The NSEvent is built and handed to the view, never posted.
