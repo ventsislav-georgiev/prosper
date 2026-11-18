@@ -39,13 +39,21 @@ final class ManagedConfigPinTests: XCTestCase {
         XCTAssertTrue(mc.status(owner: env.owner).isEmpty, "nothing recorded")
     }
 
-    /// The real F_GETPATH of the held folder spells /private/var while the resolved path spells /var (the tempDir is
-    /// under /var, a link to /private/var); the commit normalises both the same way, so the normal commit lands.
+    /// The real F_GETPATH of the held folder names the real folder while the roots spell it through a link this row makes
+    /// (so it holds under any temp root, /var link or not); the commit normalises both the same way, so the normal commit lands.
     func testAHeldFolderWithItsOwnPathCommits() async throws {
         let env = makeMCEnv()
-        try Data(Self.original).write(to: env.claudeMD)
+        let fm = FileManager.default
+        let real = env.root.appendingPathComponent("real-home", isDirectory: true)
+        try fm.createDirectory(at: real.appendingPathComponent("claude", isDirectory: true), withIntermediateDirectories: true)
+        let link = env.root.appendingPathComponent("link-home")
+        try fm.createSymbolicLink(at: link, withDestinationURL: real)
+        let claude = link.appendingPathComponent("claude", isDirectory: true)
+        let md = claude.appendingPathComponent("CLAUDE.md")
+        try Data(Self.original).write(to: md)
+        let roots = ManagedConfigRoots(claude: claude, configHome: env.mc.roots.configHome, stateDir: env.mc.roots.stateDir)
         let seen = Paths()
-        let mc = ManagedConfig(roots: env.mc.roots, consent: env.consent, writer: ManagedConfigPOSIXWriter(), pinnedDirPath: { fd in
+        let mc = ManagedConfig(roots: roots, consent: env.consent, writer: ManagedConfigPOSIXWriter(), pinnedDirPath: { fd in
             let p = ManagedConfig.path(of: fd)
             seen.add(p)
             return p
@@ -54,9 +62,9 @@ final class ManagedConfigPinTests: XCTestCase {
         XCTAssertEqual(r.status, .done, r.message)
         XCTAssertEqual(seen.values.count, 1)
         let held = try XCTUnwrap(seen.values.last ?? nil)
-        XCTAssertTrue(held.hasPrefix("/private/"), "the premise: the held path spells the /private the resolved one drops: \(held)")
-        XCTAssertEqual(ManagedConfig.dropPrivatePrefix(held), env.claude.resolvingSymlinksInPath().path)
-        XCTAssertTrue(env.read(env.claudeMD)?.contains("Follow the kit rules.") ?? false)
+        XCTAssertTrue(held != claude.path && !held.contains("link-home"), "the premise: the held path is the real folder, not the spelling through the link: \(held)")
+        XCTAssertEqual(ManagedConfig.dropPrivatePrefix(held), claude.resolvingSymlinksInPath().path)
+        XCTAssertTrue((try? String(contentsOf: md, encoding: .utf8))?.contains("Follow the kit rules.") ?? false)
     }
 
     // MARK: R1431-s1, spelling; R1431-i2, no link followed

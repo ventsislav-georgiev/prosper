@@ -263,7 +263,15 @@ final class TextViewerDocumentTests: XCTestCase {
     /// FACT: resolve's bound is 32 readlinks: 31 links get an identity. macOS MAXSYMLINKS is 32, so the plain open of a 32-link
     /// chain fails with ELOOP (resolve refused it first, so no retry): the load answers .unreadable, exactly.
     func testAChainOfThirtyTwoLinksIsUnreadableAndThirtyOneLoad() throws {
-        let dir = tempDir("tv-doc-r7d")
+        // The path has exactly one link of its own (made here), so the count is the same under any temp root.
+        let base = tempDir("tv-doc-r7d")
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        XCTAssertNotNil(realpath(base.path, &buf), "the premise: the root resolves, so the one link below is the only one in the path")
+        let realBase = URL(fileURLWithPath: String(cString: buf), isDirectory: true)
+        let realDir = realBase.appendingPathComponent("real", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        let dir = realBase.appendingPathComponent("via", isDirectory: true)
+        XCTAssertEqual(symlink("real", dir.path), 0)
         _ = try file("real.txt", Array("rrr".utf8), in: dir)
         for n in [31, 32] {
             var prev = "real.txt"
