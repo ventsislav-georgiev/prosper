@@ -55,10 +55,12 @@ final class XrayExtensionCardTests: XCTestCase {
         let actions = (0..<6).map { ["label": "Open \($0)", "url": "https://example.com/acme/\($0)"] }
             + [["label": "Run", "url": "file:///etc/passwd"], ["label": "Shell", "run": "x"]]
         let o: [String: Any] = ["title": String(repeating: "t", count: 300) + "\u{202E}", "subtitle": String(repeating: "s", count: 300),
-                                "body": String(repeating: "b\u{0007}\n", count: 9000), "actions": actions]
+                                "body": String(repeating: "bbbbbbbb\u{0007}\n", count: 1500), "actions": actions]
         let raw = String(decoding: try JSONSerialization.data(withJSONObject: o), as: UTF8.self)
+        // the body is past 8 KB once cleaned, the answer under resultBytes (a JSON "\u0007" is 6 bytes): else it is refused unread
+        XCTAssertLessThan(raw.utf8.count, XrayExtensionRefs.resultBytes)
         guard case .card(let c) = XrayExtensionRefs.outcome(raw) else { return XCTFail("no card") }
-        XCTAssertEqual(c.title, String(repeating: "t", count: 120))
+        XCTAssertEqual(c.title, String(repeating: "t", count: 119) + "\u{2026}")   // OutsideText.shown's cap: max - 1 and an ellipsis
         XCTAssertEqual(c.subtitle.count, 200)
         XCTAssertLessThanOrEqual(c.body.utf8.count, 8 * 1024)
         XCTAssertFalse(c.body.contains("\u{0007}"))
