@@ -306,6 +306,19 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(w.todos?.items.map(\.text), ["a"])
     }
 
+    /// #1270: QA's wording for the partial note, and the note's only condition is todos.partial.
+    func testVerbosityPartialNoteWordingAndNeverOnTheStorePath() throws {
+        XCTAssertEqual(AgentTodosList.partialNote,
+                       "Partial list: tasks from earlier in the session are not loaded, so some may be missing or out of date.")
+        let dir = tempDir().appendingPathComponent("tasks/s")
+        try writeStore(dir, [("1", "one", "pending")])
+        var a = asm(taskCreate("c1", "one", n: 1))
+        a.fromStart = false
+        XCTAssertEqual(a.todos?.partial, true, "no store, events not from the start: the note shows")
+        a.setTaskStore(AgentTaskStore.read(dir))
+        XCTAssertEqual(a.todos?.partial, false, "the store path never shows the note")
+    }
+
     // MARK: Round 2d (QA #657 r3 INFO-2): only regular files, bounded, the lowest ids
 
     func testVerbosityTaskStoreReadsOnlyRegularFilesWithinTheCap() throws {

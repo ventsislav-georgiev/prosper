@@ -3518,6 +3518,8 @@ struct AgentTodosList: View {
     let todos: AgentTodos
     /// About 8 one-line rows; a longer list scrolls, so it never pushes the prompt pane off-screen.
     static var maxHeight: CGFloat { sz(8 * 16) }
+    /// #1270 (QA #657 r3): shown only for a partial list (no task store, history not loaded).
+    static let partialNote = "Partial list: tasks from earlier in the session are not loaded, so some may be missing or out of date."
     var body: some View {
         ScrollView { list }
             .frame(maxHeight: Self.maxHeight)
@@ -3527,7 +3529,7 @@ struct AgentTodosList: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: sz(2)) {
             if todos.partial {
-                Text("Tasks from the loaded part of the transcript only")
+                Text(Self.partialNote)
                     .font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
             }
             ForEach(Array(todos.rows.enumerated()), id: \.offset) { _, t in

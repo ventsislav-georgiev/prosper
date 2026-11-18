@@ -1889,6 +1889,8 @@ tag from the now-released section and put it on the new top draft.
   usage line on the island. (#1552)
 - Turning off an extension that had just asked to keep the Mac awake with the lid closed now always
   lets the Mac sleep again, even when that request was still being applied. (#1549)
+- Agent Sessions: the task list note for a partly loaded session now reads "Partial list: tasks from
+  earlier in the session are not loaded, so some may be missing or out of date.". (#1270)
 
 ## v2.174.0
 

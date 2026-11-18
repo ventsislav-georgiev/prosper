@@ -19,7 +19,7 @@ struct AgentTodos: Equatable, Sendable {
     }
     /// The whole list, in creation order.
     var items: [Item]
-    /// Seen in the loaded part of the transcript only (no task store, history not loaded):
+    /// Seen in the loaded part of the transcript only (no task store, history not loaded; the list shows AgentTodosList.partialNote):
     /// the count is unknown, so the chip shows none.
     var partial = false
     /// The cards the chip stands for: hidden at Default and Focused unless they failed.
@@ -144,7 +144,8 @@ struct AgentTodos: Equatable, Sendable {
 
 /// #821 (QA #657 F2): Claude Code's own task list, `<config>/tasks/<list id>/<id>.json`, read
 /// only. A session's list id is its session id unless CLAUDE_CODE_TASK_LIST_ID is set or the
-/// session is in a team (Prosper cannot see either; those lists fall back to the transcript).
+/// session is in a team. Neither is in the transcript lines or dch's row (#1270: only sessionId,
+/// transcript_path), so those lists fall back to the transcript.
 enum AgentTaskStore {
     /// `<config>/projects/<slug>/<file>.jsonl` → `<config>/tasks/<session id>`; nil for a
     /// transcript somewhere else.
