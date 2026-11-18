@@ -106,6 +106,7 @@ final class XrayPanels: ObservableObject {
         m.fromDch = { Self.chaptersRead(pane, target) }
         m.openURL = { Self.model(pane)?.openURL($0) }
         m.cwd = { Self.cwd(pane, target) }
+        m.refResults = { XrayRefResults.on() ? Self.window(pane).map { XrayRefResults.of($0) } : nil }   // #1567
     }
 
     /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
@@ -208,6 +209,8 @@ final class XrayPanelModel: ObservableObject {
     /// #1417: the Refs row whose card was asked for last; the panels whose --ref read it runs (XrayPanels.open wires it).
     @Published private(set) var refCard: XrayRefs.Entry?
     weak var panels: XrayPanels?
+    /// #1567: the window's --ref result cache (XrayPanels.wire); nil: none, every ask reads (rows set it).
+    var refResults: @MainActor () -> XrayRefResults? = { nil }
     /// #1389: this pane reads dch's chapters (XrayPanels.chaptersRead); false: never runs that read.
     var fromDch: () -> Bool = { false }
     /// #1355: the Search tab is there (false once dch answered exit 1, does not know --search, or 6, refused); the

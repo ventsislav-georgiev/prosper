@@ -100,6 +100,7 @@ struct XrayRefPopover: View {
                 VStack(alignment: .leading, spacing: sz(6)) { tabBody }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let c = context { footerRow(c) }
             if let n = panel.refNote { faint(n) }
             HStack(spacing: sz(8)) {
                 if Self.openURL(entry) != nil { Button("Open", action: openLink).accessibilityLabel("Open \(entry.text)") }
@@ -115,6 +116,45 @@ struct XrayRefPopover: View {
         .frame(width: Self.size.width, height: Self.size.height, alignment: .topLeading)
         .onExitCommand(perform: escape)
         .onHover { inside in hover?.onCard(inside) }   // #1565: the pointer on the card keeps it open
+    }
+
+    static let searching = "searching more\u{2026}"
+    static let clickForAll = "click for all"
+
+    /// #1567 (spec 5.6, dch README v1.99.0:1678-1683, :1744-1747): the footer slots. "N on screen" (the grid's marks of
+    /// this ref: a hover card's, XrayHover.onScreen), the session's count, the other sessions' ("9 in 3 others": dch's
+    /// project count, its project_sessions; none at 0 sessions, README :1683), "searching more…" while no done line
+    /// came, and a light read that ended partial "≥N · click for all" (N: this session's and the others'). "≥" while partial.
+    static func footer(_ c: XrayRefContext, onScreen: Int) -> [String] {
+        let ge = c.partial ? "\u{2265}" : ""
+        var out = onScreen > 0 ? ["\(onScreen) on screen"] : []
+        if let n = c.rawCounts {
+            out.append("\(ge)\(n.session) session")
+            if n.projectSessions > 0 { out.append("\(ge)\(n.project) in \(n.projectSessions) others") }
+        }
+        if !c.done {
+            out.append(searching)
+        } else if c.light, c.partial, let n = c.rawCounts {   // the parse bounds each count to Int32.max: no overflow
+            out.append("\u{2265}\(n.session + n.project) \u{00B7} \(clickForAll)")
+        }
+        return out
+    }
+
+    /// #1567: the footer in one faint line; a hover card's "click for all" pins it (today's full card).
+    @ViewBuilder func footerRow(_ c: XrayRefContext) -> some View {
+        let slots = Self.footer(c, onScreen: hover.map { $0.onScreen(entry.key) } ?? 0)
+        HStack(spacing: sz(8)) {
+            ForEach(slots, id: \.self) { s in
+                if hover != nil, s.hasSuffix(Self.clickForAll) {
+                    Button(action: pin) { Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.blue) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Pin the card for \(entry.text): \(s)")
+                } else {
+                    faint(s)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     /// The #821 capsule strip, as the panel's: a tab group for VoiceOver, the shown tab selected.

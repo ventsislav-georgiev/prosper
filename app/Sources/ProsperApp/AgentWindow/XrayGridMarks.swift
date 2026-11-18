@@ -64,6 +64,7 @@ final class XrayGridMarksView: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                                        owner: self, userInfo: nil))
         hover.after = { [weak self] in self?.after($0, $1) }
+        hover.onScreen = { [weak self] k in self?.marks.filter { $0.key == k }.count ?? 0 }   // #1567: the card's footer
         hover.ready = { [weak self] in self?.hoverReady() == true }
         hover.panel = { [weak self] in
             guard let self, let key = host?.owner?.key else { return nil }
@@ -204,6 +205,8 @@ final class XrayHover {
     var ready: @MainActor () -> Bool = { false }
     /// The panel the card shows in and the pane's refs (XrayRefLink.hoverPanel); nil: no card.
     var panel: @MainActor () -> (panel: XrayPanelModel, refs: XrayRefs)? = { nil }
+    /// #1567: the grid's marks of a ref key now (XrayGridMarksView.marks): the card's "N on screen".
+    var onScreen: @MainActor (String) -> Int = { _ in 0 }
 
     /// The mark under the pointer.
     private(set) var over: String?

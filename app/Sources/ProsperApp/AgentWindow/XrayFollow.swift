@@ -114,6 +114,7 @@ final class XrayFollow: ObservableObject {
                 continue
             }
             guard o["schema"] as? Int == 1 else { continue }
+            XrayRefResults.followed(target, o)   // #1567: a ref, evict or reset drops the windows' cached --ref answers
             // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
             if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; changed = true; continue }
             if o["reset"] != nil {

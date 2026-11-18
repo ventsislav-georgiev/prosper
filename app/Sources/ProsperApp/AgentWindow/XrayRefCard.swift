@@ -217,6 +217,12 @@ struct XrayRefContext: Equatable {
     var othersCount: String?
     let tasks: [XrayTasks.Task]
     let memory: [XrayMemory.Item]
+    /// #1567: the footer's facts: dch's counts as sent, a done line came, every count a lower bound (XrayRefStream), and
+    /// the answer came from a light read (takeRef sets it; a full result serving a hover is not light).
+    let rawCounts: XrayRefStream.Counts?
+    let done: Bool
+    let partial: Bool
+    var light = false
 
     static let commandMark = "your define_command"
     static let othersCountPrefix = "All projects"
@@ -276,6 +282,7 @@ struct XrayRefContext: Equatable {
             ["This session \(ge)\(c.session)", "This project \(ge)\(c.project) in \(c.projectSessions) other sessions"]
                 + (c.all.map { ["\(Self.othersCountPrefix) \(ge)\($0) in \(c.allSessions ?? 0) other sessions"] } ?? [])
         } ?? []
+        (rawCounts, done, partial) = (s.counts, s.done, s.partial)
         let q = ref
         self.tasks = (tasks?.tasks ?? []).filter { t in
             [t.title, t.note ?? "", t.label].contains { $0.localizedCaseInsensitiveContains(q) }
@@ -372,6 +379,8 @@ extension XrayPanels {
     /// local text goes on stdin, where dch counts its newline in the 256 bytes: over 255 runs nothing (a remote keeps 256).
     /// shortcut: one --ref for the app, not per window; the card is a transient popover (a click or key in another
     /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
+    /// #1567: the window's result cache (m.refResults, XrayRefResults) does not need it: a hit within 30 s lands at once
+    /// with no spawn and no read in flight; an exit-0 answer goes into the cache of the window that asked.
     @discardableResult
     /// #1565: `budget` set: the hover card's light read (lightArgs), whose `first.elapsed_ms` goes to spawnCosts.
     func runRef(_ text: String, shown: String? = nil, scope: String = "project", budget: Int? = nil, for m: XrayPanelModel) -> Bool {
@@ -383,10 +392,17 @@ extension XrayPanels {
         closeRef()
         if scope == "project" { m.refContext = nil }   // Other projects adds to the card's context, never clears it
         m.refNote = nil
+        let cache = m.refResults(), key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: budget != nil, scope: scope)
+        if let hit = cache?.get(key) {   // #1567: no spawn; a light answer never reaches a full ask (get)
+            Self.othersRead = nil
+            m.takeRef((0, hit.out), text: shown ?? text, scope: scope, light: hit.light, cached: true)
+            return true
+        }
         let a = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope), env = m.target.env
-        refReading = Task { [weak m] in
+        refReading = Task { [weak m, weak cache] in
             let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
+            if r.status == 0 { cache?.put(key, r.out) }   // #1567: only an answer the card shows as a context
             m.takeRef(r, text: shown ?? text, scope: scope, light: budget != nil)
         }
         Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
@@ -442,13 +458,15 @@ extension XrayPanelModel {
 
     /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; else failed.
     /// #1560: a `scope` "all" read adds its extra groups to the card's context (XrayRefContext.with(others:)).
-    /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent).
-    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project", light: Bool = false) {
+    /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent). #1567: not a `cached` one (no spawn); the
+    /// context says it is light (its footer's end slot).
+    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project", light: Bool = false, cached: Bool = false) {
         switch r.status {
         case 0:
             let s = XrayRefStream.parse(r.out)
-            if light { XrayPanels.spent(s.first?.elapsed) }
-            let c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
+            if light, !cached { XrayPanels.spent(s.first?.elapsed) }
+            var c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
+            c.light = light
             refContext = scope == "project" ? c : refContext?.with(others: c)
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef
