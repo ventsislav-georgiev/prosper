@@ -105,4 +105,19 @@ final class XrayRefsParseTests: XCTestCase {
         let o = try XCTUnwrap(XrayRefs.parse(Self.object(refs: old)))
         XCTAssertEqual(o.ordered.map(\.text), ["#13", "#12", "#11"], "no last_offset (dch < 1.62.0): by count, then later first")
     }
+
+    /// #1560 (dch README v1.99.0 "other_projects" :1461, :1468-1470): read as a bounded int, 0 when missing, negative or
+    /// not a number (red with the field unread: 3 reads 0).
+    func testOtherProjectsIsReadBounded() throws {
+        func with(_ v: String?) throws -> XrayRefs {
+            let base = String(decoding: Self.object(refs: "[]"), as: UTF8.self)
+            let o = v.map { base.replacingOccurrences(of: #""dropped_keys":0}"#, with: #""dropped_keys":0,"other_projects":"# + $0 + "}") } ?? base
+            return try XCTUnwrap(XrayRefs.parse(Data(o.utf8)))
+        }
+        XCTAssertEqual(try with("3").otherProjects, 3)
+        XCTAssertEqual(try with(nil).otherProjects, 0, "a dch before the field")
+        XCTAssertEqual(try with("0").otherProjects, 0)
+        XCTAssertEqual(try with("-4").otherProjects, 0)
+        XCTAssertEqual(try with(#""3""#).otherProjects, 0, "a string is no count")
+    }
 }

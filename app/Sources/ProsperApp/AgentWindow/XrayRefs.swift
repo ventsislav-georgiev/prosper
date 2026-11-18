@@ -31,6 +31,8 @@ struct XrayRefs: Equatable {
     var complete: Bool
     var why: String?
     var sessionID: String?
+    /// #1560 (dch README "other_projects"): other sessions in other project dirs, what `--ref --scope all` would add.
+    var otherProjects = 0
 
     /// Caps: dch holds at most 2000 keys (README "refs"); a ref's text is 1-256 bytes (README "--ref"); a title 120
     /// scalars. A row past them is dropped (rows past maxRows count in droppedKeys).
@@ -65,7 +67,8 @@ struct XrayRefs: Equatable {
         let over = list.count - entries.count
         return XrayRefs(entries: entries, droppedKeys: (int(o["dropped_keys"]) ?? 0) + over,
                         complete: o["complete"] as? Bool != false, why: (o["why"] as? String).map { OutsideText.shown($0, max: 40) },
-                        sessionID: (o["session_id"] as? String).map { OutsideText.shown($0, max: 64) })
+                        sessionID: (o["session_id"] as? String).map { OutsideText.shown($0, max: 64) },
+                        otherProjects: int(o["other_projects"]) ?? 0)
     }
 
     /// dch's Refs order: latest mention first (last_offset), then count, then later in dch's list first; terms after the

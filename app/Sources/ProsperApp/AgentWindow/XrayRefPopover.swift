@@ -15,6 +15,8 @@ struct XrayRefPopover: View {
     /// The pasteboard Copy writes (Pasteboard.swift's; rows hand a scratch one).
     var pasteboard: NSPasteboard = Pasteboard.general
     @State var tab: Tab = .definition
+    /// #1560: the Mentions tab's Other projects row, collapsed until clicked.
+    @State var othersOpen = false
 
     /// OQ-164 not ruled: the memory card's 380x360, scaled.
     static var size: CGSize { CGSize(width: sz(380), height: sz(360)) }
@@ -151,14 +153,23 @@ struct XrayRefPopover: View {
 
     @ViewBuilder func definition(_ c: XrayRefContext) -> some View {
         faint(c.heading)
-        if let r = c.resolved {
-            field(r.kind, ([r.title, r.subtitle] + r.lines).filter { !$0.isEmpty }.joined(separator: "\n"))
-        }
+        if let r = c.resolved { field(r.kind, Self.resolvedText(r)) }
         ForEach(Array(c.definitions.enumerated()), id: \.offset) { _, d in
             field(Self.label(d) + (d.mark.map { " \u{00B7} " + $0 } ?? ""),
                   ([d.passage] + [d.url, d.status].compactMap { $0 }).filter { !$0.isEmpty }.joined(separator: "\n"))
         }
         if let m = c.firstMention { field("First mention", m.line) }
+    }
+
+    /// #1560: the resolver block: `ok`'s title, subtitle and lines as before; any other state its one plain line alone
+    /// (an ended session ran no git: nothing of git's is drawn).
+    static func resolvedText(_ r: XrayRefStream.Resolved) -> String {
+        XrayRefContext.stateLine(r) ?? ([r.title, r.subtitle] + r.lines).filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// #1560: "Other projects (N)" from the snapshot's other_projects; nil (no row) at 0.
+    static func othersTitle(_ p: XrayPanelModel) -> String? {
+        (p.refs?.otherProjects ?? 0) > 0 ? "Other projects (\(p.refs?.otherProjects ?? 0))" : nil
     }
 
     /// A term's one definition is dch's first mention (rule "term"); any other keeps its title.
@@ -187,7 +198,31 @@ struct XrayRefPopover: View {
                 }
             }
         } else {
-            flatMentions(c)
+            flatMentions(c.groups, c)
+        }
+        if let title = Self.othersTitle(panel) { others(title, c) }
+    }
+
+    /// #1560: the collapsed row; opening it runs the one `--scope all` read (XrayPanelModel.openOthers), then lists the
+    /// sessions it added under its All projects line.
+    @ViewBuilder func others(_ title: String, _ c: XrayRefContext) -> some View {
+        Button {
+            othersOpen.toggle()
+            if othersOpen { panel.openOthers() }
+        } label: {
+            Text(verbatim: (othersOpen ? "\u{25BE} " : "\u{25B8} ") + title).font(Neon.font(10, weight: .semibold))
+                .foregroundStyle(Neon.textSecondary).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(othersOpen ? "expanded" : "collapsed")
+        if othersOpen {
+            if let o = c.others {
+                if let n = c.othersCount { faint(n) }
+                flatMentions(o, c)
+            } else if panel.refNote == nil {
+                faint("Reading\u{2026}")
+            }
         }
     }
 
@@ -224,8 +259,8 @@ struct XrayRefPopover: View {
     }
 
     /// Today's list (a dch before 1.100.0): per session, each mention's line.
-    @ViewBuilder func flatMentions(_ c: XrayRefContext) -> some View {
-        ForEach(Array(c.groups.enumerated()), id: \.offset) { _, g in
+    @ViewBuilder func flatMentions(_ groups: [XrayRefContext.Group], _ c: XrayRefContext) -> some View {
+        ForEach(Array(groups.enumerated()), id: \.offset) { _, g in
             faint(g.session).accessibilityAddTraits(.isHeader)
             ForEach(Array(g.mentions.enumerated()), id: \.offset) { _, m in
                 // Return or a click: this session's mention jumps (jumpRef); another session's does nothing

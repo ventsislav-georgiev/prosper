@@ -208,10 +208,15 @@ struct XrayRefContext: Equatable {
     /// order, then one Earlier block (no turn, or another session's). nil from an older dch: the flat `groups` stay.
     let turns: [Turn]?
     let counts: [String]
+    /// #1560: "Other projects": the groups a `--scope all` read added (sessions this context has no group of) and its
+    /// "All projects" count line; nil until that read lands.
+    var others: [Group]?
+    var othersCount: String?
     let tasks: [XrayTasks.Task]
     let memory: [XrayMemory.Item]
 
     static let commandMark = "your define_command"
+    static let othersCountPrefix = "All projects"
     static let noDefinition = "No definition found"
 
     init(_ s: XrayRefStream, ref: String, tasks: XrayTasks?, memory: XrayMemory?) {
@@ -266,7 +271,7 @@ struct XrayRefContext: Equatable {
         let ge = s.partial ? "\u{2265}" : ""
         counts = s.counts.map { c in
             ["This session \(ge)\(c.session)", "This project \(ge)\(c.project) in \(c.projectSessions) other sessions"]
-                + (c.all.map { ["All projects \(ge)\($0) in \(c.allSessions ?? 0) other sessions"] } ?? [])
+                + (c.all.map { ["\(Self.othersCountPrefix) \(ge)\($0) in \(c.allSessions ?? 0) other sessions"] } ?? [])
         } ?? []
         let q = ref
         self.tasks = (tasks?.tasks ?? []).filter { t in
@@ -274,6 +279,33 @@ struct XrayRefContext: Equatable {
         }
         self.memory = (memory?.items ?? []).filter { m in
             [m.title, m.note ?? "", m.body ?? ""].contains { $0.localizedCaseInsensitiveContains(q) }
+        }
+    }
+
+    /// #1560: this context with `all`'s extra groups (a session it has no group of) and its All projects line.
+    func with(others all: XrayRefContext) -> XrayRefContext {
+        let seen = Set(groups.map(\.session) + [session].compactMap { $0 })
+        var c = self
+        c.others = all.groups.filter { !seen.contains($0.session) }
+        c.othersCount = all.counts.last { $0.hasPrefix(Self.othersCountPrefix) }
+        return c
+    }
+
+    /// #1560 (dch README v1.99.0 "--ref" :1775-1893, resolved states): one plain line for a state that is not `ok` (nil:
+    /// draw the resolver's title and lines as before). A word Prosper does not know is shown as itself (cleaned by the parse).
+    static func stateLine(_ r: XrayRefStream.Resolved) -> String? {
+        switch r.state {
+        case "ok": nil
+        case "ended": "Session ended: git not run"
+        case "no_git": "No git found: not looked up"
+        case "not_repo": "Not in a git repository"
+        case "ambiguous": "Short SHA matches more than one object"
+        case "not_commit": "Not a commit in this repository"
+        case "timeout": "git took too long"
+        case "outside_project": "Outside the project: not read"
+        case "secret_name": "Looks like a secret: not read"
+        case "too_large": "Over 2 MB: not read"
+        default: r.state.isEmpty ? nil : r.state   // no state word (or one all unseen scalars): drawn as before
         }
     }
 
@@ -290,7 +322,8 @@ struct XrayRefContext: Equatable {
 
 extension XrayTarget {
     /// #1416: dch README "dch --xray <n> --ref <ref> --scope project --full --json"; the text is checked first (runRef).
-    func refArgs(_ text: String) -> [String] { ["--xray", name, "--ref", text, "--scope", "project", "--full", "--json"] }
+    /// #1560: `scope` "all" for the card's Other projects row.
+    func refArgs(_ text: String, scope: String = "project") -> [String] { ["--xray", name, "--ref", text, "--scope", scope, "--full", "--json"] }
 }
 
 extension XrayPanels {
@@ -300,21 +333,27 @@ extension XrayPanels {
     /// shortcut: one --ref for the app, not per window; the card is a transient popover (a click or key in another
     /// window closes it first), so two never show at once. Key it by window if a later step keeps two cards open.
     @discardableResult
-    func runRef(_ text: String, shown: String? = nil, for m: XrayPanelModel) -> Bool {
+    func runRef(_ text: String, shown: String? = nil, scope: String = "project", for m: XrayPanelModel) -> Bool {
         let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
         guard DchCtl.refOK(text), !text.hasPrefix("-"), !Self.overStdin(input), let dch = m.dch,
               let run = m.run else { return false }
+        // #1560: the card's own read, which its close names (an Other projects read stands in for it)
+        let card = Self.othersRead.flatMap { $0.read == refReading ? $0.card : nil } ?? refReading
         closeRef()
-        m.refContext = nil
+        if scope == "project" { m.refContext = nil }   // Other projects adds to the card's context, never clears it
         m.refNote = nil
-        let a = m.target.refArgs(arg), env = m.target.env
+        let a = m.target.refArgs(arg, scope: scope), env = m.target.env
         refReading = Task { [weak m] in
             let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
-            m.takeRef(r, text: shown ?? text)
+            m.takeRef(r, text: shown ?? text, scope: scope)
         }
+        Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
         return true
     }
+
+    /// #1560: the Other projects read in flight and the card read it stands in for (one --ref read for the app).
+    private static var othersRead: (card: Task<Void, Never>, read: Task<Void, Never>?)?
 
     /// #1419 (R1410-i1): dch's stdin cap, newline included.
     private static func overStdin(_ input: Data?) -> Bool { input.map { $0.count > 256 } ?? false }
@@ -333,7 +372,7 @@ extension XrayPanels {
     /// #1417: the card that started `read` went (presenter closed, Esc, Search): its read is cancelled, unless a newer
     /// card's read is the one in flight now (a replaced card's close may come after the new card's read started).
     func closeRef(started read: Task<Void, Never>?) {
-        if let read, read == refReading { closeRef() }
+        if let read, read == refReading || Self.othersRead.map({ $0.card == read && $0.read == refReading }) == true { closeRef() }
     }
 }
 
@@ -344,14 +383,27 @@ extension XrayPanelModel {
     static let refFailed = "The ref read failed"
 
     /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; else failed.
-    func takeRef(_ r: (status: Int32, out: Data), text: String) {
+    /// #1560: a `scope` "all" read adds its extra groups to the card's context (XrayRefContext.with(others:)).
+    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project") {
         switch r.status {
-        case 0: refContext = XrayRefContext(XrayRefStream.parse(r.out), ref: text, tasks: tasks, memory: memory)
+        case 0:
+            let c = XrayRefContext(XrayRefStream.parse(r.out), ref: text, tasks: tasks, memory: memory)
+            refContext = scope == "project" ? c : refContext?.with(others: c)
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef
         case _ where unreached(r.status): refNote = "host unreachable"
         default: refNote = Self.refFailed
         }
+    }
+
+    /// #1560: the card's Other projects row opened: one `--scope all` read of the card's ref, once (none while the
+    /// card's own read has not landed, or once the groups are in).
+    @discardableResult
+    func openOthers() -> Bool {
+        guard let e = refCard, let c = refContext, c.others == nil, c.ref == e.text else { return false }
+        // as openRef sends it (XrayPanel.swift): a term in backticks
+        let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text
+        return panels?.runRef(sent, shown: e.text, scope: "all", for: self) == true
     }
 
     /// Search: the ref text becomes the query and runs, only when DchCtl.searchOK takes it (else nothing changes); #1417:

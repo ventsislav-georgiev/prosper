@@ -121,4 +121,43 @@ final class XrayRefStreamTests: XCTestCase {
         XCTAssertEqual(s.mentions.map(\.line), ["Work on #12 please", "again"])
         XCTAssertEqual(s.mentions.map(\.offset), [0, 1])
     }
+
+    /// #1560 (dch README v1.99.0 :1762-1893): a `resolved` line for `state` (a commit's title, subtitle and stat lines
+    /// as git would give them; dch sends none past `ok`, the fixture does to prove they are never drawn).
+    static func resolved(_ kind: String, _ state: String) -> XrayRefStream.Resolved? {
+        parse([first, #"{"schema":1,"resolved":{"kind":"\#(kind)","state":"\#(state)","title":"Fix the login retry","subtitle":"Example Dev \#u{00B7} 3h ago \#u{00B7} abc1234","lines":[" src/login.c | 4 ++--"]}}"#, done]).resolved
+    }
+
+    /// #1560: each state its one line (red with any line changed or a state falling to its word); `ok` and a missing
+    /// state keep today's title, subtitle and lines.
+    @MainActor func testEachResolvedStateGivesItsLine() throws {
+        let lines: [(String, String, String)] = [
+            ("commit", "ended", "Session ended: git not run"), ("commit", "no_git", "No git found: not looked up"),
+            ("commit", "not_repo", "Not in a git repository"), ("commit", "ambiguous", "Short SHA matches more than one object"),
+            ("commit", "not_commit", "Not a commit in this repository"), ("commit", "timeout", "git took too long"),
+            ("file", "outside_project", "Outside the project: not read"), ("file", "secret_name", "Looks like a secret: not read"),
+            ("file", "too_large", "Over 2 MB: not read"), ("commit", "shallow_clone", "shallow_clone"),
+        ]
+        for (kind, state, line) in lines {
+            let r = try XCTUnwrap(Self.resolved(kind, state), state)
+            XCTAssertEqual(r.kind, kind)
+            XCTAssertEqual(XrayRefPopover.resolvedText(r), line, state)
+        }
+        let whole = "Fix the login retry\nExample Dev \u{00B7} 3h ago \u{00B7} abc1234\n src/login.c | 4 ++--"
+        XCTAssertEqual(XrayRefPopover.resolvedText(try XCTUnwrap(Self.resolved("commit", "ok"))), whole)
+        XCTAssertEqual(XrayRefPopover.resolvedText(try XCTUnwrap(Self.resolved("commit", ""))), whole, "no state word: as before")
+    }
+
+    /// #1560: an ended session ran no git: none of the title, subtitle or lines is drawn (red with ended drawn as ok).
+    @MainActor func testEndedDrawsNoGitOutput() throws {
+        let t = XrayRefPopover.resolvedText(try XCTUnwrap(Self.resolved("commit", "ended")))
+        for git in ["Fix the login retry", "abc1234", "src/login.c"] { XCTAssertFalse(t.contains(git), git) }
+    }
+
+    /// #1560: an unknown state word with bidi and control scalars is shown cleaned (red with the raw word kept).
+    @MainActor func testABidiOrControlStateWordIsCleaned() throws {
+        let r = try XCTUnwrap(Self.resolved("commit", #"we\u202eird\u0007\u200f"#))
+        XCTAssertEqual(r.state, "weird")
+        XCTAssertEqual(XrayRefPopover.resolvedText(r), "weird")
+    }
 }

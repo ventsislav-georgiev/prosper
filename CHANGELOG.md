@@ -1933,6 +1933,9 @@ tag from the now-released section and put it on the new top draft.
   one opens its card. (#1559)
 - Claude Account Pool: the status-line script now also drops invisible and bidirectional control
   characters from an account label, and the guide documents host.ccpool.status(). (#1573)
+- The X-ray ref card now offers "Other projects (N)" under Mentions to look the ref up across your
+  other projects, and says plainly why a commit or file could not be shown (for example "Session
+  ended: git not run" or "Outside the project: not read"). (#1560)
 
 ## v2.174.0
 
