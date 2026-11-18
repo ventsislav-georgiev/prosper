@@ -1812,7 +1812,7 @@ tag from the now-released section and put it on the new top draft.
   terminal; outside a group they work as before. (#1111)
 - After the overheat cut-off hands the fans back to macOS, a new manual speed is taken only at each
   fan's maximum while the Mac is still at 95 °C or above; anything lower waits, and the popup and
-  the phone say "Too hot: only maximum speed until it cools.". (#1077)
+  the phone say "Too hot: only maximum speed until it cools." (#1077)
 - Turning off the Calculator, Units or Currency extension now stops its answers in the launcher, and
   turning off OpenLid also turns off Remote Wake (it comes back with your saved setting when OpenLid
   is turned on again). (#1072)
