@@ -533,7 +533,8 @@ struct ExtensionHost {
                   "__h_llm_complete", "__h_llm_translate", "__h_llm_chat"] { t[n] = { rt in rt.push(""); return 1 } }
         for n in ["__h_window_set", "__h_dialog_confirm", "__h_url_open", "__h_kbd_set", "__h_url_set_default",
                   "__h_menus_press"] { t[n] = { rt in rt.push(false); return 1 } }
-        for n in ["__h_http_request", "__h_dialog_prompt"] { t[n] = { rt in rt.pushNil(); return 1 } }
+        // #1563: __h_proc_run's nil reads as {ok=false, error=...} in the host.process.run wrapper.
+        for n in ["__h_http_request", "__h_dialog_prompt", "__h_proc_run"] { t[n] = { rt in rt.pushNil(); return 1 } }
         t["__h_fallback_import"] = { rt in rt.push(Double(0)); return 1 }
         t["__h_proc_kill"] = { rt in rt.push("host.process: this call was stopped (the extension was turned off, untrusted, reset, reinstalled or removed)"); return 1 }
         t["__h_osascript"] = { rt in rt.push(#"{"ok":false,"error":"not permitted"}"#); return 1 }
@@ -729,6 +730,25 @@ struct ExtensionHost {
                 if let why = services.processKill(pid: pid, force: force) { rt.push(why) } else { rt.pushNil() }
                 return 1
             }
+            // #1563: (timeout, max_bytes, argv...) from the host.process.run wrapper, which checked every argv entry
+            // is a string with no NUL. Returns the result table (ProcessRun.Result.lua).
+            let cwd = configOwner?.extensionDir
+            lua.register("__h_proc_run") { rt in
+                let limit = finiteNumber(rt, 1).map { min(max($0, 0), ProcessRun.maxTimeout) } ?? ProcessRun.defaultTimeout
+                let cap = intArgument(rt, 2, in: 0...ProcessRun.maxBytes) ?? ProcessRun.maxBytes
+                let count = rt.argumentCount
+                guard count >= 3, count - 2 <= Int32(ProcessRun.maxArgs) else {
+                    rt.pushJSON(ProcessRun.refused(count < 3 ? "argv[1] is missing" : "argv is too long").lua)
+                    return 1
+                }
+                let argv = (3...count).map { rt.stringArgument($0) ?? "" }
+                // The run ends itself by its deadline plus the kill's slack; past that the bridge drops it (cancel: group kill).
+                let out = ExtensionHost.awaitSync(timeout: limit + ProcessRun.killSlack + 1) {
+                    await ProcessRun.run(argv: argv, cwd: cwd, timeout: limit, maxBytes: cap)
+                }
+                rt.pushJSON((out ?? ProcessRun.Result(timedOut: true)).lua)
+                return 1
+            }
         } else {
             lua.register("__h_proc_refusal") { rt in
                 rt.push("host.process is restricted to system extensions")
@@ -736,6 +756,10 @@ struct ExtensionHost {
             }
             lua.register("__h_proc_kill") { rt in
                 rt.push("host.process is restricted to system extensions")
+                return 1
+            }
+            lua.register("__h_proc_run") { rt in
+                rt.pushJSON(ProcessRun.refused("restricted to system extensions").lua)
                 return 1
             }
         }
@@ -1286,6 +1310,7 @@ struct ExtensionHost {
     local _timer_cancel     = __h_timer_cancel
     local _log              = __h_log
     local _shell_run        = __h_shell_run
+    local _proc_run         = __h_proc_run
     local _fallback_save    = __h_fallback_save
     local _fallback_mode_set = __h_fallback_mode_set
     host = {
@@ -1323,7 +1348,29 @@ struct ExtensionHost {
         -- Process control. refusal(pid) -> nil when the kill is allowed, else the
         -- reason; kill(pid, force) -> nil when the signal was sent, else the reason.
         -- The rules live natively (KillProcessSupport) and kill re-checks them.
-        process = { refusal = __h_proc_refusal, kill = __h_proc_kill },
+        -- run{ argv = { "/abs/path", "arg", ... }, timeout = s (<= 10), max_bytes = n (<= 1 MiB, per stream) }
+        -- -> { ok, status, stdout, stderr, timed_out, truncated [, error] } (#1563, system tier). argv[1] runs
+        -- directly: no shell, no PATH lookup; each argument is passed as it is.
+        process = { refusal = __h_proc_refusal, kill = __h_proc_kill, run = function(opts)
+            if type(opts) ~= "table" or type(opts.argv) ~= "table" then
+                error("host.process.run: argv must be a table", 2)
+            end
+            for k in pairs(opts) do
+                if k ~= "argv" and k ~= "timeout" and k ~= "max_bytes" then
+                    error("host.process.run: unknown option '" .. tostring(k) .. "'", 2)
+                end
+            end
+            local n = #opts.argv
+            for i = 1, n do
+                local a = opts.argv[i]
+                if type(a) ~= "string" then error("host.process.run: argv[" .. i .. "] must be a string", 2) end
+                if a:find(string.char(0), 1, true) then error("host.process.run: argv[" .. i .. "] holds a NUL byte", 2) end
+            end
+            if n > 1024 then error("host.process.run: argv has more than 1024 entries", 2) end
+            local r = _proc_run(opts.timeout, opts.max_bytes, table.unpack(opts.argv, 1, n))
+            return r or { ok = false, stdout = "", stderr = "", timed_out = false, truncated = false,
+                          error = "host.process.run: this call was stopped" }
+        end },
         prefs  = { get = __h_pref_get, set = __h_pref_set },
         perms  = { has = __h_perms_has },
         notify = __h_notify,
@@ -1367,7 +1414,7 @@ struct ExtensionHost {
     __h_clip_read = nil; __h_clip_write = nil; __h_clip_history = nil
     __h_llm_complete = nil; __h_llm_translate = nil
     __h_shell_run = nil
-    __h_proc_refusal = nil; __h_proc_kill = nil
+    __h_proc_refusal = nil; __h_proc_kill = nil; __h_proc_run = nil
     __h_fallback_list = nil; __h_fallback_save = nil
     __h_fallback_mode_get = nil; __h_fallback_mode_set = nil; __h_fallback_import = nil
     __h_pref_get = nil; __h_pref_set = nil

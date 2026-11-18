@@ -1925,6 +1925,9 @@ tag from the now-released section and put it on the new top draft.
   environment (only ANTHROPIC_BASE_URL is changed; the pool still sends its own account's token),
   and the "Start new Claude sessions through the pool" toggle can now be switched off while the
   proxy is stopped or there is no account. (#1570)
+- Built-in extensions can now run a program directly (host.process.run): no shell, a fixed
+  environment, at most 10 seconds and 1 MB of output per stream, two at a time, and every one is
+  stopped when Prosper quits. (#1563)
 
 ## v2.174.0
 

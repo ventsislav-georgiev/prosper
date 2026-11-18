@@ -94,7 +94,7 @@ final class ExtensionRetiredCallTests: XCTestCase {
         "__h_llm_complete": "", "__h_llm_translate": "", "__h_llm_chat": "",
         "__h_window_set": "false", "__h_dialog_confirm": "false", "__h_url_open": "false", "__h_kbd_set": "false",
         "__h_url_set_default": "false", "__h_menus_press": "false",
-        "__h_http_request": "nil", "__h_dialog_prompt": "nil", "__h_fallback_import": "0.0",
+        "__h_http_request": "nil", "__h_dialog_prompt": "nil", "__h_proc_run": "nil", "__h_fallback_import": "0.0",
         "__h_proc_kill": "host.process: this call was stopped (the extension was turned off, untrusted, reset, reinstalled or removed)",
         "__h_osascript": #"{"ok":false,"error":"not permitted"}"#,
         "__h_config": ManagedConfigLua.inert("a"),
