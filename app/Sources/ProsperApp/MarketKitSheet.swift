@@ -249,8 +249,17 @@ struct MarketKitSheetView: View {
     /// line falls back to its cleaned raw text, references shown as typed.
     static func readmeText(_ line: String) -> AttributedString {
         let body = line.hasPrefix("#") ? String(line.drop { $0 == "#" }.drop { $0 == " " }) : line
-        guard let md = try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        guard let parsedMD = try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
         else { return AttributedString(body) }
+        // R1534-s1: a no-break/en/em/thin space or tab reference reads as a plain space and a soft hyphen is dropped, so
+        // they no longer cost the line its links; every other change OutsideText makes still falls back below.
+        var md = AttributedString()
+        for run in parsedMD.runs {
+            let text = String(String.UnicodeScalarView(String(parsedMD[run.range].characters).unicodeScalars.compactMap { u in
+                u.value == 0xAD ? nil : (u != " " && u.properties.isWhitespace ? " " : u)
+            }))
+            md.append(AttributedString(text, attributes: run.attributes))
+        }
         let parsed = String(md.characters)
         guard OutsideText.shown(parsed, max: MarketKitText.lineMax) == parsed else { return AttributedString(body) }
         // by link span (emphasis inside one link text is one span), so "[a*.*b](...)" is judged as "a.b"
@@ -266,7 +275,8 @@ struct MarketKitSheetView: View {
     /// R1527-n2: a link whose text reads as a web address (a dot, no space) and names another host than the one it
     /// opens; it is drawn as plain text. Text the URL parser refuses counts as another host.
     static func misleads(_ text: String, _ url: URL) -> Bool {
-        let t = text.trimmingCharacters(in: .whitespaces)
+        // R1534-n1: IDNA reads the ideographic full stops as "."
+        let t = String(text.trimmingCharacters(in: .whitespaces).map { "\u{3002}\u{FF0E}\u{FF61}".contains($0) ? "." : $0 })
         guard t.contains("."), !t.contains(" ") else { return false }
         guard let shown = URL(string: t.contains("://") ? t : "https://" + t)?.host, let target = url.host else { return true }
         return LinkPolicy.asciiLowercased(shown) != LinkPolicy.asciiLowercased(target)

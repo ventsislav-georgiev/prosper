@@ -323,6 +323,32 @@ final class MarketKitSheetTests: XCTestCase {
                        "https://example.org")
     }
 
+    /// R1534-s1: a whitespace reference other than U+0020 and a soft hyphen read as a space / nothing and keep the link.
+    func testSpaceAndSoftHyphenReferencesKeepTheLine() {
+        let forms = ["&nbsp;", "&ensp;", "&emsp;", "&thinsp;", "&#9;", "&#x00A0;"]
+        XCTAssertEqual(forms.count, 6)
+        for f in forms {
+            let r = MarketKitSheetView.readmeText("Install\(f)it from [the docs](https://example.com/docs)")
+            XCTAssertEqual(String(r.characters), "Install it from the docs", f)
+            XCTAssertEqual(r.runs.compactMap { $0.link }.map(\.absoluteString), ["https://example.com/docs"], f)
+        }
+        let shy = MarketKitSheetView.readmeText("Inst&shy;all [the docs](https://example.com/docs)")
+        XCTAssertEqual(String(shy.characters), "Install the docs")
+        XCTAssertEqual(shy.runs.compactMap { $0.link }.count, 1)
+    }
+
+    /// R1534-n1: the ideographic full stops read as "." in a link text, so a mismatched host loses its link.
+    func testIdeographicDotsInLinkTextAreComparedAsDots() {
+        let dots = ["\u{3002}", "\u{FF0E}", "\u{FF61}"]
+        XCTAssertEqual(dots.count, 3)
+        for d in dots {
+            let r = MarketKitSheetView.readmeText("[example\(d)org](https://evil.example/x)")
+            XCTAssertEqual(r.runs.compactMap { $0.link }, [], "U+\(String(d.unicodeScalars.first!.value, radix: 16))")
+            let ok = MarketKitSheetView.readmeText("[example\(d)org](https://example.org/x)")
+            XCTAssertEqual(ok.runs.compactMap { $0.link }.count, 1)
+        }
+    }
+
     /// n1: quit sends no window close; a sheet open at quit discards its work folder (the quit notification is posted to
     /// the row's own center; the app is never terminated).
     func testAppQuitDiscardsTheOpenSheetsFolder() async {
