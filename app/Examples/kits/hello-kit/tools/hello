@@ -1,0 +1,3 @@
+#!/bin/sh
+# Prints the greeting setting.
+printf '%s\n' "${KIT_GREETING:-Hello from hello-kit}"

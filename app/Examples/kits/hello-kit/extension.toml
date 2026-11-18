@@ -1,0 +1,43 @@
+[extension]
+id          = "com.example.kit.hello"
+name        = "hello-kit"
+title       = "Hello Kit"
+description = "A minimal Agent Kit: one rule, one hook, one tool and one setting."
+version     = "1.0.0"
+author      = "Example Org"
+license     = "MIT"
+
+[extension.host]
+min_version = "2.175.0"
+api_level   = 1
+
+[extension.entry]
+main = "init.lua"
+
+[contributes.kit]
+schema   = 1
+homepage = "https://example.com/hello-kit"
+requires = ["sh"]
+
+[[contributes.kit.pieces]]
+id       = "rules"
+kind     = "claude-md"
+source   = "CLAUDE.md"
+position = "bottom"
+
+[[contributes.kit.pieces]]
+id    = "greet"
+kind  = "hook"
+event = "SessionStart"
+run   = "hooks/hello-hook.sh"
+
+[[contributes.kit.pieces]]
+id   = "tools"
+kind = "tools"
+dir  = "tools"
+
+[[contributes.kit.settings]]
+key     = "greeting"
+title   = "Greeting"
+kind    = "string"
+default = "Hello from hello-kit"
