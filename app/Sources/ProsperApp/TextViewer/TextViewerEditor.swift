@@ -52,6 +52,28 @@ enum TextViewerEditor {
         }
     }
 
+    /// #1545 (D12): after Keep Mine, "Overwrite the newer file on disk?" as a sheet. Under XCTest, or with no window, it
+    /// shows nothing and answers no: nothing is written.
+    static func liveOverwriteSheet(_ window: NSWindow?, _ name: String, _ answer: @escaping @MainActor (Bool) -> Void) {
+        guard NSClassFromString("XCTestCase") == nil, let window else { return answer(false) }
+        let alert = NSAlert()
+        alert.messageText = "Overwrite the newer file on disk?"
+        alert.informativeText = "\(name) changed on disk after you opened it. Saving replaces that version with yours."
+        alert.addButton(withTitle: "Overwrite")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            MainActor.assumeIsolated { answer(response == .alertFirstButtonReturn) }
+        }
+    }
+
+    /// D12's banner texts.
+    nonisolated static func banner(_ change: TextViewerModel.DiskChange) -> String {
+        switch change {
+        case .changed: "Changed on disk"
+        case .deleted: "Deleted on disk"
+        }
+    }
+
     /// What the window says when a save fails (D11: shown inline; the buffer stays dirty).
     nonisolated static func message(_ failure: TextFileWriter.Failure) -> String {
         switch failure {

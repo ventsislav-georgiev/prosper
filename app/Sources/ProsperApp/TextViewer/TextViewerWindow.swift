@@ -150,10 +150,31 @@ final class TextViewerModel: ObservableObject {
             output = out
             previewed = preview
         }
-        // D12, not dirty: an edited file that changed on disk takes the new text, the caret clamped. Dirty: kept (#1545 asks).
-        if let doc = try? next.get(), buffer != nil, !isDirty, doc.text != base || doc.encoding != encoding {
-            adopt(doc)
-            editorView?.replaceText(doc.text)
+        // D12, not dirty: an edited file that changed on disk takes the new text, the caret clamped. Dirty: kept, and #1545's
+        // banner asks (a load of the bytes last loaded, saved or kept says nothing: a restyle, Read, a touch).
+        if buffer != nil, !isDirty {
+            diskChange = nil
+            keptHash = nil
+            if let doc = try? next.get(), doc.text != base || doc.encoding != encoding {
+                adopt(doc)
+                editorView?.replaceText(doc.text)
+            }
+        } else if buffer != nil {
+            switch next {
+            case .failure(.missing):
+                diskChange = .deleted
+                keptHash = nil   // nothing to overwrite: Save creates the file
+            case .success(let doc):
+                let hash = Self.hash(doc)
+                if hash == baseHash {   // the bytes the buffer started from (also put back after a delete): no question
+                    diskChange = nil
+                    keptHash = nil
+                } else if hash != keptHash {   // a change not yet kept: asked (again, after an older Keep Mine)
+                    diskChange = .changed
+                    keptHash = nil
+                }
+            default: break   // shortcut: a refusal on disk (binary, too large) has no banner, the save says why; upgrade if asked
+            }
         }
         if first { onFirstLoad?(); onFirstLoad = nil } else { onReload?() }
         loads += 1
@@ -323,8 +344,12 @@ final class TextViewerModel: ObservableObject {
         buffer = doc.text
         base = doc.text
         encoding = doc.encoding
-        // decode is strict, so the text encodes back to the bytes read
-        baseHash = TextFileWriter.encode(doc.text, encoding: doc.encoding).map(TextFileWriter.digest) ?? []
+        baseHash = Self.hash(doc)
+    }
+
+    /// The hash of a loaded file's bytes: decode is strict, so the text encodes back to the bytes read.
+    private static func hash(_ doc: TextViewerDocument) -> TextFileWriter.Fingerprint {
+        TextFileWriter.encode(doc.text, encoding: doc.encoding).map(TextFileWriter.digest) ?? []
     }
 
     /// The editor's text changed: typing, paste, undo.
@@ -332,6 +357,39 @@ final class TextViewerModel: ObservableObject {
         guard buffer != nil else { return }
         buffer = text
         setDirty(text != base)
+        // Undone back to the base while the disk differs: D12's clean case, the disk's text is taken.
+        if !isDirty, diskChange != nil || keptHash != nil { reload() }
+    }
+
+    // MARK: #1545 (D12): a change on disk while dirty
+
+    enum DiskChange: Equatable { case changed, deleted }
+    /// The banner under the header: "Changed on disk" with Reload and Keep Mine, or "Deleted on disk". Only while dirty.
+    @Published private(set) var diskChange: DiskChange?
+    /// After Keep Mine: the hash of the disk's bytes the user chose to write over. The next save asks first, then checks the
+    /// disk against this one, so a newer write still refuses the save.
+    private var keptHash: TextFileWriter.Fingerprint?
+    /// D12: "Overwrite the newer file on disk?". A seam: the live one answers no under XCTest and shows nothing.
+    var askToOverwrite: @MainActor (NSWindow?, String, @escaping @MainActor (Bool) -> Void) -> Void
+        = TextViewerEditor.liveOverwriteSheet
+
+    /// Reload: the disk's text replaces the buffer, the edits are dropped, the window reports clean.
+    func reloadFromDisk() {
+        guard diskChange == .changed, let doc = document else { return }
+        adopt(doc)
+        editorView?.replaceText(doc.text)
+        diskChange = nil
+        keptHash = nil
+        saveError = nil
+        setDirty(false)
+        if mode == .read { reload() }   // the shown preview was the buffer's
+    }
+
+    /// Keep Mine: the buffer stays dirty; the next save asks, then writes over the disk version seen here.
+    func keepMine() {
+        guard diskChange == .changed, let doc = document else { return }
+        keptHash = Self.hash(doc)
+        diskChange = nil
     }
 
     private func setDirty(_ dirty: Bool) {
@@ -342,10 +400,20 @@ final class TextViewerModel: ObservableObject {
 
     /// D11: ⌘S or Save. The buffer in the file's own encoding, to the opened path resolved, checked against the bytes last
     /// read or saved; off main. `done` gets whether it was written. Text typed meanwhile stays dirty.
+    /// After Keep Mine (D12) it asks "Overwrite the newer file on disk?" first.
     func save(then done: @escaping @MainActor (Bool) -> Void = { _ in }) {
+        guard saving == nil, isDirty, buffer != nil else { return done(false) }
+        guard let kept = keptHash else { return write(expected: baseHash, then: done) }
+        askToOverwrite(editorView?.window ?? textView?.window, shownName) { [weak self] yes in
+            guard yes, let self, self.keptHash == kept else { return done(false) }
+            self.write(expected: kept, then: done)
+        }
+    }
+
+    private func write(expected: TextFileWriter.Fingerprint, then done: @escaping @MainActor (Bool) -> Void) {
         guard saving == nil else { return done(false) }
         guard isDirty, let text = buffer else { return done(false) }
-        let (url, expected, identity, encoding) = (self.url, baseHash, self.identity, self.encoding)
+        let (url, identity, encoding) = (self.url, self.identity, self.encoding)
         saving = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 TextFileWriter.save(text, encoding: encoding, to: url, expected: expected, identity: identity)
@@ -357,6 +425,8 @@ final class TextViewerModel: ObservableObject {
                 self.base = text
                 self.baseHash = hash
                 self.saveError = nil
+                self.diskChange = nil
+                self.keptHash = nil
                 self.setDirty(self.buffer != text)
                 done(true)
             case .failure(let failure):
@@ -371,6 +441,8 @@ final class TextViewerModel: ObservableObject {
         buffer = nil
         editorScroll = nil
         saveError = nil
+        diskChange = nil
+        keptHash = nil
         setDirty(false)
     }
 
@@ -620,6 +692,7 @@ struct TextViewerRootView: View {
             Rectangle().fill(Neon.stroke).frame(height: 1)
             if let notice = model.notice { banner(notice) }
             if let error = model.saveError { banner(error) }
+            if let change = model.diskChange { diskBanner(change) }
             if model.mode == .terminal, let t = model.terminal {
                 TextViewerTerminalPane(controller: t.controller)
             } else if model.mode == .edit {
@@ -653,6 +726,27 @@ struct TextViewerRootView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, sz(5))
             .background(Neon.card)
+    }
+
+    /// #1545 (D12): "Changed on disk" with [Reload] (drops the edits) and [Keep Mine]; "Deleted on disk" alone (Save
+    /// writes the file anew).
+    func diskBanner(_ change: TextViewerModel.DiskChange) -> some View {
+        HStack(spacing: sz(10)) {
+            Text(TextViewerEditor.banner(change))
+                .font(Neon.font(11, weight: .medium))
+                .foregroundStyle(Neon.textSecondary)
+                .lineLimit(1)
+            if change == .changed {
+                Button("Reload") { model.reloadFromDisk() }.buttonStyle(.borderless).fixedSize()
+                    .help("Take the file on disk and drop your edits")
+                Button("Keep Mine") { model.keepMine() }.buttonStyle(.borderless).fixedSize()
+                    .help("Keep your edits; Save asks before writing over the file on disk")
+            }
+        }
+        .font(Neon.font(11, weight: .medium))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, sz(5))
+        .background(Neon.card)
     }
 
     func refused(_ refusal: TextViewerDocument.Refusal) -> some View {

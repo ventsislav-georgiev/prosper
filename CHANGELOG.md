@@ -1882,6 +1882,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a terminal pane whose session another window holds at a different size now offers
   "Sized for another window · Fit here", and a session on another Mac reconnects by itself a few
   times after a lost connection (never when it was opened on another device or refused). (#896)
+- Text Viewer: when a file you are editing changes on disk, a "Changed on disk" banner offers Reload
+  (take the file, drop your edits) or Keep Mine (Save then asks before writing over it); a file
+  deleted on disk shows "Deleted on disk" and Save writes it again. (#1545)
 
 ## v2.174.0
 
