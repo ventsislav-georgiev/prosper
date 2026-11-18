@@ -65,6 +65,7 @@ extension AgentWindowD1Tests {
                 let tag = "\(label) \(scale) \(Int(px))x"
                 st.sessions = [session("api", .idle)]
                 let base = bandSnapshot(m, size, backing: px)
+                XCTAssertEqual(ThemeRuntime.scale, scale, "#1512: the snapshot kept the scale (\(tag))")
                 let band = try XCTUnwrap(base["band"], tag)
                 let f = { (k: String) in base[k].map { "\($0.minX)...\($0.maxX) w \($0.width)" } ?? "none" }
                 print("#1253 band \(tag): band.width \(band.width) all \(f("all")) layout \(f("layout"))"
@@ -126,6 +127,7 @@ extension AgentWindowD1Tests {
             for w in stride(from: CGFloat(1600), through: least.width, by: -24) {
                 let s = bandSnapshot(m, CGSize(width: w, height: least.height))
                 let tag = "\(w) at \(scale)"
+                XCTAssertEqual(ThemeRuntime.scale, scale, "#1512: the snapshot kept the scale (\(tag))")
                 let chip = s["chip"] != nil, layout = s["layout"] != nil
                 XCTAssertNotNil(s["all"], "the All slot never goes (\(tag))")
                 XCTAssertTrue(!chip || layout, "the chip slot gives way before the layout slot (\(tag)): \(s.keys)")

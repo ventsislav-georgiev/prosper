@@ -111,6 +111,7 @@ extension AgentWindowD1Tests {
 
             // One pane.
             let one = paneSnapshot(m, size)
+            XCTAssertEqual(ThemeRuntime.scale, scale, "#1512: the snapshot kept the scale")
             assertSame(one["pane 0"], area, "one pane: the whole area (\(scale))")
             let fullHeader = try XCTUnwrap(one["header 0"], "the header (\(scale))")
             XCTAssertGreaterThan(fullHeader.height, AgentCompactHeader.height + 1, "one pane: the full header (\(scale))")

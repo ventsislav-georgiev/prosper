@@ -101,6 +101,9 @@ final class DefaultsProbeObserver: NSObject, XCTestObservation {
     func testCaseWillStart(_ testCase: XCTestCase) {
         check(testCase, Preferences.defaults, path: Preferences.scratchSuitePath, previousTest: lastProbed)
         lastProbed = testCase.name
+        // #1512: ThemeStore.shared's first touch seeds ThemeRuntime.scale from the prefs; warm it before any row
+        // sets a scale, so a pane that reaches the store mid-row (AgentTerminal.userColours) resets nothing.
+        MainActor.assumeIsolated { _ = ThemeStore.shared }
     }
 
     func check(_ testCase: XCTestCase, _ defaults: UserDefaults, path: String, previousTest: String?) {

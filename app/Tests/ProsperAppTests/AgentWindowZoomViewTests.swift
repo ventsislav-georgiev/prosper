@@ -100,8 +100,8 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(AgentWindowBand.chip(m, in: area) == nil, "no chip (\(scale))")
                 let base = bandSnapshot(m, wide)
                 XCTAssertNotNil(base["chip"], "the wide band has the chip slot (\(scale))")
-                // #1510: the band was drawn at this scale, and the chip slot is sized by it (after the layout slot, at its
-                // widest text measured at this scale; NSHostingView rounds that up to a whole point).
+                // #1510: the band was drawn at this scale, and the chip slot is sized by it (after the layout slot, within a
+                // point of its widest text measured at this scale).
                 XCTAssertEqual(ThemeRuntime.scale, scale, "the snapshot kept the scale")
                 let chip = try XCTUnwrap(base["chip"]), widest = bandChipMeasured, pixel = AXTreeSupport.devicePixel
                 XCTAssertEqual(chip.minX, sz(16) + AgentWindowBand.layoutWidth + sz(8), accuracy: pixel,
