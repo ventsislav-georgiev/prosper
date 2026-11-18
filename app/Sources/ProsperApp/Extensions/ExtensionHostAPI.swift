@@ -239,6 +239,44 @@ protocol ExtensionHostServices: AnyObject, Sendable {
     // extension holds. Called on disable/reset/quit so a wedged "disable sleep" can
     // never outlive its owner (stateless-resource teardown, plan §2.3).
     func resetResources(extensionID: String)
+
+    // #1550: take() forms. `owner` is the generation of the call that took the key; the take records it, and
+    // the undo (`owner:` on a cancel/off/remove/clear) releases (id, key) only while that generation still owns it,
+    // so a retired call's undo leaves a live generation's take of the same key alone. resetResources ignores owners.
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String, owner: Int)
+    func timerCancel(extensionID: String, id: String, owner: Int)
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool, owner: Int)
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool, owner: Int) async
+    func menubarSet(extensionID: String, id: String, json: String, owner: Int)
+    func menubarRemove(extensionID: String, id: String, owner: Int)
+    func keysSetRules(extensionID: String, json: String, owner: Int)
+    func keysClearRules(extensionID: String, owner: Int)
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool, owner: Int)
+    func fsUnwatch(extensionID: String, path: String, owner: Int)
+}
+
+/// #1550 defaults (test fakes and minimal hosts): forward to the plain calls, owner ignored.
+extension ExtensionHostServices {
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String, owner: Int) {
+        timerSchedule(extensionID: extensionID, id: id, every: every, seconds: seconds, handler: handler)
+    }
+    func timerCancel(extensionID: String, id: String, owner: Int) { timerCancel(extensionID: extensionID, id: id) }
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool, owner: Int) {
+        caffeinatePreventIdleSleep(extensionID: extensionID, kind: kind, on: on)
+    }
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool, owner: Int) async {
+        await caffeinateSetDisableLidSleep(extensionID: extensionID, on: on)
+    }
+    func menubarSet(extensionID: String, id: String, json: String, owner: Int) {
+        menubarSet(extensionID: extensionID, id: id, json: json)
+    }
+    func menubarRemove(extensionID: String, id: String, owner: Int) { menubarRemove(extensionID: extensionID, id: id) }
+    func keysSetRules(extensionID: String, json: String, owner: Int) { keysSetRules(extensionID: extensionID, json: json) }
+    func keysClearRules(extensionID: String, owner: Int) { keysSetRules(extensionID: extensionID, json: "[]") }
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool, owner: Int) {
+        fsWatch(extensionID: extensionID, path: path, handler: handler, hideSecrets: hideSecrets)
+    }
+    func fsUnwatch(extensionID: String, path: String, owner: Int) { fsUnwatch(extensionID: extensionID, path: path) }
 }
 
 extension ExtensionHostServices {
@@ -439,6 +477,9 @@ struct ExtensionHost {
     /// #1238: false once the call this VM is serving was retired by a teardown (the off-main lane sets it;
     /// the main-actor VM cannot straddle a teardown and keeps the default). Gates every host function but a read.
     let isCurrent: @Sendable () -> Bool
+    /// #1550: the generation (epoch) of the call this VM is serving, the owner a take records. The lane passes the
+    /// running epoch (0 and up); the main-actor VM keeps -1: it never undoes, and it differs from every lane epoch.
+    let generation: @Sendable () -> Int
 
     init(extensionID: String,
          services: ExtensionHostServices,
@@ -446,7 +487,8 @@ struct ExtensionHost {
          privileged: Bool = true,
          trusted: Bool = true,
          configOwner: ManagedConfigOwner? = nil,
-         isCurrent: @escaping @Sendable () -> Bool = { true }) {
+         isCurrent: @escaping @Sendable () -> Bool = { true },
+         generation: @escaping @Sendable () -> Int = { -1 }) {
         self.extensionID = extensionID
         self.services = services
         self.callTimeout = callTimeout
@@ -454,6 +496,7 @@ struct ExtensionHost {
         self.trusted = trusted
         self.configOwner = configOwner
         self.isCurrent = isCurrent
+        self.generation = generation
     }
 
     /// #1238: the host functions a call retired by a teardown may still make: they only read (nothing is held,
@@ -533,10 +576,13 @@ struct ExtensionHost {
         // #1238: a take by a retired generation is refused (a no-op: Lua sees the usual empty return). A take a
         // teardown overtook mid-call may land after the teardown's release: undo it at once, since no late
         // release comes if the extension is back on by the time the call returns.
-        func take(_ act: () -> Void, undo: () -> Void) {
+        // #1550: both get this call's generation, read once: the undo releases only what that generation still owns.
+        let generation = self.generation
+        func take(_ act: (Int) -> Void, undo: (Int) -> Void) {
             guard isCurrent() else { return }
-            act()
-            if !isCurrent() { undo() }
+            let owner = generation()
+            act(owner)
+            if !isCurrent() { undo(owner) }
         }
         // Lua numbers are Doubles: NaN/±inf trap Int()/Int32() and make JSONSerialization
         // raise an uncatchable NSException. Every number crossing into Swift as an Int or
@@ -965,8 +1011,8 @@ struct ExtensionHost {
             let seconds = finiteNumber(rt, 3) ?? 0  // NaN traps TimerScheduler's Int(leeway)
             let handler = rt.stringArgument(4) ?? ""
             guard !id.isEmpty, !handler.isEmpty else { return 0 }
-            take({ services.timerSchedule(extensionID: extID, id: id, every: every, seconds: seconds, handler: handler) },
-                 undo: { services.timerCancel(extensionID: extID, id: id) })
+            take({ services.timerSchedule(extensionID: extID, id: id, every: every, seconds: seconds, handler: handler, owner: $0) },
+                 undo: { services.timerCancel(extensionID: extID, id: id, owner: $0) })
             return 0
         }
         lua.register("__h_timer_cancel") { rt in
@@ -1010,11 +1056,11 @@ struct ExtensionHost {
         if automation {
             lua.register("__h_caf_idle") { rt in
                 let kind = rt.stringArgument(1) ?? "display"
-                let release = { services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: false) }
                 if rt.boolArgument(2) ?? false {
-                    take({ services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: true) }, undo: release)
+                    take({ services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: true, owner: $0) },
+                         undo: { services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: false, owner: $0) })
                 } else {
-                    release()
+                    services.caffeinatePreventIdleSleep(extensionID: extID, kind: kind, on: false)
                 }
                 return 0
             }
@@ -1027,10 +1073,12 @@ struct ExtensionHost {
                 // appended in VM call order so set(true)/set(false) apply strictly in
                 // order and none are dropped (a drop-based coalescer regressed this:
                 // a trailing set(false) killed the override → Mac slept on lid close).
-                let apply = { (on: Bool) in
-                    LidSleepHelper.enqueueApply { await services.caffeinateSetDisableLidSleep(extensionID: extID, on: on) }
+                if on {
+                    take({ owner in LidSleepHelper.enqueueApply { await services.caffeinateSetDisableLidSleep(extensionID: extID, on: true, owner: owner) } },
+                         undo: { owner in LidSleepHelper.enqueueApply { await services.caffeinateSetDisableLidSleep(extensionID: extID, on: false, owner: owner) } })
+                } else {
+                    LidSleepHelper.enqueueApply { await services.caffeinateSetDisableLidSleep(extensionID: extID, on: false) }
                 }
-                if on { take({ apply(true) }, undo: { apply(false) }) } else { apply(false) }
                 return 0
             }
             lua.register("__h_caf_remotewake") { rt in
@@ -1063,8 +1111,8 @@ struct ExtensionHost {
         if automation {
             lua.register("__h_menubar_set") { rt in
                 let id = rt.stringArgument(1) ?? ""
-                take({ services.menubarSet(extensionID: extID, id: id, json: rt.stringArgument(2) ?? "{}") },
-                     undo: { services.menubarRemove(extensionID: extID, id: id) })
+                take({ services.menubarSet(extensionID: extID, id: id, json: rt.stringArgument(2) ?? "{}", owner: $0) },
+                     undo: { services.menubarRemove(extensionID: extID, id: id, owner: $0) })
                 return 0
             }
             lua.register("__h_menubar_remove") { rt in
@@ -1172,8 +1220,8 @@ struct ExtensionHost {
             }
             lua.register("__h_keys_rules") { rt in
                 // A set replaces the id's whole rule set (the live generation's too): gated even when empty.
-                take({ services.keysSetRules(extensionID: extID, json: rt.stringArgument(1) ?? "[]") },
-                     undo: { services.keysSetRules(extensionID: extID, json: "[]") })
+                take({ services.keysSetRules(extensionID: extID, json: rt.stringArgument(1) ?? "[]", owner: $0) },
+                     undo: { services.keysClearRules(extensionID: extID, owner: $0) })
                 return 0
             }
             lua.register("__h_keys_stroke") { rt in
@@ -1189,8 +1237,8 @@ struct ExtensionHost {
                 let p = rt.stringArgument(1) ?? ""
                 if !secret(rt, p, "fs.watch") {
                     take({ services.fsWatch(extensionID: extID, path: p, handler: rt.stringArgument(2) ?? "",
-                                            hideSecrets: !systemTier) },
-                         undo: { services.fsUnwatch(extensionID: extID, path: p) })
+                                            hideSecrets: !systemTier, owner: $0) },
+                         undo: { services.fsUnwatch(extensionID: extID, path: p, owner: $0) })
                 }
                 return 0
             }

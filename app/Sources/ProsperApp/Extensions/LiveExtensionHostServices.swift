@@ -633,6 +633,15 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         TimerScheduler.shared.cancel(extID: extensionID, id: id)
     }
 
+    // #1550: the take forms (see ExtensionHostServices): the owner is recorded with the take, the undo checks it.
+    func timerSchedule(extensionID: String, id: String, every: Bool, seconds: Double, handler: String, owner: Int) {
+        TimerScheduler.shared.schedule(extID: extensionID, id: id, every: every, seconds: seconds, handler: handler, owner: owner)
+    }
+
+    func timerCancel(extensionID: String, id: String, owner: Int) {
+        TimerScheduler.shared.cancel(extID: extensionID, id: id, owner: owner)
+    }
+
     // MARK: Logging + environment
 
     private static let extLog = Logger(subsystem: "com.prosper.app", category: "extension")
@@ -651,6 +660,18 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool) {
         ExtensionResources.shared.setAssertion(extID: extensionID, kind: kind, on: on)
+    }
+
+    func caffeinatePreventIdleSleep(extensionID: String, kind: String, on: Bool, owner: Int) {
+        ExtensionResources.shared.setAssertion(extID: extensionID, kind: kind, on: on, owner: owner)
+    }
+
+    /// #1550: runs on LidSleepHelper's serial chain like the plain form, so the owner check and the apply are not
+    /// split by another apply. An undo whose owner no longer holds the flag sends no XPC: the live take keeps it.
+    func caffeinateSetDisableLidSleep(extensionID: String, on: Bool, owner: Int) async {
+        if !on, !ExtensionResources.shared.ownsLidSleepDisabled(extID: extensionID, owner: owner) { return }
+        let ok = await LidSleepHelper.applyExtensionOverride(on)
+        if ok || !on { ExtensionResources.shared.setLidSleepDisabled(extID: extensionID, on: on && ok, owner: owner) }
     }
 
     /// `pmset -a disablesleep` overrides lid-close sleep, and that needs root. We
@@ -984,6 +1005,7 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             // #1242: after the teardown returned (the record is off, or rebuilt by a reset), so the probe sees it.
             EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
             ExtensionFSWatch.shared.removeAll(extensionID: extensionID)
+            ExtensionTakeOwners.shared.removeAll(extensionID)
         }
     }
 
@@ -995,6 +1017,20 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
 
     func menubarRemove(extensionID: String, id: String) {
         Task { @MainActor in ExtensionMenuBar.shared.remove(extensionID: extensionID, id: id) }
+    }
+
+    func menubarSet(extensionID: String, id: String, json: String, owner: Int) {
+        Task { @MainActor in
+            ExtensionTakeOwners.shared.claim(extensionID, "menubar", id, owner: owner)
+            ExtensionMenuBar.shared.set(extensionID: extensionID, id: id, json: json)
+        }
+    }
+
+    func menubarRemove(extensionID: String, id: String, owner: Int) {
+        Task { @MainActor in
+            guard ExtensionTakeOwners.shared.release(extensionID, "menubar", id, owner: owner) else { return }
+            ExtensionMenuBar.shared.remove(extensionID: extensionID, id: id)
+        }
     }
 
     func dialogPrompt(json: String) async -> String? {
@@ -1073,6 +1109,21 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
         }
     }
+    func keysSetRules(extensionID: String, json: String, owner: Int) {
+        Task { @MainActor in
+            ExtensionTakeOwners.shared.claim(extensionID, "keys", "", owner: owner)
+            ExtensionKeyRules.shared.setRules(extensionID: extensionID, json: json)
+            EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
+        }
+    }
+
+    func keysClearRules(extensionID: String, owner: Int) {
+        Task { @MainActor in
+            guard ExtensionTakeOwners.shared.release(extensionID, "keys", "", owner: owner) else { return }
+            ExtensionKeyRules.shared.setRules(extensionID: extensionID, json: "[]")
+            EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
+        }
+    }
     func keysStroke(_ spec: String) {
         guard let chord = KeyChord(spec: spec) else { return }
         Task { @MainActor in KeyInjector.stroke(chord) }
@@ -1113,6 +1164,22 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         Task { @MainActor in ExtensionFSWatch.shared.finishUnwatch(key: key) }
     }
 
+    func fsWatch(extensionID: String, path: String, handler: String, hideSecrets: Bool, owner: Int) {
+        Task { @MainActor in
+            ExtensionTakeOwners.shared.claim(extensionID, "fs", path, owner: owner)
+            ExtensionFSWatch.shared.watch(extensionID: extensionID, path: path, handler: handler, hideSecrets: hideSecrets)
+        }
+    }
+
+    /// The undo of a retired take: decided on main with the watch itself, so the #983 lane mark is not needed
+    /// (the retired call's later runs are refused by its epoch anyway).
+    func fsUnwatch(extensionID: String, path: String, owner: Int) {
+        Task { @MainActor in
+            guard ExtensionTakeOwners.shared.release(extensionID, "fs", path, owner: owner) else { return }
+            ExtensionFSWatch.shared.unwatch(extensionID: extensionID, path: path)
+        }
+    }
+
     // MARK: Notifications
 
     func notify(title: String, body: String) {
@@ -1137,5 +1204,31 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
             return MainActor.assumeIsolated(body)
         }
         return DispatchQueue.main.sync { MainActor.assumeIsolated(body) }
+    }
+}
+
+/// #1550: who took each (id, kind, key) of the main-actor stores (menu bar items, key rule sets, fs watches): the
+/// generation of the call whose take holds it. Read and written in the same main-actor turn as the store change, so
+/// a take and an undo cannot interleave. Explicit removes leave the entry: an undo then finds nothing to release.
+@MainActor
+final class ExtensionTakeOwners {
+    static let shared = ExtensionTakeOwners()
+    private var owners: [String: Int] = [:]
+
+    private static func key(_ id: String, _ kind: String, _ key: String) -> String { "\(id)\u{1}\(kind)\u{1}\(key)" }
+
+    func claim(_ id: String, _ kind: String, _ key: String, owner: Int) { owners[Self.key(id, kind, key)] = owner }
+
+    /// True (and forgotten) only while `owner` still holds the key; false leaves a later generation's take alone.
+    func release(_ id: String, _ kind: String, _ key: String, owner: Int) -> Bool {
+        let k = Self.key(id, kind, key)
+        guard owners[k] == owner else { return false }
+        owners[k] = nil
+        return true
+    }
+
+    /// Teardown: everything under the id, whoever took it.
+    func removeAll(_ id: String) {
+        for k in owners.keys where k.hasPrefix("\(id)\u{1}") { owners[k] = nil }
     }
 }

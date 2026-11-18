@@ -1902,6 +1902,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: changing the theme, accent, light or dark, opacity or UI size now re-themes the
   open window in place: the sidebar keeps its scroll position, an open Rename field keeps its text
   and focus, and the terminal keeps its screen and scrollback. (#891)
+- Extensions: when an extension is turned off and back on while one of its calls is still finishing,
+  that late call no longer drops the power assertion, lid-sleep override, timer, menu bar item, key
+  rules or file watch the newly running extension just set up. (#1550)
 
 ## v2.174.0
 

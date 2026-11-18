@@ -34,7 +34,22 @@ final class ExtensionResources: @unchecked Sendable {
     private var assertions: [String: IOPMAssertionID] = [:]
     /// Extensions that currently hold the pmset disable-lid-sleep override.
     private var lidSleepDisabledBy: Set<String> = []
+    /// #1550: the generation whose take holds each key ("extID\u{1}assert.<kind>", "extID\u{1}lid"); see release(_:owner:).
+    private var owners: [String: Int] = [:]
     private let log = Logger(subsystem: "com.prosper.app", category: "ext-resources")
+    /// Seams (#1550 rows pass fakes): IOPMAssertionCreateWithName and IOPMAssertionRelease.
+    private let createAssertion: (CFString, CFString) -> IOPMAssertionID?
+    private let releaseAssertion: (IOPMAssertionID) -> Void
+
+    init(createAssertion: @escaping (CFString, CFString) -> IOPMAssertionID? = { type, reason in
+            var id: IOPMAssertionID = 0
+            let r = IOPMAssertionCreateWithName(type, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason, &id)
+            return r == kIOReturnSuccess ? id : nil
+         },
+         releaseAssertion: @escaping (IOPMAssertionID) -> Void = { _ = IOPMAssertionRelease($0) }) {
+        self.createAssertion = createAssertion
+        self.releaseAssertion = releaseAssertion
+    }
 
     private static func key(_ extID: String, _ name: String) -> String { "\(extID)\u{1}\(name)" }
 
@@ -42,23 +57,37 @@ final class ExtensionResources: @unchecked Sendable {
 
     /// Create or release a named idle-sleep assertion for an extension. `kind` is
     /// "display" (PreventUserIdleDisplaySleep) or "system"
-    /// (PreventUserIdleSystemSleep). Idempotent per (extID, kind).
-    func setAssertion(extID: String, kind: String, on: Bool) {
+    /// (PreventUserIdleSystemSleep). Idempotent per (extID, kind). #1550: an `owner` on records it with the
+    /// hold (a held one changes owner); an `owner` off releases only while that owner still holds it.
+    func setAssertion(extID: String, kind: String, on: Bool, owner: Int? = nil) {
         let assertionType = (kind == "system"
             ? kIOPMAssertionTypePreventUserIdleSystemSleep
             : kIOPMAssertionTypePreventUserIdleDisplaySleep) as CFString
         let k = Self.key(extID, "assert.\(kind)")
         lock.lock(); defer { lock.unlock() }
         if on {
+            owners[k] = owner
             guard assertions[k] == nil else { return }
-            var id: IOPMAssertionID = 0
             let reason = "Prosper extension \(extID)" as CFString
-            let r = IOPMAssertionCreateWithName(assertionType, IOPMAssertionLevel(kIOPMAssertionLevelOn), reason, &id)
-            if r == kIOReturnSuccess { assertions[k] = id }
-            else { log.error("IOPMAssertionCreateWithName failed (\(r)) for \(extID, privacy: .public)") }
+            if let id = createAssertion(assertionType, reason) { assertions[k] = id }
+            else { log.error("IOPMAssertionCreateWithName failed for \(extID, privacy: .public)") }
         } else {
-            if let id = assertions[k] { IOPMAssertionRelease(id); assertions[k] = nil }
+            guard ownedLocked(k, owner) else { return }
+            if let id = assertions[k] { releaseAssertion(id); assertions[k] = nil }
         }
+    }
+
+    func holdsAssertion(extID: String, kind: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return assertions[Self.key(extID, "assert.\(kind)")] != nil
+    }
+
+    /// #1550: a release with no owner always acts (and clears the owner); one with an owner acts only while that
+    /// owner holds the key, so a retired call's undo leaves a live generation's take of the same key alone.
+    private func ownedLocked(_ k: String, _ owner: Int?) -> Bool {
+        if let owner, owners[k] != owner { return false }
+        owners[k] = nil
+        return true
     }
 
     // MARK: pmset lid-sleep override (tracked so it always gets reset)
@@ -66,9 +95,17 @@ final class ExtensionResources: @unchecked Sendable {
     /// Record/clear that an extension holds the pmset disable-lid-sleep override.
     /// The actual `pmset -a disablesleep` shell call is done by the caller (it needs
     /// the privileged shell lane); this only tracks ownership for teardown.
-    func setLidSleepDisabled(extID: String, on: Bool) {
+    func setLidSleepDisabled(extID: String, on: Bool, owner: Int? = nil) {
         lock.lock(); defer { lock.unlock() }
-        if on { lidSleepDisabledBy.insert(extID) } else { lidSleepDisabledBy.remove(extID) }
+        let k = Self.key(extID, "lid")
+        if on { owners[k] = owner; lidSleepDisabledBy.insert(extID) }
+        else if ownedLocked(k, owner) { lidSleepDisabledBy.remove(extID) }
+    }
+
+    /// #1550: whether a release with `owner` would act now (see ownedLocked); the lid undo asks before its XPC.
+    func ownsLidSleepDisabled(extID: String, owner: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return owners[Self.key(extID, "lid")] == owner
     }
 
     func holdsLidSleepDisabled(extID: String) -> Bool {
@@ -84,8 +121,9 @@ final class ExtensionResources: @unchecked Sendable {
     func releaseAll(extID: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         for (k, id) in assertions where k.hasPrefix("\(extID)\u{1}") {
-            IOPMAssertionRelease(id); assertions[k] = nil
+            releaseAssertion(id); assertions[k] = nil
         }
+        for k in owners.keys where k.hasPrefix("\(extID)\u{1}") { owners[k] = nil }
         let hadLid = lidSleepDisabledBy.remove(extID) != nil
         return hadLid
     }

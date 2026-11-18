@@ -34,6 +34,9 @@ final class TimerScheduler: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.prosper.extensions.timers")
     private var entries: [String: Entry] = [:]          // key = "extID\u{1}id"
     private var sources: [String: DispatchSourceTimer] = [:]
+    /// #1550: the generation whose take() scheduled each key; not persisted (a restored timer has no owner, so no
+    /// owned cancel touches it). Cleared by every plain schedule, cancel, cancelAll and one-shot fire.
+    private var owners: [String: Int] = [:]
     private let store: TimerStore
     private let log = Logger(subsystem: "com.prosper.app", category: "ext-timers")
 
@@ -65,20 +68,27 @@ final class TimerScheduler: @unchecked Sendable {
     /// Schedule (or replace) a named timer for an extension. `seconds` is the delay
     /// (one-shot) or period (repeating); clamped to a sane floor so a buggy `every=0`
     /// can't spin.
-    func schedule(extID: String, id: String, every: Bool, seconds: Double, handler: String) {
+    func schedule(extID: String, id: String, every: Bool, seconds: Double, handler: String, owner: Int? = nil) {
         let secs = Self.clamp(seconds, floor: every ? 0.05 : 0)
         queue.async {
             let entry = Entry(extID: extID, id: id, handler: handler, every: every,
                               interval: secs, fireAt: self.now() + secs)
             self.entries[Self.key(extID, id)] = entry
+            self.owners[Self.key(extID, id)] = owner
             self.persistLocked()
             self.armLocked(entry)
         }
     }
 
     /// Cancel a single named timer (no-op if absent).
-    func cancel(extID: String, id: String) {
-        queue.async { self.removeLocked(Self.key(extID, id)) ; self.persistLocked() }
+    /// #1550: with an `owner` (a take's undo), only while that owner's schedule is still the one held, so a
+    /// retired call's undo leaves a live generation's timer of the same id alone.
+    func cancel(extID: String, id: String, owner: Int? = nil) {
+        queue.async {
+            let k = Self.key(extID, id)
+            if let owner, self.owners[k] != owner { return }
+            self.removeLocked(k); self.persistLocked()
+        }
     }
 
     /// Cancel every timer owned by an extension (used when it is disabled/reset).
@@ -158,6 +168,7 @@ final class TimerScheduler: @unchecked Sendable {
         sources[k]?.cancel()
         sources[k] = nil
         entries[k] = nil
+        owners[k] = nil
     }
 
     private func persistLocked() {

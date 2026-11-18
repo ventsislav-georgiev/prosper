@@ -211,6 +211,12 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         return running[id] == (epochs[id] ?? 0)
     }
 
+    /// #1550: the epoch of the call running on `id`'s lane: the owner its takes record. Read on that lane.
+    private func runningEpoch(_ id: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return running[id] ?? -1
+    }
+
     /// Run `spec.handler(args…)` on the extension's lane, building + caching the VM
     /// on first use. Returns the handler's string result, or nil to decline / error.
     /// MainActor: the epoch is read and the job enqueued in the caller's turn, so no
@@ -271,7 +277,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                                   callTimeout: spec.callTimeout,
                                   privileged: spec.privileged, trusted: spec.trusted,
                                   configOwner: spec.configOwner,
-                                  isCurrent: { [weak self] in self?.callIsCurrent(id) ?? false }).install(into: rt)
+                                  isCurrent: { [weak self] in self?.callIsCurrent(id) ?? false },
+                                  generation: { [weak self] in self?.runningEpoch(id) ?? -1 }).install(into: rt)
                 let source = try BoundedFileRead.text(spec.entryURL, maxBytes: BoundedFileRead.entryLuaMaxBytes)
                 try rt.run(source, name: "@\(spec.extensionID)")
                 lock.lock(); cache[spec.extensionID] = rt; lock.unlock()
