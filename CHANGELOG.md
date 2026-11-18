@@ -895,8 +895,8 @@ tag from the now-released section and put it on the new top draft.
   darker, so it now meets the 4.5:1 contrast minimum there. (#1129)
 - ccpool: with "Start new Claude sessions through the pool" turned on in the ccpool settings, new
   sessions you start from Prosper (Agent Island's New session or the New session form) that run
-  claude now go through the pool, and any Anthropic API key or auth token in their environment is
-  left out. The New session form shows "via ccpool" next to the command when that applies.
+  claude now go through the pool, keeping any Anthropic API key or tokens in their environment
+  (#1570). The New session form shows "via ccpool" next to the command when that applies.
   headroom, shells, other programs and sessions started in a terminal are unchanged. (#914, #1200)
 - Text Viewer: Markdown files with a long line of spaces or tabs are no longer shown as source with
   "Nested too deeply"; a list line that opens two items ("1. - x") shows both markers; a table wider
@@ -1758,7 +1758,7 @@ tag from the now-released section and put it on the new top draft.
 - X-ray Refs list terms, identifiers and backticked words from the conversation, with where they
   were first mentioned (dch 1.93.0 or newer). (#1489)
 - Resuming a session now routes it through the account pool, as a new session is (Resume interrupted
-  still is not), even when your shell startup files set ANTHROPIC_BASE_URL or an API key. (#1219,
+  still is not), even when your shell startup files set ANTHROPIC_BASE_URL; API keys and tokens are kept. (#1219,
   #1499)
 - Agent Island > Row details now has a toggle for every part of a session row: model, effort, state,
   agents, merged, open PRs, age and the Command 1-9 shortcut chip; model and effort show only where
