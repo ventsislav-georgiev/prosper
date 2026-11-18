@@ -430,7 +430,7 @@ private final class PublishCalls: @unchecked Sendable {
     private let lock = NSLock()
     private var seen: [String] = []
     var all: [String] { lock.withLock { seen } }
-    var fake: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void {
+    var fake: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.Preview?) async throws -> Void {
         { [self] m, _, _, _ in lock.withLock { seen.append("\(m.id) \(m.version)") } }
     }
 }

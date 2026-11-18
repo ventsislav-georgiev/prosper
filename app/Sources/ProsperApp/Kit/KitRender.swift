@@ -26,6 +26,12 @@ struct KitRenderContext: Equatable, Sendable {
             runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path)
     }
 
+    /// #919 S2: the Marketplace listing's context: the placeholders themselves, so a listing names no path of the publisher's Mac.
+    static func listing(extensionID: String) -> KitRenderContext {
+        KitRenderContext(extensionID: extensionID, kitDir: "{{kit_dir}}", kitBin: "{{kit_bin}}", kitConfig: "{{kit_config}}",
+                         home: "{{home}}", runner: "prosper-kit-run")
+    }
+
     /// #920: the agents validator refuses a file holding one of these (an agent file is never rendered)
     static let placeholderKeys = ["{{kit_dir}}", "{{kit_bin}}", "{{kit_config}}", "{{home}}"]
 

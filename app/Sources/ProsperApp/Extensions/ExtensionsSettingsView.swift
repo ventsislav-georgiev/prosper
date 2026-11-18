@@ -146,17 +146,21 @@ struct ExtensionRow: View {
     /// #1182: the live Marketplace version for an id; a row passes a fake. Sendable, run from the row's task.
     let fetchVersion: @Sendable (String) async -> String?
     /// #1182: the Marketplace upload (manifest, blob, kind, preview); a row passes a fake. Sendable, run from publish's task.
-    let publishCall: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void
+    let publishCall: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.Preview?) async throws -> Void
 
     init(registry: ExtensionRegistry, record: ExtensionRecord,
          fetchVersion: @escaping @Sendable (String) async -> String? = { await MarketClient.publishedVersion(id: $0) },
-         publishCall: @escaping @Sendable (MarketClient.PublishManifest, String, String, MarketClient.ThemePreview?) async throws -> Void
-             = { try await MarketClient.publish(manifest: $0, blobBase64: $1, kind: $2, preview: $3) }) {
+         publishCall: @escaping @Sendable (MarketClient.PublishManifest, String, String, MarketClient.Preview?) async throws -> Void
+             = { try await MarketClient.publish(manifest: $0, blobBase64: $1, kind: $2, preview: $3) },
+         workRoot: URL = FileManager.default.temporaryDirectory) {
         self.registry = registry
         self.record = record
         self.fetchVersion = fetchVersion
         self.publishCall = publishCall
+        self.workRoot = workRoot
     }
+    /// #919 S2: the temp folder a kit publish unpacks its own blob in; a row passes its tempDir().
+    let workRoot: URL
 
     @State private var publishing = false
     /// Latest version live on the marketplace for this id (nil = never published /
@@ -307,6 +311,34 @@ struct ExtensionRow: View {
         return ("theme", swatches.isEmpty ? nil : .init(themes: swatches))
     }
 
+    /// #919 S2: a kit's listing, computed over the packed blob unpacked as an install would (the dev folder's hidden
+    /// and test files are not in it). The work folder is removed on every path. Throws the refusals or a too-large preview.
+    nonisolated static func kitListing(blob: String, id: String, tempRoot: URL) throws -> KitListingPreview {
+        guard let data = Data(base64Encoded: blob) else { throw KitPublishRefused(text: "The packed kit could not be read.") }
+        let dir = try RemoteInstaller.extract(data, workName: "prosper-market-publish-\(id)", tempRoot: tempRoot, stripTopLevel: false)
+        defer { RemoteInstaller.removeWorkFolder(holding: dir, tempRoot: tempRoot) }
+        // the unpacked extension.toml through the loader's guarded decode; "0.0.0" is the dev host (no min_version floor:
+        // which app versions can install it is not the publisher's Mac's question)
+        let manifest = try ExtensionLoader.load(directory: dir, isSystem: false, hostVersion: "0.0.0").manifest
+        switch KitValidator.validate(kitDir: dir, manifest: manifest, source: .market, otherKitSlugs: []) {
+        case .refused(let why):
+            throw KitPublishRefused(text: "This kit can't be published: " + why.map(\.description).joined(separator: "; "))
+        case .ok(let v):
+            let readme = (try? BoundedFileRead.data(dir.appendingPathComponent("README.md"), maxBytes: KitValidator.maxTextBytes))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            let listing = KitListingPreview.make(v, readme: readme)
+            // the server's cap (market.ts): the encoded preview object, in UTF-16 units
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .withoutEscapingSlashes   // as JSON.stringify writes "/"
+            let encoded = try encoder.encode(MarketClient.Preview(kit: listing))
+            guard (String(data: encoded, encoding: .utf8) ?? "").utf16.count <= maxPreviewUnits else {
+                throw KitPublishRefused(text: "The marketplace preview is too large to publish.")
+            }
+            return listing
+        }
+    }
+    nonisolated static let maxPreviewUnits = 16384
+
     // MARK: Actions
 
     private func setEnabled(_ on: Bool) {
@@ -368,13 +400,26 @@ struct ExtensionRow: View {
         publishing = true
         let m = meta
         let themes = record.manifest.contributes?.allThemes ?? []
+        let isKit = record.manifest.contributes?.kit != nil
+        let root = workRoot
         Task {
             do {
                 let blob = try await PublishActions.pack(dir, plan)
                 let manifest = MarketClient.PublishManifest(
                     id: m.id, name: m.name, title: m.title, description: m.description,
                     version: m.version, author: m.author, icon: m.icon, license: m.license)
-                let (kind, preview) = Self.themePreview(themes: themes, dir: dir, members: plan.members)
+                let kind: String
+                let preview: MarketClient.Preview?
+                if isKit {
+                    // the listing is computed over the packed blob, unpacked as an install would; refused: nothing is uploaded
+                    kind = "kit"
+                    let listing = try await Task.detached { try Self.kitListing(blob: blob, id: m.id, tempRoot: root) }.value
+                    preview = MarketClient.Preview(kit: listing)
+                } else {
+                    let t = Self.themePreview(themes: themes, dir: dir, members: plan.members)
+                    kind = t.kind
+                    preview = t.preview.map { MarketClient.Preview(themes: $0.themes) }
+                }
                 try await publishCall(manifest, blob, kind, preview)
                 await MainActor.run { publishing = false; publishedVersion = m.version }
             } catch {
@@ -385,6 +430,12 @@ struct ExtensionRow: View {
             }
         }
     }
+}
+
+/// #919 S2: a kit publish refused before anything is uploaded; the row shows `text`.
+struct KitPublishRefused: Error, LocalizedError, Equatable {
+    let text: String
+    var errorDescription: String? { text }
 }
 
 /// #1141: a publish waits here between the Publish button and the upload. Main actor: SwiftUI bodies

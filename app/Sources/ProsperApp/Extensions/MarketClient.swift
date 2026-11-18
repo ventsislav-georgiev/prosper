@@ -22,10 +22,26 @@ enum MarketClient {
         let downloads: Int
         let updated_at: Int
         let kind: String?
-        let preview: ThemePreview?
+        let preview: Preview?
 
         var latestVersion: String { latest_version }
         var isTheme: Bool { kind == "theme" }
+        var isKit: Bool { kind == "kit" }
+    }
+
+    /// #919 S2: a listing's preview, read field by field: a field (or a whole preview) of a shape this build does not
+    /// know reads as nil, so a newer server's preview never fails the page.
+    struct Preview: Codable, Sendable, Equatable {
+        var themes: [ThemePreview.Swatch]?
+        var kit: KitListingPreview?
+
+        init(themes: [ThemePreview.Swatch]? = nil, kit: KitListingPreview? = nil) { self.themes = themes; self.kit = kit }
+
+        init(from decoder: any Decoder) throws {
+            let c = try? decoder.container(keyedBy: CodingKeys.self)
+            themes = (try? c?.decodeIfPresent([ThemePreview.Swatch].self, forKey: .themes)) ?? nil
+            kit = (try? c?.decodeIfPresent(KitListingPreview.self, forKey: .kit)) ?? nil
+        }
     }
 
     /// Look-and-feel preview for theme packages: each contributed theme's flat
@@ -80,7 +96,8 @@ enum MarketClient {
             "not_owner": "Another account already owns this extension id.",
             "version_exists": "That version is already published — bump the version and try again.",
             "too_large": "The extension is too large to publish (256 KB max).",
-            "preview_too_large": "The theme preview is too large to publish.",
+            "preview_too_large": "The marketplace preview is too large to publish.",
+            "kit_preview_missing": "A kit is published with its preview; this one had none.",
             "invalid_id": "The extension id isn't a valid reverse-DNS identifier.",
             "invalid_version": "The version isn't valid semver (e.g. 1.2.3).",
             "missing_fields": "The manifest is missing a required field (name, title, or author).",
@@ -152,9 +169,9 @@ enum MarketClient {
     /// gzipped tarball of the extension directory; `kind`/`preview` are the
     /// marketplace category + look-and-feel strip (set for theme packages).
     static func publish(manifest: PublishManifest, blobBase64: String,
-                        kind: String = "extension", preview: ThemePreview? = nil) async throws {
+                        kind: String = "extension", preview: Preview? = nil) async throws {
         guard let session = SupporterStore.load()?.session else { throw MarketError.notSignedIn }
-        struct Body: Codable { let manifest: PublishManifest; let blob: String; let kind: String; let preview: ThemePreview? }
+        struct Body: Codable { let manifest: PublishManifest; let blob: String; let kind: String; let preview: Preview? }
         let body = try JSONEncoder().encode(Body(manifest: manifest, blob: blobBase64, kind: kind, preview: preview))
         let (data, code) = try await send("POST", path: "/market/publish", session: session, body: body)
         guard code < 300 else { throw MarketError.http(code, errorText(data)) }

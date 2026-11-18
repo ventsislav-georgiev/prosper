@@ -307,7 +307,7 @@ struct MarketplaceRootView: View {
                 }
             }
             if let preview = pkg.preview {
-                ForEach(Array(preview.themes.enumerated()), id: \.offset) { _, swatch in
+                ForEach(Array((preview.themes ?? []).enumerated()), id: \.offset) { _, swatch in
                     ThemePreviewStrip(swatch: swatch)
                 }
             }
