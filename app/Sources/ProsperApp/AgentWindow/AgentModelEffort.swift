@@ -144,7 +144,7 @@ struct AgentModelEffort: Equatable, Sendable {
     }
 
     /// Outside text made safe for a notice: the local-command tags and terminal escape sequences dropped, every other
-    /// control or format character dropped, whitespace folded, cut to `maxAnswer` characters; nil when nothing is left.
+    /// control or format character dropped, whitespace folded, then OutsideText.shown (cut to `maxAnswer` characters); nil when nothing is left.
     static func clean(_ text: String) -> String? {
         var t = text
         for tag in ["<local-command-stdout>", "</local-command-stdout>", "<local-command-stderr>", "</local-command-stderr>"] {
@@ -154,8 +154,11 @@ struct AgentModelEffort: Equatable, Sendable {
         let kept = String(String.UnicodeScalarView(t.unicodeScalars.map {
             [.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) ? " " : $0
         }))
-        let folded = kept.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return folded.isEmpty ? nil : String(folded.prefix(maxAnswer))
+        // R1528 s1: the tree's rule for outside text (fillers such as U+3164 dropped, combining marks capped), then folded
+        // (a dropped filler may leave two spaces) and cut to maxAnswer with an ellipsis.
+        let folded = OutsideText.shown(kept, max: .max).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let shown = OutsideText.shown(folded, max: maxAnswer)
+        return shown.isEmpty ? nil : shown
     }
 
     // MARK: - Short name

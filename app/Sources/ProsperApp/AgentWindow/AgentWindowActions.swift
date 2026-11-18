@@ -391,6 +391,22 @@ enum AgentModelSwitch {
     static let unconfirmed = "Couldn't confirm the switch. Open in terminal"
     static let noScreen = "This dch can't confirm a switch. Open in terminal"
     static func requestedText(_ level: String) -> String { "Requested: \(level) (from the next message)" }
+    /// R1528 i3: the dch result texts of a message, in the switch's own words.
+    static let notSubmitted = "The command is in Claude's input but wasn't run. Open in terminal"
+    static let draftLeft = "The command may still be in Claude's input, but it wasn't run. Open in terminal"
+    static let notSent = "Not switched: dch was stopped before it typed the command. Try again"
+    static func words(_ why: String) -> String {
+        switch why {
+        case AgentWindowText.notSubmitted: return notSubmitted
+        case AgentWindowText.draftLeft: return draftLeft
+        case AgentWindowText.notSent: return notSent
+        default: return why
+        }
+    }
+    /// R1528 s2: words that mark an answer as a refusal. Source: the refusals Claude Code is seen to give (a model or
+    /// effort the plan or model does not offer: "not available", "not supported", "invalid", "unknown") and the generic
+    /// failure words; Claude Code's wording is not documented (spec N4). Any other answer is shown neutrally.
+    static let refusalMarkers = ["notavailable", "notsupported", "invalid", "unknown", "unrecognized", "cannot", "can't", "failed", "error"]
     static func refused(_ answer: String) -> String { "Not switched. Claude Code answered: \(answer)" }
     static func switched(_ answer: String) -> String { "Claude Code answered: \(answer)" }
     static func kept(_ level: String) -> String {
@@ -418,33 +434,43 @@ enum AgentModelSwitch {
         screen.split(separator: "\n", omittingEmptySubsequences: false).filter { echoes(c, String($0)) }.count
     }
 
-    /// What Claude Code's answer means: a model is switched only when the answer sets the model and names the alias; an
-    /// effort answer that does not set and name the level is a refusal; one that does waits for the next answer
-    /// (`requested`), as does no answer at all (spec d: effort is confirmed only by the next answer).
+    /// What Claude Code's answer means (R1528 s2): a refusal only when it carries a `refusalMarkers` word, or says "Set
+    /// ..." (the shortcut wording) without naming the asked value (another alias or level); any other wording is shown
+    /// neutrally (`switched`), never as a failure. An effort answer waits for the next answer (`requested`), as does no
+    /// answer at all (spec d: effort is confirmed only by the next answer).
     /// shortcut: Claude Code's answer wording is not documented (spec N4): "Set ..." naming the value; re-check on a live capture.
     static func verdict(_ c: Command, _ answer: String?) -> AgentWindowOutcome {
         let flat = (answer ?? "").lowercased().filter { !$0.isWhitespace }
+        let said = answer.map { _ in c.isModel ? flat.contains("setmodelto") : flat.hasPrefix("set") } ?? false
+        let refusal = refusalMarkers.contains { flat.contains($0) } || (said && !flat.contains(c.value))
         if c.isModel {
             guard let answer else { return .failed(unconfirmed) }
-            return flat.contains("setmodelto") && flat.contains(c.value) ? .answered(switched(answer)) : .failed(refused(answer))
+            return refusal ? .failed(refused(answer)) : .answered(switched(answer))
         }
         guard let answer else { return .answered(requestedText(c.value)) }
-        return flat.hasPrefix("set") && flat.contains(c.value) ? .answered(requestedText(c.value) + ". " + switched(answer))
-            : .failed(refused(answer))
+        return refusal ? .failed(refused(answer)) : .answered(requestedText(c.value) + ". " + switched(answer))
     }
 
     /// An effort sent and taken, waiting for the next answer to carry it.
     struct Pending: Equatable {
         let level: String
         var sawWorking = false
+        /// Answers (the row worked, then stopped) that carried no effort.
+        var missed = 0
     }
+    /// R1528 n2: a request is dropped after this many answers without an effort.
+    static let maxMissed = 3
 
     /// The next answer after an effort switch: the row worked, then stopped with an effort. Same level: confirmed (nil
     /// pending, no notice); another: the "may override" notice. Row gone: dropped. Else still pending.
     static func landed(_ p: Pending, _ row: AgentSession?) -> (pending: Pending?, notice: String?) {
         guard let row else { return (nil, nil) }
-        if row.state == .working { return (Pending(level: p.level, sawWorking: true), nil) }
-        guard p.sawWorking, let e = row.effort else { return (p, nil) }
+        if row.state == .working { return (Pending(level: p.level, sawWorking: true, missed: p.missed), nil) }
+        guard p.sawWorking else { return (p, nil) }
+        guard let e = row.effort else {
+            let q = Pending(level: p.level, sawWorking: false, missed: p.missed + 1)
+            return (q.missed >= maxMissed ? nil : q, nil)
+        }
         return (nil, e == p.level ? nil : kept(e))
     }
 }
@@ -632,7 +658,7 @@ struct AgentWindowDriver: Sendable {
         if let why = refusal(shown, lite: AgentModelSwitch.noScreen) { return .failed(why) }
         let path = transcript.flatMap { $0.isEmpty ? nil : $0 }
         let size = path.flatMap { files.size($0) }, before = AgentModelSwitch.echoCount(c, shown)
-        if let why = Self.sayFailure(Self.sayReply(io.say(key, c.text))) { return .failed(why) }
+        if let why = Self.sayFailure(Self.sayReply(io.say(key, c.text))) { return .failed(AgentModelSwitch.words(why)) }
         for _ in 0..<confirmReads {
             pause(confirmStep)
             var answer: String?
@@ -1276,7 +1302,9 @@ final class AgentWindowInteraction: ObservableObject {
             say(AgentWindowControls.lockPlaceholder(lock))
             return
         }
-        guard let controller, !busy else { return }
+        guard let controller else { return }
+        // R1528 n1: a menu switch (`tell`) made while another action is in flight says so.
+        guard !busy else { if tell != nil { say(AgentWindowText.busy) }; return }
         // #1135: dch lists its Claude as not in front: every key or message would go to a shell.
         if s.claudeForeground == false {
             say(AgentWindowText.notForeground)

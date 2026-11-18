@@ -181,8 +181,9 @@ final class AgentModelSwitchTests: XCTestCase {
         files.append([
             ["type": "system", "subtype": "local_command",
              "content": "<command-name>/model</command-name>\n<command-args>opus</command-args>"],
-            Self.localCommand("<local-command-stdout>Set model to sonnet</local-command-stdout>", sidechain: true),
             Self.localCommand("<local-command-stdout>Set model to \u{1B}[1mopus (claude-opus-4-1)\u{1B}[22m</local-command-stdout>"),
+            // R1528 s4: the sidechain line is the NEWEST one: only the isSidechain check keeps it from being the answer.
+            Self.localCommand("<local-command-stdout>Set model to sonnet</local-command-stdout>", sidechain: true),
         ])
         let f = Fake()   // the screen never shows it: the transcript line decides
         XCTAssertEqual(driver(f.io).switchTo(c, transcript: "/Users/example/t.jsonl", files: files.io),
@@ -213,6 +214,119 @@ final class AgentModelSwitchTests: XCTestCase {
         XCTAssertEqual(AgentModelEffort.clean("a\u{1B}[31m\u{202E}b\u{0}\n c"), "a b c")
         XCTAssertTrue(AgentModelEffort.clean(" \u{1B}[0m ") == nil)
         XCTAssertEqual(AgentModelEffort.clean(String(repeating: "x", count: 900))?.count, AgentModelEffort.maxAnswer)
+    }
+
+    // MARK: - R1528 riders
+
+    func testAnswerGoesThroughOutsideText() {
+        let marks = String(repeating: "\u{0301}", count: 200)
+        let out = AgentModelEffort.clean("<local-command-stdout>Set o" + marks + " \u{3164}\u{3164} \u{FE0F}x</local-command-stdout>")
+        XCTAssertEqual(out, "Set o" + String(repeating: "\u{0301}", count: OutsideText.maxMarks) + " x", "fillers dropped, marks capped")
+        XCTAssertTrue(AgentModelEffort.clean("\u{3164}\u{2800}\u{034F}") == nil, "nothing left")
+        XCTAssertEqual(AgentModelEffort.clean(String(repeating: "x", count: 900)), OutsideText.shown(String(repeating: "x", count: 900), max: AgentModelEffort.maxAnswer))
+    }
+
+    func testUnrecognisedWordingIsShownNeutrallyAndOnlyRefusalsFail() throws {
+        let m = try XCTUnwrap(AgentModelSwitch.Command.model("opus"))
+        let e = try XCTUnwrap(AgentModelSwitch.Command.effort("high"))
+        XCTAssertEqual(AgentModelSwitch.verdict(m, "Model changed to Opus 4.1"), .answered(AgentModelSwitch.switched("Model changed to Opus 4.1")))
+        XCTAssertEqual(AgentModelSwitch.verdict(e, "Effort is now high"),
+                       .answered(AgentModelSwitch.requestedText("high") + ". " + AgentModelSwitch.switched("Effort is now high")))
+        XCTAssertEqual(AgentModelSwitch.verdict(m, "Set model to opus"), .answered(AgentModelSwitch.switched("Set model to opus")))
+        for marker in AgentModelSwitch.refusalMarkers {
+            XCTAssertEqual(AgentModelSwitch.verdict(m, "Model: " + marker), .failed(AgentModelSwitch.refused("Model: " + marker)), marker)
+            XCTAssertEqual(AgentModelSwitch.verdict(e, "Effort: " + marker), .failed(AgentModelSwitch.refused("Effort: " + marker)), marker)
+        }
+        XCTAssertEqual(AgentModelSwitch.verdict(m, nil), .failed(AgentModelSwitch.unconfirmed))
+    }
+
+    func testAnotherAliasInTheAnswerIsNotTheAskedSwitch() throws {
+        let m = try XCTUnwrap(AgentModelSwitch.Command.model("opus"))
+        XCTAssertEqual(AgentModelSwitch.verdict(m, "Set model to sonnet"), .failed(AgentModelSwitch.refused("Set model to sonnet")))
+        let e = try XCTUnwrap(AgentModelSwitch.Command.effort("high"))
+        XCTAssertEqual(AgentModelSwitch.verdict(e, "Set effort level to low"), .failed(AgentModelSwitch.refused("Set effort level to low")))
+    }
+
+    /// A transcript of `bytes` read through a recording fake: every read length is kept.
+    final class Window: @unchecked Sendable {
+        let data: Data
+        let lock = NSLock()
+        var lengths: [Int] = []
+        init(_ data: Data) { self.data = data }
+        func read(_ offset: UInt64, _ length: Int) -> Data? {
+            lock.withLock { lengths.append(length) }
+            guard Int(offset) + length <= data.count else { return nil }
+            return data.subdata(in: Int(offset)..<(Int(offset) + length))
+        }
+    }
+
+    static let answerLine = #"{"type":"system","subtype":"local_command","content":"<local-command-stdout>Set model to opus</local-command-stdout>"}"#
+
+    func testAnswerBeyondTheReadWindowIsNotRead() {
+        let filler = Data((String(repeating: "x", count: 99) + "\n").utf8)
+        var big = Data("\n".utf8) + Data((Self.answerLine + "\n").utf8)
+        for _ in 0..<2048 { big += filler }   // about 200 KiB after the answer
+        let w = Window(big)
+        XCTAssertTrue(AgentModelEffort.localAnswer(after: 1, size: UInt64(big.count), read: w.read) == nil, "older than the window")
+        XCTAssertTrue(w.lock.withLock { w.lengths }.allSatisfy { $0 <= Int(AgentModelEffort.answerWindow) }, "never past the window")
+        XCTAssertEqual(w.lock.withLock { w.lengths.count }, 1)
+        // The same answer inside the window is read.
+        let near = Window(Data(filler) + Data((Self.answerLine + "\n").utf8))
+        XCTAssertEqual(AgentModelEffort.localAnswer(after: 0, size: UInt64(near.data.count), read: near.read), "Set model to opus")
+    }
+
+    func testALineCutByTheWindowStartIsSkipped() {
+        // One line longer than the window whose last 65535 bytes (plus the newline: exactly the window) are a whole answer
+        // object: read whole the line is no line; cut by the window's start, it is skipped.
+        let head = String(Self.answerLine.dropLast()) + #","z":""#
+        let tail = head + String(repeating: "z", count: Int(AgentModelEffort.answerWindow) - 1 - head.utf8.count - 2) + #""}"#
+        XCTAssertEqual(tail.utf8.count + 1, Int(AgentModelEffort.answerWindow))
+        let alone = Window(Data((tail + "\n").utf8))
+        XCTAssertEqual(AgentModelEffort.localAnswer(after: 0, size: UInt64(alone.data.count), read: alone.read), "Set model to opus", "whole: read")
+        let pad = #"{"pad":""# + String(repeating: "p", count: 70_000) + #""}"#
+        let data = Data("\n".utf8) + Data((pad + tail + "\n").utf8)
+        let w = Window(data)
+        XCTAssertTrue(AgentModelEffort.localAnswer(after: 1, size: UInt64(data.count), read: w.read) == nil, "cut: skipped")
+        XCTAssertEqual(w.lock.withLock { w.lengths }, [Int(AgentModelEffort.answerWindow)])
+    }
+
+    func testSwitchResultTextsAreTheSwitchsOwnWords() throws {
+        let c = try XCTUnwrap(AgentModelSwitch.Command.model("sonnet"))
+        func reply(_ reason: String) -> String { #"{"name":"s","result":"failed","reason":""# + reason + #"","detail":""}"# }
+        let want = ["not_submitted": AgentModelSwitch.notSubmitted, "draft_left": AgentModelSwitch.draftLeft,
+                    "withdrawn": AgentModelSwitch.notSent, "interrupted": AgentModelSwitch.notSent]
+        for (reason, text) in want {
+            XCTAssertEqual(driver(Fake(reply: reply(reason)).io).switchTo(c, transcript: nil, files: Self.noFiles), .failed(text), reason)
+            XCTAssertFalse(text.lowercased().contains("message"), reason)
+        }
+        XCTAssertEqual(AgentModelSwitch.words(AgentWindowText.notClaude), AgentWindowText.notClaude)
+    }
+
+    @MainActor
+    func testMenuSwitchWhileTheWindowIsBusySaysSo() throws {
+        let c = try XCTUnwrap(AgentModelSwitch.Command.effort("high"))
+        let i = interaction(controller(Fake().io))
+        var first: [String] = [], second: [String] = []
+        i.switchTo(c, session(.idle)) { first.append($0) }
+        XCTAssertTrue(i.busy, "the first switch is in flight")
+        i.switchTo(c, session(.idle)) { second.append($0) }
+        XCTAssertEqual(second, [AgentWindowText.busy])
+        until("first settled") { !i.busy }
+    }
+
+    func testAnEffortRequestIsDroppedAfterThreeAnswersWithoutAnEffort() {
+        XCTAssertEqual(AgentModelSwitch.maxMissed, 3)
+        func row(_ state: AgentState) -> AgentSession { session(state) }   // no effort
+        var p: AgentModelSwitch.Pending? = AgentModelSwitch.Pending(level: "high")
+        for n in 1...3 {
+            XCTAssertEqual(p?.missed, n - 1)
+            p = AgentModelSwitch.landed(p!, row(.working)).pending
+            XCTAssertTrue(p != nil)
+            // Many list ticks of the same stopped row count once.
+            p = AgentModelSwitch.landed(p!, row(.idle)).pending
+            if n < 3 { p = AgentModelSwitch.landed(p!, row(.idle)).pending }
+        }
+        XCTAssertTrue(p == nil, "dropped on the third answer without an effort")
     }
 
     // MARK: - Effort
