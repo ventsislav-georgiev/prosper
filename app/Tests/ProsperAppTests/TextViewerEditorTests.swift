@@ -189,6 +189,96 @@ final class TextViewerEditorTests: XCTestCase {
         XCTAssertEqual(model.buffer, "xmine\n", "the buffer is kept")
     }
 
+    /// #1601: opened through a symlinked folder, Save writes the real file (the load read it resolved; the save used to resolve
+    /// only the last component and refused as retargeted). The folder link stays a link.
+    func testSaveThroughASymlinkedFolderWritesTheRealFile() async throws {
+        let rig = TextViewerEditorRig()
+        defer { rig.closeAll() }
+        let root = tempDir("tve-1601-folder")
+        let real = root.appendingPathComponent("real")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: false)
+        try Data("one\n".utf8).write(to: real.appendingPathComponent("notes.txt"))
+        XCTAssertEqual(symlink("real", root.appendingPathComponent("linked").path), 0)
+        let model = try await rig.editAsync(root.appendingPathComponent("linked/notes.txt"))
+        try rig.type(model, "x")
+        var saved: [Bool] = []
+        model.save { saved.append($0) }
+        await model.saving?.value
+        XCTAssertEqual(saved, [true])
+        XCTAssertTrue(model.saveError == nil, "\(model.saveError ?? "")")
+        XCTAssertEqual(try String(contentsOf: real.appendingPathComponent("notes.txt"), encoding: .utf8), "xone\n")
+        XCTAssertFalse(model.isDirty)
+        var st = stat()
+        XCTAssertEqual(lstat(root.appendingPathComponent("linked").path, &st), 0)
+        XCTAssertEqual(st.st_mode & S_IFMT, S_IFLNK, "the folder link is still a link")
+    }
+
+    /// #1601: opened through a link whose relative target climbs (../b/notes.txt), Save writes that target; the link stays.
+    func testSaveThroughADotDotLinkWritesTheTarget() async throws {
+        let rig = TextViewerEditorRig()
+        defer { rig.closeAll() }
+        let root = tempDir("tve-1601-dotdot")
+        let a = root.appendingPathComponent("a"), b = root.appendingPathComponent("b")
+        try FileManager.default.createDirectory(at: a, withIntermediateDirectories: false)
+        try FileManager.default.createDirectory(at: b, withIntermediateDirectories: false)
+        try Data("one\n".utf8).write(to: b.appendingPathComponent("notes.txt"))
+        let link = a.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("../b/notes.txt", link.path), 0)
+        let model = try await rig.editAsync(link)
+        try rig.type(model, "x")
+        var saved: [Bool] = []
+        model.save { saved.append($0) }
+        await model.saving?.value
+        XCTAssertEqual(saved, [true])
+        XCTAssertTrue(model.saveError == nil, "\(model.saveError ?? "")")
+        XCTAssertEqual(try String(contentsOf: b.appendingPathComponent("notes.txt"), encoding: .utf8), "xone\n")
+        var st = stat()
+        XCTAssertEqual(lstat(link.path, &st), 0)
+        XCTAssertEqual(st.st_mode & S_IFMT, S_IFLNK, "the link is still a link")
+    }
+
+    /// #1601 keeps R1108-q3: a model that reads through its own link (resolved: the link), loaded at a.txt, the link then
+    /// retargeted at b.txt: Save is refused as retargeted, both files unchanged, the buffer kept dirty.
+    func testSaveThroughALinkRetargetedAfterTheLoadIsRefused() async throws {
+        let root = tempDir("tve-1601-retarget")
+        let a = root.appendingPathComponent("a.txt"), b = root.appendingPathComponent("b.txt")
+        try Data("a1\n".utf8).write(to: a)
+        try Data("b1\n".utf8).write(to: b)
+        let link = root.appendingPathComponent("link.txt")
+        XCTAssertEqual(symlink("a.txt", link.path), 0)
+        let model = TextViewerModel(url: link, resolved: link, actions: TextViewerActions(
+            defaultApp: { _ in nil }, openWith: { _, _ in }, reveal: { _ in }, openURL: { _ in }, view: { _ in }),
+            imageLoader: { _, _, _ in nil })
+        var builtin = TerminalEditorSeams.current
+        builtin.settings = { TerminalEditor.Settings(terminal: false, command: "") }
+        model.editor = builtin
+        model.dirtyRegistry = TextViewerDirty()
+        await TextViewerEditorRig.waitUntilAsync("loaded", { model.state != nil })
+        model.edit()
+        XCTAssertEqual(model.mode, .edit)
+        model.edited("xa1\n")
+        XCTAssertTrue(model.isDirty)
+        XCTAssertEqual(unlink(link.path), 0)
+        XCTAssertEqual(symlink("b.txt", link.path), 0)
+        var saved: [Bool] = []
+        model.save { saved.append($0) }
+        await model.saving?.value
+        XCTAssertEqual(saved, [false])
+        XCTAssertEqual(model.saveError, TextViewerEditor.message(.retargeted))
+        XCTAssertEqual(try String(contentsOf: a, encoding: .utf8), "a1\n")
+        XCTAssertEqual(try String(contentsOf: b, encoding: .utf8), "b1\n")
+        XCTAssertTrue(model.isDirty)
+    }
+
+    /// #1601 rider: a viewer window never joins a window tab group (a tab's close would skip performClose's dirty check).
+    func testViewerWindowsDisallowTabbing() throws {
+        let rig = TextViewerEditorRig()
+        defer { rig.closeAll() }
+        rig.windows.open(try viewerFile("tve-1601-tabs", "one\n"))
+        let window = try XCTUnwrap(rig.windows.entries.last?.window)
+        XCTAssertEqual(window.tabbingMode, .disallowed)
+    }
+
     /// D12, not dirty: an edited window takes the file's new text, the caret clamped to it.
     func testCleanEditorTakesTheChangeOnDisk() throws {
         let rig = TextViewerEditorRig()

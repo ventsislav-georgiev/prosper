@@ -421,7 +421,8 @@ final class TextViewerModel: ObservableObject {
     private func write(expected: TextFileWriter.Fingerprint, then done: @escaping @MainActor (Bool) -> Void) {
         guard saving == nil else { return done(false) }
         guard isDirty, let text = buffer else { return done(false) }
-        let (url, identity, encoding) = (self.url, self.identity, self.encoding)
+        // #1601: the path the load reads (refresh), so the identity's path matches through a linked folder or a ../ link.
+        let (url, identity, encoding) = (self.resolved, self.identity, self.encoding)
         saving = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
                 TextFileWriter.save(text, encoding: encoding, to: url, expected: expected, identity: identity)
@@ -604,6 +605,7 @@ final class TextViewerWindows {
         win.contentMinSize = contentMinSize(scale: s)
         SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
+        win.tabbingMode = .disallowed   // #1601: a window tab's close would skip performClose's dirty check
         if let autosave { win.setFrameAutosaveName(autosave) }
         if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         win.clampToContentMinSize()
