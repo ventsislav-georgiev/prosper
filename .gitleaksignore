@@ -1,0 +1,2 @@
+# Fake session id in a test table; the line carries gitleaks:allow since a4cf9b58 (QA #1486).
+eace2bb3a51a870b9303b6334d70977798383462:app/Tests/ProsperAppTests/DchXrayFlagParityTests.swift:generic-api-key:208
