@@ -15,6 +15,8 @@ extension AgentWindowD1Tests {
     /// Runs `body` with the gate `on`, the preference unset, the scale 1.0; everything put back after (main actor).
     @MainActor
     func withSidebarRow(gate on: Bool, _ body: () throws -> Void) rethrows {
+        // Its first use seeds ThemeRuntime.scale from the prefs; since #1471 a the pane's terminal reaches it mid-row.
+        _ = ThemeStore.shared
         let d = Preferences.defaults, saved = d.object(forKey: Self.sidebarKey)
         let gate = AgentPaneLayout.splitsEnabled, scale = ThemeRuntime.scale
         defer {
@@ -154,13 +156,14 @@ extension AgentWindowD1Tests {
     /// hiding the sidebar widens the band and step 3's tier rule may pick a wider tier: that is the tier rule at a new
     /// width, exactly as on a window resize, not a flicker of this step (decided by the supervisor). A probe reports a
     /// slot only when its frame changes, so the last frame per slot is kept across passes and the per-pass rule applies
-    /// only to the slots reported in that pass.
+    /// only to the slots reported in that pass. A tier the band leaves keeps its views (ViewThatFits): at the minimum,
+    /// showing the sidebar again brings the narrow tier's slots back at their old frames, unreported; so "shown again" is
+    /// also read from a fresh view of the same state, which reports every slot.
     @MainActor
     func testSidebarHiddenBandSlotsKeepTheirSizesAtEveryScale() throws {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withSidebarRow(gate: true) {
-            let restoreModes = transcriptMode(["api"])
-            defer { restoreModes(); AgentWindowBand.probe = nil }
+            defer { AgentWindowBand.probe = nil }
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
                 for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))] {
@@ -193,7 +196,9 @@ extension AgentWindowD1Tests {
                     /// The one-pass rule for the frames reported in one toggle's pass (see the row's comment).
                     @MainActor func onePass(_ seen: [String: [CGRect]], _ last: [String: CGRect], _ step: String) {
                         XCTAssertTrue(seen["band"] != nil, "the band moved (\(step) \(tag))")
-                        XCTAssertTrue(seen["sidebar"] != nil, "the glyph's slot is laid out and moves with the band (\(step) \(tag))")
+                        if step == "hide" || label == "wide" {   // at the minimum the shown tier's glyph comes back unreported
+                            XCTAssertTrue(seen["sidebar"] != nil, "the glyph's slot is laid out and moves with the band (\(step) \(tag))")
+                        }
                         for (k, rs) in seen {
                             for r in rs {
                                 if k == "band", let b = last["band"] {
@@ -237,7 +242,16 @@ extension AgentWindowD1Tests {
                     }
                     // A wider tier's slot (the layout control at the minimum) keeps its last frame here: a subset, not equal.
                     XCTAssertTrue(Set(shown.keys).isSubset(of: Set(again.keys)), "shown again: every slot (\(tag))")
-                    for k in shown.keys { assertSame(again[k], shown[k], "\(k): shown again as before (\(tag))") }
+                    // A slot of a tier the band left (not in `shown`) is checked by the fresh view's set below.
+                    for (k, rs) in againSeen where shown[k] != nil { assertSame(rs.last, shown[k], "\(k): shown again as before (\(tag))") }
+                    let redraw = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))
+                    redraw.frame = CGRect(origin: .zero, size: size)
+                    win.contentView = redraw
+                    settle(redraw)
+                    let fresh = box.seen.compactMapValues(\.last)
+                    box.seen = [:]
+                    XCTAssertEqual(Set(fresh.keys), Set(shown.keys), "a fresh view: the same slots (\(tag))")
+                    for k in shown.keys { assertSame(fresh[k], shown[k], "\(k): a fresh view of it shown again as before (\(tag))") }
                     if label == "wide" {
                         XCTAssertEqual(Set(hidden.keys), Set(shown.keys), "the same slots (\(tag))")
                         for k in shown.keys where k != "band" {
@@ -284,23 +298,21 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// The glyph on the real accessibility tree: with the sidebar shown it is not read (the band reads the picker only);
-    /// hidden, "Show sidebar" is read in the band; pressing it (the button's action through the model) shows the sidebar.
+    /// The glyph on the real accessibility tree: with the sidebar shown it is not read (#1471 b: the band reads nothing
+    /// then); hidden, "Show sidebar" is read in the band; pressing it (the button's action through the model) shows the sidebar.
     @MainActor
     func testSidebarHiddenGlyphIsReadOnlyWhileHidden() throws {
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withSidebarRow(gate: true) {
-            let restoreModes = transcriptMode(["api"])
-            defer { restoreModes() }
             let m = windowModel(store([session("api", .idle)]))
             m.setVisible(true)
             defer { m.close() }
             m.select(.live(paneKey("api")))
             let size = CGSize(width: 1600, height: 900)
             let shown = AXTreeSupport.tree(AgentWindowRootView(model: m, scrolls: false), size) { t in
-                t.contains { $0.reads("Verbose view") }
+                t.contains { $0.reads(AgentsWindow.title) }
             }
-            XCTAssertTrue(shown.contains { $0.reads("Verbose view") }, "the band was read")
+            XCTAssertTrue(shown.contains { $0.reads(AgentsWindow.title) }, "the window was read: the sidebar's title")
             XCTAssertFalse(shown.contains { $0.reads("Show sidebar") }, "shown: the glyph is not read")
             m.toggleSidebar()
             let hidden = AXTreeSupport.tree(AgentWindowRootView(model: m, scrolls: false), size) { t in
