@@ -2004,6 +2004,9 @@ struct DchListRow: Equatable, Sendable {
     static let maxHarnessBytes = 3 * 8191
     /// #1467 m1: the sub-agent count kept from dch's unbounded `agents`, so a sum over every session cannot overflow.
     static let maxAgents = 9_999
+    /// #1558: dch 1.101's `shells` (DchShell.list), newest first; nil when the key is left out (an older dch, no Claude,
+    /// a --remote row): the row stays as before.
+    var shells: [DchShell]? = nil
 
     /// #877: listResp's "cwd" as dch serve writes it (serve.c:340, :358-359, :374-378@v1.54.0): the
     /// string as dch gave it, unchecked (no absolute or trailing-slash rule), nil when empty or when its
@@ -2042,6 +2045,64 @@ struct DchListRow: Equatable, Sendable {
     static let maxRepoChars = 100
     /// Unicode scalars, not Characters: combining marks cannot grow a "200" title.
     static let maxTitleChars = 200
+}
+
+/// #1558: one of dch 1.101's `--ls-json` `shells` (README.md:473@v1.101.0): a live Bash tool shell of the session's
+/// Claude. Outside text: shown only through OutsideText.shown. pid and started together name one shell.
+struct DchShell: Equatable, Sendable {
+    let id: String
+    let pid: Int
+    /// The process start, epoch seconds, from the kernel.
+    let started: Int
+    /// At most 200 bytes from dch, controls already spaces.
+    let command: String
+    /// Who started it, only when dch found the call in a transcript: .some(nil) the main conversation, .some(id) that
+    /// subagent; nil: unknown (dch left the key out).
+    var agent: String?? = nil
+    var agentDescription: String? = nil
+    /// The Bash call's own description; nil when dch left it out.
+    var description: String? = nil
+    /// `"background":true`; false when dch left it out (unknown).
+    var background = false
+
+    /// dch cuts every text to 200 bytes between UTF-8 characters; three bytes each covers a U+FFFD per byte, as
+    /// maxHarnessBytes does. A longer text is not dch's.
+    static let maxTextBytes = 3 * 200
+    /// The shells kept per row (a bound on what one --ls-json row can make Prosper hold).
+    static let maxShells = 99
+
+    /// nil when `json` is not an array (the key left out, or a wrong type: the row stays as with an older dch);
+    /// an element that is not a whole shell is dropped, the rest kept in dch's order (newest first).
+    static func list(_ json: Any?) -> [DchShell]? {
+        guard let a = json as? [Any] else { return nil }
+        return Array(a.lazy.compactMap { DchShell(json: $0) }.prefix(maxShells))
+    }
+
+    init(id: String, pid: Int, started: Int, command: String, agent: String?? = nil, agentDescription: String? = nil,
+         description: String? = nil, background: Bool = false) {
+        self.id = id; self.pid = pid; self.started = started; self.command = command
+        self.agent = agent; self.agentDescription = agentDescription; self.description = description; self.background = background
+    }
+
+    /// nil unless an object with a non-empty `id` and `command` (each within maxTextBytes), a `pid` of 1...Int32.max and
+    /// a `started` from 0 (plain JSON integers, never a bool). The optional keys each drop alone when malformed.
+    init?(json: Any?) {
+        func text(_ v: Any?) -> String? {
+            (v as? String).flatMap { !$0.isEmpty && $0.utf8.count <= Self.maxTextBytes ? $0 : nil }
+        }
+        func int(_ v: Any?) -> Int? {
+            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            return n as? Int   // nil for a fraction or a value outside Int
+        }
+        guard let o = json as? [String: Any], let id = text(o["id"]), let command = text(o["command"]),
+              let pid = int(o["pid"]), (1...Int(Int32.max)).contains(pid), let started = int(o["started"]), started >= 0
+        else { return nil }
+        self.init(id: id, pid: pid, started: started, command: command)
+        if o["agent"] is NSNull { agent = .some(nil) } else if let a = text(o["agent"]) { agent = .some(a) }
+        agentDescription = text(o["agent_description"])
+        description = text(o["description"])
+        background = (o["background"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+    }
 }
 
 /// dch 1.22's per-session `meta`, written by `dch --meta` from ANY program in the
@@ -2398,7 +2459,7 @@ enum DchCommand {
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",
                               autoAllowed: DchAutoAllowed(json: o["auto_allowed"]),
-                              cwd: o["cwd"] as? String ?? "", harness: harness)
+                              cwd: o["cwd"] as? String ?? "", harness: harness, shells: DchShell.list(o["shells"]))
         }
     }
 

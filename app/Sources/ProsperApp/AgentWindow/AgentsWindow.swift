@@ -2033,7 +2033,8 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), fill: Self.countPillFill(inks?.quiet ?? Neon.textSecondary))
+                             quiet: ink(.quiet), open: ink(.blue), fill: Self.countPillFill(inks?.quiet ?? Neon.textSecondary),
+                             help: row.countHelp)
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
                 let chip = Text(pr).font(Neon.font(9.5, weight: .medium, design: .monospaced))
@@ -2174,12 +2175,14 @@ struct AgentCountGroups: View {
     var open = Neon.blue
     /// #1531: the agents group's pill fill (a capsule, no stroke, its padding in the group's width); nil: none (the header).
     var fill: Color?
+    /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
+    var help: [AgentSidebar.Count: String] = [:]
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
-                    let pill = g.0 == .agents ? fill : nil
+                    let pill = g.0 == .agents || g.0 == .shells ? fill : nil   // #1558: the shells chip wears the agents' pill
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
@@ -2199,7 +2202,7 @@ struct AgentCountGroups: View {
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(g.0.words(g.1))
-                    .help(g.0.words(g.1))   // after the element: a help set on an ignored child never reaches AX
+                    .help(help[g.0] ?? g.0.words(g.1))   // after the element: a help set on an ignored child never reaches AX
                 }
             }
         }
@@ -3409,7 +3412,7 @@ struct AgentSessionHeader: View {
                         HStack(spacing: sz(6)) {
                             Text("\u{00B7}").accessibilityHidden(true)   // after the chip
                             // #1239: under the Rename field.
-                            AgentCountGroups(counts: row.counts, size: 11)
+                            AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp)
                                 .modifier(AgentHeaderRenameHidden(renaming: renaming))
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"

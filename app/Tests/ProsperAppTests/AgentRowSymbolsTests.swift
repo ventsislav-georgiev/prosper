@@ -21,13 +21,14 @@ extension AgentWindowD1Tests {
 
     /// The git set, written out: one symbol per count, merged and open never swapped, each present on this OS.
     func testRowSymbolsAreTheGitSetAndExist() {
-        XCTAssertEqual(AgentSidebar.Count.allCases.map(\.symbol), ["person.2", "arrow.triangle.merge", "arrow.triangle.pull"])
+        XCTAssertEqual(AgentSidebar.Count.allCases.map(\.symbol), ["person.2", "arrow.triangle.merge", "arrow.triangle.pull", "terminal"])
         XCTAssertTrue(NSImage(systemSymbolName: "person.2", accessibilityDescription: nil) != nil, "person.2")
         XCTAssertTrue(NSImage(systemSymbolName: "arrow.triangle.merge", accessibilityDescription: nil) != nil, "arrow.triangle.merge")
         XCTAssertTrue(NSImage(systemSymbolName: "arrow.triangle.pull", accessibilityDescription: nil) != nil, "arrow.triangle.pull")
-        XCTAssertEqual(AgentSidebar.Count.allCases.map { $0.words(1) }, ["1 agent", "1 merged pull request", "1 open pull request"])
+        XCTAssertTrue(NSImage(systemSymbolName: "terminal", accessibilityDescription: nil) != nil, "terminal")   // #1558
+        XCTAssertEqual(AgentSidebar.Count.allCases.map { $0.words(1) }, ["1 agent", "1 merged pull request", "1 open pull request", "1 running shell"])
         XCTAssertEqual(AgentSidebar.Count.allCases.map { $0.words(192) },
-                       ["192 agents", "192 merged pull requests", "192 open pull requests"])
+                       ["192 agents", "192 merged pull requests", "192 open pull requests", "192 running shells"])
         XCTAssertEqual(AgentSidebar.Count.merged.words(100_000), "99999+ merged pull requests", "the drawn cap")
     }
 

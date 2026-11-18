@@ -116,6 +116,8 @@ enum AgentSidebar {
         /// #1115: live subagents and merged PRs, drawn as symbol plus number; 0 (none, or the detail is off) draws nothing.
         var agents = 0
         var merged = 0
+        /// #1558: the session's Claude's running shells (dch's `shells`, newest first); [] draws nothing.
+        var shells: [DchShell] = []
         var session: AgentSession?
         var record: DchHistoryRecord?
         /// #836: a row from another machine; nil for local and History rows.
@@ -134,8 +136,10 @@ enum AgentSidebar {
         /// #1203: "model Opus 4.7, effort high", "model Opus 4.7", or nil when unknown.
         var modelWords: String? { model.map { m in "model \(m)" + (effort.map { ", effort \($0)" } ?? "") } }
 
-        /// #1115: the groups beside the state text, agents then merged; a count of 0 is left out.
-        var counts: [(Count, Int)] { [(Count.agents, agents), (Count.merged, merged)].filter { $0.1 > 0 } }
+        /// #1115: the groups beside the state text, agents, shells (#1558) then merged; a count of 0 is left out.
+        var counts: [(Count, Int)] { [(Count.agents, agents), (Count.shells, shells.count), (Count.merged, merged)].filter { $0.1 > 0 } }
+        /// #1558: the shells group's help, the list itself (AgentSidebar.shellList); the others read their words.
+        var countHelp: [Count: String] { shells.isEmpty ? [:] : [.shells: AgentSidebar.shellList(shells)] }
         /// The counts in words for VoiceOver, the open PRs too (whether their chips or their count shows).
         var countWords: [String] { (counts + (prCount > 0 ? [(Count.open, prCount)] : [])).map { $0.0.words($0.1) } }
     }
@@ -143,13 +147,14 @@ enum AgentSidebar {
     /// #1115: a count drawn as an SF Symbol plus a number (they follow the theme colour and the UI scale; an
     /// emoji does not); VoiceOver and the help read the words.
     enum Count: CaseIterable {
-        case agents, merged, open
+        case agents, merged, open, shells
 
         var symbol: String {
             switch self {
             case .agents: "person.2"
             case .merged: "arrow.triangle.merge"
             case .open: "arrow.triangle.pull"
+            case .shells: "terminal"
             }
         }
 
@@ -159,6 +164,7 @@ enum AgentSidebar {
             case .agents: "agent"
             case .merged: "merged pull request"
             case .open: "open pull request"
+            case .shells: "running shell"
             }
             return "\(AgentIsland.count(n)) \(noun)\(n == 1 ? "" : "s")"
         }
@@ -210,6 +216,39 @@ enum AgentSidebar {
         return out
     }
 
+    /// #1558: the shells chip's list, every text through OutsideText.shown: "2 running shells", then by owner (main first,
+    /// then each subagent in dch's order under its description, else its id, then the shells dch could not place), each
+    /// shell's command with its description as the line below, newest first as dch gives them. One group: no group headers.
+    static func shellList(_ shells: [DchShell], max: Int = 20) -> String {
+        var order: [String??] = [], groups: [String??: [DchShell]] = [:], names: [String: String] = [:]
+        for sh in shells.prefix(max) {
+            if groups[sh.agent] == nil { order.append(sh.agent) }
+            groups[sh.agent, default: []].append(sh)
+            if case let .some(.some(a)) = sh.agent, names[a] == nil, let d = sh.agentDescription { names[a] = d }
+        }
+        // main first, the unplaced last, the subagents between in their first-seen order
+        func rank(_ a: String??) -> Int {
+            switch a { case .some(.none): 0; case .some(.some): 1; case nil: 2 }
+        }
+        order = (0...2).flatMap { r in order.filter { rank($0) == r } }
+        var lines = [Count.shells.words(shells.count)]
+        for owner in order {
+            if order.count > 1 {
+                switch owner {
+                case .some(.none): lines.append("Main conversation")
+                case let .some(.some(a)): lines.append("Agent: " + OutsideText.shown(names[a] ?? a, max: 80))
+                case nil: lines.append("Owner unknown")
+                }
+            }
+            for sh in groups[owner] ?? [] {
+                lines.append("  " + OutsideText.shown(sh.command))
+                if let d = sh.description { lines.append("    " + OutsideText.shown(d, max: 80)) }
+            }
+        }
+        if shells.count > max { lines.append("and \(shells.count - max) more") }
+        return lines.joined(separator: "\n")
+    }
+
     static let needsYouTitle = "Needs you"
     static let otherMachinesTitle = "Other machines"   // #836
     /// #828: the sections a header click folds away. Needs you never folds: it is the list of
@@ -258,7 +297,9 @@ enum AgentSidebar {
         s.transcriptPath != nil || s.modelCarried > 0 ? s.model.map(AgentModelEffort.shortName) : nil
     }
 
-    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil) -> Row {
+    /// #1558: `shells` is the session's dch `shells` ([] until AgentSession carries them, see the entry's pending patch).
+    static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil,
+                    shells: [DchShell] = []) -> Row {
         // #829 G0: "Stopping…", "Pausing…" while a Restart or Stop runs (from the island or the window).
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
         let prs = chips.prefix(2).map(\.label) + (chips.count + more > 2 ? ["+\(chips.count + more - 2)"] : [])
@@ -269,7 +310,7 @@ enum AgentSidebar {
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, prLinks: Array(chips.prefix(2)),
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
-                   session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
+                   shells: shells, session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
     }
 
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {
