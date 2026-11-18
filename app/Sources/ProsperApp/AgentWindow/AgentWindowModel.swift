@@ -1835,6 +1835,30 @@ final class AgentWindowModel: ObservableObject {
                     splitsEnabled: AgentPaneLayout.splitsEnabled)
     }
 
+    /// #1491: the pane title switcher's list for `pane`: the sidebar's rows in its order, History left out, each with the
+    /// number (1-based, layout order) of ANOTHER pane that shows its session, nil when none does.
+    func switcherRows(for pane: UUID) -> [(row: AgentSidebar.Row, inPane: Int?)] {
+        let order = layout.order
+        return sections.filter { $0.title != "History" }.flatMap(\.rows).map { r in
+            let shown = layout.pane(showing: target(r.id)).flatMap { $0 == pane ? nil : order.firstIndex(of: $0) }
+            return (r, shown.map { $0 + 1 })
+        }
+    }
+
+    /// #1491: a pick in pane `pane`'s title switcher: row `id` goes into THAT pane (focused or not), swapping with a pane
+    /// that already shows it (PaneLayout.put), then the pane takes the focus and the keys as a sidebar click does (a remote
+    /// row arms its attach). The pane's own session, or a pane no longer in the layout: nothing changes.
+    func choose(_ id: AgentSidebar.RowID, into pane: UUID) {
+        guard case let .success(put) = layout.put(target(id), in: pane), put != layout,
+              case let .success(l) = put.focus(pane) else { return }
+        removing = nil; pendingSpawn = nil; newSession = nil
+        if paneRefusal != nil { paneRefusal = nil }
+        layout = l
+        if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
+        follow()
+        focusSelection()
+    }
+
     /// #845: a sidebar row's click: the human's pick, and the keyboard moves into it. #900 B2 step 6b1 (7.1, 15.0):
     /// `flags`, the click's event modifiers (outside data), are read only with the split gate on, and Option alone (no
     /// Command, Control or Shift) opens to the side; the gate off or any other set is today's click.

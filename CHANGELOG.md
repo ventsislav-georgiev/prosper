@@ -1782,6 +1782,8 @@ tag from the now-released section and put it on the new top draft.
   bottom edge, without opening Settings; hover a segment for its name. (#1474)
 - The X-ray drawer is wider, and you can resize it by dragging its left edge (double-click the edge
   to reset). (#1473)
+- Agent Sessions: click a pane's title to choose which session it shows, with a search field and the
+  arrow keys; picking a session that another pane already shows swaps the two panes. (#1491)
 
 ## v2.174.0
 

@@ -497,6 +497,21 @@ extension PaneLayout {
         return .success(out)
     }
 
+    /// #1491: the pane title's switcher: `target` goes into pane `id` (focused or not; the focus is not moved here). A pane
+    /// that already shows its session takes `id`'s target in exchange (a swap, so a session is never shown twice);
+    /// `id` already showing exactly `target`: unchanged.
+    func put(_ target: PaneTarget, in id: UUID) -> Result<PaneLayout, PaneRefusal> {
+        guard order.contains(id) else { return .failure(.noSuchPane) }
+        let mine = panes.first { $0.id == id }?.target
+        if mine == target { return .success(self) }
+        var out = self
+        if let other = pane(showing: target), other != id {
+            out.tree = out.tree.replacing(other) { .leaf(Pane(id: $0.id, target: mine)) }
+        }
+        out.tree = out.tree.replacing(id) { .leaf(Pane(id: $0.id, target: target)) }
+        return .success(out)
+    }
+
     /// Every pane's frame in `area`, or `.tooSmall(focused)` when a pane would fall below `minimum` (3.4).
     /// Zoom is not applied here: the zoomed pane is drawn over the whole area and the tiling stays the
     /// geometry `neighbour` moves the zoom over (7.4). 15.0: with the split gate off a multi-pane layout

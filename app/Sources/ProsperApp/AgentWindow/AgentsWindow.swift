@@ -2199,7 +2199,8 @@ struct AgentDetailView: View {
                     if compact {
                         AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
                                               ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
-                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id)
+                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
+                                              switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
                     } else {
                         AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                            todos: transcript.todos,
@@ -2207,7 +2208,8 @@ struct AgentDetailView: View {
                                            store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                            rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                            endRename: { model.endRename($0, $1) }, panes: panes,
-                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id)
+                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
+                                           switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
                     }
                 }
                 .modifier(AgentPaneProbe(kind: "header"))
@@ -2760,7 +2762,7 @@ struct AgentUnfocusedPane: View {
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
                                       panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
-                                      xrayPane: runtime.pane)
+                                      xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if !ended || kept != nil {   // #1471: Terminal is the only mode
@@ -2851,23 +2853,32 @@ struct AgentCompactHeader: View {
     var menu: AgentSessionMenuButton?
     /// #1476: the X-ray button before the "...", with the menu (a session's header).
     var xray: AgentXrayButton?
+    /// #1491: the title is the pane's session switcher; nil: a plain title.
+    var switcher: AgentPaneSwitch?
 
     static var height: CGFloat { sz(26) }
 
     static func of(_ row: AgentSidebar.Row, _ s: AgentSession, cwd: String?, ended: Bool, store: AgentIslandStore?,
                    ask: @escaping (AgentWindowVerb) -> Void, open: @escaping () -> Void, panes: [AgentWindowMenuEntry] = [],
-                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }, xrayPane: UUID? = nil) -> AgentCompactHeader {
+                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }, xrayPane: UUID? = nil,
+                   switcher: AgentPaneSwitch? = nil) -> AgentCompactHeader {
         AgentCompactHeader(title: row.title, project: AgentSessionHeader.project(cwd: cwd, session: s),
                            chip: AgentStateChip(state: s.state, ended: ended), ended: ended,
                            menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended,
                                                         panes: panes, pane: pane),
-                           xray: xrayPane.map { AgentXrayButton(pane: $0, target: XrayTarget.of(row)) })
+                           xray: xrayPane.map { AgentXrayButton(pane: $0, target: XrayTarget.of(row)) }, switcher: switcher)
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            AgentProjectTitle(text: Text(title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                .lineLimit(1).truncationMode(.middle), label: title, project: project, help: project.map { "\(title)\n\($0)" })
+            let text = Text(title).font(Neon.font(13, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                .lineLimit(1).truncationMode(.middle)
+            if let switcher {
+                AgentPaneSwitcherButton(text: text, size: 13, title: title, project: project,
+                                        help: project.map { "\(title)\n\($0)" }, switcher: switcher)
+            } else {
+                AgentProjectTitle(text: text, label: title, project: project, help: project.map { "\(title)\n\($0)" })
+            }
             if let chip { chip }
             Spacer(minLength: 0)
             if let xray { xray }   // #1476: narrower than the icon pair it replaces (sz(22) against about 60 points times the scale)
@@ -2877,6 +2888,231 @@ struct AgentCompactHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
         .clipped()
+    }
+}
+
+/// #1491: what a pane title's switcher acts on: the window model and the pane whose title it is.
+struct AgentPaneSwitch {
+    let model: AgentWindowModel
+    let pane: UUID
+
+    static let hint = "Choose a session for this pane"
+
+    /// The chevron's room after the title (its spacing and its fixed width) at a title font of `size`.
+    static func chevronRoom(_ size: CGFloat) -> CGFloat { sz(4) + chevronWidth(size) }
+    static func chevronWidth(_ size: CGFloat) -> CGFloat { sz(size * 0.6) }
+}
+
+/// #1491: a pane title as a menu button: the title (its own font and truncation) and a chevron; a click opens the
+/// pane's session list in a popover hung from the title. VoiceOver: the title, the folder as value, the hint.
+struct AgentPaneSwitcherButton<T: View>: View {
+    let text: T
+    let size: CGFloat
+    let title: String
+    let project: String?
+    /// The tooltip's first line (the compact header's whole title and folder); nil: the folder.
+    let help: String?
+    let switcher: AgentPaneSwitch
+    @State private var list: AgentPaneSwitcherList?
+
+    var body: some View {
+        Button { list = AgentPaneSwitcherList.of(switcher, dismiss: { list = nil }) } label: {
+            HStack(spacing: sz(4)) {
+                AgentSlotWidth { text }
+                Image(systemName: "chevron.down").font(Neon.font(size, weight: .semibold)).imageScale(.small)
+                    .foregroundStyle(Neon.textSecondary)
+                    .frame(width: AgentPaneSwitch.chevronWidth(size)).accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // The hint rides in the tooltip (AXHelp): a separate accessibilityHint and a .help would both claim AXHelp.
+        .help((help ?? project).map { "\($0)\n\(AgentPaneSwitch.hint)" } ?? AgentPaneSwitch.hint)
+        .accessibilityLabel(title)
+        .accessibilityValue(project ?? "")
+        .popover(isPresented: Binding(get: { list != nil }, set: { if !$0 { list = nil } }), arrowEdge: .bottom) {
+            if let list { AgentPaneSwitcherView(list: list) }
+        }
+    }
+}
+
+/// #1491: its child takes the whole width offered, up to its ideal: a cut title keeps its slot to the point (a cut Text
+/// alone comes out up to a glyph narrower than offered, so the chevron would take more than its own room).
+struct AgentSlotWidth: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let s = subviews.first else { return .zero }
+        let ideal = s.sizeThatFits(.unspecified)
+        let fit = s.sizeThatFits(proposal)
+        return CGSize(width: min(proposal.width ?? ideal.width, ideal.width), height: fit.height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
+/// #1491: the switcher's list (the popover's state): the sidebar's rows, the filter (by name, case-insensitive) and the
+/// highlighted row. Keys go through `key` (a key down) and the search field's commands through `command`: Down and Up
+/// move, Return picks, Escape closes.
+@MainActor
+final class AgentPaneSwitcherList: ObservableObject {
+    struct Item: Identifiable, Equatable {
+        let id: AgentSidebar.RowID
+        let title: String
+        /// The number of ANOTHER pane that shows it; nil: none.
+        let inPane: Int?
+    }
+
+    let items: [Item]
+    @Published var query = "" { didSet { if query != oldValue { index = 0 } } }
+    @Published var index = 0
+    let pick: (AgentSidebar.RowID) -> Void
+    let close: () -> Void
+
+    init(_ items: [Item], pick: @escaping (AgentSidebar.RowID) -> Void, close: @escaping () -> Void) {
+        self.items = items
+        self.pick = pick
+        self.close = close
+    }
+
+    /// The list for `s`'s pane: a pick goes into that pane (AgentWindowModel.choose) and closes the list; Escape closes it
+    /// and gives the keys back to the pane.
+    static func of(_ s: AgentPaneSwitch, dismiss: @escaping () -> Void) -> AgentPaneSwitcherList {
+        let (model, pane) = (s.model, s.pane)
+        let items = model.switcherRows(for: pane).map { Item(id: $0.row.id, title: $0.row.title, inPane: $0.inPane) }
+        return AgentPaneSwitcherList(items, pick: { id in
+            dismiss()
+            model.choose(id, into: pane)
+        }, close: {
+            dismiss()
+            model.focusPane(pane)
+            model.focusSelection()
+        })
+    }
+
+    var shown: [Item] { query.isEmpty ? items : items.filter { $0.title.localizedCaseInsensitiveContains(query) } }
+
+    func move(_ by: Int) {
+        let n = shown.count
+        guard n > 0 else { return }
+        index = min(max(index + by, 0), n - 1)
+    }
+
+    /// Return: the highlighted row; an empty filter result only closes.
+    func choose() {
+        guard index >= 0, let item = shown.dropFirst(index).first else { return close() }
+        pick(item.id)
+    }
+
+    /// The search field's commands; false: not the list's (the field edits).
+    func command(_ s: Selector) -> Bool {
+        switch s {
+        case #selector(NSResponder.moveDown(_:)): move(1)
+        case #selector(NSResponder.moveUp(_:)): move(-1)
+        case #selector(NSResponder.insertNewline(_:)): choose()
+        case #selector(NSResponder.cancelOperation(_:)): close()
+        default: return false
+        }
+        return true
+    }
+
+    /// A key down by its key code (Down 125, Up 126, Return 36, keypad Enter 76, Escape 53); anything else: false.
+    func key(_ e: NSEvent) -> Bool {
+        guard e.type == .keyDown else { return false }
+        let s: Selector? = switch e.keyCode {
+        case 125: #selector(NSResponder.moveDown(_:))
+        case 126: #selector(NSResponder.moveUp(_:))
+        case 36, 76: #selector(NSResponder.insertNewline(_:))
+        case 53: #selector(NSResponder.cancelOperation(_:))
+        default: nil
+        }
+        return s.map(command) ?? false
+    }
+}
+
+/// #1491: the popover: the search field on top, then the rows (a row shown in another pane says which).
+struct AgentPaneSwitcherView: View {
+    @ObservedObject var list: AgentPaneSwitcherList
+
+    static func mark(_ n: Int) -> String { "in pane \(n)" }
+
+    var body: some View {
+        let shown = list.shown
+        VStack(alignment: .leading, spacing: sz(6)) {
+            AgentPaneSwitcherField(list: list).frame(height: sz(22))
+            if shown.isEmpty {
+                Text("No sessions").font(Neon.font(12)).foregroundStyle(Neon.textSecondary).padding(.horizontal, sz(8))
+            }
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, item in
+                            Button { list.index = i; list.choose() } label: {
+                                HStack(spacing: sz(8)) {
+                                    Text(item.title).font(Neon.font(13)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer(minLength: 0)
+                                    if let n = item.inPane {
+                                        Text(Self.mark(n)).font(Neon.font(11)).foregroundStyle(Neon.textSecondary).fixedSize()
+                                    }
+                                }
+                                .padding(.horizontal, sz(8)).frame(height: sz(24))
+                                .background(RoundedRectangle(cornerRadius: sz(4)).fill(i == list.index ? Neon.blue.opacity(0.25) : .clear))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(i == list.index ? .isSelected : [])
+                            .id(i)
+                        }
+                    }
+                }
+                .onChange(of: list.index) { _, i in proxy.scrollTo(i) }
+            }
+            .frame(height: min(CGFloat(shown.count) * sz(24), sz(300)))
+        }
+        .padding(sz(8))
+        .frame(width: sz(260))
+    }
+}
+
+/// #1491: the switcher's search field: its text is the list's filter; Down, Up, Return and Escape go to the list.
+struct AgentPaneSwitcherField: NSViewRepresentable {
+    let list: AgentPaneSwitcherList
+
+    func makeCoordinator() -> Coordinator { Coordinator(list) }
+
+    func makeNSView(context: Context) -> AgentPaneSwitcherTextField {
+        let f = AgentPaneSwitcherTextField(string: list.query)
+        f.placeholderString = "Search sessions"
+        f.focusRingType = .none
+        f.font = NSFont.systemFont(ofSize: sz(13))
+        f.delegate = context.coordinator
+        f.setAccessibilityLabel("Search sessions")
+        return f
+    }
+
+    func updateNSView(_ f: AgentPaneSwitcherTextField, context: Context) { context.coordinator.list = list }
+
+    @MainActor
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var list: AgentPaneSwitcherList
+        init(_ list: AgentPaneSwitcherList) { self.list = list }
+
+        func controlTextDidChange(_ obj: Notification) {
+            if let f = obj.object as? NSTextField { list.query = f.stringValue }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            list.command(selector)
+        }
+    }
+}
+
+final class AgentPaneSwitcherTextField: NSSearchField {
+    /// Takes the keys as soon as it is in the popover's window: first responder within that window only.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.makeFirstResponder(self)
     }
 }
 
@@ -2933,6 +3169,8 @@ struct AgentSessionHeader: View {
     var pane: (AgentPaneVerb) -> Void = { _ in }
     /// #1476: the pane the X-ray button acts on; nil: no button (a header drawn outside a pane).
     var xrayPane: UUID?
+    /// #1491: the title is the pane's session switcher; nil: a plain title.
+    var switcher: AgentPaneSwitch?
 
     /// #1191: the session's folder, no longer drawn in the header: the title's tooltip and accessibility value carry it
     /// (two sessions of one name stay apart for VoiceOver). Nil when there is no text at all.
@@ -3032,9 +3270,7 @@ struct AgentSessionHeader: View {
     /// takes this line exactly when the floor, the chip and the extras fit (the extras are dropped first).
     func slotLine(folder withFolder: Bool) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
-            let title = AgentProjectTitle(text: Text(row.title).font(Neon.font(15, weight: .semibold))
-                .foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail), label: row.title, project: project)
-                .modifier(AgentHeaderRenameHidden(renaming: renaming))
+            let title = titleView.modifier(AgentHeaderRenameHidden(renaming: renaming))
             if withFolder {
                 AgentWidthFloor(floor: Self.titleFloor) { title }.layoutPriority(1)
             } else {
@@ -3043,6 +3279,17 @@ struct AgentSessionHeader: View {
             stateChip
             if withFolder { folder }
             Spacer(minLength: sz(8))
+        }
+    }
+
+    /// The title, or #1491 the pane's session switcher (the title and its chevron).
+    @ViewBuilder var titleView: some View {
+        let text = Text(row.title).font(Neon.font(15, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+            .truncationMode(.tail)
+        if let switcher {
+            AgentPaneSwitcherButton(text: text, size: 15, title: row.title, project: project, help: nil, switcher: switcher)
+        } else {
+            AgentProjectTitle(text: text, label: row.title, project: project)
         }
     }
 
@@ -3058,6 +3305,7 @@ struct AgentSessionHeader: View {
     func titleLine() -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1)
+            if switcher != nil { Color.clear.frame(width: AgentPaneSwitch.chevronRoom(15), height: 1) }   // #1491
             stateChip
             if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
             if xrayPane != nil { Color.clear.frame(width: AgentXrayButton.width, height: sz(18)) }   // #1476: the X-ray button
