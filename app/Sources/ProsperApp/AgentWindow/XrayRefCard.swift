@@ -44,6 +44,13 @@ struct XrayRefStream: Equatable {
         var who: String? = nil
         var tool: String? = nil
         var sentence: Sentence? = nil
+        /// #1589 (dch 1.104.0, README v1.104.0:1694): the session's own id (stable across renames; nil: none or an older
+        /// dch), and on a line of another session of this project its turn's title and that session's last activity.
+        /// `recall`: such a line (dch sent turn_title or last_active, even null); never from an older dch or another project.
+        var sessionID: String? = nil
+        var turnTitle: String? = nil
+        var lastActive: Date? = nil
+        var recall = false
     }
 
     /// #1528: the sentence around the ref, each part cleaned on its own; `hit` "" when dch's span did not hold (the plain
@@ -158,7 +165,9 @@ struct XrayRefStream: Equatable {
                                           index: s.mentions.count,
                                           turn: (m["turn"] as? Int).flatMap { (1...Int(Int32.max)).contains($0) ? $0 : nil },
                                           who: text(m["who"], wordCap), tool: text(m["tool"], wordCap),
-                                          sentence: (m["sentence"] as? String).map { sentence($0, span: m["span"]) }))
+                                          sentence: (m["sentence"] as? String).map { sentence($0, span: m["span"]) },
+                                          sessionID: text(m["session_id"], 64), turnTitle: text(m["turn_title"], XrayRefs.titleCap),
+                                          lastActive: date(m["last_active"]), recall: m["turn_title"] != nil || m["last_active"] != nil))
             } else if let t = o["tally"] as? [String: Any] {
                 s.tallies.append(Tally(session: text(t["session"], 64) ?? "", count: int(t["count"]) ?? 0,
                                        mentionsDropped: int(t["mentions_dropped"]) ?? 0))
@@ -188,10 +197,16 @@ struct XrayRefContext: Equatable {
         var mentions: [XrayRefStream.Mention]
     }
 
-    /// #1528: one block of the Mentions tab: a turn of this session (pN), or nil: the trailing "Earlier" block.
+    /// #1528: one block of the Mentions tab: a turn of this session (pN), or nil: the "Earlier" block.
+    /// #1589: or a turn of another session of this project (`session` its name, `title` dch's turn_title); `opens`: the
+    /// first turn of that session's block, which carries its "also discussed in" header (`lastActive` its age).
     struct Turn: Equatable {
         var turn: Int?
         var mentions: [XrayRefStream.Mention]
+        var session: String? = nil
+        var title: String? = nil
+        var lastActive: Date? = nil
+        var opens = false
     }
 
     /// The text that was asked for (it passed DchCtl.refOK); Copy gives it.
@@ -271,9 +286,12 @@ struct XrayRefContext: Equatable {
             let flat = groups.flatMap(\.mentions)
             // a turn is this session's only (README: another session's line has none); grouping keeps `flat`'s order
             let keyed = Dictionary(grouping: flat.compactMap { m in m.session == own ? m.turn.map { ($0, m) } : nil }, by: \.0)
-            let earlier = flat.filter { $0.turn == nil || $0.session != own }
+            // #1589: another session of this project (dch 1.104.0) gets its own block; an older dch's lines stay in Earlier
+            func recall(_ m: XrayRefStream.Mention) -> Bool { m.session != own && m.recall }
+            let earlier = flat.filter { ($0.turn == nil || $0.session != own) && !recall($0) }
             turns = keyed.keys.sorted(by: >).map { Turn(turn: $0, mentions: keyed[$0, default: []].map(\.1)) }
                 + (earlier.isEmpty ? [] : [Turn(turn: nil, mentions: earlier)])
+                + Self.recallBlocks(flat.filter(recall))
         } else {
             turns = nil
         }
@@ -289,6 +307,26 @@ struct XrayRefContext: Equatable {
         }
         self.memory = (memory?.items ?? []).filter { m in
             [m.title, m.note ?? "", m.body ?? ""].contains { $0.localizedCaseInsensitiveContains(q) }
+        }
+    }
+
+    /// #1589: the other same-project sessions' blocks, keyed by session_id (the name when dch sent none), newest
+    /// last_active first (else the newest mention; ties in dch's order); in each, its turns newest first, then its
+    /// mentions with no turn, each in `ms`' order.
+    static func recallBlocks(_ ms: [XrayRefStream.Mention]) -> [Turn] {
+        let bySession = Dictionary(grouping: ms) { $0.sessionID ?? $0.session }.values
+        func last(_ b: [XrayRefStream.Mention]) -> (Date, Int) {
+            (b.compactMap(\.lastActive).max() ?? b.compactMap(\.at).max() ?? .distantPast, -(b.map(\.index).min() ?? 0))
+        }
+        return bySession.sorted { last($0) > last($1) }.flatMap { b -> [Turn] in
+            let name = b.first?.session ?? "", active = b.compactMap(\.lastActive).max()
+            let keyed = Dictionary(grouping: b.filter { $0.turn != nil }) { $0.turn ?? 0 }
+            let none = b.filter { $0.turn == nil }
+            let ts = keyed.keys.sorted(by: >).map { n in
+                Turn(turn: n, mentions: keyed[n, default: []], session: name,
+                     title: keyed[n]?.lazy.compactMap(\.turnTitle).first, lastActive: active)
+            } + (none.isEmpty ? [] : [Turn(turn: nil, mentions: none, session: name, lastActive: active)])
+            return ts.enumerated().map { i, t in var t = t; t.opens = i == 0; return t }
         }
     }
 
@@ -514,7 +552,8 @@ extension XrayPanelModel {
     /// Earlier block, or a turn the chapters read does not hold, opens nothing (a turn block is this session's only).
     @discardableResult
     func jumpTurn(_ t: XrayRefContext.Turn, in c: XrayRefContext) -> Bool {
-        guard let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n }) else { return false }
+        // #1589: another session's turn is not in this session's chapters: it opens nothing
+        guard t.session == nil, let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n }) else { return false }
         openChapterCard(ch)
         return true
     }

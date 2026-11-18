@@ -243,6 +243,10 @@ struct XrayRefPopover: View {
         if c.groups.isEmpty { faint(Self.empty(.mentions, ref: entry.text)) }
         if let turns = c.turns {
             ForEach(Array(turns.enumerated()), id: \.offset) { _, t in
+                if let s = Self.sessionHeader(t, now: panel.now()) {   // #1589: another session of this project
+                    Text(verbatim: s).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                        .padding(.top, sz(4)).accessibilityAddTraits(.isHeader)
+                }
                 let head = Self.turnHeader(t, chapters: panel.chapters, now: panel.now())
                 Button { panel.jumpTurn(t, in: c) } label: {
                     Text(verbatim: head).font(Neon.font(10, weight: .semibold)).foregroundStyle(Neon.textSecondary).lineLimit(1)
@@ -291,11 +295,20 @@ struct XrayRefPopover: View {
 
     /// #1528: a turn block's header: "p3 · Fix login · 5m" (title from the chapters read, time of its newest mention);
     /// the trailing block "Earlier".
+    /// #1589: another session's turn takes dch's turn_title, never this session's chapters.
     static func turnHeader(_ t: XrayRefContext.Turn, chapters: [TranscriptOutline.Chapter], now: Date) -> String {
         guard let n = t.turn else { return "Earlier" }
-        let title = chapters.last { $0.ordinal == n }?.title ?? ""
+        let title = t.session == nil ? (chapters.last(where: { $0.ordinal == n })?.title ?? "") : (t.title ?? "")
         let age = XrayTaskRow.age(t.mentions.compactMap(\.at).max(), now: now)?.short ?? ""
         return ["p\(n)", OutsideText.shown(title, max: XrayRefs.titleCap), age].filter { !$0.isEmpty }.joined(separator: " \u{00B7} ")
+    }
+
+    /// #1589 (dch #479): the header over another same-project session's block, "also discussed in api-qa, 2h" (its
+    /// last_active, else its newest mention, as the turn headers' age); nil on every other turn.
+    static func sessionHeader(_ t: XrayRefContext.Turn, now: Date) -> String? {
+        guard t.opens, let name = t.session else { return nil }
+        let age = XrayTaskRow.age(t.lastActive ?? t.mentions.compactMap(\.at).max(), now: now)?.short
+        return "also discussed in " + OutsideText.shown(name, max: 64) + (age.map { ", " + $0 } ?? "")
     }
 
     /// #1528: who said it, dch's words to the card's (README "--ref": You, Reply or the tool); nil from an older dch.

@@ -1980,6 +1980,9 @@ tag from the now-released section and put it on the new top draft.
 - Installing a kit on a Mac that has no ~/.config folder yet no longer fails with a "mkdir" error:
   Prosper now creates ~/.config first (and still works when ~/.config is a link from a dotfile
   manager). (#1593)
+- The X-ray ref card now lists each other session of the same project as its own block, headed "also
+  discussed in <session>, <age>", with that session's mentions grouped by prompt (needs dch 1.104.0;
+  an older dch keeps the single Earlier list). (#1589)
 
 ## v2.174.0
 
