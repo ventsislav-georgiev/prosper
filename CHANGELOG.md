@@ -1936,6 +1936,9 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray ref card now offers "Other projects (N)" under Mentions to look the ref up across your
   other projects, and says plainly why a commit or file could not be shown (for example "Session
   ended: git not run" or "Outside the project: not read"). (#1560)
+- X-ray on a remote session keeps one connection to the host open while the Agent Sessions window is
+  shown, so its reads no longer start a new connection each time; it closes when the window is
+  hidden or closed. (#1561)
 
 ## v2.174.0
 

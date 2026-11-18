@@ -52,7 +52,11 @@ struct XrayTarget: Equatable {
 /// The open panels, by pane; the gate and the process seams.
 @MainActor
 final class XrayPanels: ObservableObject {
-    static let shared = XrayPanels()
+    static let shared: XrayPanels = {   // #1561: its warm connections close on the Agents window's hide and close
+        let p = XrayPanels()
+        p.requests.observe(.default)
+        return p
+    }()
     @Published var open: [UUID: XrayPanelModel] = [:] {
         didSet {   // #1368: a panel that leaves stops polling and SIGTERMs its read; one that comes reads its pane's state
             for (k, m) in oldValue where open[k] !== m { m.stop() }
@@ -106,6 +110,9 @@ final class XrayPanels: ObservableObject {
 
     /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
     let follows = XrayFollows()
+
+    /// #1561: the warm `--requests` connections (XrayRequests.swift): a remote panel's request forms go through them.
+    let requests = XrayRequests()
 
     /// #1471: the session's cwd, from the row that shows `target` (AgentSession.cwd from dch's list, a remote row's
     /// cwd); "" (dch did not say) is none, and then the cwd the session's transcript file names, as before #1471.
@@ -280,7 +287,7 @@ final class XrayPanelModel: ObservableObject {
 
     /// The one read on open: both forms, so the strip knows which tabs exist.
     func read(dch: String, run: @escaping XrayPanels.Run) {
-        (self.dch, self.run) = (dch, run)
+        (self.dch, self.run) = (dch, panels?.requests.run(for: target, cold: run) ?? run)   // #1561: remote: warm
         if stopTicker == nil { stopTicker = XrayPanels.ticker { [weak self] in self?.tick() } }
         attachFollow(dch)   // #1475: before readBoth, so the open's chapters come from the stream (cached: at once)
         readBoth()
