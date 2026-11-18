@@ -272,6 +272,89 @@ final class MarketKitSheetTests: XCTestCase {
         XCTAssertEqual(f.opened.count, 3)
     }
 
+    // MARK: the README text (QA R1527)
+
+    /// m1/s1: a README with raw direction controls, a zero-width space and stacked marks, and the same as character
+    /// references (numeric and named), read from the prepared folder: no unseen scalar and at most three marks per base
+    /// reach the AttributedString handed to Text. A plain link line keeps its link (the parse still runs).
+    func testHostileReadmeAndItsCharacterReferencesNeverReachTheText() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let marks8 = String(repeating: "&#x301;", count: 8)
+        let lines: [String] = [
+            "# Calm \u{202E}kit\u{202C}",
+            "raw \u{200B}zero e" + String(repeating: "\u{0301}", count: 8) + " end",
+            "see &#x202E;kit&#x202C; here",
+            "stack e" + marks8 + " end",
+            "a&#10;b &#0; &#x200B;z",
+            "named &rlm;x&ZeroWidthSpace;y&NewLine;z",
+            "# Head &#x202E;ing",
+            "Read [more](https://example.com/kit).",
+        ]
+        try Data(lines.joined(separator: "\n").utf8).write(to: dir.appendingPathComponent("README.md"))
+        let contents = MarketKitContents.read(dir, manifest: nil)
+        XCTAssertEqual(contents.readme.count, 8)
+        for line in contents.readme {
+            XCTAssertFalse(line.unicodeScalars.contains(where: OutsideText.isUnseen), "an unseen scalar in a README line")
+            XCTAssertLessThanOrEqual(Self.marks(line), OutsideText.maxMarks)
+        }
+        for line in contents.readme {
+            let drawn = String(MarketKitSheetView.readmeText(line).characters)
+            let bad = drawn.unicodeScalars.filter(OutsideText.isUnseen).map { String($0.value, radix: 16) }
+            XCTAssertTrue(bad.isEmpty, "unseen scalars \(bad) drawn from line \(contents.readme.firstIndex(of: line) ?? -1)")
+            XCTAssertLessThanOrEqual(Self.marks(drawn), OutsideText.maxMarks)
+        }
+        // a reference the parse would decode is drawn as typed
+        XCTAssertEqual(String(MarketKitSheetView.readmeText("see &#x202E;kit&#x202C; here").characters), "see &#x202E;kit&#x202C; here")
+        let link = MarketKitSheetView.readmeText(contents.readme.last ?? "")
+        XCTAssertEqual(link.runs.compactMap { $0.link }.map(\.absoluteString), ["https://example.com/kit"])
+    }
+
+    /// n2: a link whose text reads as a web address on another host is drawn as plain text; a link on its own host and a
+    /// worded link keep their link.
+    func testLinkTextNamingAnotherHostIsDrawnWithoutItsLink() {
+        func links(_ s: String) -> [String] { MarketKitSheetView.readmeText(s).runs.compactMap { $0.link }.map(\.absoluteString) }
+        XCTAssertEqual(links("[https://example.org](https://evil.example/x)"), [])
+        XCTAssertEqual(links("go [example.org/docs](https://evil.example/x) now"), [])
+        XCTAssertEqual(links("[example.*org*](https://evil.example/x)"), [], "judged over the whole link text")
+        XCTAssertEqual(links("[Example.com/kit](https://example.com/kit)"), ["https://example.com/kit"])
+        XCTAssertEqual(links("[the setup page](https://example.com/setup)"), ["https://example.com/setup"])
+        XCTAssertEqual(String(MarketKitSheetView.readmeText("[https://example.org](https://evil.example/x)").characters),
+                       "https://example.org")
+    }
+
+    /// n1: quit sends no window close; a sheet open at quit discards its work folder (the quit notification is posted to
+    /// the row's own center; the app is never terminated).
+    func testAppQuitDiscardsTheOpenSheetsFolder() async {
+        let f = fake()
+        let center = NotificationCenter()
+        let i = MarketInstaller(seams: f.seams, center: center)
+        i.install(pkg(kitID, kind: "kit"))
+        _ = await prepared(i)
+        XCTAssertTrue(f.discards.isEmpty)
+        center.post(name: NSApplication.willTerminateNotification, object: nil)
+        XCTAssertEqual(f.discards.count, 1)
+        XCTAssertEqual(f.discards.last?.directory, f.dir)
+        XCTAssertTrue(i.kitSheet == nil)
+    }
+
+    /// i1: the spinner shown while the kit downloads has a VoiceOver label.
+    func testPreparingSpinnerHasAVoiceOverLabel() async {
+        let f = fake()
+        f.hold = true
+        let i = MarketInstaller(seams: f.seams)
+        i.install(pkg(kitID, kind: "kit"))
+        guard let m = i.kitSheet else { return XCTFail("no sheet") }
+        XCTAssertEqual(m.phase, .preparing)
+        let tree = AXTreeSupport.tree(MarketKitSheetView(model: m, onInstall: {}, onCancel: {}), CGSize(width: 600, height: 700)) {
+            $0.contains { $0.named(MarketKitText.preparingLabel) }
+        }
+        XCTAssertTrue(tree.contains { $0.named(MarketKitText.preparingLabel) }, "\(tree.map(\.names))")
+        f.hold = false
+        await m.task?.value
+        i.closeSheet()
+    }
+
     // MARK: through the registry (fake download and listing under the row's tempDir)
 
     private func registry(_ root: URL, source: URL, detail: MarketClient.PackageDetail) -> ExtensionRegistry {

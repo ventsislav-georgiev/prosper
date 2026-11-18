@@ -37,6 +37,7 @@ enum MarketKitText {
     static let unreviewed = "Unreviewed \u{2014} runs shell commands in your Claude Code sessions"
     static let untrustedNote = "Installs untrusted: nothing runs until you trust it and Apply it in its Settings page."
     static let badge = "KIT", badgeLabel = "Agent kit, unreviewed"
+    static let preparingLabel = "Preparing kit"
 
     static func lines(_ lines: [String], max: Int) -> [String] {
         lines.prefix(max).map { OutsideText.shown($0, max: lineMax) }
@@ -138,8 +139,19 @@ final class MarketInstaller: ObservableObject {
     @Published var installError: String?
     @Published private(set) var kitSheet: MarketKitSheetModel?
     let seams: MarketInstallSeams
+    nonisolated(unsafe) private var stopQuitObserver: () -> Void = {}
 
-    init(seams: MarketInstallSeams) { self.seams = seams }
+    /// `center`: where the app's quit is posted (rows pass their own). R1527-n1: quit sends no window willClose, so a
+    /// sheet open at quit discards its work folder here.
+    init(seams: MarketInstallSeams, center: NotificationCenter = .default) {
+        self.seams = seams
+        let token = center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.closeSheet() }
+        }
+        stopQuitObserver = { center.removeObserver(token) }
+    }
+
+    deinit { stopQuitObserver() }
 
     func install(_ pkg: MarketClient.Package) {
         installError = nil
@@ -212,7 +224,7 @@ struct MarketKitSheetView: View {
     @ViewBuilder private var content: some View {
         switch model.phase {
         case .preparing, .installing:
-            ProgressView().controlSize(.small)
+            ProgressView().controlSize(.small).accessibilityLabel(MarketKitText.preparingLabel)
         case .refused(let why), .failed(let why):
             Text(verbatim: OutsideText.shown(why, max: 600)).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
         case .ready, .installed:
@@ -229,11 +241,35 @@ struct MarketKitSheetView: View {
 
     /// One README line as inline Markdown (links, emphasis, code); a heading line drawn bold without its marks.
     static func readmeLine(_ line: String) -> Text {
-        let heading = line.hasPrefix("#")
-        let body = heading ? String(line.drop { $0 == "#" }.drop { $0 == " " }) : line
-        let md = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(body)
-        return Text(md).font(Neon.font(heading ? .body : .caption)).bold(heading)
+        Text(readmeText(line)).font(Neon.font(line.hasPrefix("#") ? .body : .caption)).bold(line.hasPrefix("#"))
+    }
+
+    /// What `readmeLine` hands to Text. R1527-m1: the parse decodes character references (&#x202E;, &#x301;, &#10;)
+    /// after OutsideText ran on the raw line, so a parse whose characters OutsideText would change is not drawn: the
+    /// line falls back to its cleaned raw text, references shown as typed.
+    static func readmeText(_ line: String) -> AttributedString {
+        let body = line.hasPrefix("#") ? String(line.drop { $0 == "#" }.drop { $0 == " " }) : line
+        guard let md = try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return AttributedString(body) }
+        let parsed = String(md.characters)
+        guard OutsideText.shown(parsed, max: MarketKitText.lineMax) == parsed else { return AttributedString(body) }
+        // by link span (emphasis inside one link text is one span), so "[a*.*b](...)" is judged as "a.b"
+        var out = AttributedString()
+        for (link, range) in md.runs[\.link] {
+            var piece = AttributedString(md[range])
+            if let link, misleads(String(piece.characters), link) { piece.link = nil }
+            out.append(piece)
+        }
+        return out
+    }
+
+    /// R1527-n2: a link whose text reads as a web address (a dot, no space) and names another host than the one it
+    /// opens; it is drawn as plain text. Text the URL parser refuses counts as another host.
+    static func misleads(_ text: String, _ url: URL) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespaces)
+        guard t.contains("."), !t.contains(" ") else { return false }
+        guard let shown = URL(string: t.contains("://") ? t : "https://" + t)?.host, let target = url.host else { return true }
+        return LinkPolicy.asciiLowercased(shown) != LinkPolicy.asciiLowercased(target)
     }
 }
 
