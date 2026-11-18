@@ -19,6 +19,8 @@ struct XrayRefPopover: View {
     @State var othersOpen = false
     /// #1565 (X-T b): the grid's hover that opened this card unpinned (Pin, the pointer on the card); nil: today's card.
     var hover: XrayHover? = nil
+    /// #1569 (X7 c): an extension ref's card: the handler block in place of the tabs; nil: a dch ref's card.
+    var ext: XrayExtensionCard? = nil
 
     /// #1565: the context as this card may show it: unpinned, XrayRefContext.guarded's (no other session's line; a shell's
     /// titles and counts alone); today's card all of it.
@@ -85,6 +87,14 @@ struct XrayRefPopover: View {
     func escape() { panel.dismiss() }
 
     var body: some View {
+        if let ext {
+            XrayExtensionBlock(card: ext, panel: panel, entry: entry, hover: hover, pasteboard: pasteboard)
+        } else {
+            refBody
+        }
+    }
+
+    @ViewBuilder var refBody: some View {
         let lines = Self.header(entry, complete: complete, home: panel.home, cwd: panel.cwd())
         VStack(alignment: .leading, spacing: sz(8)) {
             VStack(alignment: .leading, spacing: sz(2)) {
@@ -348,5 +358,77 @@ struct XrayRefPopover: View {
 
     func faint(_ s: String) -> some View {
         Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(2)
+    }
+}
+
+/// #1569 (X7 c, spec 5.6): an extension ref's card: the rule's label and the text, "Extension ref · not indexed" where a
+/// dch ref's counts go, then the handler's block (title, subtitle, body) and its actions, which the host runs (open an
+/// http(s) url, copy a text). No tab, no count, no dch read. Esc closes; on a hover card the pointer keeps it, Pin pins it.
+struct XrayExtensionBlock: View {
+    @ObservedObject var liveTheme = ThemeStore.shared
+    @ObservedObject var card: XrayExtensionCard
+    let panel: XrayPanelModel
+    let entry: XrayRefs.Entry
+    let hover: XrayHover?
+    let pasteboard: NSPasteboard
+
+    static func header(_ e: XrayRefs.Entry) -> [String] { [e.title + " " + e.text, XrayExtensionRefs.notIndexed] }
+
+    func run(_ a: XrayExtensionRefs.Action) {
+        if let u = a.url { return panel.openURL(u) }
+        if let c = a.copy {
+            pasteboard.clearContents()
+            pasteboard.setString(c, forType: .string)
+        }
+    }
+
+    func copy() {
+        pasteboard.clearContents()
+        pasteboard.setString(entry.text, forType: .string)
+    }
+
+    var body: some View {
+        let lines = Self.header(entry)
+        VStack(alignment: .leading, spacing: sz(8)) {
+            VStack(alignment: .leading, spacing: sz(2)) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
+                    Text(verbatim: l).font(i == 0 ? Neon.font(12, weight: .semibold) : Neon.font(10.5))
+                        .foregroundStyle(i == 0 ? Neon.textPrimary : Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(lines.joined(separator: ", "))
+            ScrollView {
+                VStack(alignment: .leading, spacing: sz(6)) { block }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: sz(8)) {
+                if case .card(let c)? = card.outcome {
+                    ForEach(Array(c.actions.enumerated()), id: \.offset) { _, a in
+                        Button(a.label) { run(a) }.accessibilityLabel(a.label)
+                    }
+                }
+                Button("Copy", action: copy).accessibilityLabel("Copy \(entry.text)")
+                if let hover { Button("Pin", action: hover.pin).accessibilityLabel("Pin the card for \(entry.text)") }
+            }
+            .font(Neon.font(11))
+        }
+        .padding(sz(12))
+        .frame(width: XrayRefPopover.size.width, height: XrayRefPopover.size.height, alignment: .topLeading)
+        .onExitCommand(perform: panel.dismiss)
+        .onHover { inside in hover?.onCard(inside) }
+    }
+
+    @ViewBuilder var block: some View {
+        if case .card(let c)? = card.outcome {
+            if !c.title.isEmpty { Text(verbatim: c.title).font(Neon.font(11.5, weight: .semibold)).foregroundStyle(Neon.textPrimary) }
+            if !c.subtitle.isEmpty { Text(verbatim: c.subtitle).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary) }
+            if !c.body.isEmpty {
+                Text(verbatim: c.body).font(Neon.font(11)).foregroundStyle(Neon.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+        } else if let n = card.note {
+            Text(verbatim: n).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(3)
+        }
     }
 }

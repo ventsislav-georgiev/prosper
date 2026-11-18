@@ -14,6 +14,8 @@ import SwiftUI
 // area's moves to its owner) feeds XrayHover, the hover card's dwell, settle and close items. Moves, entries and exits
 // stop here (never passed on: the terminal's own tracking area already has them).
 // #1568 (X-R a, plan 905 phase G): a remote pane too, its follow keyed "host:name"; its hover runs nothing (K4.1).
+// #1569 (X7 c, 5.1 exception): a live extension rule with a handler marks its spans too when one key has 2 or more on the
+// grid; its card calls the handler on the extension's lane (XrayExtensionCalls), never dch.
 
 @MainActor
 final class XrayGridMarksView: NSView {
@@ -46,6 +48,10 @@ final class XrayGridMarksView: NSView {
     }
     private(set) var refs: XrayRefs?
     private var sink: AnyCancellable?
+    /// #1569: the live xref rules (ExtensionRegistry.xrefRules; rows answer).
+    var rules: @MainActor () -> [XrayExtensionRule] = { SettingsHooks.shared.extensionRegistry?.xrefRules ?? [] }
+    /// #1569: each extension mark's match, by key.
+    private(set) var extMatches: [String: XrayExtensionRefs.Match] = [:]
 
     /// #1565: the hover card's state; its items run through `after`, its gate is hoverReady, its panel hoverPanel.
     let hover = XrayHover()
@@ -67,6 +73,8 @@ final class XrayGridMarksView: NSView {
         hover.after = { [weak self] in self?.after($0, $1) }
         hover.onScreen = { [weak self] k in self?.marks.filter { $0.key == k }.count ?? 0 }   // #1567: the card's footer
         hover.ready = { [weak self] in self?.hoverReady() == true }
+        hover.ext = { [weak self] k in self?.extMatches[k] }   // #1569
+        hover.calls = { [weak self] in XrayExtensionCalls.of(self?.window) }
         hover.panel = { [weak self] in
             guard let self, let key = host?.owner?.key else { return nil }
             return XrayRefLink.hoverPanel(window as? AgentsNSWindow, key: key)
@@ -85,6 +93,7 @@ final class XrayGridMarksView: NSView {
     func output() {
         hover.close(all: false)
         if !marks.isEmpty { marks = []; needsDisplay = true }
+        extMatches = [:]
         settle?.cancel()
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.place() } }
         settle = item
@@ -101,7 +110,11 @@ final class XrayGridMarksView: NSView {
     func place() {
         settle = nil
         let rows = host?.gridMetrics.map { Int($0.rows) } ?? 0
-        let now = shown() ? Self.marks((host?.viewportText() ?? "").components(separatedBy: "\n"), refs?.entries ?? [], rows: rows) : []
+        let lines = shown() ? (host?.viewportText() ?? "").components(separatedBy: "\n") : []
+        let dch = Self.marks(lines, refs?.entries ?? [], rows: rows)
+        let ext = lines.isEmpty ? [] : Self.extMarks(lines, rules(), rows: rows, taken: dch)   // #1569
+        extMatches = Dictionary(ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })
+        let now = dch + ext.map(\.mark)
         if now != marks { marks = now; needsDisplay = true }
     }
 
@@ -121,6 +134,30 @@ final class XrayGridMarksView: NSView {
                 Mark(row: row, col: XrayRefSpans.cells(line[..<$0.range.lowerBound]), cells: XrayRefSpans.cells(line[$0.range]), key: $0.key)
             }
         }
+    }
+
+    /// #1569 (5.1 exception): each handler rule's spans in the first `rows` lines, in rule order. A span over a dch mark
+    /// or over a span an earlier rule kept is dropped (first rule wins); then a key with fewer than 2 spans is. Pure.
+    static func extMarks(_ lines: [String], _ rules: [XrayExtensionRule], rows: Int,
+                         taken: [Mark]) -> [(mark: Mark, match: XrayExtensionRefs.Match)] {
+        guard rows > 0 else { return [] }
+        var out: [(mark: Mark, match: XrayExtensionRefs.Match)] = []
+        for rule in rules where rule.handler != nil {
+            var mine: [(mark: Mark, match: XrayExtensionRefs.Match)] = []
+            for (row, line) in lines.prefix(rows).enumerated() {
+                for m in XrayExtensionRefs.matches(of: rule, in: line) {
+                    let mark = Mark(row: row, col: XrayRefSpans.cells(line[..<m.range.lowerBound]), cells: XrayRefSpans.cells(line[m.range]),
+                                    key: XrayExtensionRefs.key(m))
+                    let over = (taken + out.map(\.mark)).contains {
+                        $0.row == row && $0.col < mark.col + mark.cells && mark.col < $0.col + $0.cells
+                    }
+                    if !over { mine.append((mark, m)) }
+                }
+            }
+            let n = Dictionary(mine.map { ($0.mark.key, 1) }, uniquingKeysWith: +)
+            out += mine.filter { n[$0.mark.key, default: 0] >= 2 }
+        }
+        return out
     }
 
     /// #1565: the mark under a top-left point of this view, nil off the grid or off every mark.
@@ -213,11 +250,17 @@ final class XrayHover {
     var panel: @MainActor () -> (panel: XrayPanelModel, refs: XrayRefs)? = { nil }
     /// #1567: the grid's marks of a ref key now (XrayGridMarksView.marks): the card's "N on screen".
     var onScreen: @MainActor (String) -> Int = { _ in 0 }
+    /// #1569: an extension mark's match (XrayGridMarksView.extMatches); nil: a dch ref.
+    var ext: @MainActor (String) -> XrayExtensionRefs.Match? = { _ in nil }
+    /// #1569: the window's handler calls (XrayExtensionCalls.of); nil: the card says unavailable.
+    var calls: @MainActor () -> XrayExtensionCalls? = { nil }
 
     /// The mark under the pointer.
     private(set) var over: String?
     /// The unpinned card's ref; nil: no hover card.
     private(set) var card: XrayRefs.Entry?
+    /// #1569: the card's extension match; nil for a dch ref's card.
+    private(set) var extCard: XrayExtensionRefs.Match?
     /// The card's session is a live shell (XrayRefContext.shell): titles and counts only.
     private(set) var shell = false
     /// The card's light read, once started (killed by a switch, Pin, a close).
@@ -254,7 +297,7 @@ final class XrayHover {
             settle = arm(Self.settleDelay) { [weak self] in
                 guard let self, let e = self.card, e.key == key else { return }
                 self.settle = nil
-                self.read = self.model?.hoverRead(e)
+                self.startRead(e)
             }
         } else {
             dwell = arm(Self.dwellDelay) { [weak self] in
@@ -262,9 +305,14 @@ final class XrayHover {
                 self.dwell = nil
                 guard self.ready() else { return }
                 self.show(key)
-                if let e = self.card { self.read = self.model?.hoverRead(e) }
+                if let e = self.card { self.startRead(e) }
             }
         }
+    }
+
+    /// The card's light read; #1569: none for an extension card (its card asked the handler when it was made).
+    private func startRead(_ e: XrayRefs.Entry) {
+        if extCard == nil { read = model?.hoverRead(e) }
     }
 
     /// The pointer entered (true) or left the card.
@@ -283,7 +331,9 @@ final class XrayHover {
         guard let e = card, let m = model else { return }
         gen += 1   // the unpinned card's close, when openRef's present retires it, is not news
         m.panels?.closeRef(started: read)
+        let x = extCard
         reset()
+        if let x { return m.extRef(e, x, calls: calls(), hover: nil) }   // #1569: the kept or joined answer
         m.openRef(e)
     }
 
@@ -302,13 +352,17 @@ final class XrayHover {
     }
 
     private func show(_ key: String) {
-        guard let p = panel(), let e = p.refs.entries.first(where: { $0.key == key }) else { return close(all: false) }
+        let x = ext(key)   // #1569
+        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key }) else {
+            return close(all: false)
+        }
         model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now
         settle?.cancel()
         (settle, read) = (nil, nil)
         gen += 1
         let g = gen
-        (card, model, shell) = (e, p.panel, XrayRefContext.shell(p.refs.sessionID))
+        (card, model, shell, extCard) = (e, p.panel, XrayRefContext.shell(p.refs.sessionID), x)
+        if let x { return p.panel.extRef(e, x, calls: calls(), hover: self) { [weak self] in self?.closed(g) } }
         p.panel.hoverRef(e, hover: self) { [weak self] in self?.closed(g) }
     }
 
@@ -321,6 +375,6 @@ final class XrayHover {
 
     private func reset() {
         for item in [settle, linger] { item?.cancel() }
-        (card, read, settle, linger, onCard) = (nil, nil, nil, nil, false)
+        (card, read, settle, linger, onCard, extCard) = (nil, nil, nil, nil, false, nil)
     }
 }

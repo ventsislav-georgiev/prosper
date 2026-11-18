@@ -1,0 +1,30 @@
+# xref-example: an X-ray ref rule with a Lua card handler (#1569, spec v2.1 2.6 and 7.3). Fake data only.
+#
+# A Terminal pane that shows "ACME-12" twice underlines both; hovering one (or pinning its card) calls
+# `xref_card` on this extension's lane with ONE argument, a table {text, parts, dir, session}: the match, its
+# placeholders, the pane's directory and the session name, never any other screen or transcript text. The handler
+# returns nil (no card), {error = "..."} or {title, subtitle, body, actions}; anything else, or a throw, fails the card.
+# The host caps title 120, subtitle 200, body 8 KB and keeps 4 actions, each {label, url} (http or https) or {label, copy}.
+# Needs Trust to run.
+
+[extension]
+id = "com.example.xref-example"
+name = "xref-example"
+title = "X-ray ref example"
+description = "Underlines ACME-<n> tickets in Terminal panes and shows a fake card for them."
+version = "1.0.0"
+author = "Example"
+
+[extension.host]
+min_version = "2.0.0"
+api_level = 1
+
+[extension.entry]
+main = "init.lua"
+
+[[contributes.xrefs]]
+id = "acme-ticket"
+template = "ACME-{n}"
+label = "Acme ticket"
+handler = "xref_card"
+timeout = 3

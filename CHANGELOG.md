@@ -1955,6 +1955,10 @@ tag from the now-released section and put it on the new top draft.
   the cached card without running anything on the host (Pin reads the full card over the open
   connection), a Command-click opens the card, other sessions in a remote card show their host, a
   host whose dch has no X-ray says so, and Esc in the terminal closes an open card. (#1568)
+- X-ray: an extension can now teach Terminal panes its own refs (say ACME-12): a ref that shows at
+  least twice on screen is underlined, and hovering or pinning it shows a card the extension fills
+  in, with up to four open or copy actions. An example extension is in app/Examples/extensions/xref-
+  example. (#1569)
 
 ## v2.174.0
 

@@ -164,6 +164,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         var configOwner: ManagedConfigOwner? = nil
         /// #983: set only by deliverEvent for a host.fs.watch run; callOnLane drops the run once that watch is gone.
         var fsWatch: FSWatchRun? = nil
+        /// #1569: set only by callXref (an X-ray ref card's handler): a dropped call never starts, and its host waits go.
+        var lane: LaneCall? = nil
     }
 
     private let lock = NSLock()
@@ -248,6 +250,7 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
         guard self.epoch(spec.extensionID) == epoch else { return nil }
         // #983: a watch run handed off before host.fs.unwatch returned never starts after it (nil for every other call).
         if let run = spec.fsWatch, !ExtensionFSWatch.isCurrent(run) { return nil }
+        if spec.lane?.isDropped == true { return nil }   // #1569: dropped while queued (a newer card, its timeout)
         lock.lock(); running[spec.extensionID] = epoch; lock.unlock()
         defer {
             // #1238: only while the extension is still off (or off again); once back, the id's resources are the
@@ -283,8 +286,14 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                 try rt.run(source, name: "@\(spec.extensionID)")
                 lock.lock(); cache[spec.extensionID] = rt; lock.unlock()
             }
-            return try rt.callGlobal(spec.handler, args)
+            return try LaneCall.with(spec.lane) {
+                guard spec.lane != nil else { return try rt.callGlobal(spec.handler, args) }
+                // #1569: an xref handler takes and returns a table; the host's shim keeps the lane string in, string out
+                try rt.run(LaneCall.shim, name: "=xref")
+                return try rt.callGlobal(LaneCall.shimName, [spec.handler] + args)
+            }
         } catch {
+            spec.lane?.fail(String(describing: error))   // #1569: the card says it failed (a nil result is "nothing")
             // A broken handler must not fail silently forever — surface it.
             Self.log.error("extension \(spec.extensionID, privacy: .public) handler \(spec.handler, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             return nil
@@ -293,6 +302,70 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
 
     func invalidate(id: String) { lock.lock(); cache[id] = nil; lock.unlock() }
     func invalidateAll() { lock.lock(); cache.removeAll(); lock.unlock() }
+}
+
+/// #1569 (X7 c): one lane call an X-ray ref card may drop. drop() refuses it before it starts and cancels every host
+/// wait it is in (ExtensionHost.awaitSync's task: host.process.run's group kill); `failed` keeps why the handler threw.
+final class LaneCall: @unchecked Sendable {
+    private let lock = NSLock()
+    private var dropped = false
+    private var failure: String?
+    private var cancels: [Int: @Sendable () -> Void] = [:]
+    private var next = 0
+
+    var isDropped: Bool { lock.withLock { dropped } }
+    var failed: String? { lock.withLock { failure } }
+    func fail(_ why: String) { lock.withLock { if failure == nil { failure = why } } }
+
+    func drop() {
+        let c: [@Sendable () -> Void] = lock.withLock {
+            dropped = true
+            defer { cancels = [:] }
+            return Array(cancels.values)
+        }
+        c.forEach { $0() }
+    }
+
+    /// Keeps `cancel` while a host call waits; a call already dropped is cancelled at once (nil token).
+    func watch(_ cancel: @escaping @Sendable () -> Void) -> Int? {
+        let token: Int? = lock.withLock {
+            guard !dropped else { return nil }
+            next += 1
+            cancels[next] = cancel
+            return next
+        }
+        if token == nil { cancel() }
+        return token
+    }
+
+    func unwatch(_ token: Int?) { if let token { lock.withLock { _ = cancels.removeValue(forKey: token) } } }
+
+    private static let key = "eu.illegible.prosper.laneCall"
+
+    /// #1569 (v2.1 7.3): the host's fixed shim around an xref handler, defined again before each call (so an extension
+    /// that replaced it gets it back). The handler gets the decoded table {text, parts, dir, session}; nil or an empty
+    /// table is no card; any other non-table, or a throw, fails the card; a table goes back as JSON.
+    static let shimName = "__prosper_xref"
+    static let shim = """
+        function __prosper_xref(name, s)
+          local f = rawget(_G, name)
+          if type(f) ~= "function" then error("the handler " .. tostring(name) .. " is not a function", 0) end
+          local r = f(host.json.decode(s))
+          if r == nil then return nil end
+          if type(r) ~= "table" then error("the handler returned a " .. type(r) .. ", not a table", 0) end
+          if next(r) == nil then return nil end
+          return host.json.encode(r)
+        end
+        """
+    /// The call the lane thread runs now (set by `with` around the handler; nil for every other lane call).
+    static var current: LaneCall? { Thread.current.threadDictionary[key] as? LaneCall }
+
+    static func with<T>(_ call: LaneCall?, _ body: () throws -> T) rethrows -> T {
+        guard let call else { return try body() }
+        Thread.current.threadDictionary[key] = call
+        defer { Thread.current.threadDictionary[key] = nil }
+        return try body()
+    }
 }
 
 /// Discovers, validates, and routes to extensions. Static-first + lazy: every
@@ -998,6 +1071,17 @@ final class ExtensionRegistry: ObservableObject {
             configOwner: record.loaded.managedConfigOwner
         )
         return await asyncRuntimes.invoke(spec, args: args)
+    }
+
+    /// #1569 (X7 c, v2.1 7.3): an xref rule's handler on its extension's lane, `arg` its one JSON string argument.
+    /// The handler's string (its JSON result) or nil: no handler, not live, dropped, failed (`call.failed`), or nil.
+    func callXref(_ rule: XrayExtensionRule, arg: String, call: LaneCall) async -> String? {
+        guard let handler = rule.handler, let record = record(id: rule.extensionID), record.isLive else { return nil }
+        var spec = AsyncExtensionRuntimes.Spec(
+            extensionID: record.id, entryURL: record.loaded.entryURL, handler: handler, callTimeout: callTimeout,
+            privileged: record.privileged, trusted: record.trusted, configOwner: record.loaded.managedConfigOwner)
+        spec.lane = call
+        return await asyncRuntimes.invoke(spec, args: [arg])
     }
 
     // MARK: - Native events (stateless per-event handler delivery)

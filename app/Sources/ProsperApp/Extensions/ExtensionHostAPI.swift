@@ -2197,6 +2197,9 @@ struct ExtensionHost {
             box.set(value)
             sem.signal()
         }
+        // #1569: an X-ray ref card that drops its lane call cancels this wait's task (process.run: group kill)
+        let lane = LaneCall.current, token = lane?.watch { task.cancel() }
+        defer { lane?.unwatch(token) }
         if sem.wait(timeout: .now() + timeout) == .success { return box.get() }
         if cancelOnTimeout { task.cancel() }
         return nil

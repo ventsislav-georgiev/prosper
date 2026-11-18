@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import SwiftUI
 
 /// #1564 (X7 b, spec v2.1 2.6): one live `[[contributes.xrefs]]` rule, its template compiled into literals and typed
 /// placeholders. No regex: the matcher below walks the pieces, so one attempt is bounded by the template's longest match.
@@ -254,5 +255,260 @@ extension XrayExtensionRule.Slot {
             if name >= 1 { out.append((i + 1)...(i + name)) }
             return out
         }
+    }
+}
+
+// MARK: - #1569 (X7 c, spec 5.6, v2.1 7.3): the handler call and its card
+
+extension XrayExtensionRefs {
+    /// The handler's result as the card shows it: a card, nothing (nil or empty), a failure, or the extension went.
+    enum Outcome: Equatable, Sendable {
+        case card(Card)
+        case nothing
+        case failed(String)
+        case unavailable
+    }
+
+    /// An action is data the host runs: open an http(s) url, or copy a text. Never Lua run on the click.
+    struct Action: Equatable, Sendable {
+        let label: String
+        let url: URL?
+        let copy: String?
+    }
+
+    struct Card: Equatable, Sendable {
+        let title: String
+        let subtitle: String
+        let body: String
+        let actions: [Action]
+    }
+
+    static let titleCap = 120, subtitleCap = 200, bodyBytes = 8 * 1024, maxActions = 4, labelCap = 40
+    /// What the lane may hand back at all; past it the result is refused unread.
+    static let resultBytes = 64 * 1024
+    static let notIndexed = "Extension ref \u{00B7} not indexed"
+    static let unavailable = "Extension unavailable: it was reloaded or turned off"
+    static let unreadable = "The extension's answer was unreadable"
+    static let timedOut = "The extension did not answer in time"
+    static let dropped = "Dropped for a newer card"
+
+    /// The mark's key: never a dch key (those are "<shape>:<text>"), one per rule and text.
+    static func key(_ m: Match) -> String { "xref:\(m.rule.extensionID)/\(m.rule.id):\(m.text)" }
+
+    /// The handler's one argument, JSON {text, parts, dir, session}: the match and where it is, never a line of the screen
+    /// or of the transcript.
+    static func arg(_ m: Match, dir: String?, session: String?) -> String {
+        let o: [String: Any] = ["text": m.text, "parts": m.parts, "dir": dir ?? "", "session": session ?? ""]
+        let d = (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return String(decoding: d, as: UTF8.self)
+    }
+
+    /// The card's row (the hover and the popover take an XrayRefs.Entry): the rule's label as its title, no count.
+    static func entry(_ m: Match) -> XrayRefs.Entry {
+        XrayRefs.Entry(key: key(m), shape: nil, text: OutsideText.shown(m.text, max: XrayRefs.maxRefBytes), full: nil, count: 0,
+                       lastOffset: nil, defined: false, definitions: 0, title: m.rule.label, underline: true, index: 0)
+    }
+
+    /// The handler's string, capped (v2.1 7.3): nil or an empty card is nothing; `{error}` a failure; else title 120,
+    /// subtitle 200, body 8 KB (each line through OutsideText), the first 4 usable actions. Every string is outside text.
+    static func outcome(_ raw: String?) -> Outcome {
+        guard let raw else { return .nothing }
+        guard raw.utf8.count <= resultBytes,
+              let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return .failed(unreadable) }
+        if let e = o["error"] {
+            let why = OutsideText.shown(e as? String ?? "", max: subtitleCap)
+            return .failed(why.isEmpty ? "The extension failed" : why)
+        }
+        let body = capBytes(((o["body"] as? String) ?? "").prefix(bodyBytes * 2).components(separatedBy: "\n")
+            .map { OutsideText.shown($0, max: bodyBytes) }.joined(separator: "\n"), bodyBytes)
+        let actions = ((o["actions"] as? [Any]) ?? []).prefix(64).compactMap(action).prefix(maxActions)
+        let c = Card(title: OutsideText.shown(o["title"] as? String ?? "", max: titleCap),
+                     subtitle: OutsideText.shown(o["subtitle"] as? String ?? "", max: subtitleCap),
+                     body: body.trimmingCharacters(in: .newlines), actions: Array(actions))
+        return c.title.isEmpty && c.subtitle.isEmpty && c.body.isEmpty && c.actions.isEmpty ? .nothing : .card(c)
+    }
+
+    /// {label, url} (http or https with a host) or {label, copy}; anything else is dropped.
+    static func action(_ v: Any) -> Action? {
+        guard let a = v as? [String: Any], let raw = a["label"] as? String else { return nil }
+        let label = OutsideText.shown(raw, max: labelCap)
+        guard !label.isEmpty else { return nil }
+        if let raw = a["url"] as? String, let u = XrayRefContext.openable(raw, shape: .url) { return Action(label: label, url: u, copy: nil) }
+        if let c = a["copy"] as? String, !c.isEmpty { return Action(label: label, url: nil, copy: capBytes(String(c.prefix(bodyBytes)), bodyBytes)) }
+        return nil
+    }
+
+    /// At most `n` UTF-8 bytes, cut at a character.
+    static func capBytes(_ s: String, _ n: Int) -> String {
+        guard s.utf8.count > n else { return s }
+        var out = "", used = 0
+        for c in s {
+            let b = c.utf8.count
+            if used + b > n { break }
+            out.append(c)
+            used += b
+        }
+        return out
+    }
+}
+
+/// #1569: a window's handler calls (5.6): at most 2 in flight, the oldest dropped (LaneCall.drop: its host waits go,
+/// process.run's group with them), the same request joined; answers kept in an LRU of 256, 60 s (a failure 10 s).
+@MainActor
+final class XrayExtensionCalls {
+    struct Key: Hashable {
+        let ext: String
+        let rule: String
+        let arg: String
+    }
+
+    static let maxInFlight = 2, maxKept = 256
+    static let keep: TimeInterval = 60, keepFailed: TimeInterval = 10
+
+    var now: () -> Date = Date.init
+    /// The lane (ExtensionRegistry.callXref); rows answer.
+    var call: @MainActor (XrayExtensionRule, String, LaneCall) async -> String? = { rule, arg, lane in
+        await SettingsHooks.shared.extensionRegistry?.callXref(rule, arg: arg, call: lane)
+    }
+    /// The registry's rulesVersion; a change while a call ran (reload, disable) makes its answer "unavailable".
+    var version: @MainActor () -> Int? = { SettingsHooks.shared.extensionRegistry?.rulesVersion }
+    /// Sleeps the rule's timeout (rows answer at once or never).
+    var sleep: @MainActor (Int) async -> Void = { s in try? await Task.sleep(nanoseconds: UInt64(s) * 1_000_000_000) }
+
+    private(set) var flying: [(key: Key, lane: LaneCall, task: Task<XrayExtensionRefs.Outcome, Never>)] = []
+    private var kept: [Key: (at: Date, outcome: XrayExtensionRefs.Outcome)] = [:]
+    private var order: [Key] = []
+    var keptCount: Int { kept.count }
+
+    private static let windows = NSMapTable<NSWindow, XrayExtensionCalls>.weakToStrongObjects()
+
+    /// The window's calls, made on first use; nil with no window.
+    static func of(_ w: NSWindow?) -> XrayExtensionCalls? {
+        guard let w else { return nil }
+        if let c = windows.object(forKey: w) { return c }
+        let c = XrayExtensionCalls()
+        windows.setObject(c, forKey: w)
+        return c
+    }
+
+    /// The answer for `m`: kept, joined, or a new call on the lane.
+    func outcome(_ m: XrayExtensionRefs.Match, dir: String?, session: String?) -> Task<XrayExtensionRefs.Outcome, Never> {
+        let arg = XrayExtensionRefs.arg(m, dir: dir, session: session)
+        let key = Key(ext: m.rule.extensionID, rule: m.rule.id, arg: arg)
+        if let k = kept[key] {
+            if now().timeIntervalSince(k.at) < (k.outcome.isFailure ? Self.keepFailed : Self.keep) {
+                order.removeAll { $0 == key }
+                order.append(key)
+                let o = k.outcome
+                return Task { o }
+            }
+            forget(key)
+        }
+        if let f = flying.first(where: { $0.key == key }) { return f.task }
+        if flying.count >= Self.maxInFlight, let old = flying.first {
+            flying.removeFirst()
+            old.lane.drop()
+        }
+        let lane = LaneCall(), rule = m.rule, started = version()
+        let task = Task { @MainActor [weak self] () -> XrayExtensionRefs.Outcome in
+            guard let self else { return .unavailable }
+            let raw = await self.race(rule, arg, lane)
+            self.flying.removeAll { $0.lane === lane }
+            let o: XrayExtensionRefs.Outcome
+            if self.version() != started || started == nil {
+                o = .unavailable
+            } else if let why = lane.failed {
+                o = .failed(why == XrayExtensionRefs.timedOut ? why : "The extension failed: " + OutsideText.shown(why, max: 160))
+            } else if lane.isDropped {
+                return .failed(XrayExtensionRefs.dropped)   // not kept: the next ask runs it again
+            } else {
+                o = XrayExtensionRefs.outcome(raw.flatMap { $0 })
+            }
+            if o != .unavailable { self.put(key, o) }
+            return o
+        }
+        flying.append((key, lane, task))
+        return task
+    }
+
+    /// The lane's answer, or nil past the rule's timeout (the call dropped, its failure "timed out"). Never waits on a
+    /// lane busy past it: the first of the two to land resumes.
+    private func race(_ rule: XrayExtensionRule, _ arg: String, _ lane: LaneCall) async -> String?? {
+        @MainActor final class Once { var done = false }
+        let once = Once()
+        var timer: Task<Void, Never>?
+        let r: String?? = await withCheckedContinuation { (k: CheckedContinuation<String??, Never>) in
+            Task { @MainActor in
+                let s = await self.call(rule, arg, lane)
+                guard !once.done else { return }
+                once.done = true
+                k.resume(returning: .some(s))
+            }
+            timer = Task { @MainActor in
+                await self.sleep(rule.timeout)
+                guard !once.done, !Task.isCancelled else { return }
+                once.done = true
+                lane.fail(XrayExtensionRefs.timedOut)
+                lane.drop()
+                k.resume(returning: nil)
+            }
+        }
+        timer?.cancel()
+        return r
+    }
+
+    private func put(_ key: Key, _ o: XrayExtensionRefs.Outcome) {
+        forget(key)
+        kept[key] = (now(), o)
+        order.append(key)
+        while order.count > Self.maxKept { forget(order[0]) }
+    }
+
+    private func forget(_ key: Key) {
+        kept[key] = nil
+        order.removeAll { $0 == key }
+    }
+}
+
+extension XrayExtensionRefs.Outcome {
+    var isFailure: Bool { if case .failed = self { return true } else { return false } }
+}
+
+/// #1569: one extension card's answer, filled when the window's call lands.
+@MainActor
+final class XrayExtensionCard: ObservableObject {
+    let match: XrayExtensionRefs.Match
+    @Published private(set) var outcome: XrayExtensionRefs.Outcome?
+    private(set) var task: Task<Void, Never>?
+
+    init(_ m: XrayExtensionRefs.Match, calls: XrayExtensionCalls?, dir: String?, session: String?) {
+        match = m
+        guard let calls else { outcome = .unavailable; return }
+        let asked = calls.outcome(m, dir: dir, session: session)
+        task = Task { @MainActor [weak self] in
+            let o = await asked.value
+            self?.outcome = o
+        }
+    }
+
+    /// The block's lines while reading, for nothing, a failure or a gone extension (a card draws its own fields).
+    var note: String? {
+        switch outcome {
+        case nil: "Reading\u{2026}"
+        case .card?: nil
+        case .nothing?: "Nothing from \(match.rule.label)"
+        case .failed(let why)?: why
+        case .unavailable?: XrayExtensionRefs.unavailable
+        }
+    }
+}
+
+extension XrayPanelModel {
+    /// #1569 (5.6): an extension ref's card, unpinned (`hover`) or pinned: its header and the handler block; no dch runs.
+    func extRef(_ e: XrayRefs.Entry, _ m: XrayExtensionRefs.Match, calls: XrayExtensionCalls?, hover: XrayHover?,
+                closed: @escaping @MainActor () -> Void = {}) {
+        (refContext, refNote) = (nil, nil)
+        let card = XrayExtensionCard(m, calls: calls, dir: cwd(), session: target.name)
+        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: true, hover: hover, ext: card)), XrayRefPopover.size, closed)
     }
 }
