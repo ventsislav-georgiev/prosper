@@ -124,6 +124,8 @@ final class KitShellPathTests: XCTestCase {
 
     func testShellPathIsOffUntilSwitchedOn() throws {
         let env = makeMCEnv()
+        // makeMCEnv names config/ but never makes it; KitStore makes prosper/ under an existing config home (as KitRuntimePaneTests does)
+        try FileManager.default.createDirectory(at: env.config, withIntermediateDirectories: true)
         let rt = KitRuntime(provider: ManagedConfigProvider(env.mc), store: try KitStore(configHome: env.config, extID: "com.example.kit"),
                             isTrusted: { _ in true })
         let v = validated([.init(id: "rules", kind: .permissions, allow: ["Bash(ls:*)"]), .init(id: "path", kind: .shellPath)])

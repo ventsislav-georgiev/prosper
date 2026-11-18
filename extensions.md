@@ -664,6 +664,7 @@ Every piece has an `id` (`[a-z0-9-]+`, unique in the kit), a `kind`, the keys of
 | `permissions` | `allow`, `deny`, `ask` (at least one rule, at most 64 in each) | the rules, added to `permissions.*` in `settings.json` | the rules this kit added |
 | `seed` | `from` | files copied into `~/.config/<slug>/` when missing | nothing: seeded files are the person's after the copy |
 | `agents` | `dir` (default `agents`) | `<name>.md` files in `~/.claude/agents/`, byte for byte | the files, while they still hash as written |
+| `shell-path` | none (opt-in: off until the person switches it on) | one managed block at the bottom of `~/.zshrc` that appends `~/.config/prosper/kits/<ext-id>/bin` to `PATH` once, shown first and backed up | the block, leaving the file byte for byte as before |
 
 Rules the validator enforces on every kit, local or Marketplace, with the reason shown on refusal:
 

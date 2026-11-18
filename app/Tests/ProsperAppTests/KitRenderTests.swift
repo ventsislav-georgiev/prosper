@@ -159,6 +159,10 @@ final class KitRenderTests: XCTestCase {
         deny  = ["Bash(curl:*)"]
         ask   = ["Bash(git push:*)"]
 
+        [[contributes.kit.pieces]]
+        id    = "path"
+        kind  = "shell-path"
+
         [[contributes.kit.settings]]
         """
         let v = try validatedFixture(KitFixture.kit(replacing: "\n[[contributes.kit.settings]]", with: extra))
@@ -170,7 +174,8 @@ final class KitRenderTests: XCTestCase {
         for p in plan.pieces {
             switch p.kind {
             case .block:
-                XCTAssertEqual(p.target, "claude:CLAUDE.md", p.id)
+                // #922: the shell-path piece is the one block outside CLAUDE.md
+                XCTAssertEqual(p.target, p.id == "path" ? KitRender.shellRCTarget : "claude:CLAUDE.md", p.id)
             case .seed:
                 XCTAssertTrue(p.target.hasPrefix("kitconfig:"), p.id)
             case .json:
