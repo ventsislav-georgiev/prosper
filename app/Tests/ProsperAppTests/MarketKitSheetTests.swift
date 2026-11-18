@@ -355,6 +355,7 @@ final class MarketKitSheetTests: XCTestCase {
         XCTAssertEqual(forms.count, 4)
         for f in forms {
             let r = MarketKitSheetView.readmeText("[\(f)](https://evil.example/x)")
+            XCTAssertEqual(String(r.characters), f)
             XCTAssertEqual(r.runs.compactMap { $0.link }, [], f.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " "))
         }
         let ok = MarketKitSheetView.readmeText("[github.com](https://github.com/x)")
