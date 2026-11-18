@@ -2000,6 +2000,8 @@ tag from the now-released section and put it on the new top draft.
   only gets shortened when the window is really narrow. (#1616)
 - Layouts: switching focus between two panes no longer leaves both terminals blank except for the
   cursor; each pane keeps its terminal and screen, without reconnecting. (#1615, #1618)
+- The X-ray card says "Missing" for a file reference whose file is gone, instead of the raw word
+  "missing". (#1612)
 
 ## v2.174.0
 

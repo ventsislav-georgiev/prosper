@@ -376,6 +376,7 @@ struct XrayRefContext: Equatable {
     static func stateLine(_ r: XrayRefStream.Resolved) -> String? {
         switch r.state {
         case "ok": nil
+        case "missing": "Missing"   // #1612: dch 1.110 file ref, no such file: its one plain line, as dch titles it
         case "ended": "Session ended: git not run"
         case "no_git": "No git found: not looked up"
         case "not_repo": "Not in a git repository"
