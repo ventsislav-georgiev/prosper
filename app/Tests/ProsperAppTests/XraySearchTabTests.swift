@@ -261,4 +261,18 @@ final class XraySearchTabTests: XCTestCase {
             XCTAssertEqual(run.calls.count, n)
         }
     }
+
+    /// dch 1.94 (#456): a leading "\u{2026} " is drawn, not spoken; one inside the text stays in both.
+    func testLeadingEllipsisIsDrawnButNotSpoken() {
+        func row(_ snippet: String) -> XraySearchRow {
+            XraySearchRow(XraySearch.Hit(who: "user", tool: nil, at: nil, snippet: snippet), now: Self.base)
+        }
+        let cut = row("\u{2026} fix the login test")
+        XCTAssertTrue(cut.snippet.hasPrefix("\u{2026} fix"), "drawn keeps the cue")
+        XCTAssertEqual(cut.spoken, "You, fix the login test")
+        let inner = row("\u{2026} fix \u{2026} the test")
+        XCTAssertEqual(inner.spoken, "You, fix \u{2026} the test", "only the leading pair goes")
+        XCTAssertEqual(row("fix \u{2026} the test").spoken, "You, fix \u{2026} the test")
+        XCTAssertEqual(row("\u{2026}fix").spoken, "You, \u{2026}fix", "no space: not dch's cue")
+    }
 }

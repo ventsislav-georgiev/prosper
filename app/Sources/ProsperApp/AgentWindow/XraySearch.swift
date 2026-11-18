@@ -12,18 +12,25 @@ struct XraySearch: Equatable {
     }
 
     var hits: [Hit]
-    /// dch kept the newest 50 and there were more (or the host sent more than 50).
+    /// dch 1.94 (#457) keeps the hits of the newest 50 turns, up to 500, newest first; it says `more` past a 51st turn or a
+    /// 501st hit. Prosper draws the first 50 hits (maxHits), so a host that sends more than 50 counts as `more` too.
     var more: Bool
     /// dch stopped early (`why`: "bytes", "time" or "range"); the hits shown stand.
     var partial: Bool
     var why: String?
 
-    /// Caps: 50 hits (dch's own, the newest; a host that sends more counts as `more`); a snippet 400 scalars (dch: about
+    /// Caps: 50 drawn hits (the newest of dch's up to 500); a snippet 400 scalars (dch: about
     /// 160 bytes), a tool name 120, `who` and `why` 16; the whole answer 16 MiB (XrayPanels.maxReadBytes).
     static let maxHits = 50
     static let snippetCap = 400
     static let toolCap = 120
     static let wordCap = 16
+
+    /// dch 1.94 (#456): a snippet that starts past the text's start begins with "\u{2026} ". Drawn as the cue that the text
+    /// was cut; spoken without it. Only that leading pair goes, never one inside the text. (Search has no highlight.)
+    static func withoutLeadingEllipsis(_ s: String) -> String {
+        s.unicodeScalars.starts(with: "\u{2026} ".unicodeScalars) ? String(s.unicodeScalars.dropFirst(2)) : s
+    }
 
     static let tooLarge = "The search answer was too large"
     static let cannotSearch = "This host\u{2019}s dch cannot search"
@@ -77,7 +84,8 @@ struct XraySearchRow: Equatable {
         let a = XrayTaskRow.age(h.at, now: now)
         age = a?.short
         snippet = OutsideText.shown(h.snippet, max: 240)
-        spoken = [who, a?.spoken, snippet].compactMap { $0 }.joined(separator: ", ")
+        let said = OutsideText.shown(XraySearch.withoutLeadingEllipsis(h.snippet), max: 240)
+        spoken = [who, a?.spoken, said].compactMap { $0 }.joined(separator: ", ")
     }
 }
 

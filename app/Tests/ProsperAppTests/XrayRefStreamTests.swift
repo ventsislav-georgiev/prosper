@@ -112,4 +112,13 @@ final class XrayRefStreamTests: XCTestCase {
         XCTAssertEqual(s.mentions.first?.line, "see #12 now")
         XCTAssertFalse(s.mentions.first?.line.unicodeScalars.contains { $0.value == 0x202e } ?? true)
     }
+
+    /// dch 1.94 (#455): a mention line gains `who` and `tool`; it decodes as before.
+    func testMentionWithWhoAndToolKeysDecodes() {
+        let line = #"{"schema":1,"mention":{"session":"api","chapter":"f12:0","at":1794304801,"line":"Work on #12 please","offset":0,"live":false,"project":"-Users-example-acme","who":"tool","tool":"Bash"}}"#
+        let none = #"{"schema":1,"mention":{"session":"api","chapter":"f12:1","at":1794304802,"line":"again","offset":1,"live":false,"project":"-Users-example-acme","who":"user","tool":null}}"#
+        let s = Self.parse([Self.first, line, none, Self.done])
+        XCTAssertEqual(s.mentions.map(\.line), ["Work on #12 please", "again"])
+        XCTAssertEqual(s.mentions.map(\.offset), [0, 1])
+    }
 }
