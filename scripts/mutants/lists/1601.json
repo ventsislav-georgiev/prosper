@@ -1,0 +1,28 @@
+{
+ "entry": 1601,
+ "filter": "TextViewerEditorTests|TextFileWriterTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "identity-pass",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "let (url, identity, encoding) = (self.resolved, self.identity, self.encoding)",
+   "new": "let (url, identity, encoding) = (self.url, self.identity, self.encoding)",
+   "expect": "killed",
+   "note": "GATE (#1601)"
+  },
+  {
+   "name": "retarget-guard",
+   "file": "app/Sources/ProsperApp/TextViewer/TextFileWriter.swift",
+   "old": "if let identity, identity.path != path { return .failure(.retargeted) }",
+   "new": "if false, let identity, identity.path != path { return .failure(.retargeted) }",
+   "expect": "killed"
+  },
+  {
+   "name": "tabbing",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "win.tabbingMode = .disallowed",
+   "new": "win.tabbingMode = .automatic",
+   "expect": "killed"
+  }
+ ]
+}
