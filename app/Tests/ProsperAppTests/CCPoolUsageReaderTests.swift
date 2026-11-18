@@ -358,4 +358,51 @@ final class CCPoolUsageReaderTests: XCTestCase {
             .init(model: "m-two", day: "2027-01-15", median: 7000, p90: 7000, count: 1),
         ])
     }
+
+    // MARK: #1571 O12: utilization appends in place, output unchanged
+
+    func testUtilizationWobbleAndANewResetKeepTheirSeries() {
+        let rows = [rdEntry(1, lim: rdClaim(0.34, 100)), rdEntry(2, lim: rdClaim(0.35, 100)), rdEntry(3, lim: rdClaim(0.34, 100)),
+                    rdEntry(4, lim: rdClaim(0.35, 100)), rdEntry(5, lim: rdClaim(0.10, 200)), rdEntry(6, lim: rdClaim(0.12, 200))]
+        let s = CCPoolUsageStats.utilization(rows)
+        XCTAssertEqual(s.count, 1)
+        XCTAssertEqual(s.first?.points.map(\.value), [0.34, 0.35, 0.35, 0.35, 0.10, 0.12], "a new reset starts over")
+        XCTAssertEqual(s.first?.resets, [.init(t: 5, reset: 200)])
+    }
+
+    /// The function as it was before #1571 (copies the series per row), as the reference for the in-place one.
+    private func utilizationReference(_ rows: [CCPoolUsageEntry]) -> [CCPoolUsageStats.UtilizationSeries] {
+        struct Key: Hashable { var acct: String; var window: String }
+        var out: [Key: CCPoolUsageStats.UtilizationSeries] = [:]
+        var state: [Key: (reset: Double, max: Double)] = [:]
+        for row in rows {
+            for window in ["five_hour", "seven_day"] {
+                guard let c = row.lim[window], let u = c.u, let r = c.r else { continue }
+                let key = Key(acct: row.acct, window: window)
+                var s = out[key] ?? .init(acct: row.acct, window: window, points: [], resets: [])
+                if let cur = state[key], cur.reset == r {
+                    state[key] = (r, max(cur.max, u))
+                } else {
+                    if state[key] != nil { s.resets.append(.init(t: row.t, reset: r)) }
+                    state[key] = (r, u)
+                }
+                s.points.append(.init(t: row.t, value: state[key]!.max))
+                out[key] = s
+            }
+        }
+        return out.values.sorted { ($0.acct, $0.window) < ($1.acct, $1.window) }
+    }
+
+    func testUtilizationOnTwentyThousandRowsEqualsTheOldFunction() {
+        let rows = (0..<20_000).map { i -> CCPoolUsageEntry in
+            let t = Double(i)
+            let r5 = (t / 500).rounded(.down) * 500 + 500
+            return rdEntry(t, acct: "acct-\(i % 3)", lim: ["five_hour": .init(u: Double(i * 7 % 100) / 100, r: r5, s: "a"),
+                                                          "seven_day": .init(u: Double(i % 50) / 50, r: i < 10_000 ? 1_000_000 : 2_000_000, s: "a")])
+        }
+        let got = CCPoolUsageStats.utilization(rows)
+        XCTAssertEqual(got.count, 6)
+        XCTAssertEqual(got.reduce(0) { $0 + $1.points.count }, 40_000)
+        XCTAssertTrue(got == utilizationReference(rows), "same series as the old function")
+    }
 }

@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import ProsperApp
 
@@ -6,6 +7,14 @@ private final class LeftoverCounter: @unchecked Sendable {
     private var n = 0
     func bump() { lock.withLock { n += 1 } }
     var count: Int { lock.withLock { n } }
+}
+
+private final class LeftoverListenerBox: @unchecked Sendable { var l: NWListener? }
+
+private final class LeftoverSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _on = false
+    var on: Bool { get { lock.withLock { _on } } set { lock.withLock { _on = newValue } } }
 }
 
 /// Holds the first start between its listener's .ready and its publish (the afterReady seam).
@@ -408,5 +417,95 @@ final class CCPoolLeftoverTests: XCTestCase {
             XCTAssertEqual(labelOf(a), "Example Org B")
             XCTAssertEqual(labelOf(b), "Example Org A")
         })
+    }
+
+    // #1571 O8, mutant o8a: a remove drops the account's sample inside the lock of its state change, before the change hook
+    // runs: a fresh account added under the same label from that hook keeps its own fresher sample.
+    nonisolated func testCCPoolRemoveThenAddSameLabelKeepsNoSampleOfTheRemovedAccount() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let id = try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        let older = CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits
+        let fresher = CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.7"]).limits
+        store.recordUsage(id: id, limits: older)
+        let wrote = LeftoverCounter()
+        store.onChange = {
+            guard wrote.count == 0 else { return }
+            wrote.bump()
+            guard let newID = try? store.addAccount(label: "Example Org", token: "tok-second", secrets: secrets) else { return }
+            store.recordUsage(id: newID, limits: fresher)
+        }
+        try store.removeAccount(label: "Example Org", secrets: secrets)
+        XCTAssertEqual(wrote.count, 1)
+        XCTAssertEqual(store.usageSample("Example Org")?.util, CCPoolCore.utils(fresher), "the new holder's sample stays; the removed one's is gone")
+    }
+
+    // #1571 O8: without a hook the removed account leaves no sample.
+    nonisolated func testCCPoolRemoveDropsTheSample() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = CCPoolMemorySecrets()
+        let id = try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        store.recordUsage(id: id, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits)
+        XCTAssertTrue(store.usageSample("Example Org") != nil)
+        try store.removeAccount(label: "Example Org", secrets: secrets)
+        XCTAssertTrue(store.usageSample("Example Org") == nil)
+    }
+
+    // #1571 O8, mutant o8b: a remove whose save fails is undone, and the undo skips the usage step: the sample stays.
+    nonisolated func testCCPoolRemoveThatFailsToSaveKeepsTheSample() throws {
+        let sw = LeftoverSwitch()
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"),
+                                writer: { data, url in sw.on ? false : CCPoolStore.atomicWrite(data, url) })
+        let secrets = CCPoolMemorySecrets()
+        let id = try store.addAccount(label: "Example Org", token: "tok-first", secrets: secrets)
+        let limits = CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits
+        store.recordUsage(id: id, limits: limits)
+        sw.on = true
+        XCTAssertThrowsError(try store.removeAccount(label: "Example Org", secrets: secrets))
+        XCTAssertEqual(store.snapshot.order, ["Example Org"], "the account is still listed")
+        XCTAssertEqual(store.usageSample("Example Org")?.util, CCPoolCore.utils(limits), "the sample stays")
+    }
+
+    // #1571 O9 (v8), mutant v8: a second start while running returns at its first line (`if case .running = status { return status }`
+    // in CCPoolService.start): same listener, same port, one bind.
+    nonisolated func testCCPoolSecondStartWhileRunningKeepsTheListenerAndPort() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let binds = LeftoverCounter()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        cfg.afterReady = { _ in binds.bump() }
+        let service = CCPoolService(config: cfg, store: store, secrets: CCPoolMemorySecrets(), logger: CCPoolCapturingLogger())
+        defer { service.stop() }
+        guard case .running(let port) = service.start(), port != 0 else { return XCTFail("\(service.status)") }
+        let first = service.currentListener
+        XCTAssertTrue(first != nil)
+        XCTAssertEqual(service.start(), .running(port: port))
+        XCTAssertEqual(service.start(bindRetry: 0.5), .running(port: port))
+        XCTAssertTrue(service.currentListener === first, "the same listener")
+        XCTAssertEqual(binds.count, 1, "one bind")
+    }
+
+    // #1571 O10, mutant r10: restart() binds again only after the old listener's cancel was seen (port 0: the new one
+    // takes another port, so the old listener's own state is the evidence).
+    nonisolated func testCCPoolRestartBindsOnlyAfterTheOldListenerIsCancelled() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let binds = LeftoverCounter()
+        let oldWasCancelled = LeftoverSwitch()
+        let oldBox = LeftoverListenerBox()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        cfg.afterReady = { l in
+            if binds.count == 0 { oldBox.l = l } else if case .cancelled = oldBox.l?.state { oldWasCancelled.on = true }
+            binds.bump()
+        }
+        let service = CCPoolService(config: cfg, store: store, secrets: CCPoolMemorySecrets(), logger: CCPoolCapturingLogger())
+        defer { service.stop() }
+        guard case .running = service.start() else { return XCTFail("\(service.status)") }
+        guard case .running = service.restart() else { return XCTFail("\(service.status)") }
+        XCTAssertEqual(binds.count, 2)
+        XCTAssertTrue(oldWasCancelled.on, "the old listener was cancelled when the new one bound")
+        XCTAssertTrue(service.currentListener !== oldBox.l)
     }
 }

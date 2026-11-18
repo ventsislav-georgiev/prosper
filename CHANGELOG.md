@@ -1919,6 +1919,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray's ref card groups a ref's mentions by turn, newest first, each showing who said it and the
   sentence with the ref highlighted; click a turn's header to open that prompt (needs dch 1.100.0;
   an older dch keeps the plain list). (#1528)
+- Account pool: removing an account now drops its usage reading together with the account, and the
+  usage chart is faster on large histories. (#1571)
 
 ## v2.174.0
 

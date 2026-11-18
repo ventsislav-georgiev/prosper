@@ -263,17 +263,16 @@ final class CCPoolStore: @unchecked Sendable {
     @discardableResult
     func removeAccount(label: String, secrets: CCPoolSecrets) throws -> (id: String, itemDeleted: Bool) {
         guard let id = read({ $0.accounts[label]?.id }) else { throw CCPoolStoreError.noSuchAccount }
-        let (removed, saved) = mutateOrUndo { st -> Bool in
+        let (removed, saved) = mutateOrUndo({ st -> Bool in
             guard st.accounts[label]?.id == id else { return false }
             st.accounts.removeValue(forKey: label)
             st.order.removeAll { $0 == label }
             if st.current == label { st.current = nil }
             st.unpin(account: label)   // #1259 (R1258-b)
             return true
-        }
+        }, usage: { u in u.removeValue(forKey: label) })   // #1571 O8: under the save's lock; skipped when the save fails
         guard removed else { throw CCPoolStoreError.noSuchAccount }
         guard saved else { throw writeFailure }
-        lock.withLock { _ = usage.removeValue(forKey: label) }
         do { try secrets.remove(id: id) } catch {
             logger.note(label, "removed; its Keychain item could not be deleted")
             return (id, false)

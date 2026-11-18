@@ -270,15 +270,15 @@ enum CCPoolUsageStats {
             for window in ["five_hour", "seven_day"] {
                 guard let c = row.lim[window], let u = c.u, let r = c.r else { continue }
                 let key = Key(acct: row.acct, window: window)
-                var s = out[key] ?? UtilizationSeries(acct: row.acct, window: window, points: [], resets: [])
+                // Appends in place: a copy of the series per row would make this quadratic (#1571 O12).
+                let empty = UtilizationSeries(acct: row.acct, window: window, points: [], resets: [])
                 if let cur = state[key], cur.reset == r {
                     state[key] = (r, max(cur.max, u))
                 } else {
-                    if state[key] != nil { s.resets.append(Marker(t: row.t, reset: r)) }
+                    if state[key] != nil { out[key, default: empty].resets.append(Marker(t: row.t, reset: r)) }
                     state[key] = (r, u)
                 }
-                s.points.append(Point(t: row.t, value: state[key]!.max))
-                out[key] = s
+                out[key, default: empty].points.append(Point(t: row.t, value: state[key]!.max))
             }
         }
         return out.values.sorted { ($0.acct, $0.window) < ($1.acct, $1.window) }
