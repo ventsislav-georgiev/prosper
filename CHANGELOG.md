@@ -1841,6 +1841,9 @@ tag from the now-released section and put it on the new top draft.
   their windows already did. (#1543)
 - OpenLid: a Mac that had OpenLid turned off before the last update, with Remote Wake still on, is
   now disarmed once at the next launch. (#1541)
+- The sub-agents robot is now a clean line drawing that matches the other icons and takes their
+  colour, in the Sessions header count, the sidebar counts, the X-ray prompt rows and the menu.
+  (#1546)
 
 ## v2.174.0
 

@@ -98,7 +98,8 @@ final class XrayChaptersTests: XCTestCase {
         XCTAssertEqual(p.shownPrompts.map(\.title), ["Continue the api work", "Please rerun the api suite", "Fix the login test"],
                        "newest first, the 3 automatic rows hidden")
         XCTAssertEqual(p.count(.prompts), 3)
-        XCTAssertEqual(p.shownPrompts.map { XrayPromptRow($0).mark }, [nil, "\u{1F916} api-qa", nil], "the peer is marked")
+        XCTAssertEqual(p.shownPrompts.map { XrayPromptRow($0).mark }, [nil, "api-qa", nil], "the peer is marked")
+        XCTAssertEqual(p.shownPrompts.map { XrayPromptRow($0).robot }, [false, true, false], "with the robot glyph (#1546)")
         XCTAssertEqual(p.hidden(.prompts).auto, 3)
         XCTAssertEqual(p.hidden(.prompts).peer, 1)
         XCTAssertEqual(p.shownResponses.map(\.response), ["Continuing", "Rerunning", "Done: login fixed"])
@@ -113,7 +114,7 @@ final class XrayChaptersTests: XCTestCase {
                                                      "Please rerun the api suite", "Background build finished",
                                                      "Fix the login test"], "an auto prompt titled by its summary")
         XCTAssertEqual(p.shownPrompts.map { XrayPromptRow($0).mark },
-                       [nil, nil, "\u{1F4E5} worker-a", "\u{1F916} api-qa", "\u{1F514}", nil])
+                       [nil, nil, "\u{1F4E5} worker-a", "api-qa", "\u{1F514}", nil])
         XCTAssertTrue(p.shownPrompts.allSatisfy { XrayPromptRow($0).faint == $0.auto })
         XCTAssertEqual(p.shownPrompts.map(\.ordinal), [6, 5, 4, 3, 2, 1], "dch's i")
     }

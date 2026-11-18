@@ -380,10 +380,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .idle, .error:
             agentStatusItem.isHidden = true
         case .loadingModel:
-            agentStatusItem.title = "\u{1F916} Loading coding model — suggestions paused"
+            agentStatusItem.title = "Loading coding model — suggestions paused"
+            agentStatusItem.image = RobotGlyph.nsImage(size: 16)   // #1546: the drawn robot, template
             agentStatusItem.isHidden = false
         case .running, .awaitingApproval:
-            agentStatusItem.title = "\u{1F916} Coding agent running — suggestions paused"
+            agentStatusItem.title = "Coding agent running — suggestions paused"
+            agentStatusItem.image = RobotGlyph.nsImage(size: 16)
             agentStatusItem.isHidden = false
         }
         agentItem.isHidden = !Preferences.agentEnabled

@@ -99,7 +99,8 @@ final class XrayPromptsTabTests: XCTestCase {
         let c = try XCTUnwrap(p.shownPrompts.first { $0.from == .peer })
         XCTAssertEqual(c.title, "Please rerun the api suite", "titled by its body, never the wrapper")
         let row = XrayPromptRow(c)
-        XCTAssertEqual(row.mark, "\u{1F916} api-qa", "a robot and the sender, through OutsideText.shown")
+        XCTAssertEqual(row.mark, "api-qa", "the sender, through OutsideText.shown")
+        XCTAssertTrue(row.robot, "the robot glyph before it (#1546)")
         XCTAssertEqual(row.spoken, "Message from api-qa, prompt 3, Please rerun the api suite")
         XCTAssertFalse(row.faint)
         let toggle = try XCTUnwrap(p.promptFooter(.prompts).last)
@@ -183,7 +184,8 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertFalse(m.blocks.contains { if case .user(let c) = $0.body { c.text.contains("rerun") || c.origin?.peer != nil } else { false } })
         let c = try XCTUnwrap(m.chapters.first { $0.from == .peer })
         XCTAssertEqual(c.title, "Please rerun the api suite")
-        XCTAssertEqual(XrayPromptRow(c).mark, "\u{1F916} api-qa")
+        XCTAssertEqual(XrayPromptRow(c).mark, "api-qa")
+        XCTAssertTrue(XrayPromptRow(c).robot)
         XCTAssertEqual(p.title(.prompts), "Prompts 4")
         XCTAssertEqual(tip.chapters.count, 5, "without the two records: two chapters fewer")
     }
@@ -212,7 +214,8 @@ final class XrayPromptsTabTests: XCTestCase {
         let marked = p.shownPrompts.filter { $0.from != .own }
         XCTAssertEqual(marked.count, 2, "both listed in Prompts")
         XCTAssertTrue(marked.allSatisfy { XrayPromptRow($0).mark != nil }, "marked (robot for the message, inbox for the hand-back)")
-        XCTAssertEqual(Set(marked.compactMap { XrayPromptRow($0).mark }), ["\u{1F916} api-qa", "\u{1F4E5} worker-a"])
+        XCTAssertEqual(Set(marked.compactMap { XrayPromptRow($0).mark }), ["api-qa", "\u{1F4E5} worker-a"])
+        XCTAssertEqual(marked.map { XrayPromptRow($0).robot }.filter { $0 }.count, 1, "the robot only for the message")
     }
 
     /// Return or a click on a row: the pane's jumper is asked for that chapter's block (#1319's seam).

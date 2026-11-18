@@ -682,6 +682,8 @@ final class XrayPanelModel: ObservableObject {
 struct XrayPromptRow: Equatable {
     let ordinal: String
     let mark: String?
+    /// #1546: a peer's message: the view draws RobotGlyph before `mark` (the sender; "" when it has none), not an emoji.
+    let robot: Bool
     let title: String
     let faint: Bool
     let tools: String?
@@ -695,15 +697,18 @@ struct XrayPromptRow: Equatable {
     static let lineCap = 240
 
     static func mark(_ c: TranscriptOutline.Chapter) -> String? {
-        let symbol: String? = c.peer == nil ? (c.auto && c.kind != .compaction ? "\u{1F514}" : nil) : c.auto ? "\u{1F4E5}" : "\u{1F916}"
-        guard let symbol else { return nil }
         let sender = OutsideText.shown(c.peer ?? "", max: 40)
+        if isRobot(c) { return sender }
+        let symbol: String? = c.peer == nil ? (c.auto && c.kind != .compaction ? "\u{1F514}" : nil) : "\u{1F4E5}"
+        guard let symbol else { return nil }
         return sender.isEmpty ? symbol : symbol + " " + sender
     }
+    static func isRobot(_ c: TranscriptOutline.Chapter) -> Bool { c.peer != nil && !c.auto }
 
     init(_ c: TranscriptOutline.Chapter, response: Bool = false) {
         ordinal = "\(c.ordinal)"
         mark = Self.mark(c)
+        robot = Self.isRobot(c)
         title = OutsideText.shown(c.title, max: TranscriptOutline.titleCap)
         faint = c.auto
         tools = response ? c.tools.map { OutsideText.shown($0, max: 160) } : nil
@@ -1159,7 +1164,8 @@ struct XrayPromptRowView: View {
             VStack(alignment: .leading, spacing: sz(1)) {
                 HStack(spacing: sz(6)) {
                     Text(verbatim: row.ordinal).foregroundStyle(Neon.textSecondary).fixedSize()
-                    if let m = row.mark { Text(verbatim: m).foregroundStyle(Neon.textSecondary).lineLimit(1) }
+                    if row.robot { RobotGlyph(size: 11).foregroundStyle(Neon.textSecondary) }
+                    if let m = row.mark, !m.isEmpty { Text(verbatim: m).foregroundStyle(Neon.textSecondary).lineLimit(1) }
                     Text(verbatim: row.title).foregroundStyle(row.faint ? Neon.textSecondary : Neon.textPrimary)
                         .lineLimit(1).truncationMode(.tail).layoutPriority(1)
                 }

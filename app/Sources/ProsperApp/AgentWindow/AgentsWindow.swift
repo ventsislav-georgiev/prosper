@@ -1157,11 +1157,11 @@ struct AgentSidebarTitleRow: View {
             Spacer(minLength: 0)
             let rows = model.sections.filter { $0.title != "History" }.flatMap(\.rows)
             if !rows.isEmpty {
-                // #1467: "6/17 active \u{B7} \u{1F916} 9"; a header too narrow for it drops the word "active" first.
+                // #1467: "6/17 active \u{B7} <robot glyph> 9" (#1546: the drawn RobotGlyph, inline); a header too narrow for it drops the word "active" first.
                 let t = Self.countText(rows.map { (state: $0.state, agents: max(0, $0.session?.agents ?? 0)) })
                 ViewThatFits(in: .horizontal) {
-                    Text(t.short)
-                    Text(t.narrow)
+                    Self.countLine(t.short, subs: t.subs)
+                    Self.countLine(t.narrow, subs: t.subs)
                 }
                 .font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
                 .lineLimit(1)
@@ -1205,21 +1205,30 @@ struct AgentSidebarTitleRow: View {
     /// session header's title line: 14 + 18 / 2 = AgentSessionHeader's 10 + 26 / 2.
     static var padTop: CGFloat { sz(14) }
 
-    /// #1467: the header count of the listed sessions (state, sub-agents). short "6/17 active \u{B7} \u{1F916} 9" (active =
-    /// working or blocked; the robot part is left out at 0), narrow the same without "active", long the full split
+    /// #1546: the count line: `ratio`, then at subs > 0 " \u{B7} ", the robot glyph (a template image Text draws in the
+    /// surrounding ink, 10.5 pt as the header's font) and the number.
+    /// The header's robot: the 10.5 pt font at the UI scale (as Neon.font) times the glyph's side factor.
+    static func countRobotImage() -> NSImage { RobotGlyph.nsImage(size: 10.5 * ThemeRuntime.scale * RobotGeometry.sideFactor) }
+    static func countLine(_ ratio: String, subs: Int) -> Text {
+        guard subs > 0 else { return Text(ratio) }
+        return Text(ratio) + Text(" \u{B7} ") + Text(Image(nsImage: countRobotImage()).renderingMode(.template)) + Text(" \(subs)")
+    }
+
+    /// #1467: the header count of the listed sessions (state, sub-agents). short "6/17 active" and `subs` 9, drawn as
+    /// "6/17 active \u{B7} <robot glyph> 9" by countLine (active = working or blocked; the robot part is left out at
+    /// subs 0), narrow the same without "active", long the full split
     /// for the tooltip and VoiceOver: "4 working, 2 need input, 3 done, 8 idle \u{B7} 9 sub-agents" (zero parts left out).
     /// A row with no state reads as idle. n = 0 has no count: the caller shows nothing.
-    static func countText(_ rows: [(state: AgentState?, agents: Int)]) -> (short: String, narrow: String, long: String) {
+    static func countText(_ rows: [(state: AgentState?, agents: Int)]) -> (short: String, narrow: String, long: String, subs: Int) {
         func n(_ s: AgentState) -> Int { rows.filter { ($0.state ?? .idle) == s }.count }
         let (blocked, working, done, idle) = (n(.blocked), n(.working), n(.done), n(.idle))
         // #1467 m1: each term and the running total kept to 0...maxAgents, so no + can overflow whatever a caller passes.
         let subs = rows.reduce(0) { min($0 + min(max(0, $1.agents), DchListRow.maxAgents), DchListRow.maxAgents) }
-        let robot = subs > 0 ? " \u{B7} \u{1F916} \(subs)" : ""
         let ratio = "\(working + blocked)/\(rows.count)"
         let parts = [working > 0 ? "\(working) working" : nil, blocked > 0 ? "\(blocked) need\(blocked == 1 ? "s" : "") input" : nil,
                      done > 0 ? "\(done) done" : nil, idle > 0 ? "\(idle) idle" : nil].compactMap { $0 }
         let tail = subs > 0 ? " \u{B7} \(subs) sub-agent\(subs == 1 ? "" : "s")" : ""
-        return ("\(ratio) active\(robot)", "\(ratio)\(robot)", parts.joined(separator: ", ") + tail)
+        return ("\(ratio) active", ratio, parts.joined(separator: ", ") + tail, subs)
     }
     /// #897: the trailing strip the overlay holds: the "..." slot, the gap, #847's pair.
     static var buttonsWidth: CGFloat { AgentNewSessionButtons.width + sz(4) + sz(18) }
@@ -2120,8 +2129,8 @@ struct AgentCountGroups: View {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
                     let pill = g.0 == .agents ? fill : nil
                     HStack(spacing: sz(2)) {
-                        // #1453: the sub-agents count is a robot emoji, not .agents' people symbol; the words stay the label below.
-                        if g.0 == .agents { Text("\u{1F916}").font(Neon.font(size - 1)) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
+                        // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
+                        if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
                     .padding(.horizontal, pill == nil ? 0 : sz(4))

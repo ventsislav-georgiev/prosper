@@ -11,7 +11,7 @@ private final class Window1453: NSWindow {
 }
 
 /// #1453 (operator 2026-11-17, "use robot emoji here for subagents"): the sub-agent count on a sidebar row and an island
-/// card draws the robot emoji (U+1F916) in the same filled capsule, not the people symbol; VoiceOver keeps the words.
+/// card draws the RobotGlyph (#1546: was the robot emoji U+1F916) in the same filled capsule, not the people symbol; VoiceOver keeps the words.
 /// Offscreen only: ImageRenderer, or views hosted in windows that are never shown; no event, no file. Fakes only.
 extension AgentRowModelEffortTests {
     static let robot1453 = "\u{1F916}"
@@ -42,7 +42,7 @@ extension AgentRowModelEffortTests {
         try atScales { scale in
             for n in [3, 128] {
                 let got = try pixels1453(AgentCountGroups(counts: [(.agents, n)], size: 10.5, fill: AgentSidebarRowView.countPillFill()))
-                let robot = try pixels1453(group1453(n, Text(Self.robot1453)))
+                let robot = try pixels1453(group1453(n, RobotGlyph(size: 10.5 - 1)))
                 let people = try pixels1453(group1453(n, Image(systemName: "person.2")))
                 XCTAssertTrue(got.0 == robot.0 && got.1 == robot.1 && got.2 == robot.2, "the robot and the number: \(n) agents (\(scale))")
                 XCTAssertTrue(got.2 != people.2, "not the people symbol: \(n) agents (\(scale))")
@@ -62,7 +62,7 @@ extension AgentRowModelEffortTests {
                     XCTFail("probed: \(h.frames.keys.sorted()) (\(scale))"); continue
                 }
                 let inner = NSHostingView(rootView: HStack(spacing: sz(2)) {
-                    Text(Self.robot1453).font(Neon.font(10.5 - 1))
+                    RobotGlyph(size: 10.5 - 1)
                     Text(AgentIsland.count(n)).font(Neon.font(10.5).monospacedDigit())
                 }.fixedSize()).fittingSize
                 XCTAssertEqual(c.width, inner.width + 2 * sz(4), accuracy: 1 + pixel, "the capsule is the robot group plus its padding: \(c) \(inner) (\(scale))")
@@ -101,13 +101,53 @@ extension AgentRowModelEffortTests {
         let r = AgentIslandRow.sidebarRow(s, show: .all, now: Self.now, notice: nil)
         XCTAssertEqual(r.counts.first.map { "\($0.0) \($0.1)" }, "agents 3", "the card's row carries the agents count")
         let line = AgentSidebarRowView(row: r, selected: false, inks: AgentIslandRow.inks).detailLine([])
-        // The robot is a colour glyph; the symbol and the text are one ink: a chromatic pixel is the emoji's.
+        // #1546: the glyph is drawn in the surrounding ink like the text: no chromatic pixel (the emoji's colours are gone).
         let (w, h, data) = try pixels1453(line)
         let lit = stride(from: 0, to: data.count - 3, by: 4).filter { i in
             let c = [data[i], data[i + 1], data[i + 2]], hi = c.max() ?? 0, lo = c.min() ?? 0
             return Int(hi) - Int(lo) > 40
         }.count
-        XCTAssertTrue(w > 0 && h > 0 && lit > 0, "the card's agents group is drawn with the colour emoji: \(lit) chromatic pixels")
+        XCTAssertTrue(w > 0 && h > 0 && lit == 0, "the card's agents group is the one-ink robot glyph: \(lit) chromatic pixels")
+    }
+
+    /// #1546 source guard: no U+1F916 (the character or its \u{1F916} escape) anywhere in Sources outside Emoji.swift (the
+    /// ":robot:" shortcode table); every place draws RobotGlyph.
+    func testRobot1546NoRobotEmojiInSourcesOutsideEmojiSwift() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let escapes = ["\\u{1F916}", "\\u{1f916}", "\u{1F916}"]
+        var seen = 0, hits: [String] = []
+        let e = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)
+        while let url = e?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            seen += 1
+            guard url.lastPathComponent != "Emoji.swift" else { continue }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            if escapes.contains(where: { text.contains($0) }) { hits.append(url.lastPathComponent) }
+        }
+        XCTAssertTrue(seen > 100, "the scan read the sources: \(seen) files")
+        XCTAssertEqual(hits, [], "the robot emoji outside Emoji.swift")
+    }
+
+    /// #1546: at a UI scale other than 1 the header's robot image is 10.5 * scale * sideFactor, as the text beside it scales.
+    @MainActor
+    func testRobot1546TheHeaderRobotFollowsTheUIScale() {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for s in [0.7, 0.85, 1.0] {
+            ThemeRuntime.scale = s
+            XCTAssertEqual(AgentSidebarTitleRow.countRobotImage().size.width, 10.5 * s * RobotGeometry.sideFactor, accuracy: 0.001, "scale \(s)")
+        }
+    }
+
+    /// #1546: the AppKit render is a template (the menu tints it) of the asked size, and the view draws.
+    @MainActor
+    func testRobot1546TheMenuImageIsATemplateOfTheAskedSize() throws {
+        let image = RobotGlyph.nsImage(size: 16)
+        XCTAssertTrue(image.isTemplate)
+        XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
+        let (w, h, data) = try pixels1453(RobotGlyph(size: 20).foregroundStyle(Color.white))
+        XCTAssertTrue(w > 0 && h > 0 && data.contains { $0 != 0 }, "the glyph draws ink")
     }
 
     /// A view hosted in a never-shown window of `size` whose backing is pinned: its fitting height and the row probes' frames.

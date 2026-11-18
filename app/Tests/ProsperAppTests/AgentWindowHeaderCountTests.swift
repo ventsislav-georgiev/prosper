@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1467: the Agent Sessions header count, "6/17 active \u{B7} \u{1F916} 9" with the full split as its tooltip and
+/// #1467: the Agent Sessions header count, "6/17 active \u{B7} <robot glyph> 9" (#1546: drawn, countText.subs 9) with the full split as its tooltip and
 /// VoiceOver label. The text is a pure function of (state, sub-agents) per listed session; the narrow form is
 /// measured offscreen (a never-shown hosting view drawn into a bitmap). No window shown, no event, no pasteboard.
 extension AgentWindowD1Tests {
@@ -14,20 +14,21 @@ extension AgentWindowD1Tests {
     func testAgentWindowHeaderCountTextTable() {
         let mixed: HeaderSet = [(.working, 3), (.working, 2), (.working, 0), (.working, 0), (.blocked, 1), (.blocked, 0),
                                 (.done, 2), (.done, 0), (.done, 0), (.idle, 1)] + Array(repeating: (.idle, 0), count: 7)
-        let table: [(String, HeaderSet, String, String, String)] = [
+        let table: [(String, HeaderSet, String, String, Int, String)] = [
             ("4 working + 2 blocked + 3 done + 8 idle, 9 sub-agents", mixed,
-             "6/17 active \u{B7} \u{1F916} 9", "6/17 \u{B7} \u{1F916} 9", "4 working, 2 need input, 3 done, 8 idle \u{B7} 9 sub-agents"),
-            ("one idle, no sub-agents", [(.idle, 0)], "0/1 active", "0/1", "1 idle"),
-            ("one blocked, one sub-agent", [(.blocked, 1)], "1/1 active \u{B7} \u{1F916} 1", "1/1 \u{B7} \u{1F916} 1", "1 needs input \u{B7} 1 sub-agent"),
-            ("all idle", [(.idle, 0), (.idle, 0), (.idle, 0)], "0/3 active", "0/3", "3 idle"),
-            ("one working, one done", [(.working, 0), (.done, 0)], "1/2 active", "1/2", "1 working, 1 done"),
-            ("no state reads as idle", [(nil, 0)], "0/1 active", "0/1", "1 idle"),
-            ("no sessions", [], "0/0 active", "0/0", ""),
+             "6/17 active", "6/17", 9, "4 working, 2 need input, 3 done, 8 idle \u{B7} 9 sub-agents"),
+            ("one idle, no sub-agents", [(.idle, 0)], "0/1 active", "0/1", 0, "1 idle"),
+            ("one blocked, one sub-agent", [(.blocked, 1)], "1/1 active", "1/1", 1, "1 needs input \u{B7} 1 sub-agent"),
+            ("all idle", [(.idle, 0), (.idle, 0), (.idle, 0)], "0/3 active", "0/3", 0, "3 idle"),
+            ("one working, one done", [(.working, 0), (.done, 0)], "1/2 active", "1/2", 0, "1 working, 1 done"),
+            ("no state reads as idle", [(nil, 0)], "0/1 active", "0/1", 0, "1 idle"),
+            ("no sessions", [], "0/0 active", "0/0", 0, ""),
         ]
-        for (name, set, short, narrow, long) in table {
+        for (name, set, short, narrow, subs, long) in table {
             let t = AgentSidebarTitleRow.countText(set)
             XCTAssertEqual(t.short, short, name)
             XCTAssertEqual(t.narrow, narrow, name)
+            XCTAssertEqual(t.subs, subs, name)
             XCTAssertEqual(t.long, long, name)
         }
     }
@@ -39,11 +40,12 @@ extension AgentWindowD1Tests {
         let cap = DchListRow.maxAgents
         XCTAssertEqual(cap, 9_999)
         let t = AgentSidebarTitleRow.countText([(.working, Int.max), (.idle, Int.max)])
-        XCTAssertEqual(t.short, "1/2 active \u{B7} \u{1F916} \(cap)")
-        XCTAssertEqual(t.narrow, "1/2 \u{B7} \u{1F916} \(cap)")
+        XCTAssertEqual(t.short, "1/2 active")
+        XCTAssertEqual(t.narrow, "1/2")
+        XCTAssertEqual(t.subs, cap)
         XCTAssertEqual(t.long, "1 working, 1 idle \u{B7} \(cap) sub-agents")
-        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, cap), (.idle, 1)]).narrow, "1/2 \u{B7} \u{1F916} \(cap)", "the total too")
-        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, Int.min), (.idle, 4)]).narrow, "1/2 \u{B7} \u{1F916} 4", "a negative term is 0")
+        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, cap), (.idle, 1)]).subs, cap, "the total too")
+        XCTAssertEqual(AgentSidebarTitleRow.countText([(.working, Int.min), (.idle, 4)]).subs, 4, "a negative term is 0")
     }
 
     /// #1467 s1: hosted offscreen (a never-shown window, nothing ordered in or made key, no event), a hit at the
@@ -99,9 +101,10 @@ extension AgentWindowD1Tests {
             let full = wiringModel(store(sessions), SpawnCalls()), empty = wiringModel(store([]), SpawnCalls())
             defer { full.close(); empty.close() }
             let t = AgentSidebarTitleRow.countText([(.working, 2), (.blocked, 1), (.idle, 0)])
-            XCTAssertEqual(t.short, "2/3 active \u{B7} \u{1F916} 3")
+            XCTAssertEqual(t.short, "2/3 active")
+            XCTAssertEqual(t.subs, 3)
             @MainActor func width(_ s: String) -> CGFloat {
-                NSHostingView(rootView: Text(s).font(Neon.font(10.5)).fixedSize()).fittingSize.width
+                NSHostingView(rootView: AgentSidebarTitleRow.countLine(s, subs: t.subs).font(Neon.font(10.5)).fixedSize()).fittingSize.width
             }
             let (wShort, wNarrow) = (width(t.short), width(t.narrow))
             XCTAssertGreaterThan(wShort, wNarrow + 8, "the word is wider than rounding")
@@ -119,7 +122,7 @@ extension AgentWindowD1Tests {
             }
             @MainActor func refInk(_ s: String) throws -> CGRect {
                 let size = CGSize(width: 400, height: sz(40))
-                let rep = try wiringRender(Text(s).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary).padding(.leading, 4), size, backing: 2)
+                let rep = try wiringRender(AgentSidebarTitleRow.countLine(s, subs: t.subs).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary).padding(.leading, 4), size, backing: 2)
                 return try XCTUnwrap(ink(rep, CGRect(origin: .zero, size: size)), s)
             }
             let (refShort, refNarrow) = (try refInk(t.short), try refInk(t.narrow))
