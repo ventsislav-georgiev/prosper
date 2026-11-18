@@ -172,9 +172,9 @@ final class XrayRefCacheTests: XCTestCase {
         var f: XrayRefCache.Focus? = focus(active: false, mark: 5)
         let c = cache(run, { clock }, { f })
         for _ in 0..<3 { c.tick() }
-        f = nil   // another pane or Terminal mode
+        f = nil   // no focus: no window model, a remote row (#1357: a Terminal pane has one now)
         c.tick()
-        XCTAssertEqual(run.calls.count, 0, "blurred, hidden or not a Transcript pane: no read")
+        XCTAssertEqual(run.calls.count, 0, "blurred, hidden or no focus: no read")
         f = focus(mark: 5)
         c.tick()
         await c.reading?.value

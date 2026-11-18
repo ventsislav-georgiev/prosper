@@ -270,6 +270,10 @@ final class AgentTerminalController: ObservableObject {
     var cwd: (AgentSessionKey) -> String? = { _ in nil }
     var homeDirectory: () -> String = { NSHomeDirectory() }
     var showFile: @MainActor (URL) -> Void = { TextViewerIntake.shared.receive($0) }
+    /// #1357 (P9): a prosper-xray link (OSC 8) to the window's ref card, the key checked against this session's refs.
+    var openRefLink: @MainActor (URL, NSWindow?, AgentSessionKey?) -> Void = {
+        XrayRefLink.openTerminalLink($0, $1 as? AgentsNSWindow, key: $2)
+    }
     /// The client binary's version, probed off main (cached per path and mtime). Nil under XCTest: the
     /// probe runs before the spawn now, and a row never runs a real `dch --version`.
     var clientVersion: @Sendable (String) -> [Int]? = {
@@ -609,10 +613,14 @@ final class AgentTerminalController: ObservableObject {
     // MARK: Links and find
 
     /// ⌘-click on a URL or an OSC 8 link: web and mail links to openURL; a text file to the Text Viewer;
-    /// never any other file or an app.
+    /// #1357: a prosper-xray link to the ref card (a local session's only); never any other file or an app.
     func open(_ link: String) {
         if let url = URL(string: link), let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
             openURL(url)
+            return
+        }
+        if let url = URL(string: link), url.scheme?.lowercased() == XrayRefLink.scheme {
+            if remoteHost == nil { openRefLink(url, view?.window, key) }
             return
         }
         // A remote row's paths are another machine's: never open one here, not even an absolute one (same-named local file).
@@ -762,6 +770,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         guard window != nil, let screen, screen !== installed else { return }
         AgentTerminalLook.refresh(look())
         installed = screen
+        viewportText = { [weak screen] in screen?.session.readViewportText() }
         // The backend first: a controller set while the options still name `.exec` (the default)
         // would build a surface that runs a login shell.
         configuration = TerminalSurfaceOptions(backend: .inMemory(screen.session),
@@ -772,6 +781,8 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
+        // #1357: the window's ref cache starts with its terminal, so refs are read before the first Cmd-click
+        if XrayRefLink.decorate(), let w = window as? AgentsNSWindow, w.model != nil { _ = XrayRefCache.of(w) }
         show(wanted)
         if owner?.focusPending == true { owner?.focus() }
     }
@@ -818,6 +829,49 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func mouseMoved(with event: NSEvent) { if !unfocused { super.mouseMoved(with: event) } }
     override func mouseDragged(with event: NSEvent) { if !unfocused { super.mouseDragged(with: event) } }
     override func mouseExited(with event: NSEvent) { if !unfocused { super.mouseExited(with: event) } }
+
+    // MARK: #1357 (P9): a Cmd-click on a ref on the grid
+
+    /// The grid as libghostty last laid it out (terminalDidResize): a click's cell.
+    var gridMetrics: TerminalGridMetrics?
+    /// The viewport's text, one line per row (rows hand in their own).
+    var viewportText: () -> String? = { nil }
+    /// The card for the ref at a cell; rows record it.
+    var openRef: @MainActor (NSWindow?, AgentSessionKey, String, Int) -> Bool = {
+        XrayRefLink.openOnGrid($0 as? AgentsNSWindow, key: $1, line: $2, column: $3)
+    }
+    /// AgentTerminalLook's window-padding-x and -y (points; padding balance off): the grid's top-left.
+    static let gridOrigin = CGPoint(x: 4, y: 2)
+
+    /// The cell (column, row) under a top-left point, nil off the grid. Every value is checked before Int() (an event's).
+    static func cell(at p: CGPoint, _ g: TerminalGridMetrics, scale: CGFloat) -> (col: Int, row: Int)? {
+        guard scale > 0, g.cellWidthPixels > 0, g.cellHeightPixels > 0 else { return nil }
+        let x = (p.x - gridOrigin.x) / (CGFloat(g.cellWidthPixels) / scale)
+        let y = (p.y - gridOrigin.y) / (CGFloat(g.cellHeightPixels) / scale)
+        guard x.isFinite, y.isFinite, x >= 0, y >= 0, x < CGFloat(g.columns), y < CGFloat(g.rows) else { return nil }
+        return (Int(x), Int(y))
+    }
+
+    /// A Cmd-click on the focused pane: the ref under it opens its card. The click still goes on to libghostty and the
+    /// program (operator 2026-11-10, spec X-T mutant 10: Prosper takes no click); an unfocused pane's down never gets here.
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command), !unfocused {
+            let p = convert(event.locationInWindow, from: nil)
+            refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))
+        }
+        super.mouseDown(with: event)
+    }
+
+    /// The ref under top-left point `p` of a local session's grid opens its card. False: gate B off, a remote row, no
+    /// grid yet, off the grid, or no ref there.
+    @discardableResult
+    func refClick(at p: CGPoint) -> Bool {
+        guard XrayRefLink.decorate(), let owner, owner.remoteHost == nil, let key = owner.key, let g = gridMetrics,
+              let c = Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2) else { return false }
+        let lines = (viewportText() ?? "").components(separatedBy: "\n")
+        guard c.row < lines.count else { return false }
+        return openRef(window, key, lines[c.row], c.col)
+    }
 
     // MARK: #1492 (QA m1): a sidebar row dragged over the terminal
 
@@ -895,6 +949,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// gets. The in-memory session's own report (IO thread) trails it on every new surface (720x420 pt
     /// on 2x: 46x16, then 101x26 ~25 ms later); the client starts once that report reaches this grid.
     func terminalDidResize(_ size: TerminalGridMetrics) {
+        gridMetrics = size
         owner?.gridChanged(cols: Int(size.columns), rows: Int(size.rows))
     }
 

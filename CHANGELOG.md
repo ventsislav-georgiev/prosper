@@ -1855,6 +1855,9 @@ tag from the now-released section and put it on the new top draft.
   blocked until it finishes. (#1333)
 - The Agent Sessions sidebar's state glyphs (needs input, working, done) are now darker on light
   themes so they stand out from the sidebar. (#1339)
+- Command-click a reference such as #12 in a live session's terminal to open its X-ray card.
+  Prosper's server now also answers X-ray requests from phones and other Macs when that Mac's dch is
+  1.91.0 or newer. (#1357)
 
 ## v2.174.0
 

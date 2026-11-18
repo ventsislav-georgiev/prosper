@@ -5,6 +5,9 @@ import SwiftUI
 // focus into a per-window cache; each ref dch marks `underline` gets a dotted underline and a prosper-xray link in the
 // user and assistant prose clips; a click opens the ref card (XrayRefPopover) through the window's presenter.
 // Gate B (XrayRefLink.decorate) ships on (#1419); while off, no read, no underline, no link.
+// #1357 (P9): Terminal mode too. The cache reads for the focused live (Terminal) pane as well; a Cmd-click on an underlined
+// ref on the grid, or a prosper-xray OSC 8 link, opens the same card through the same panel (AgentTerminalHostView.refClick,
+// AgentTerminalController.open).
 
 @MainActor
 enum XrayRefLink {
@@ -60,6 +63,30 @@ enum XrayRefLink {
         XrayPanels.shared.wire(m, pane)
         return m
     }
+
+    /// #1357 (P9): the refs read for `key` when it is the window's focused pane's session (a Cmd-click reaches only the
+    /// focused pane: the window's first-click rule takes a focusing down), its target and that pane. Nil: gate B off, no
+    /// window, another session, a remote row (no dir), or nothing read yet.
+    static func terminalRefs(_ w: AgentsNSWindow?, _ key: AgentSessionKey?) -> (refs: XrayRefs, target: XrayTarget, pane: UUID)? {
+        guard decorate(), let w, let key, let m = w.model, let f = XrayRefCache.focused(in: w), f.key == key,
+              let refs = XrayRefCache.of(w).refs(key, sessionID: f.sessionID) else { return nil }
+        return (refs, f.target, m.layout.focused)
+    }
+
+    /// #1357: a Cmd-click on grid column `column` of the viewport line `line`: the ref there opens its card. False: none.
+    static func openOnGrid(_ w: AgentsNSWindow?, key: AgentSessionKey, line: String, column: Int) -> Bool {
+        guard let r = terminalRefs(w, key), let k = XrayRefSpans.key(atColumn: column, in: line, refs: r.refs.entries),
+              let e = r.refs.entries.first(where: { $0.key == k }) else { return false }
+        panel(r.pane, r.target, r.refs).openRef(e)
+        return true
+    }
+
+    /// #1357: a prosper-xray link a program printed (OSC 8) in a Terminal pane: the Transcript's allowlist and key check
+    /// (open), so only a key in this session's refs opens a card; anything else is dropped.
+    static func openTerminalLink(_ url: URL, _ w: AgentsNSWindow?, key: AgentSessionKey?) {
+        guard let r = terminalRefs(w, key) else { return }
+        _ = open(url, refs: r.refs) { panel(r.pane, r.target, r.refs).openRef($0) }
+    }
 }
 
 /// XrayRefSpans.find: where the underlined refs occur in one prose text. Pure.
@@ -85,6 +112,29 @@ enum XrayRefSpans {
             }
         }
         return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+
+    /// #1357 (P9): the key of the underlined ref covering grid column `col` of one viewport line, or nil. Columns are cells:
+    /// a wide character takes two. A url or file ref is skipped: libghostty already makes those Cmd-click links, which go to
+    /// the browser or the Text Viewer as before (no second action on one click).
+    static func key(atColumn col: Int, in line: String, refs: [XrayRefs.Entry]) -> String? {
+        guard col >= 0 else { return nil }
+        for sp in find(line, refs.filter { $0.shape != .url && $0.shape != .file }) {
+            let lo = cells(line[..<sp.range.lowerBound])
+            if col >= lo, col < lo + cells(line[sp.range]) { return sp.key }
+        }
+        return nil
+    }
+
+    /// Terminal cells of a text: two for an East Asian wide or emoji-presentation character, else one.
+    /// shortcut: a fixed range list, not wcwidth; a rare wide script outside it shifts a click by a cell.
+    static func cells(_ s: Substring) -> Int {
+        s.reduce(0) { n, ch in
+            guard let v = ch.unicodeScalars.first else { return n }
+            let wide = v.properties.isEmojiPresentation || [0x1100...0x115F, 0x2E80...0xA4CF, 0xAC00...0xD7A3, 0xF900...0xFAFF,
+                0xFE30...0xFE4F, 0xFF00...0xFF60, 0xFFE0...0xFFE6, 0x20000...0x3FFFD].contains { $0.contains(v.value) }
+            return n + (wide ? 2 : 1)
+        }
     }
 
     static func word(_ c: Character?) -> Bool {
@@ -191,10 +241,13 @@ final class XrayRefCache: ObservableObject {
         return c
     }
 
-    /// The product's focus: the window's focused pane on a local session that has no terminal to attach (#1471: was
-    /// Transcript mode; that is a History row or an ended session's held row now).
+    /// The window's cache with the product's focus.
+    static func of(_ w: AgentsNSWindow) -> XrayRefCache { of(w) { [weak w] in w.flatMap { focused(in: $0) } } }
+
+    /// The product's focus: the window's focused pane on a local session whose transcript is this session's: a History row
+    /// or an ended session's held row (#1471), and since #1357 (P9) a live session's Terminal pane too.
     static func focused(in w: AgentsNSWindow) -> Focus? {
-        guard let m = w.model, !m.paneHasTerminal,
+        guard let m = w.model,
               let t = XrayTarget.of(m.selectedRow), let dir = t.dir, let tr = m.focusedRuntime?.transcript,
               let id = tr.source?.sessionId, tr.source?.key == AgentSessionKey(dir: dir, name: t.name) else { return nil }
         return Focus(active: w.isKeyWindow && m.visible, target: t, key: AgentSessionKey(dir: dir, name: t.name), sessionID: id, mark: tr.blocks.last?.id ?? -1)
@@ -250,8 +303,7 @@ struct XrayRefScope: ViewModifier {
 
     func body(content: Content) -> some View {
         if XrayRefLink.decorate(), let w = window, let m = w.model {
-            content.modifier(Linked(cache: XrayRefCache.of(w) { [weak w] in w.flatMap { XrayRefCache.focused(in: $0) } },
-                                    transcript: transcript, pane: pane ?? m.layout.focused))
+            content.modifier(Linked(cache: XrayRefCache.of(w), transcript: transcript, pane: pane ?? m.layout.focused))
         } else {
             content
         }

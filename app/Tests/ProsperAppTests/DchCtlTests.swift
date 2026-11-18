@@ -374,15 +374,18 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(DchCtlOps().timeout(of: "--xray"), 60, "--ref and the rest: 60 s")
     }
 
-    /// amendment 3: "xray" is in ops only while the dch ctl runs has --xray: a version gate whose
-    /// minimum is a placeholder out of reach today.
+    /// amendment 3: "xray" is in ops only while the dch ctl runs has --xray: #1357 (P9) gates it at 1.91.0, the first
+    /// dch whose serve ctl_xray lets --follow take --tasks and --memory as `.xray` does (rframe.c:676@v1.91.0).
     func testXrayOpsFollowTheDchVersion() {
         XCTAssertFalse(DchCtl.hasXray(nil))
         XCTAssertFalse(DchCtl.hasXray([1, 41, 0]))
-        XCTAssertFalse(DchCtl.hasXray([998, 99, 99]))
+        XCTAssertEqual(DchCtl.xrayMinDch, [1, 91, 0])
+        XCTAssertFalse(DchCtl.hasXray([1, 78, 0]), "1.78.0's serve refuses --follow --tasks (rframe.c:673-680)")
+        XCTAssertFalse(DchCtl.hasXray([1, 90, 99]))
+        XCTAssertTrue(DchCtl.hasXray([1, 99, 0]), "the bundled DCH_TAG")
         XCTAssertTrue(DchCtl.hasXray(DchCtl.xrayMinDch))
         XCTAssertTrue(DchCtl.hasXray([999, 0, 1]))
-        XCTAssertFalse(DchCtlOps().xray(), "off today, and no test probes a dch")
+        XCTAssertFalse(DchCtlOps().xray(), "off under XCTest: no test probes a dch")
         func ops(_ xray: Bool) -> [String] {
             DchFrame.machineInfo(deviceID: "d", hostname: "h", wakeId: nil, xray: xray)["ops"] as? [String] ?? []
         }

@@ -66,14 +66,14 @@ enum DchCtl {
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
 
-    /// Out of reach on purpose: dch has shipped --xray since 1.44.0, with the --ref/--scope/--budget-ms forms
-    /// `.xray` allows since 1.50.0, and dch serve runs a peer's --xray since 1.55.0 (ctl_xray, v1.57.0
-    /// rframe.c:609-667), but "xray" stays off until Prosper's X-ray client ships AND `.xray`'s allowlist
-    /// matches dch serve's. #1247 closed the flag list, the refusal words, the order of checks, --budget-ms and
-    /// refOK's code points (rframe.c@v1.99.0); what is left is xr_ref_parse's grammar ("not a ref": only a blank text and
-    /// a text starting with "-" are refused here, dch itself refuses the rest when it runs) and a 60-byte cut of a
-    /// shown word at a scalar boundary. A bundled dch that has --xray is not a reason to lower it (QA #720, #879).
-    static let xrayMinDch = [999, 0, 0]
+    /// #1357 (P9): the first dch whose serve ctl_xray is `.xray`'s allowlist. #1247 ported rframe.c@v1.99.0 (flags, words,
+    /// order of checks, --budget-ms, refOK's code points). Re-read at v1.78.0 (rframe.c:630-694): the same eleven flags,
+    /// words, order, anchor/scope/budget/search checks, but no #446 exemption, so serve refuses --follow with --tasks or
+    /// --memory (:673-680) where `.xray` allows it. That exemption is v1.91.0's (rframe.c:676); ctl_xray and its helpers are
+    /// byte-identical from v1.91.0 to v1.99.0. Left as before: xr_ref_parse's grammar ("not a ref": only a blank text and
+    /// a text starting with "-" are refused here, the dch child refuses the rest when it runs) and a 60-byte cut of a
+    /// shown word at a scalar boundary.
+    static let xrayMinDch = [1, 91, 0]
     static func hasXray(_ version: [Int]?) -> Bool { version.map { DchCommand.isAtLeast($0, xrayMinDch) } ?? false }
 
     /// The timeout's timer (DchCtlOps.after's default).
