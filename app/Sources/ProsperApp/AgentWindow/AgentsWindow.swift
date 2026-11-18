@@ -2112,6 +2112,8 @@ struct AgentCountGroups: View {
                     .background {   // no vertical padding: the line's height stays (31/39/45)
                         if let pill {
                             Capsule().fill(pill)
+                                // #1531 n2: no stroke in the default look; Increase Contrast keeps a 1 pt quiet-ink edge (inside, no layout change).
+                                .overlay { if ThemeRuntime.increaseContrast { Capsule().strokeBorder(quiet, lineWidth: 1) } }
                                 .modifier(AgentSidebarRowProbe(kind: "capsule.\(g.0)", title: g.0.words(g.1)))
                         }
                     }

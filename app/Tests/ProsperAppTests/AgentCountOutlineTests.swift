@@ -80,14 +80,40 @@ extension AgentRowModelEffortTests {
             }
         }
     }
+
+    /// #1531 n2: Increase Contrast only (the seam is ThemeRuntime.increaseContrast, forced here and put back; never the Mac's
+    /// setting): the agents pill keeps a 1 pt quiet-ink stroke, so its edge pixel differs from its interior fill; off, no stroke.
+    @MainActor
+    func testAgentsCountPillKeepsAQuietStrokeOnlyUnderIncreaseContrast() {
+        let saved = ThemeRuntime.increaseContrast
+        defer { ThemeRuntime.increaseContrast = saved }
+        let r = outlined1360(agents: 5)
+        func edgeAndInside(_ hc: Bool) -> (edge: [CGFloat], inside: [CGFloat])? {
+            ThemeRuntime.increaseContrast = hc
+            let w = AgentWindowModel.fullSidebarWidth - sz(16)
+            let h = hosted1345(r, number: 1, width: w, backing: 2)
+            guard let c = h.frames["capsule.agents"], let rep = h.rep else { return nil }
+            let k = CGFloat(rep.pixelsWide) / w.rounded(.up)
+            func pix(_ x: CGFloat) -> [CGFloat] {
+                guard let col = rep.colorAt(x: Int(x * k), y: Int(c.midY * k))?.usingColorSpace(.sRGB) else { return [] }
+                return [col.redComponent, col.greenComponent, col.blueComponent]
+            }
+            return (pix(c.minX + 0.5), pix(c.minX + sz(3)))
+        }
+        guard let on = edgeAndInside(true), let off = edgeAndInside(false) else { return XCTFail("probed and drawn") }
+        XCTAssertTrue(on.edge.count == 3 && on.inside.count == 3 && off.edge.count == 3 && off.inside.count == 3, "pixels read")
+        XCTAssertGreaterThan(zip(on.edge, on.inside).map { $0 - $1 }.reduce(0, +), 0.3, "Increase Contrast: the quiet-ink stroke is brighter than the fill: \(on)")
+        XCTAssertTrue(zip(off.edge, off.inside).allSatisfy { $0 <= $1 + 0.02 }, "default look: no stroke: \(off)")
+    }
 }
 
 extension AgentRowSelectedTextTests {
     /// #1531: the pill's fill (textSecondary at countPillOpacity) over the row on every theme, unselected (the sidebar) and
-    /// selected (the accent at 0.14 over it): it differs from the row by at least 1.12:1 (a visible pill), and the number's
+    /// selected (the accent at 0.14 over it): it differs from the row by at least 1.18:1 (the measured minimum is 1.2037:1) (a visible pill), and the number's
     /// ink (unchanged, AgentRowSelectedTextTests' count group row) stays at least 3:1 over the fill.
     func testAgentsCountPillFillIsVisibleOnEveryTheme() throws {
         var pairs = 0
+        var minMargin = CGFloat.infinity
         try onEveryTheme { d, p in
             for selected in [false, true] {
                 let bg = selected ? over(rgba(p.sidebar), p.blue, 0.14) : rgba(p.sidebar)
@@ -95,11 +121,13 @@ extension AgentRowSelectedTextTests {
                 let margin = ThemeContrastTests.contrast(ns((pill.r, pill.g, pill.b, 1)), on: ns((bg.r, bg.g, bg.b, 1)))
                 let number = ThemeContrastTests.contrast(NSColor(AgentSidebarRowView.ink(.quiet, selected: selected)), on: ns((pill.r, pill.g, pill.b, 1)))
                 let tag = "\(d.title) selected \(selected): fill over row \(margin):1, number over fill \(number):1"
-                XCTAssertGreaterThanOrEqual(margin, 1.12, tag)
+                minMargin = min(minMargin, margin)
+                XCTAssertGreaterThanOrEqual(margin, 1.18, tag)   // measured minimum 1.2037 (PILL-MIN-MARGIN), floor 0.02 under it: an opacity cut fails
                 XCTAssertGreaterThanOrEqual(number, 3, tag)
                 pairs += 1
             }
         }
         XCTAssertEqual(pairs, 22 * 2)
+        print("PILL-MIN-MARGIN \(minMargin):1 over \(pairs) pairs")
     }
 }
