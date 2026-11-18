@@ -290,8 +290,14 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertTrue(s.contains { $0.contains("Add an account first.") }, "no account: the row says why it is disabled")
         XCTAssertEqual(CCPoolPane.routeScope, "New sessions started from Prosper that run claude. "
                        + "Shells, headroom, other programs and sessions started in a terminal are not routed. "
-                       + "Resume interrupted is not routed. A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key.")
+                       + "Resume interrupted is not routed.")
         XCTAssertTrue(s.contains { $0.contains(CCPoolPane.routeScope) }, "the scope line is shown")
+        // #1499: the shell-startup limit holds below dch 1.94.0 (or with no control dch); from it Resume passes --env/--unset.
+        let limited = CCPoolPane.routeScope + " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
+        XCTAssertEqual(CCPoolPane.routeScope(dch: nil), limited)
+        XCTAssertEqual(CCPoolPane.routeScope(dch: [1, 93, 9]), limited)
+        XCTAssertEqual(CCPoolPane.routeScope(dch: [1, 94, 0]), CCPoolPane.routeScope)
+        XCTAssertEqual(CCPoolPane.routeScope(dch: [1, 95, 0]), CCPoolPane.routeScope)
         XCTAssertTrue(s.contains { $0.contains("Starts when the first account is added.") }, "the proxy row says why it is stopped")
         XCTAssertTrue(s.contains { $0.contains("ANTHROPIC_BASE_URL=") }, "terminal use, read-only text")
         XCTAssertFalse(s.contains { $0.contains("Import from ccpool") }, "no old vault: no import row")

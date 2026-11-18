@@ -15,7 +15,13 @@ struct CCPoolPane: View {
     /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1). #1219 step 2: a single Resume is
     /// routed as a new session; Resume interrupted (one --revive --all per folder) runs with the control environment only.
     static let routeScope = "New sessions started from Prosper that run claude. "
-        + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed. A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
+        + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed."
+    /// #1499: below dch 1.94.0 a resumed session takes dch's login-shell env, rc files' ANTHROPIC_* included; from it
+    /// Resume passes the routing with --env/--unset, which win.
+    static let shellLimit = " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL or an API key."
+    static func routeScope(dch: [Int]?) -> String {
+        dch.map { DchCommand.isAtLeast($0, AgentIsland.reviveEnvMinimum) } == true ? routeScope : routeScope + shellLimit
+    }
     /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
     /// soonest five-hour reset; the list order only breaks ties.
     static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
@@ -183,7 +189,7 @@ struct CCPoolPane: View {
                         .disabled(reason != nil)
                         .accessibilityLabel(Self.routeTitle)
                 }
-                caption(Self.routeScope)
+                caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))
             }
         }
     }

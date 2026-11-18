@@ -155,6 +155,8 @@ extension AgentIsland {
     static let reviveFileMinimum = [1, 28, 2]
     /// #719: 1.28.3's --all also holds the id of a record that ended on purpose.
     static let reviveEndedHoldMinimum = [1, 28, 3]
+    /// #1499: `--revive <n> [--env K=V]... [--unset K]...`, applied after dch's login-shell env, dch 1.94.0 (local only).
+    static let reviveEnvMinimum = [1, 94, 0]
     /// The History tab lists this many records in all, the newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50

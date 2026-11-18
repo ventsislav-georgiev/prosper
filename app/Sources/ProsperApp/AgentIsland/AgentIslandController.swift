@@ -32,6 +32,8 @@ private final class FirstClickHostingView<V: View>: NSHostingView<V> {
 /// person gave it, before dch's naming) and the env so far. Applied in order after spawnEnv's strip, on the --spawn
 /// runner's queue (DispatchQueue.global), never main.
 typealias SessionEnvContributor = @Sendable (_ argv: [String], _ env: [String: String]) -> [String: String]
+/// #1499: the --revive flags (`--unset K`, `--env K=V`) that carry a command's routing past dch's login-shell env.
+typealias ReviveEnvFlags = @Sendable (_ argv: [String]) -> [String]
 
 /// #1185 (b1): the seed socket dirs the poll does not list, scanned by AgentDirScanner's rule (one stat per dir per
 /// tick, a readdir only when its mtime moved). A dch client's own files move the mtime too, so only the .sock set
@@ -228,6 +230,9 @@ final class AgentIslandController {
         (CCPoolRuntime.shared.map { [$0.routing.contributor] } ?? [])
             + [KitSessionEnv.contributor { [bins = KitRuntimes.shared?.liveBins() ?? []] in bins }]   // after the pool; #1423: read on main here, used off main
     }
+    /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
+    /// and run on the runner's queue like a contributor. No runtime: none.
+    var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     /// #1096 3: `done.prompt` is the panel's button word, the caller's own.
@@ -487,9 +492,18 @@ final class AgentIslandController {
         // #1219 step 2 (OQ-135 A): dch hands --revive's env to the revived command, so a local record resumes with a
         // new session's env for its command (the pool's routing among the contributors); another machine's record does not.
         let command = AgentWindowModel.isRemote(r) ? nil : r.argv
-        return run(key, alias: alias, dch: dch, args: AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact),
+        let args = AgentIsland.reviveArgs(r, live: live, records: records, noMessage: noMessage, exact: exact)
+        // #1499: dch runs a login shell for --revive and takes its env, so an rc file's ANTHROPIC_* would win over the
+        // routing above; 1.94.0's --env/--unset apply after it. Local only (dch refuses host:name); built on the runner's queue.
+        var prepare: (@Sendable () -> (args: [String]?, out: Data))?
+        if let command, let args, store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.reviveEnvMinimum) }) == true,
+           let flags = reviveEnvFlags() {
+            prepare = { (args + flags(command), Data()) }
+        }
+        return run(key, alias: alias, dch: dch, args: args,
                    running: AgentIsland.resumingText, spawn: command,
-                   history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) }) { [weak self] res in
+                   history: true, onLine: { [weak self] in self?.rowLine($0, key: key, name: name, history: true) },
+                   prepare: prepare) { [weak self] res in
             // #716 L-3: dch names a no_history line after the argument (an aside file; #719 `<file>.json`).
             let named = DchControlOps.renamed(res, arg, to: name)
             let text = AgentIsland.rowText(named, name: name, verb)

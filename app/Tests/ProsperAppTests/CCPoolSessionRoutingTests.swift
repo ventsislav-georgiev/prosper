@@ -85,7 +85,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
 
     /// A panel-less island whose control binary, history and runner are fakes; `routing` nil keeps the default
     /// contributors (no ccpool runtime under XCTest).
-    private func controller(_ rec: Recorder, routing: CCPool.Routing?) -> AgentIslandController {
+    private func controller(_ rec: Recorder, routing: CCPool.Routing?, version: [Int] = [1, 24, 1]) -> AgentIslandController {
         let c = AgentIslandController()
         c.showsPanel = false
         c.monitorClicks = { _ in nil }
@@ -95,8 +95,11 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         c.controlEnv = { Self.controlEnv($0) }
         c.runner = rec.runner()
         c.store = AgentIslandStore(geometry: geometry)
-        c.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 24, 1])
-        if let routing { c.sessionEnvContributors = { [routing.contributor] } }
+        c.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: version)
+        if let routing {
+            c.sessionEnvContributors = { [routing.contributor] }
+            c.reviveEnvFlags = { routing.reviveFlags }
+        }
         return c
     }
 
@@ -511,5 +514,53 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
         XCTAssertEqual(rec.args.last?.first, "--revive")
         XCTAssertEqual(resumed, Self.controlEnv("@example-host"), "the control env as before #1219: no strip, no routing")
+    }
+
+    // MARK: - Resume past the login shell's env (#1499, dch 1.94.0 --revive --env/--unset)
+
+    /// The pool's spawn delta as --revive flags, literally: the three credentials by name, then the pool's base URL.
+    private static let poolFlags = ["--unset", "ANTHROPIC_API_KEY", "--unset", "ANTHROPIC_AUTH_TOKEN", "--unset", "CLAUDE_CODE_OAUTH_TOKEN",
+                                    "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:41234"]
+
+    /// One single Resume of `r` on a control dch of `version` through the recorder; the argv it was handed.
+    private func resumedArgs(_ r: DchHistoryRecord, version: [Int], pool: Pool,
+                             file: StaticString = #filePath, line: UInt = #line) -> [String]? {
+        let rec = Recorder()
+        let c = controller(rec, routing: pool.routing, version: version)
+        c.store?.history = [r]
+        _ = launchedEnv(c, rec, key: r.id, file: file, line: line) { XCTAssertTrue(c.resume(r), "the Resume started", file: file, line: line) }
+        return rec.args.last
+    }
+
+    /// Mutant version-gate-off: below dch 1.94.0 the argv is as before (dch would refuse the flags).
+    func testCCPoolResumeOnDch193HasNoEnvFlags() {
+        let pool = Pool()
+        XCTAssertEqual(resumedArgs(record("api", argv: ["claude"]), version: [1, 93, 9], pool: pool), ["--revive", "api", "--json"])
+    }
+
+    /// Mutant resume-env-dropped: on 1.94.0 a routed local Resume carries the spawn delta as flags, read off main.
+    func testCCPoolResumeOnDch194CarriesThePoolDelta() {
+        let pool = Pool()
+        XCTAssertEqual(resumedArgs(record("api", argv: ["/opt/homebrew/bin/claude", "--chrome"]), version: [1, 94, 0], pool: pool),
+                       ["--revive", "api", "--json"] + Self.poolFlags)
+        XCTAssertEqual(pool.mainReads, 0, "the flags read the pool on the runner's queue, never main")
+        XCTAssertEqual(CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"], remove: CCPool.strippedCredentials).reviveFlags,
+                       Self.poolFlags, "exactly the spawn delta")
+    }
+
+    /// Mutant remote-gets-flags: another machine's record gets no flags (dch exits 2 on --env/--unset for host:name).
+    func testCCPoolRemoteResumeOnDch194HasNoEnvFlags() {
+        let pool = Pool()
+        XCTAssertEqual(resumedArgs(record("api", dir: "@example-host", argv: ["claude"]), version: [1, 94, 0], pool: pool),
+                       ["--revive", "api", "--json"])
+    }
+
+    /// Routing off, or a command the pool does not route: an empty delta, no flags.
+    func testCCPoolResumeOnDch194WithRoutingOffOrNotClaudeHasNoEnvFlags() {
+        let off = Pool()
+        off.set(on: false)
+        XCTAssertEqual(resumedArgs(record("api", argv: ["claude"]), version: [1, 94, 0], pool: off), ["--revive", "api", "--json"])
+        XCTAssertEqual(resumedArgs(record("api", argv: ["headroom", "wrap", "claude"]), version: [1, 94, 0], pool: Pool()),
+                       ["--revive", "api", "--json"])
     }
 }

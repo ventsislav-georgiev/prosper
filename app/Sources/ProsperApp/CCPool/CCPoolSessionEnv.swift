@@ -19,6 +19,12 @@ enum CCPool {
             out.merge(self.set) { _, new in new }
             return out
         }
+
+        /// #1499: the same change as dch 1.94.0 --revive flags: `--unset K` per removal (in order), then `--env K=V` per set
+        /// (by key). Only names and the set values go in argv: the pool's set is its loopback URL, never a credential.
+        var reviveFlags: [String] {
+            remove.flatMap { ["--unset", $0] } + self.set.sorted { $0.key < $1.key }.flatMap { ["--env", "\($0.key)=\($0.value)"] }
+        }
     }
 
     /// Credentials that would bypass the pool on a direct call; dropped whenever a session routes
@@ -68,5 +74,8 @@ enum CCPool {
         /// spec 6.1's ccpool member. Called on the runner's queue, never main. An empty delta returns `env`
         /// unchanged, byte for byte.
         var contributor: SessionEnvContributor { { [self] argv, env in delta(argv).applied(to: env) } }
+
+        /// #1499: the same delta as --revive flags (AgentIslandController.resume, dch 1.94.0); read on the runner's queue too.
+        var reviveFlags: ReviveEnvFlags { { [self] argv in delta(argv).reviveFlags } }
     }
 }
