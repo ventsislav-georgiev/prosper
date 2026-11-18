@@ -7,19 +7,13 @@ import LuaRuntime
 /// resumes exactly once however a cancel races the exit. Runs `zsh -c` (the one `-lc` row is
 /// pinned to the ZDOTDIR below) and signals only pids the test's own commands recorded.
 final class ShellRunnerTests: XCTestCase {
-    /// #1026 (QA #671 INFO-5): zsh reads its dotfiles from a ZDOTDIR and HOME this test made,
-    /// never the real ~/.zshenv or ~/.zprofile.
+    /// #1026 (QA #671 INFO-5): zsh reads its dotfiles from a ZDOTDIR and HOME this test made
+    /// (ZshTestEnvironment.swift), never the real ~/.zshenv or ~/.zprofile.
     private var zdotdir: URL!
 
     override func setUpWithError() throws {
-        zdotdir = tempDir("zdotdir")
-        try "export PROSPER_TEST_ZSHENV=test-zshenv\n"
-            .write(to: zdotdir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
-        try "export PROSPER_TEST_ZPROFILE=test-zprofile\n"
-            .write(to: zdotdir.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
-        var env = ProcessInfo.processInfo.environment
-        env["ZDOTDIR"] = zdotdir.path
-        env["HOME"] = zdotdir.path
+        let (dir, env) = try zshTestEnvironment()
+        zdotdir = dir
         ShellRunner.testEnvironment = env
     }
 

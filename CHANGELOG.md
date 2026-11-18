@@ -1905,6 +1905,8 @@ tag from the now-released section and put it on the new top draft.
 - Extensions: when an extension is turned off and back on while one of its calls is still finishing,
   that late call no longer drops the power assertion, lid-sleep override, timer, menu bar item, key
   rules or file watch the newly running extension just set up. (#1550)
+- Tests: the zsh shells that BookmarksExtensionTests spawns now read a test-made ZDOTDIR and HOME,
+  shared with ShellRunnerTests, instead of the real dotfiles. (#1557)
 
 ## v2.174.0
 

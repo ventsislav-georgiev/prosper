@@ -115,6 +115,22 @@ private final class BookmarkFakeServices: ExtensionHostServices, @unchecked Send
 
 final class BookmarksExtensionTests: XCTestCase {
 
+    /// #1557: the test ZDOTDIR/HOME environment every spawned process gets (set in setUp).
+    nonisolated(unsafe) private static var zshEnvironment: [String: String] = [:]
+    private var zdotdir: URL!
+
+    override func setUpWithError() throws {
+        let (dir, env) = try zshTestEnvironment()
+        zdotdir = dir
+        Self.zshEnvironment = env
+    }
+
+    /// #1557: the zsh these rows spawn reads the test .zshenv from the test ZDOTDIR, not the real one.
+    func testSpawnedZshReadsTheTestZshenv() {
+        let out = Self.run("/bin/zsh", ["-c", "echo $PROSPER_TEST_ZSHENV:$HOME"])
+        XCTAssertEqual(out.trimmingCharacters(in: .whitespacesAndNewlines), "test-zshenv:\(zdotdir.path)")
+    }
+
     // MARK: - Paths (must mirror the absolute paths init.lua builds from $HOME)
 
     private static let home = "/Users/test"
@@ -784,6 +800,7 @@ final class BookmarksExtensionTests: XCTestCase {
     /// Run a process to completion, returning combined stdout (test helper only).
     private static func run(_ launch: String, _ args: [String]) -> String {
         let p = Process(); p.executableURL = URL(fileURLWithPath: launch); p.arguments = args
+        p.environment = zshEnvironment   // #1557: zsh reads the test ZDOTDIR, never the real dotfiles
         let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
         do { try p.run() } catch { return "spawn error: \(error)" }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
