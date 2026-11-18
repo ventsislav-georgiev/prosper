@@ -2473,7 +2473,7 @@ let agentBandSpace = "agentWindowBand"
 /// right: the layout slot (empty before the Layouts section) and the chip slot (zoom and too small: `chip`), the
 /// All slot (its room kept, empty until phase C: no control, no text, no accessibility element). #1471 b: the detail
 /// level picker is gone with the transcript. Fixed slots: each slot's size comes from the UI scale alone. A narrow band
-/// gives way in `Tier` order: the chip slot first, then the layout slot; the All slot never goes.
+/// gives way in `Tier` order: the chip slot first, then the layout name (cut, then gone; #1616: Edit layout stays); the All slot never goes.
 struct AgentWindowBand: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
@@ -2508,7 +2508,9 @@ struct AgentWindowBand: View {
     static let chipWidest = "5 panes hidden, window too small"
 
     /// Widest first, so ViewThatFits takes the first that fits: the order in which the slots give way.
-    enum Tier: CaseIterable { case full, noChip, noLayout }
+    /// #1616: with a saved layout, `shortName` (the name cut to `layoutWidth`) sits between `noChip` and `noLayout`, and
+    /// Edit layout / Done stays in every tier.
+    enum Tier: CaseIterable { case full, noChip, shortName, noLayout }
 
     /// 7.4 / 3.4 (#900 B2 step 3): the chip slot's words for the pane area `area`. Zoomed (the view draws one pane over a
     /// tiling of more): "Zoomed · i of n", i the zoomed pane's place in tree order. Else too small: "k panes hidden,
@@ -2529,6 +2531,7 @@ struct AgentWindowBand: View {
         ViewThatFits(in: .horizontal) {
             line(.full, chip: chip)
             line(.noChip, chip: chip)
+            if model.layoutRows != nil { line(.shortName, chip: chip) }
             line(.noLayout, chip: chip)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2537,28 +2540,41 @@ struct AgentWindowBand: View {
         .coordinateSpace(.named(agentBandSpace))
     }
 
+    /// #1616: the layout slot. No saved layout (layoutRows nil): the fixed empty room, as before. Else one slot of its own
+    /// whose width is its content: "⌃N name" (the whole name; `shortName` cuts it to `layoutWidth`) and, a spacing after
+    /// it on its baseline, Edit layout / Done (#1538), which every tier keeps (`noLayout` drops the name only).
+    @ViewBuilder func layoutSlotView(_ t: Tier) -> some View {
+        if model.layoutRows == nil {
+            if t == .full || t == .noChip {
+                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+                if t != .noLayout, let r = Self.layoutSlot(model) {
+                    HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
+                        Text("⌃\(r.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
+                            .foregroundStyle(Neon.textSecondary).fixedSize()
+                        Text(r.name).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    .frame(maxWidth: t == .shortName ? Self.layoutWidth : nil, alignment: .leading)
+                    .accessibilityElement(children: .combine).accessibilityLabel(AgentLayoutsSection.label(r))
+                    .modifier(AgentBandProbe(kind: "layoutName"))
+                }
+                Button(model.layoutEditing ? "Done" : "Edit layout") { model.toggleLayoutEditing() }   // main actor
+                    .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
+                    .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
+                    .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
+                    .modifier(AgentBandProbe(kind: "edit"))
+            }
+            .modifier(AgentBandProbe(kind: "layout"))
+        }
+    }
+
     func line(_ t: Tier, chip: String?) -> some View {
         HStack(spacing: sz(8)) {
             // Slots that give way are left out of the stack, never zero-width (a zero-width child still takes a spacing).
-            if t == .full || t == .noChip {
-                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true)
-                    // #901 B3 step 4b (9.1 :708): "⌃N name" of the active layout over the slot's fixed room, only while the
-                    // Layouts section is built (layoutRows: gate on and the show rule); else the slot stays empty.
-                    .overlay(alignment: .leading) {
-                        if let r = Self.layoutSlot(model) {
-                            HStack(spacing: sz(6)) {
-                                Text("⌃\(r.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
-                                    .foregroundStyle(Neon.textSecondary).fixedSize()
-                                Text(r.name).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
-                                    .lineLimit(1).truncationMode(.middle)
-                            }
-                            .frame(maxWidth: Self.layoutWidth, alignment: .leading)
-                            .accessibilityElement(children: .combine).accessibilityLabel(AgentLayoutsSection.label(r))
-                            .modifier(AgentBandProbe(kind: "layoutName"))
-                        }
-                    }
-                    .modifier(AgentBandProbe(kind: "layout"))
-            }
+            layoutSlotView(t)
             if t == .full {
                 Text(Self.chipWidest).font(Neon.font(11)).lineLimit(1).fixedSize().hidden().accessibilityHidden(true)
                     // #900 B2 step 3: the words over the widest variant's room: the slot never changes a frame.
@@ -2583,19 +2599,6 @@ struct AgentWindowBand: View {
         }
         .padding(.horizontal, sz(16))
         .frame(maxWidth: .infinity)   // the ideal width still decides the tier; the taken line spans the band
-        // #1538: Edit layout / Done, left of the show-sidebar slot, while a saved layout exists (the layout slot's rule).
-        // An overlay: no slot's frame or tier changes (shortcut: it may cover the chip's words in a narrow band; give it
-        // a slot of its own if that shows).
-        .overlay(alignment: .trailing) {
-            if model.layoutRows != nil {
-                Button(model.layoutEditing ? "Done" : "Edit layout") { model.toggleLayoutEditing() }   // main actor
-                    .buttonStyle(.plain).font(Neon.font(11, weight: .medium))
-                    .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
-                    .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
-                    .padding(.trailing, sz(16) + Self.allWidth + sz(8) + Self.sidebarWidth + sz(8))
-                    .modifier(AgentBandProbe(kind: "edit"))
-            }
-        }
     }
 }
 

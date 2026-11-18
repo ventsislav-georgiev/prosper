@@ -454,7 +454,8 @@ extension AgentWindowD1Tests {
             two.close()
             XCTAssertTrue(base["layoutName"] == nil, "one layout of one pane: not built (\(scale))")
             XCTAssertTrue(base["layout"] != nil, "\(scale)")
-            for k in base.keys.sorted() { XCTAssertEqual(shown[k], base[k], "\(k) unchanged (\(scale))") }
+            // #1616: the layout slot is its content's width and moves the chip; the rest of the band does not move.
+            for k in ["band", "sidebar", "all"] { XCTAssertEqual(shown[k], base[k], "\(k) unchanged (\(scale))") }
             let name = try XCTUnwrap(shown["layoutName"], "\(scale)"), room = try XCTUnwrap(shown["layout"])
             XCTAssertTrue(name.minX >= room.minX - pixel && name.maxX <= room.maxX + pixel, "in the slot (\(scale)): \(name) \(room)")
             XCTAssertTrue(name.width > 0)
@@ -463,6 +464,42 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(AgentWindowBand.layoutSlot(off) == nil, "gate off (\(scale))")
             XCTAssertTrue(bandSnapshot(off, size).isEmpty, "gate off: no band, no slot (\(scale))")
             off.close()
+        }
+    }
+
+    /// #1616 (operator 2026-11-18: "prosp...er-ios" with the band mostly empty, Edit layout far right on another baseline)
+    /// at 1.0, 0.85 and 0.7: a wide band draws the whole name "prosper + prosper-ios", Edit layout starts one spacing after
+    /// the name's frame on its vertical center, and in every narrower band the button stays inside the band (the name
+    /// is cut or gone before it). GUARD edit-layout-is-its-own-slot.
+    @MainActor
+    func testAgentWindowLayoutBandNameIsWholeAndEditLayoutFollowsIt() throws {
+        let pixel = AXTreeSupport.devicePixel
+        _ = ThemeStore.shared
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
+        defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
+        Preferences.agentWindowSidebarHidden = true
+        gate(true)
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            let a = paneLayout([paneTarget("prosper"), paneTarget("prosper-ios")]), b = paneLayout([paneTarget("docs")])
+            let (m, _) = try sectionModel([a, b], sessions: ["prosper", "prosper-ios", "docs"])
+            defer { m.close() }
+            XCTAssertEqual(AgentWindowBand.layoutSlot(m)?.name, "prosper + prosper-ios", "\(scale)")
+            let natural = NSHostingView(rootView: Text("prosper + prosper-ios").font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize())
+                .fittingSize.width
+            for width: CGFloat in [1400, 900, 700, 560, 480, 420, 360] {
+                let s = bandSnapshot(m, CGSize(width: width, height: 800))
+                let band = try XCTUnwrap(s["band"], "\(scale) \(width)")
+                let edit = try XCTUnwrap(s["edit"], "the button stays (\(scale) \(width))")
+                XCTAssertTrue(edit.minX >= band.minX - pixel && edit.maxX <= band.maxX + pixel, "inside the band (\(scale) \(width)): \(edit) \(band)")
+                guard let name = s["layoutName"] else { continue }
+                XCTAssertTrue(name.maxX <= edit.minX + pixel, "the name ends before the button (\(scale) \(width))")
+                XCTAssertTrue(edit.minX - name.maxX <= sz(8) + 2 * pixel, "right after the name (\(scale) \(width)): \(name) \(edit)")
+                XCTAssertEqual(edit.midY, name.midY, accuracy: 2 * pixel, "one vertical center (\(scale) \(width))")
+                if width == 1400 { XCTAssertTrue(name.width >= natural - 2 * pixel, "the whole name, no ellipsis (\(scale)): \(name.width) of \(natural)") }
+            }
         }
     }
 

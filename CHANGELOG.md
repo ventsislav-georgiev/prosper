@@ -1996,6 +1996,8 @@ tag from the now-released section and put it on the new top draft.
 - Splitting a pane (Command-D or the Split menu items) now turns on Edit layout, so clicking a
   session in the sidebar fills the new empty pane instead of switching away, and the split is saved.
   (#1617)
+- Edit layout / Done now sits right after the layout name in the band, on its baseline, and the name
+  only gets shortened when the window is really narrow. (#1616)
 
 ## v2.174.0
 
