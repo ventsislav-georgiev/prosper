@@ -85,6 +85,9 @@ extension AgentWindowD1Tests {
         let names = ["api", "web", "db"]
         let restoreModes = transcriptMode(names)
         defer { ThemeRuntime.scale = saved; restoreModes() }
+        // #1510: ThemeStore.shared's first touch (a terminal pane reads its appearance) sets ThemeRuntime.scale from the
+        // stored preference; touched here, never inside the first scale's snapshot.
+        _ = ThemeStore.shared
         try withTreeGate(true) {
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
@@ -97,6 +100,14 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(AgentWindowBand.chip(m, in: area) == nil, "no chip (\(scale))")
                 let base = bandSnapshot(m, wide)
                 XCTAssertNotNil(base["chip"], "the wide band has the chip slot (\(scale))")
+                // #1510: the band was drawn at this scale, and the chip slot is sized by it (after the layout slot, at its
+                // widest text measured at this scale; NSHostingView rounds that up to a whole point).
+                XCTAssertEqual(ThemeRuntime.scale, scale, "the snapshot kept the scale")
+                let chip = try XCTUnwrap(base["chip"]), widest = bandChipMeasured, pixel = AXTreeSupport.devicePixel
+                XCTAssertEqual(chip.minX, sz(16) + AgentWindowBand.layoutWidth + sz(8), accuracy: pixel,
+                               "the chip slot after the layout slot (\(scale)): \(chip)")
+                XCTAssertTrue(chip.width <= widest + 0.01 && chip.width > widest - 1,
+                              "the chip slot at its widest text (\(scale)): \(chip.width) vs \(widest)")
                 func same(_ s: [String: CGRect], _ keys: [String], _ why: String) {
                     for k in keys { assertSame(s[k], base[k], "\(k): \(why) (\(scale))") }
                 }
