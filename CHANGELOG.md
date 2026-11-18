@@ -1836,7 +1836,7 @@ tag from the now-released section and put it on the new top draft.
   updates. (#1540)
 - Refs in the Transcript view (issue numbers, tickets, files) are now underlined and clickable and
   open a ref card; http, https and mailto: links still open as before; other kinds of links in the
-  transcript no longer open.. (#1419)
+  transcript no longer open. (#1419)
 
 ## v2.174.0
 
