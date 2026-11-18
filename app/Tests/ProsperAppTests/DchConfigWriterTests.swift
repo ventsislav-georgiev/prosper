@@ -405,7 +405,7 @@ final class DchConfigWriterTests: XCTestCase {
         let cap = DchListRow.maxHarnessBytes
         let atCap = String(repeating: "x", count: cap), overCap = atCap + "x"
         func wire(_ alias: String, _ title: String) -> String {
-            String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: alias, activityEpoch: 1, state: "idle", agents: 0,
+            String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: alias, activityEpoch: 0, state: "idle", agents: 0,
                                                               harness: title)]), as: UTF8.self)
         }
         let table: [(alias: String, title: String, wire: String)] = [
@@ -427,8 +427,8 @@ final class DchConfigWriterTests: XCTestCase {
     /// Version skew. An older phone reads name, alias, state, agents and meta by key (prosper-ios decodeList): with the
     /// key, every other key of the row is the same. An older Mac sends no key: a row without a title is today's bytes.
     func testTheTitleKeyIsOnlyAddedOnBothSidesOfSkew() {
-        let rows = [DchListRow(name: "a", alias: "A", activityEpoch: 1, state: "working", agents: 2, cwd: "/w/a", harness: "web-qa"),
-                    DchListRow(name: "b", alias: "", activityEpoch: 1, state: "", agents: 0, harness: "notes")]
+        let rows = [DchListRow(name: "a", alias: "A", activityEpoch: 0, state: "working", agents: 2, cwd: "/w/a", harness: "web-qa"),
+                    DchListRow(name: "b", alias: "", activityEpoch: 0, state: "", agents: 0, harness: "notes")]
         let untitled = rows.map { var r = $0; r.harness = ""; return r }
         func parsed(_ d: Data) -> [NSDictionary] { ((try? JSONSerialization.jsonObject(with: d)) as? [NSDictionary]) ?? [] }
         let withKey = parsed(DchFrame.listPayload(rows)).map { d -> NSDictionary in

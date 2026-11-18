@@ -16,7 +16,10 @@
             "?agents": "int",
             "?cwd": "string~.+",
             "?meta": "object",
-            "?meta_epoch": "int"
+            "?meta_epoch": "int",
+            "?model": "string~.+",
+            "?effort": "string~low|medium|high|xhigh|max",
+            "?activity": "int"
           }
         ]
       }

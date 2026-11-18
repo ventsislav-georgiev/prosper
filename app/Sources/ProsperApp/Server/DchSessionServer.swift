@@ -378,7 +378,9 @@ final class DchSessionServer: ObservableObject, @unchecked Sendable {
     /// QA #606 INFO-6: `dirs` are the ones that list was read from, not the Preferences' now.
     @MainActor func islandSessions(_ sessions: [AgentSession]?, dirs: [String] = AgentIslandController.shared.listedDirs) {
         let cache = DchWatchHub.cache(island: sessions, dirs: dirs,
-                                      remote: DchCommand.remoteSocketDir())
+                                      remote: DchCommand.remoteSocketDir(),
+                                      defaultModel: Preferences.agentIslandDefaultModel,
+                                      defaultEffort: Preferences.agentIslandDefaultEffort)
         queue.async { self.watch.island(cache) }
     }
 

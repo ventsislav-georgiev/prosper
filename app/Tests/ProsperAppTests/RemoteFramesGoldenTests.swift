@@ -18,8 +18,9 @@ final class RemoteFramesGoldenTests: XCTestCase {
         .appendingPathComponent("docs/protocol/golden")
 
     private static let rows = [
-        DchListRow(name: "alpha", alias: "Alpha", activityEpoch: 1, state: "working", agents: 2, cwd: "/golden/alpha"),
-        DchListRow(name: "beta", alias: "", activityEpoch: 2, state: "", agents: 0),
+        DchListRow(name: "alpha", alias: "Alpha", activityEpoch: 1_799_999_999, state: "working", agents: 2, cwd: "/golden/alpha",
+                   model: "Opus 4.7", effort: "high"),
+        DchListRow(name: "beta", alias: "", activityEpoch: 0, state: "", agents: 0),
     ]
 
     private var server: DchSessionServer!
@@ -140,6 +141,27 @@ final class RemoteFramesGoldenTests: XCTestCase {
         let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: payload) as? [[String: Any]])
         XCTAssertEqual(rows.first { $0["name"] as? String == "alpha" }?["cwd"] as? String, "/golden/alpha")
         XCTAssertNil(rows.first { $0["name"] as? String == "beta" }?["cwd"], "absent, not null")
+    }
+
+    /// #1519: fixture 02 allows "model", "effort" and "activity"; the server sends each for a row that has it and leaves
+    /// the key out (never null, "" or 0) for a row that has none.
+    func testTheListCarriesModelEffortAndActivityOnlyWhenKnown() throws {
+        let fx = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: try goldenDir().appendingPathComponent("02-list.json"))) as? [String: Any])
+        let row = try XCTUnwrap(((fx["steps"] as? [[String: Any]])?[1]["expect"] as? [String: Any])?["json"] as? [[String: Any]])
+        XCTAssertEqual(row.first?["?model"] as? String, "string~.+")
+        XCTAssertEqual(row.first?["?activity"] as? String, "int")
+        XCTAssertTrue(row.first?["?effort"] is String)
+        let c = try Client(port: port)
+        try c.send(DchFrame.encode(DchFrame.list, []))
+        let (type, payload) = try c.frame()
+        XCTAssertEqual(type, DchFrame.listResp)
+        let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: payload) as? [[String: Any]])
+        let alpha = rows.first { $0["name"] as? String == "alpha" }, beta = rows.first { $0["name"] as? String == "beta" }
+        XCTAssertEqual(alpha?["model"] as? String, "Opus 4.7")
+        XCTAssertEqual(alpha?["effort"] as? String, "high")
+        XCTAssertEqual(alpha?["activity"] as? Int, 1_799_999_940, "floored to the minute")
+        XCTAssertTrue(beta?["model"] == nil && beta?["effort"] == nil && beta?["activity"] == nil, "absent, not null")
     }
 
     /// The runner dch CI uses, against the same server: it must read the fixtures as this test does.

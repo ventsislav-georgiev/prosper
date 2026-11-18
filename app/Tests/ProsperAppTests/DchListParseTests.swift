@@ -299,12 +299,12 @@ final class DchListParseTests: XCTestCase {
 
     /// serve.c:374-378@v1.54.0: the key in sorted place, with the other strings' escaping; absent when unknown.
     func testCwdIsOnTheWireWhenKnownAndAbsentOtherwise() {
-        let row = DchListRow(name: "a", alias: "A", activityEpoch: 1, state: "idle", agents: 2, cwd: "rel")
+        let row = DchListRow(name: "a", alias: "A", activityEpoch: 0, state: "idle", agents: 2, cwd: "rel")
         XCTAssertEqual(String(decoding: DchFrame.listPayload([row]), as: UTF8.self),
                        #"[{"agents":2,"alias":"A","cwd":"rel","name":"a","state":"idle"}]"#)
         XCTAssertEqual(rows("/Users/me/src").first?["cwd"] as? String, "/Users/me/src")
         XCTAssertEqual(rows("/w \"q\"\n").first?["cwd"] as? String, "/w \"q\"\n", "escaped as JSON, read back the same")
-        XCTAssertEqual(String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: "", activityEpoch: 1, state: "", agents: 0)]),
+        XCTAssertEqual(String(decoding: DchFrame.listPayload([DchListRow(name: "a", alias: "", activityEpoch: 0, state: "", agents: 0)]),
                               as: UTF8.self), #"[{"name":"a"}]"#, "unknown: no key, never null or \"\"")
     }
 

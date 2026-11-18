@@ -163,6 +163,12 @@ enum DchFrame {
             if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
             if let cwd = row.wireCwd { o["cwd"] = cwd }        // #877: dch 1.52+, absent when unknown
             o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
+            // #1519: the Mac row's model and effort (only when not the Default's) and its age's epoch seconds.
+            if !row.model.isEmpty, row.model.utf8.count <= DchListRow.maxModelBytes { o["model"] = row.model }
+            if AgentModelEffort.levels.contains(row.effort) { o["effort"] = row.effort }
+            // Whole minutes (the Mac's age slot is minute-grained), so the watch payload moves once a minute, not per tick.
+            let minute = row.activityEpoch / 60 * 60
+            if minute > 0 { o["activity"] = minute }
             return o
         }
         return (try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])) ?? Data("[]".utf8)
@@ -1208,11 +1214,18 @@ final class DchWatchHub: @unchecked Sendable {
     /// off or does not list `remote` (then a request forks, as before). Sorted by name, so
     /// an activity reorder of the island is no change; `published` already reads a session
     /// the island is auto-answering as working, as Live status does.
-    static func cache(island sessions: [AgentSession]?, dirs: [String], remote: String) -> Cache? {
+    /// #1519: `defaultModel`/`defaultEffort` are Preferences' Default model and effort ("" = none): a row carries the
+    /// model and effort only when the Mac's badges would show them.
+    static func cache(island sessions: [AgentSession]?, dirs: [String], remote: String,
+                      defaultModel: String = "", defaultEffort: String = "") -> Cache? {
         guard let sessions, dirs.contains(remote) else { return nil }
+        let rule = AgentIslandRowDetails(defaultModel: defaultModel, defaultEffort: defaultEffort)
         let rows = sessions.filter { $0.key.dir == remote }.sorted { $0.name < $1.name }.map { s in
-            DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: s.wireState ?? wireState(s.state),
-                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd, harness: s.harness)
+            let label = AgentSidebar.modelLabel(s)
+            let me = rule.modelEffort(model: label, effort: label == nil ? nil : s.effort)
+            return DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: s.wireState ?? wireState(s.state),
+                       agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd, harness: s.harness,
+                       model: me.model ?? "", effort: me.effort ?? "")
         }
         return Cache(dir: remote, rows: rows)
     }
@@ -1938,6 +1951,11 @@ struct DchListRow: Equatable, Sendable {
     /// #1210: `harness`, the Claude Code or Codex session title dch prints (1.9+), "" when none. Matched
     /// by the Sidekicks split as dch's picker does (1.32+), never shown in place of a set alias.
     var harness: String = ""
+    /// #1519: the Mac row's model label and effort when they differ from the Default's (AgentIslandRowDetails.modelEffort); "" = none.
+    var model: String = ""
+    var effort: String = ""
+    /// The label is AgentModelEffort's id (at most maxModelLength bytes) shortened; outside text still, so capped on the wire.
+    static let maxModelBytes = AgentModelEffort.maxModelLength
     /// dch reads a title from a record under 8192 bytes, and json_quote may turn each byte into U+FFFD
     /// (3 bytes): a longer one is not dch's, so it is dropped, never matched.
     static let maxHarnessBytes = 3 * 8191

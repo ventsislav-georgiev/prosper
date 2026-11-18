@@ -234,6 +234,11 @@ enum AgentSidebar {
         return out
     }
 
+    /// #1519: the model label a live row draws (nil: no Claude transcript, or no model read yet); the phone list shares it.
+    static func modelLabel(_ s: AgentSession) -> String? {
+        s.transcriptPath != nil || s.modelCarried > 0 ? s.model.map(AgentModelEffort.shortName) : nil
+    }
+
     static func row(_ s: AgentSession, details: AgentIslandRowDetails, now: TimeInterval, action: String? = nil) -> Row {
         // #829 G0: "Stopping…", "Pausing…" while a Restart or Stop runs (from the island or the window).
         let (chips, more) = AgentIsland.prChips(s.meta, show: details, budget: .infinity)
@@ -241,7 +246,7 @@ enum AgentSidebar {
         // dch's agents is an unclamped Int (DchCommand.parseListJSON); merged is clamped by DchSessionMeta.count.
         // #1203: only a Claude session has a transcript (dch sets the path with a Claude only); the effort only with a model.
         // #1267: or a label carried over an answer with no mapping (display only).
-        let claude = s.transcriptPath != nil || s.modelCarried > 0, model = claude ? s.model.map(AgentModelEffort.shortName) : nil
+        let claude = s.transcriptPath != nil || s.modelCarried > 0, model = modelLabel(s)
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, prLinks: Array(chips.prefix(2)),
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,

@@ -98,7 +98,7 @@ final class DchWatchStreamTests: XCTestCase {
     }
 
     /// The island publishes every activity tick and reorders by it; the phone's payload
-    /// (name order, no activity) is unchanged, so nothing goes out and no flush is armed.
+    /// (name order, activity in whole minutes: 1, 2, 8 and 9 are all minute 0) is unchanged, so nothing goes out and no flush is armed.
     func testUnchangedPayloadSendsNothing() {
         let timers = Timers(), h = hub(timers), sink = Sink()
         h.island(Self.cache([Self.session("a", activity: 1), Self.session("b", activity: 2)]))
@@ -107,6 +107,19 @@ final class DchWatchStreamTests: XCTestCase {
         h.island(Self.cache([Self.session("b", activity: 9), Self.session("a", activity: 8)]))
         XCTAssertEqual(sink.frames.count, 2)
         XCTAssertEqual(timers.live, [25], "only the heartbeat, armed by the snapshot")
+    }
+
+    /// #1519: "activity" is floored to the minute: a tick inside the same minute sends nothing, one in the next minute does.
+    func testActivityTicksInTheSameMinuteSendNothingAndTheNextMinuteDoes() {
+        let timers = Timers(), h = hub(timers), sink = Sink()
+        h.island(Self.cache([Self.session("a", activity: 120)]))
+        _ = open(h, sink)
+        timers.advance(to: 5)
+        h.island(Self.cache([Self.session("a", activity: 179)]))
+        XCTAssertEqual(sink.frames.count, 2, "snapshot and ok only: same minute sends nothing")
+        h.island(Self.cache([Self.session("a", activity: 180)]))
+        timers.advance(to: 10)
+        XCTAssertEqual(sink.frames.count, 3, "next minute: one more list")
     }
 
     func testCoalescesToOnePerSecondKeepingTheTrailingChange() {

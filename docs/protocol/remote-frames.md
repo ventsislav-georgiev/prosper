@@ -335,6 +335,9 @@ until the island publishes again at least 5 s later. Each row's keys are sorted.
 | `cwd` | string | no | Since the 2026-11-12 amendment (dch 1.52.0, Prosper #877): the session's start directory as `getcwd` gave its master (absolute, no trailing slash, `/` the one exception), from the session's live history record, passed on as dch read it. **Absent, never `null` or `""`**, when there is no record (`DCH_NO_HISTORY`, an older dch), the record has no cwd, or the path is 512 bytes of UTF-8 or longer (dch serve's `cwd[512]`, serve.c:340@v1.54.0). An older client ignores it. |
 | `meta` | object | no | `{"prs": {"open": [{url, repo, title, num?}], "merged"?: int}}`; only allowlisted `https://github.com/<owner>/<repo>/pull/<n>` URLs. |
 | `meta_epoch` | int | no | When `meta` last changed (epoch seconds); absent when unknown. |
+| `model` | string | no | Prosper #1519: the session's model as the Mac row's badge names it (e.g. `Opus 4.7`), only when it differs from the Mac's Default model; absent when equal, unknown or over 128 bytes. An older client ignores it. |
+| `effort` | string | no | Prosper #1519: `low`, `medium`, `high`, `xhigh` or `max`, only when it differs from the Mac's Default effort; absent otherwise. |
+| `activity` | int | no | Prosper #1519: the session's last activity (epoch seconds, the Mac row's age is computed from it); absent when unknown (0). |
 
 A payload that is not a JSON array is an error on the phone (it keeps its rows). No error reply.
 
