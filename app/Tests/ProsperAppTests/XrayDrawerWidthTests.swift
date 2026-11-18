@@ -86,6 +86,7 @@ final class XrayDrawerWidthTests: XCTestCase {
         withClearedKey {
             let w = XrayDrawerWidth()
             w.dragged(by: -80, offered: 1000, scale: 1)
+            XCTAssertTrue(Preferences.defaults.object(forKey: Self.key) == nil, "nothing is written while the drag runs")
             w.ended()
             XCTAssertEqual(Preferences.xrayDrawerWidth ?? 0, 500, accuracy: 0.001, "stored")
             XCTAssertEqual(XrayDrawerWidth().points, 500, accuracy: 0.001, "read back by a new model")
@@ -126,5 +127,53 @@ final class XrayDrawerWidthTests: XCTestCase {
         }
         XCTAssertEqual(XrayDrawerWidth.width(stored: 1e12, offered: 250, scale: 1), 250, "the pane, not past it")
         XCTAssertEqual(XrayDrawerWidth.width(stored: 420, offered: 400, scale: 1), 300, "60% of 400 is under the minimum")
+    }
+
+    final class Under: NSView {}
+    struct UnderView: NSViewRepresentable {
+        func makeNSView(context: Context) -> Under { Under() }
+        func updateNSView(_ v: Under, context: Context) {}
+    }
+
+    /// The pane's own view under `host` at `x` (host points, mid height), with an open drawer: true when the hit is the pane view.
+    func paneTakesHit<V: View>(_ v: V, size: CGSize, x: CGFloat) -> Bool {
+        let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        defer { win.contentView = nil; win.close() }
+        let host = NSHostingView(rootView: v.frame(width: size.width, height: size.height))
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        var v: NSView? = host.hitTest(host.convert(NSPoint(x: x, y: size.height / 2), to: host.superview))
+        while let n = v, !(n is Under) { v = n.superview }
+        return v != nil
+    }
+
+    /// R1512-c1: the drawer's frame-wide GeometryReader takes no hit where it draws nothing: a point left of the open drawer
+    /// reaches the pane's view under it, at one pane and in a split (the drawer over the pane area); a point in the drawer
+    /// does not (the drawer is drawn). Red when the GeometryReader's frame is a content shape (drawer-full-hit).
+    func testThePaneLeftOfAnOpenDrawerKeepsItsClicks() {
+        let pane = UUID(), p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
+        let target = XrayTarget(name: "api", dir: "/tmp/dch-test")
+        XrayPanels.shared.open = [pane: p]
+        defer { XrayPanels.shared.open = [:] }
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let size = CGSize(width: 900, height: 400)
+        for scale: CGFloat in [0.7, 1.0] {
+            ThemeRuntime.scale = scale
+            let drawn = XrayDrawerWidth.width(stored: XrayDrawerWidth.shared.points, offered: size.width)
+            let left = size.width - drawn - 20, inside = size.width - drawn / 2
+            let one = UnderView().overlay(alignment: .trailing) { XrayDrawer(pane: pane, target: target) }
+            let split = HStack(spacing: 0) { UnderView(); UnderView() }
+                .overlay(alignment: .trailing) { XrayDrawer(pane: pane, target: target) }
+            for (name, v) in [("one pane", AnyView(one)), ("split", AnyView(split))] {
+                XCTAssertTrue(paneTakesHit(v, size: size, x: left), "\(name): the pane left of the drawer takes the click at \(scale)")
+                XCTAssertFalse(paneTakesHit(v, size: size, x: inside), "\(name): the drawer takes its own click at \(scale)")
+            }
+        }
     }
 }

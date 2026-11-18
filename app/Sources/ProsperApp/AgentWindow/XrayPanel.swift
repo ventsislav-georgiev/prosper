@@ -839,10 +839,13 @@ final class XrayDrawerWidth: ObservableObject {
         let from = start ?? Self.width(stored: points, offered: offered, scale: scale)
         start = from
         points = Self.width(stored: (from - dx) / scale, offered: offered, scale: scale) / scale
-        Preferences.xrayDrawerWidth = Double(points)
     }
 
-    func ended() { start = nil }
+    /// The drag is over: the width is written once (while dragging only the in-memory value moves).
+    func ended() {
+        start = nil
+        Preferences.xrayDrawerWidth = Double(points)
+    }
 
     func reset() {
         start = nil
@@ -882,10 +885,13 @@ struct XrayDrawer: View {
             }
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { width.dragged(by: $0.translation.width, offered: offered) }
-                .onEnded { _ in width.ended() })
+                .onEnded { _ in
+                    width.ended()
+                    NSCursor.arrow.set()   // a drag can end off the handle: no later hover end to restore it
+                })
             .onTapGesture(count: 2) { width.reset() }
             .accessibilityElement()
-            .accessibilityLabel("X-Ray width")
+            .accessibilityLabel("X-ray width")
             // the drawn width (bounded by the space offered), never the stored value: that is outside data and Int( could trap
             .accessibilityValue("\(Int(XrayDrawerWidth.width(stored: width.points, offered: offered) / ThemeRuntime.scale)) points")
             .accessibilityAdjustableAction { d in
