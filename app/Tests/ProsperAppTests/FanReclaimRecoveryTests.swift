@@ -1271,7 +1271,7 @@ final class FanReclaimRecoveryTests: XCTestCase {
         func reapply() async -> Bool {
             await FanControlHelper.applySavedTargets(
                 reclaimGeneration: FanControlHelper.reclaimGeneration,
-                engage: { i, rpm, _ in core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 96, macOSRPM: 2500) },
+                engage: { i, rpm, _ in core.manualRequest(index: i, rpm: rpm, holder: holder, maxCelsius: 94, macOSRPM: 2500) },
                 reset: { resets.append($0); return true })
         }
 

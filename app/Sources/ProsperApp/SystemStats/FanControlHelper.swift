@@ -49,16 +49,25 @@ enum FanReclaimRecovery {
 
     /// #737: the popup's pending line. Manual intent is on and macOS still has every adjustable
     /// fan, so the saved preset is waiting for recovery; nil once the helper takes the fans.
-    static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double]) -> String? {
+    /// Entry 1077: `tooHot` = the helper's last refusal was its at-the-cut-off rule (FanControlHelper.pendingTooHot).
+    static func pendingText(manualIntent: Bool, readings: [FanReading], targets: [Int: Double],
+                            tooHot: Bool = false) -> String? {
         guard manualIntent, reclaimDetected(readings),
               let fraction = manualFraction(targets: targets, readings: readings) else { return nil }
-        return pendingSentence(StatsFormat.percent(Swift.min(1, Swift.max(0, fraction))))   // #1223: clamped, percent() does Int()
+        let percent = StatsFormat.percent(Swift.min(1, Swift.max(0, fraction)))   // #1223: clamped, percent() does Int()
+        return tooHot ? tooHotSentence(percent) : pendingSentence(percent)
     }
 
     /// Entry 1041: the one sentence for a preset the helper's latch refused (refused, settling, settlingReported), on the
     /// popup's pending line and in the phone's "Manual pending" answer. The recovery applies it, not the person.
     static func pendingSentence(_ percent: String) -> String {
         "Waiting for macOS to hand back the fans. Prosper sets \(percent) as soon as it can."
+    }
+
+    /// Entry 1077 (OQ-109): the plain reason for a preset refused at or above the cut-off, on the same two surfaces.
+    static let tooHotReason = "Too hot: only maximum speed until it cools."
+    static func tooHotSentence(_ percent: String) -> String {
+        tooHotReason + " Prosper sets \(percent) as soon as it can."
     }
 
     /// `userAdjusting` = a slider drag / quick-button commit is in flight. The saved
@@ -114,13 +123,15 @@ enum FanManualReply: Equatable {
     /// Entry 1234: the helper's OWN reason said settling (FanEngageCode 1). `.settling` is the app's guess from a
     /// Bool false (an older helper, or the identity answer not in yet), which `afterAnAccept` still renames.
     case settlingReported
+    /// Entry 1077 (OQ-109): the helper's own reason (FanEngageCode 6): still at or above the cut-off, below the fan's maximum.
+    case tooHot
 
     /// #737: a live helper's refusal (its latch) makes the user's speed a pending preset;
     /// no reply (.unavailable / .needsApproval) stays a failure.
-    var isLatchRefusal: Bool { self == .refused || self == .settling || self == .settlingReported }
+    var isLatchRefusal: Bool { self == .refused || self == .settling || self == .settlingReported || self == .tooHot }
 
     /// Entry 1234: a `setFanManualRPMWithReason` code. Outside data from the helper: compared only, never an
-    /// index or a conversion. Unreadable, inert and every value outside 0...5 read as a write failure: the
+    /// index or a conversion. Unreadable, inert and every value outside 0...6 read as a write failure: the
     /// reply that hands back the most (a Manual click saves nothing; a commit keeps the previous targets).
     static func reason(_ code: Int) -> FanManualReply {
         switch code {
@@ -130,6 +141,7 @@ enum FanManualReply: Equatable {
         case FanEngageCode.unreadable.rawValue: return .writeFailed
         case FanEngageCode.writeFailed.rawValue: return .writeFailed
         case FanEngageCode.inert.rawValue: return .writeFailed
+        case FanEngageCode.belowMaximum.rawValue: return .tooHot
         default: return .writeFailed
         }
     }
@@ -166,6 +178,8 @@ enum FanManualReply: Equatable {
         case .settling, .settlingReported:
             return "The overheat cut-off just handed the fans to macOS. "
                 + "Try again in a few seconds." + old
+        case .tooHot:
+            return FanReclaimRecovery.tooHotReason
         case .unavailable, .needsApproval:
             return "Couldn’t enable manual control — the Prosper helper isn’t "
                 + "running or wasn’t approved. Turn on “Prosper” under System Settings ▸ "
@@ -338,6 +352,11 @@ enum FanControlHelper {
     // ponytail: in-memory and never cleared; it only orders the fans.
     static var lastRefusedFan: Int?
 
+    /// Entry 1077: the helper's last latch refusal was `.tooHot`; the popup's pending line gives that reason. Set by
+    /// every latch refusal, cleared by every landed engage.
+    // shortcut: in-memory; a relaunch shows the plain pending line until the next refusal says it again.
+    static var pendingTooHot = false
+
     /// Entry 981 (OQ-142 b): this launch found `Preferences.fanTripHeld`, so the saved speed waits until the app's own
     /// complete reading is below the helper's re-arm line: a helper that exited latched starts unlatched below 95 °C.
     /// Only the re-apply of the saved speed waits (launch, wake, recovery); a Manual click goes to the helper as before.
@@ -365,7 +384,8 @@ enum FanControlHelper {
 
     /// Entry 981: a refusal by the helper's latch is remembered across a relaunch.
     private static func rememberingTrip(_ reply: FanManualReply) -> FanManualReply {
-        if reply.isLatchRefusal { Preferences.fanTripHeld = true }
+        // Entry 1077: `.tooHot` is the latch too (only latched does the helper judge the maximum), so it is held as well.
+        if reply.isLatchRefusal { Preferences.fanTripHeld = true; pendingTooHot = reply == .tooHot }
         return reply
     }
 
@@ -439,7 +459,7 @@ enum FanControlHelper {
             if let reason { proxy.setFanManualRPMWithReason(index, rpm: rpm) { code in reason.withLock { $0 = code }; done(code == 0) } }
             else { proxy.setFanManualRPM(index, rpm: rpm) { done($0) } }
         }) {
-        case true?: lateLandings = 0; return .engaged   // R1230-2: landed in time
+        case true?: lateLandings = 0; pendingTooHot = false; return .engaged   // R1230-2: landed in time
         case false?:
             lastRefusedFan = index
             // Entry 1234: the helper's own reason, with no speed read (no code kept reads -1)...

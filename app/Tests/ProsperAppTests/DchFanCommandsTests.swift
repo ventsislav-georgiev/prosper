@@ -286,6 +286,24 @@ final class DchFanCommandsTests: XCTestCase {
         }
     }
 
+    /// Entry 1077 (OQ-109): the helper refused below the maximum at the cut-off. A pending preset as for any latch
+    /// refusal, and the phone's detail says why in the plain reason.
+    func testTooHotRepliesThePlainReasonAndSavesThePreset() async {
+        await withFanState {
+            Preferences.fanManualEnabled = false
+            Preferences.fanTargets = [9: 1]
+            let log = Log()
+            let f = await run(ops(log: log, first: .tooHot), "fans.manual", "60%")
+            XCTAssertEqual(Self.result(f), ["text": "Manual pending · 4080 / 3400 rpm",
+                                            "detail": "Too hot: only maximum speed until it cools. Prosper sets 60% as soon as it can."])
+            XCTAssertTrue(Preferences.fanManualEnabled)
+            XCTAssertEqual(Preferences.fanTargets, [0: 4080, 1: 3400])
+            XCTAssertTrue(FanControlHelper.presetPending)
+            XCTAssertFalse(log.calls.contains { $0.hasPrefix("engage") }, "the rest engaged after a refusal")
+            await disarm()
+        }
+    }
+
     /// No reply from the helper is still the popup's error; nothing is saved, the engage is released.
     func testUnavailableComesBackAsThePopupErrorText() async throws {
         try await withFanState {

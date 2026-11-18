@@ -31,6 +31,7 @@ final class FanDaemonSeamTests: XCTestCase {
             if autoFails { throw Failed() }
         }
         func hasFtst() -> Bool { calls.append("ftst"); return ftst }
+        func maxRPM(_ i: Int) -> Double? { calls.append("Mx \(i)"); return nil }
         /// The calls without the reclaim probes (supervise probes the held fans in dictionary order).
         var ordered: [String] { calls.filter { !$0.hasPrefix("engaged") } }
     }

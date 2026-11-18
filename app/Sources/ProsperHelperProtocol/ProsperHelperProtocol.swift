@@ -120,4 +120,7 @@ public enum FanEngageCode: Int, Sendable {
     case writeFailed = 4
     /// Nothing tried: no SMC controller, no current connection, or a non-finite speed.
     case inert = 5
+    /// Entry 1077 (OQ-109): the kill-switch latch with the hottest sensor still at or above the cut-off, and the
+    /// speed below the fan's maximum.
+    case belowMaximum = 6
 }

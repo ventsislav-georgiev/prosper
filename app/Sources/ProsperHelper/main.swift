@@ -208,7 +208,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
                                                arm: { self.armFanKillSwitch_fanQ() },
                                                refused: { why in
                 // One line per reason change in a latched episode, not one per retry.
-                fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s")
+                fanLog.notice("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) refused (\(why.rawValue, privacy: .public)): kill-switch latched until < \(FanControlCore.reArmCelsius, privacy: .public)°C; at or above macOS's speed after \(FanControlCore.reTakeSettleSeconds, privacy: .public) s, only the maximum at or above \(FanControlCore.killSwitchCelsius, privacy: .public)°C")
             }, failed: { error in
                 fanLog.error("setFanManualRPM(\(index, privacy: .public), \(rpm, privacy: .public)) FAILED: \(String(describing: error), privacy: .public)")
             })
@@ -463,7 +463,10 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     }
 }
 
-extension SMCFanController: FanHardware {}
+extension SMCFanController: FanHardware {
+    /// Entry 1077: the fan's own maximum, from the same validated bounds read the app's range comes from.
+    public func maxRPM(_ i: Int) -> Double? { bounds(i)?.max }
+}
 
 let delegate = Helper()
 let listener = NSXPCListener(machServiceName: helperMachServiceName)

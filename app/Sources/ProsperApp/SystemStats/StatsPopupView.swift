@@ -831,7 +831,8 @@ struct StatsPopupView: View {
         if let err = fanError {
             Text(err).font(Neon.font(10)).foregroundStyle(.red).padding(.top, sz(2))
         } else if fanManual, !fanBusy, let wait = FanReclaimRecovery.pendingText(
-            manualIntent: Preferences.fanManualEnabled, readings: fans, targets: fanTargets) {
+            manualIntent: Preferences.fanManualEnabled, readings: fans, targets: fanTargets,
+            tooHot: FanControlHelper.pendingTooHot) {
             // #737: a preset the overheat latch refused; recovery applies it, no click needed.
             Text(wait).font(Neon.font(10)).foregroundStyle(Neon.textSecondary).padding(.top, sz(2))
         }

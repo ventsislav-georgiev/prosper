@@ -46,6 +46,7 @@ final class FanReleaseAfterPinOrderTests: XCTestCase {
         func isManualEngaged(_ i: Int) -> Bool { pinned[i] != nil }
         func setAuto(_ i: Int, holdUnlock: Bool) throws { lock.withLock { _pinned[i] = nil; _calls.append("auto \(i)") } }
         func hasFtst() -> Bool { false }
+        func maxRPM(_ i: Int) -> Double? { nil }               // read only while latched at the cut-off: never here
         func resetAll() -> Bool {
             record("reset start")
             hold("reset")
@@ -147,6 +148,7 @@ final class FanReplyWordingTests: XCTestCase {
         FanReading(id: 0, min: 1200, max: 6000, current: 1800, manual: false),
     ]
     private static let pending = "Waiting for macOS to hand back the fans. Prosper sets 60% as soon as it can."
+    private static let tooHot = "Too hot: only maximum speed until it cools. Prosper sets 60% as soon as it can."
     private static let unavailable = "Couldn’t enable manual control — the Prosper helper isn’t running or wasn’t "
         + "approved. Turn on “Prosper” under System Settings ▸ General ▸ Login Items ▸ Allow in the Background, then try again."
     private static let writeFailed = "A fan didn’t take the new speed, so macOS runs every fan again. Try again."
@@ -158,6 +160,7 @@ final class FanReplyWordingTests: XCTestCase {
         (.refused, true, pending, "Manual pending · 4080 / 3400 rpm", pending),
         (.settling, true, pending, "Manual pending · 4080 / 3400 rpm", pending),
         (.settlingReported, true, pending, "Manual pending · 4080 / 3400 rpm", pending),
+        (.tooHot, true, tooHot, "Manual pending · 4080 / 3400 rpm", tooHot),
         (.unavailable, false, unavailable, unavailable, nil),
         (.needsApproval, false, unavailable, approval, nil),
         (.writeFailed, false, writeFailed, writeFailed, nil),
@@ -166,11 +169,11 @@ final class FanReplyWordingTests: XCTestCase {
     /// Every case. The switch has no default: a new reply does not build until it is listed here and in the table.
     private static func listed(_ r: FanManualReply) -> Bool {
         switch r {
-        case .engaged, .refused, .settling, .unavailable, .needsApproval, .writeFailed, .settlingReported: return true
+        case .engaged, .refused, .settling, .unavailable, .needsApproval, .writeFailed, .settlingReported, .tooHot: return true
         }
     }
     private static let every: [FanManualReply] = [.engaged, .refused, .settling, .unavailable, .needsApproval,
-                                                   .writeFailed, .settlingReported]
+                                                   .writeFailed, .settlingReported, .tooHot]
 
     private var saved: (manual: Bool, hold: Bool, targets: [Int: Double], pending: Bool, refused: Int?) =
         (false, false, [:], false, nil)
@@ -219,7 +222,9 @@ final class FanReplyWordingTests: XCTestCase {
         for row in Self.table {
             XCTAssertEqual(row.reply.isLatchRefusal, row.saved, "\(row.reply)")
             if row.saved {
-                XCTAssertEqual(FanReclaimRecovery.pendingText(manualIntent: true, readings: Self.fans, targets: targets),
+                // Entry 1077: the popup passes FanControlHelper.pendingTooHot, set by that reply (FanReasonReplyTests).
+                XCTAssertEqual(FanReclaimRecovery.pendingText(manualIntent: true, readings: Self.fans, targets: targets,
+                                                              tooHot: row.reply == .tooHot),
                                row.popup, "\(row.reply)")
             } else {
                 XCTAssertEqual(row.reply.errorText, row.popup, "\(row.reply)")
@@ -233,6 +238,7 @@ final class FanReplyWordingTests: XCTestCase {
     /// phone builds their detail from the one sentence pinned below, and DchFanCommandsTests runs refused and settling.
     func testThePhoneAnswersTheTableText() async {
         XCTAssertEqual(FanReclaimRecovery.pendingSentence("60%"), Self.pending)
+        XCTAssertEqual(FanReclaimRecovery.tooHotSentence("60%"), Self.tooHot)
         for row in Self.table where !row.saved {
             Preferences.fanManualEnabled = false
             Preferences.fanTargets = [:]

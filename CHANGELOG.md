@@ -1809,6 +1809,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a group of sessions (a main and its sidekicks) now takes one Command number, which
   selects the session you used last in it, and Control-Tab / Control-Shift-Tab move between the
   group's sessions. (#1111)
+- After the overheat cut-off hands the fans back to macOS, a new manual speed is taken only at each
+  fan's maximum while the Mac is still at 95 °C or above; anything lower waits, and the popup and
+  the phone say "Too hot: only maximum speed until it cools.". (#1077)
 
 ## v2.174.0
 

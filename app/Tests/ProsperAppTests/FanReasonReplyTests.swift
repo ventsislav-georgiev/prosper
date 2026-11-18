@@ -44,6 +44,7 @@ final class FanReasonReplyTests: XCTestCase {
         FanControlHelper.inject(connection: nil, engagesInFlight: 0)
         FanControlHelper.helperMayHaveChanged()
         FanControlHelper.presetPending = false
+        FanControlHelper.pendingTooHot = false
         FanControlHelper.deferReclaimRetry(now: .distantPast)
         if let savedRegistration { LidSleepHelper.registration = savedRegistration }
         if let savedFactory { FanControlHelper.makeIdentityConnection = savedFactory }
@@ -76,7 +77,7 @@ final class FanReasonReplyTests: XCTestCase {
     func testReasonCodeTable() {
         let rows: [(Int, FanManualReply)] = [
             (0, .engaged), (1, .settlingReported), (2, .refused), (3, .writeFailed), (4, .writeFailed), (5, .writeFailed),
-            (-1, .writeFailed), (6, .writeFailed), (Int.max, .writeFailed), (Int.min, .writeFailed),
+            (-1, .writeFailed), (6, .tooHot), (7, .writeFailed), (Int.max, .writeFailed), (Int.min, .writeFailed),
         ]
         for (code, want) in rows { XCTAssertEqual(FanManualReply.reason(code), want, "code \(code)") }
         XCTAssertTrue(FanManualReply.settlingReported.isLatchRefusal)
@@ -101,7 +102,7 @@ final class FanReasonReplyTests: XCTestCase {
         // Code 2 is still named by the speed read too: 3103 reads at or above 2500, as an older helper's false did.
         for (code, rpm, want) in [(0, 3103.0, FanManualReply.engaged), (1, 3103, .settlingReported), (2, 2000, .refused),
                                   (2, 3103, .settling), (3, 3103, .writeFailed), (4, 3103, .writeFailed),
-                                  (5, 3103, .writeFailed), (-1, 3103, .writeFailed), (6, 3103, .writeFailed),
+                                  (5, 3103, .writeFailed), (-1, 3103, .writeFailed), (6, 2000, .tooHot), (7, 3103, .writeFailed),
                                   (Int.max, 3103, .writeFailed)] {
             fan.sent = []
             fan.reasonCode = code
@@ -120,6 +121,39 @@ final class FanReasonReplyTests: XCTestCase {
         XCTAssertEqual(fan.sent, ["bool"], "old: the Bool method")
         XCTAssertEqual(reply, .refused, "named by the speed read (2000 < 2500)")
         XCTAssertEqual(reads.get().count, 4)
+    }
+
+    // Entry 1077 (OQ-109): code 6 is the latch too. It is remembered across a relaunch like the others (fanTripHeld),
+    // and it names the popup's pending line (pendingTooHot) until an engage lands. No speed read. Split fans: a
+    // burst whose later fan says it keeps the new targets pending, as code 1 does.
+    func testCodeSixIsTheLatchWithItsOwnReason() async {
+        let held = Preferences.fanTripHeld
+        defer { Preferences.fanTripHeld = held }
+        XCTAssertEqual(FanManualReply.tooHot.errorText, "Too hot: only maximum speed until it cools.")
+        XCTAssertTrue(FanManualReply.tooHot.isLatchRefusal)
+        XCTAssertEqual(FanManualReply.tooHot.afterAnAccept, .tooHot)
+        XCTAssertEqual(FanCommit.decide([.engaged, .tooHot], fans: 2, manualEnabled: true), .keepNew(.tooHot))
+        let fan = FakeConn()
+        FanControlHelper.inject(connection: fan, engagesInFlight: 0)
+        await answer(.answers(helperProtocolVersion, helperCapabilityFanReason))
+        Preferences.fanTripHeld = false
+        FanControlHelper.pendingTooHot = false
+        fan.reasonCode = FanEngageCode.belowMaximum.rawValue
+        var reply = await engage(rpm: 4899)
+        XCTAssertEqual(reply, .tooHot)
+        XCTAssertTrue(Preferences.fanTripHeld, "the latch refused: held across a relaunch")
+        XCTAssertTrue(FanControlHelper.pendingTooHot)
+        XCTAssertEqual(reads.get(), [], "no speed read")
+        fan.reasonCode = FanEngageCode.belowMacOS.rawValue
+        reply = await engage(rpm: 2000)
+        XCTAssertEqual(reply, .refused)
+        XCTAssertFalse(FanControlHelper.pendingTooHot, "another latch reason names the plain line")
+        fan.reasonCode = FanEngageCode.belowMaximum.rawValue
+        _ = await engage(rpm: 4899)
+        fan.reasonCode = FanEngageCode.engaged.rawValue
+        reply = await engage(rpm: 4900)
+        XCTAssertEqual(reply, .engaged)
+        XCTAssertFalse(FanControlHelper.pendingTooHot, "a landed engage ends it")
     }
 
     // (v) A burst's second fan answers code 1: the slider commit keeps the NEW targets pending (it read as a write

@@ -18,6 +18,7 @@ final class FanLatchedIdleTests: XCTestCase {
         func isManualEngaged(_ i: Int) -> Bool { calls.append("engaged \(i)"); return true }
         func setAuto(_ i: Int, holdUnlock: Bool) throws { calls.append("auto \(i)") }
         func hasFtst() -> Bool { calls.append("ftst"); return true }
+        func maxRPM(_ i: Int) -> Double? { calls.append("Mx \(i)"); return nil }
     }
     private final class Clock {
         var t = ContinuousClock.now

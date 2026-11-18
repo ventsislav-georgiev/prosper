@@ -59,10 +59,11 @@ public final class FanControlCore {
     /// clean failure is harmless (reset is idempotent); under-arming strands the fan.
     public func manualRequest(index: Int, rpm: Double, holder: ObjectIdentifier,
                               maxCelsius: @autoclosure () -> Double?,
-                              macOSRPM: @autoclosure () -> Double?) -> Bool {
+                              macOSRPM: @autoclosure () -> Double?,
+                              maxRPM: @autoclosure () -> Double? = nil) -> Bool {
         // A NaN or infinite speed from the app is refused first: nothing read, recorded or armed, lastRefusal kept.
         guard rpm.isFinite else { return false }
-        guard mayEngageManual(rpm: rpm, maxCelsius: maxCelsius(), macOSRPM: macOSRPM()) else { return false }
+        guard mayEngageManual(rpm: rpm, maxCelsius: maxCelsius(), macOSRPM: macOSRPM(), maxRPM: maxRPM()) else { return false }
         didSetManual()
         self.holder = holder
         heldTargets[index] = rpm
@@ -96,11 +97,13 @@ public final class FanControlCore {
         let seen = lastRefusal
         guard manualRequest(index: index, rpm: rpm, holder: holder,
                             maxCelsius: fan.maxTemperature(complete: true),
-                            macOSRPM: Self.macOSSpeed(current: fan.currentRPM(index), target: fan.targetRPM(index))) else {
+                            macOSRPM: Self.macOSSpeed(current: fan.currentRPM(index), target: fan.targetRPM(index)),
+                            maxRPM: fan.maxRPM(index)) else {
             if let why = lastRefusal, why != seen { refused(why) }
             switch lastRefusal {
             case .settling?: return .settling
             case .belowMacOS?: return .belowMacOS
+            case .belowMaximum?: return .belowMaximum
             case .unreadable?, nil: return .unreadable   // nil: unreachable, every gate refusal records its reason
             }
         }
@@ -247,6 +250,8 @@ public final class FanControlCore {
         case settling
         /// The target is below the speed macOS runs the fan at now.
         case belowMacOS
+        /// Entry 1077 (OQ-109): the hottest sensor is at or above the cut-off and the target is below the fan's maximum.
+        case belowMaximum
         /// The hottest sensor or the fan's speed did not read (fail closed).
         case unreadable
     }
@@ -302,18 +307,26 @@ public final class FanControlCore {
     /// While latched it is allowed when EITHER the hottest sensor is back below
     /// `reArmCelsius` (which clears the latch), OR the settle window has passed and
     /// `rpm` is at or above macOS's speed for the fan (`macOSSpeed`; the latch stays: every later
-    /// engage is judged again). Unreadable temperature or speed refuses. Nothing else
+    /// engage is judged again). Entry 1077 (OQ-109): at or above `killSwitchCelsius` only the fan's own maximum
+    /// (`maxRPM`, F<i>Mx) may take it, checked before the window; below the maximum waits for the sensor to fall
+    /// under the cut-off. Unreadable temperature, speed or maximum refuses. Nothing else
     /// but a daemon cold start clears the latch — not a reconnect, not choosing
     /// Automatic, not `resetAllFans`. The reads only happen while latched, so the
     /// common path costs no SMC reads.
     public func mayEngageManual(rpm: Double, maxCelsius: @autoclosure () -> Double?,
-                                macOSRPM: @autoclosure () -> Double?) -> Bool {
+                                macOSRPM: @autoclosure () -> Double?,
+                                maxRPM: @autoclosure () -> Double? = nil) -> Bool {
         guard tripLatched else { return true }
         guard let t = maxCelsius(), t.isFinite else { return refuse(.unreadable) }
         if t < Self.reArmCelsius {
             tripLatched = false
             lastRefusal = nil
             return true
+        }
+        // OQ-109: still at the cut-off, a pin can only add cooling, so only each fan's own maximum is taken.
+        if t >= Self.killSwitchCelsius {
+            guard let top = maxRPM(), top.isFinite else { return refuse(.unreadable) }
+            guard rpm >= top else { return refuse(.belowMaximum) }
         }
         // The rule at the cut-off: never hold a fan below macOS's own speed. Once macOS
         // has had the fans for the settle window, a pin at or above what it runs them
@@ -404,4 +417,6 @@ public protocol FanHardware {
     func isManualEngaged(_ i: Int) -> Bool
     func setAuto(_ i: Int, holdUnlock: Bool) throws
     func hasFtst() -> Bool
+    /// Entry 1077: fan i's maximum (F<i>Mx), nil when unreadable. Read only while latched at or above the cut-off.
+    func maxRPM(_ i: Int) -> Double?
 }

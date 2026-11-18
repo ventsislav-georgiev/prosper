@@ -199,7 +199,9 @@ struct DchCommandOps: Sendable {
         // #737: the helper's latch refused it; saved as the preset, applied by the Mac's recovery. Entry 1041: in the
         // popup's own pending sentence (a settle ends when the helper's window passes, not when the Mac cools down).
         guard !reply.isLatchRefusal else {
-            return Self.shape("Manual pending · \(shown) rpm\t" + FanReclaimRecovery.pendingSentence(shownPercent))
+            // Entry 1077: a refusal at the cut-off says why (only maximum speed until it cools).
+            let why = reply == .tooHot ? FanReclaimRecovery.tooHotSentence(shownPercent) : FanReclaimRecovery.pendingSentence(shownPercent)
+            return Self.shape("Manual pending · \(shown) rpm\t" + why)
         }
         return Self.shape("Manual · \(shown) rpm\ttarget at \(shownPercent)")
     }
