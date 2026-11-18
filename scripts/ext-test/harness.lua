@@ -440,6 +440,7 @@ function M.makeHost(opts)
             lid_closed = function() env.calls.screen = env.calls.screen + 1; return env.lidClosed end,
         },
         dch = { sessions = function() return opts.dchSessions or {} end },
+        ccpool = { status = function() return opts.ccpoolStatus or {running=false, port=0, accounts={}} end },
         time = function() return env.now end,
         date = function() return opts.date or { hour = 12, min = 0, sec = 0 } end,
         -- menubar / dialog: automation tier. Refused: set and remove are no-ops (env.menu

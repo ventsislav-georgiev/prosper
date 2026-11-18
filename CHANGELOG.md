@@ -1931,6 +1931,8 @@ tag from the now-released section and put it on the new top draft.
 - In a focused Terminal pane, issues, pull requests, tickets and other refs X-ray knows now get a
   dotted underline on the terminal itself, for shell and Codex sessions too, and Command-clicking
   one opens its card. (#1559)
+- Claude Account Pool: the status-line script now also drops invisible and bidirectional control
+  characters from an account label, and the guide documents host.ccpool.status(). (#1573)
 
 ## v2.174.0
 

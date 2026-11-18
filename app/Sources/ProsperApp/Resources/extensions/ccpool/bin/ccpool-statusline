@@ -39,10 +39,15 @@ if [ "$service" != "ccpool-proxy" ]; then
     printf '%sccpool down%s' "$red" "$plain"
     exit 0
 fi
-# A label is user text: C0 controls, DEL and the UTF-8 C1 controls (0xC2 0x80-0x9F) are dropped before it is printed.
+# A label is user text: C0 controls, DEL and the UTF-8 C1 controls (0xC2 0x80-0x9F) are dropped before it is printed,
+# and so are the invisible format and bidi characters: U+00AD, U+200B-U+200F, U+202A-U+202E, U+2066-U+2069, U+FEFF.
 c1=$(printf '\302[\200-\237]')
+shy=$(printf '\302\255')
+zw=$(printf '\342\200[\213-\217\252-\256]')
+iso=$(printf '\342\201[\246-\251]')
+bom=$(printf '\357\273\277')
 label=$(printf '%s' "$body" | plutil -extract current raw -o - - 2>/dev/null | LC_ALL=C tr -d '\000-\037\177' \
-    | LC_ALL=C sed "s/$c1//g")
+    | LC_ALL=C sed -e "s/$c1//g" -e "s/$shy//g" -e "s/$zw//g" -e "s/$iso//g" -e "s/$bom//g")
 if [ -n "$label" ]; then
     printf '%sccpool %s%s' "$green" "$label" "$plain"
 else

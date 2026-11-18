@@ -264,6 +264,23 @@ final class CCPoolScriptsTests: XCTestCase {
         XCTAssertEqual(r.out.unicodeScalars.filter { $0.value == 0x1B }.count, 2, "only the colour codes carry ESC")
     }
 
+    // Invisible format and bidi characters (U+00AD, U+200B-U+200F, U+202A-U+202E, U+2066-U+2069, U+FEFF) are dropped
+    // too; neighbouring visible text (U+2010, U+2060 range edges, accents) is kept.
+    func testStatuslineStripsInvisibleFormatCharactersFromTheLabel() throws {
+        let port = try listener([("Server", "ccpool"), ("Content-Type", "application/json")],
+                                #"{"current":"a\u202eb\u200bc\u00add\u200fe\u202af\u2066g\u2069h\ufeffi\u200a\u2010j\u00e9","service":"ccpool-proxy"}"#)
+        let r = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)"])
+        XCTAssertEqual(r.out, "\u{1B}[32mccpool abcdefghi\u{200A}\u{2010}j\u{E9}\u{1B}[0m")
+    }
+
+    // A label made only of those characters leaves nothing: the bare "ccpool".
+    func testStatuslineWithAnInvisibleOnlyLabelPrintsJustCCPool() throws {
+        let port = try listener([("Server", "ccpool"), ("Content-Type", "application/json")],
+                                #"{"current":"\u202e\u200b\ufeff\u00ad","service":"ccpool-proxy"}"#)
+        let r = try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)"])
+        XCTAssertEqual(r.out, "\u{1B}[32mccpool\u{1B}[0m")
+    }
+
     // Claude Code's statusLine JSON on a stdin that stays open: drained in the background, never waited on.
     func testStatuslineNeverWaitsOnStdin() throws {
         let input = Pipe()
