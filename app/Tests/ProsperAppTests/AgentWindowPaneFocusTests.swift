@@ -189,6 +189,62 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1618: gate on, two live terminal panes (fake clients) hosted in a never-shown window: a focus switch, there and
+    /// back, keeps each pane's AgentTerminalHostView (the same object, so its libghostty surface: no #1615 remount) and
+    /// starts or ends no client. Red at base: AgentPaneArea.pane swapped each pane's branch (AgentDetailView /
+    /// AgentUnfocusedPane) with the terminal inside it, so SwiftUI made a new host view for both panes.
+    @MainActor
+    func testPaneFocusSwitchKeepsBothTerminalViews() throws {
+        try withPaneMenu(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            let log = splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            let first = m.layout.focused, second = try XCTUnwrap(m.layout.order.last)
+            final class Slots { var frames: [UUID: CGRect] = [:] }
+            let slots = Slots()
+            AgentPaneArea.probe = { kind, pane, r in if kind == "terminal" { slots.frames[pane] = r } }
+            defer { AgentPaneArea.probe = nil }
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            endRests(log)
+            let views = { [first, second].compactMap { m.runtimes[$0]?.terminal?.view } }
+            paneFocusSettle(host) { views().count == 2 && views().allSatisfy { $0.window === win } }
+            let before = views()
+            XCTAssertEqual(before.count, 2, "both panes draw a terminal view")
+            XCTAssertFalse(before.first === before.last, "one view per pane")
+            XCTAssertEqual(log.spawned.count, 2, "both panes attached")
+            for (to, why) in [(second, "focus to web"), (first, "focus back to api")] {
+                m.focusPane(to)
+                XCTAssertEqual(m.layout.focused, to, why)
+                paneFocusSettle(host) { false }   // every pass of the settle: the flip has drawn
+                let after = views()
+                XCTAssertEqual(after.count, 2, why)
+                XCTAssertTrue(after.first === before.first, "\(why): api's host view kept")
+                XCTAssertTrue(after.last === before.last, "\(why): web's host view kept")
+                let shown = focusViews(host, AgentTerminalHostView.self)
+                XCTAssertEqual(shown.count, 2, "\(why): no second view for a pane")
+                XCTAssertTrue(shown.allSatisfy { v in before.contains { $0 === v } }, "\(why): the views in the window are the kept ones")
+                XCTAssertEqual(log.spawned.count, 2, "\(why): no client started")
+                XCTAssertEqual(log.children.values.map(\.terminated).reduce(0, +), 0, "\(why): no client ended")
+                // Drawn where the branch's slot is (under the header), at its size: content top-left coordinates.
+                let area = try XCTUnwrap(m.paneAreaFrame(in: win.contentLayoutRect.size), why)
+                let r = win.contentLayoutRect
+                for (pane, v) in zip([first, second], after) {
+                    let slot = try XCTUnwrap(slots.frames[pane], "\(why): the slot's frame")
+                    let f = v.convert(v.bounds, to: nil)
+                    XCTAssertEqual(f.minX - r.minX, area.minX + slot.minX, accuracy: 1, "\(why): x")
+                    XCTAssertEqual(r.maxY - f.maxY, area.minY + slot.minY, accuracy: 1, "\(why): y, under the header")
+                    XCTAssertEqual(f.width, slot.width, accuracy: 1, "\(why): width")
+                    XCTAssertEqual(f.height, slot.height, accuracy: 1, "\(why): height")
+                }
+            }
+            XCTAssertFalse(win.isVisible, "never shown")
+            XCTAssertFalse(win.isKeyWindow, "never key")
+        }
+    }
+
     /// Gate on (R900-6b1-1): open to the side and a plain click follow the same rule: the focused pane AFTER the action
     /// has the keys. Open to the side focuses the NEW pane: its box takes them, not the old pane's (which goes inert).
     @MainActor

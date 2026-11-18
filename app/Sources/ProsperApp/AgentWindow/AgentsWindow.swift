@@ -2332,7 +2332,7 @@ struct AgentDetailView: View {
                 AgentRemoteHeader(row: row, remote: r, pane: model.layout.focused,
                                   switcher: AgentPaneSwitch(model: model, pane: model.layout.focused)).modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                AgentTerminalPane(controller: model.terminal, open: {})
+                AgentTerminalPaneSlot(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "terminal"))
                     .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) } }
@@ -2390,7 +2390,7 @@ struct AgentDetailView: View {
     /// is both). The notice, the question and the todo list float over its top, so nothing that
     /// changes with state ever resizes it.
     func terminalPane(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
-        AgentTerminalPane(controller: model.terminal, open: { model.openSelected() })
+        AgentTerminalPaneSlot(controller: model.terminal, open: { model.openSelected() })
             .frame(minHeight: 0, maxHeight: .infinity)
             .modifier(AgentPaneProbe(kind: "terminal"))   // tests only: the terminal's own frame, before the overlay (nil probe: nothing)
             .overlay(alignment: .top) {
@@ -2625,6 +2625,37 @@ let agentPaneAreaSpace = "agentPaneArea"
 private struct AgentComposerTwoLinesKey: EnvironmentKey { static let defaultValue = false }
 private struct AgentPaneIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
 private struct AgentPaneModelKey: EnvironmentKey { static let defaultValue: AgentWindowModel? = nil }
+private struct AgentTerminalHoistedKey: EnvironmentKey { static let defaultValue = false }
+
+/// #1618: a pane's terminal. Inside AgentPaneArea.pane (agentTerminalHoisted) a clear slot that hands its controller and
+/// frame up, and the pane draws the one AgentTerminalPane under it, outside the focused/unfocused branch. Elsewhere (a
+/// view hosted on its own): the terminal itself, as before.
+struct AgentTerminalPaneSlot: View {
+    let controller: AgentTerminalController
+    let open: () -> Void
+    @Environment(\.agentTerminalHoisted) private var hoisted
+
+    struct Slot {
+        let controller: AgentTerminalController
+        let open: () -> Void
+        let bounds: Anchor<CGRect>
+    }
+
+    struct Key: PreferenceKey {
+        static var defaultValue: Slot? { nil }
+        static func reduce(value: inout Slot?, nextValue: () -> Slot?) { value = value ?? nextValue() }
+    }
+
+    var body: some View {
+        if hoisted {
+            Color.clear.anchorPreference(key: Key.self, value: .bounds) { [controller, open] in
+                Slot(controller: controller, open: open, bounds: $0)
+            }
+        } else {
+            AgentTerminalPane(controller: controller, open: open)
+        }
+    }
+}
 
 extension EnvironmentValues {
     /// 5.1: more than one row of panes is shown: the composer row is 44·s.
@@ -2641,6 +2672,11 @@ extension EnvironmentValues {
     var agentPaneModel: AgentWindowModel? {
         get { self[AgentPaneModelKey.self] }
         set { self[AgentPaneModelKey.self] = newValue }
+    }
+    /// #1618: true inside AgentPaneArea.pane: AgentTerminalPaneSlot leaves its terminal to the pane.
+    var agentTerminalHoisted: Bool {
+        get { self[AgentTerminalHoistedKey.self] }
+        set { self[AgentTerminalHoistedKey.self] = newValue }
     }
 }
 
@@ -2768,12 +2804,28 @@ struct AgentPaneArea: View {
         if model.paneArea != area { model.paneArea = area }
     }
 
-    @ViewBuilder func pane(_ id: UUID, compact: Bool) -> some View {
-        if id == model.layout.focused {
-            AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls, compact: compact)
-        } else if let r = model.runtimes[id] {
-            AgentUnfocusedPane(model: model, runtime: r, transcript: r.transcript, interaction: model.interaction,
-                               scrolls: scrolls)
+    /// #1618: the branch draws the chrome and a clear terminal slot (AgentTerminalPaneSlot); the one terminal is drawn
+    /// here, under the branch at the slot's frame, so a focus switch keeps its host view and surface (no #1615 remount).
+    func pane(_ id: UUID, compact: Bool) -> some View {
+        Group {
+            if id == model.layout.focused {
+                AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls, compact: compact)
+            } else if let r = model.runtimes[id] {
+                AgentUnfocusedPane(model: model, runtime: r, transcript: r.transcript, interaction: model.interaction,
+                                   scrolls: scrolls)
+            }
+        }
+        .environment(\.agentTerminalHoisted, true)
+        .backgroundPreferenceValue(AgentTerminalPaneSlot.Key.self) { slot in
+            GeometryReader { p in
+                if let slot {
+                    let f = p[slot.bounds]
+                    AgentTerminalPane(controller: slot.controller, open: slot.open)
+                        .frame(width: f.width, height: f.height)
+                        .offset(x: f.minX, y: f.minY)
+                        .accessibilitySortPriority(-1)   // read after the header, as when it sat under it
+                }
+            }
         }
     }
 
@@ -2963,7 +3015,7 @@ struct AgentUnfocusedPane: View {
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if !ended || kept != nil {   // #1471: Terminal is the only mode
-                    AgentTerminalPane(controller: kept ?? model.paneTerminal(runtime), open: { model.openSession(p.session) })
+                    AgentTerminalPaneSlot(controller: kept ?? model.paneTerminal(runtime), open: { model.openSession(p.session) })
                         .overlay {
                             // #1477 (11.3): over the cap or the session's second pane: the last frame, and Connect focuses
                             if !ended, model.connectPanes.contains(runtime.pane) {
@@ -2986,7 +3038,7 @@ struct AgentUnfocusedPane: View {
                 AgentRemoteHeader(row: row, remote: x, pane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
-                AgentTerminalPane(controller: model.paneTerminal(runtime), open: {})
+                AgentTerminalPaneSlot(controller: model.paneTerminal(runtime), open: {})
                     .overlay {
                         if model.connectPanes.contains(runtime.pane) {
                             AgentTerminalCard(icon: "pause.circle", text: "Not connected") {
