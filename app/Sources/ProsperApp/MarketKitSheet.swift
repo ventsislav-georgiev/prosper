@@ -275,9 +275,11 @@ struct MarketKitSheetView: View {
     /// R1527-n2: a link whose text reads as a web address (a dot, no space) and names another host than the one it
     /// opens; it is drawn as plain text. Text the URL parser refuses counts as another host.
     static func misleads(_ text: String, _ url: URL) -> Bool {
-        // R1534-n1: IDNA reads the ideographic full stops as "."
-        let t = String(text.trimmingCharacters(in: .whitespaces).map { "\u{3002}\u{FF0E}\u{FF61}".contains($0) ? "." : $0 })
-        guard t.contains("."), !t.contains(" ") else { return false }
+        // R1534-n1: IDNA reads the ideographic full stops as "."; R1536-s1: NFKC first (U+2024, U+FE52, U+FF0E to "."),
+        // and the dot is a scalar test, so a dot carrying a mark still counts (and then fails URL parsing: fails closed)
+        let t = String(text.trimmingCharacters(in: .whitespaces).precomposedStringWithCompatibilityMapping.unicodeScalars
+            .map { $0 == "\u{3002}" ? "." : Character($0) })
+        guard t.unicodeScalars.contains("."), !t.contains(" ") else { return false }
         guard let shown = URL(string: t.contains("://") ? t : "https://" + t)?.host, let target = url.host else { return true }
         return LinkPolicy.asciiLowercased(shown) != LinkPolicy.asciiLowercased(target)
     }

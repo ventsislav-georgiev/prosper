@@ -349,6 +349,18 @@ final class MarketKitSheetTests: XCTestCase {
         }
     }
 
+    /// R1536-s1: a dot carrying a mark, U+2024 and U+FE52 still read as a dot, so the mismatched link is dropped.
+    func testMarkedAndCompatibilityDotsInLinkTextAreComparedAsDots() {
+        let forms = ["github.\u{301}com", "github\u{3002}\u{301}com", "github\u{2024}com", "github\u{FE52}com"]
+        XCTAssertEqual(forms.count, 4)
+        for f in forms {
+            let r = MarketKitSheetView.readmeText("[\(f)](https://evil.example/x)")
+            XCTAssertEqual(r.runs.compactMap { $0.link }, [], f.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " "))
+        }
+        let ok = MarketKitSheetView.readmeText("[github.com](https://github.com/x)")
+        XCTAssertEqual(ok.runs.compactMap { $0.link }.count, 1)
+    }
+
     /// n1: quit sends no window close; a sheet open at quit discards its work folder (the quit notification is posted to
     /// the row's own center; the app is never terminated).
     func testAppQuitDiscardsTheOpenSheetsFolder() async {
