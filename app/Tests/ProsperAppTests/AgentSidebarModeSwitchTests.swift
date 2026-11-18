@@ -104,6 +104,7 @@ final class AgentSidebarModeSwitchTests: XCTestCase {
             let found = ours(tree)
             XCTAssertEqual(found.map(\.label), Self.labels, "\(tree.map { "\($0.role) \($0.label)" })")
             for n in found { XCTAssertEqual(n.help, n.label, "the tooltip is the label") }
+            XCTAssertEqual(tree.filter { !$0.ignored && $0.label == "Sidebar mode" }.count, 1, "the group is named: \(tree.map { "\($0.role) \($0.label)" })")
             XCTAssertFalse(tree.contains { !$0.ignored && $0.role == "AXStaticText" }, "no text: \(tree.map { "\($0.role) \($0.label)" })")
             XCTAssertEqual(tree.filter { !$0.ignored && $0.role == "AXButton" }.count, 3, "no other button")
             let saved = ThemeRuntime.palette
@@ -119,6 +120,26 @@ final class AgentSidebarModeSwitchTests: XCTestCase {
             }
             XCTAssertNotEqual(accents.first, accents.last, "the light theme's accent is its own")
         }
+    }
+
+    /// #1474 b (QA R1511 s1): non-text UI needs 3:1. On every bundled theme (Increase Contrast off), the idle symbol
+    /// (textSecondary at idleOpacity over the sidebar) and the current one (the accent over its 0.2 fill over the sidebar,
+    /// never dimmed) clear it. The measured figures are printed (IDLE1474B); 0.6 left 8 themes under.
+    func testIdleAndCurrentSymbolsClearThreeToOneOnEveryTheme() throws {
+        let t = AgentRowSelectedTextTests()
+        var cases = 0
+        try t.onEveryTheme { d, p in
+            let sidebar = t.rgba(p.sidebar)
+            let idle = ThemeContrastTests.contrast(NSColor(Neon.textSecondary).withAlphaComponent(AgentSidebarModeSwitch.idleOpacity),
+                                                   on: t.ns(sidebar))
+            let fill = t.over(sidebar, p.blue, 0.2)
+            let current = ThemeContrastTests.contrast(NSColor(AgentSidebarModeSwitch.ink(true)), on: t.ns(fill))
+            print("IDLE1474B \(d.title) idle \(idle) current \(current) at \(AgentSidebarModeSwitch.idleOpacity)")
+            XCTAssertGreaterThanOrEqual(idle, 3, "\(d.title): idle symbol is \(idle):1")
+            XCTAssertGreaterThanOrEqual(current, 3, "\(d.title): current symbol is \(current):1")
+            cases += 1
+        }
+        XCTAssertEqual(cases, 22)
     }
 
     // MARK: AX press (no event; the offscreen window's own tree)

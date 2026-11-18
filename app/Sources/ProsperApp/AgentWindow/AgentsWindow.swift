@@ -819,17 +819,20 @@ struct AgentSidebarModeSwitch: View {
     static func ink(_ on: Bool) -> Color { on ? Neon.blue : Neon.textSecondary }
     /// Not Neon.faded: Increase Contrast would make the fill opaque, the accent symbol on it unseen (the X-ray button's fill).
     static func fill(_ on: Bool) -> Color { on ? Neon.blue.opacity(0.2) : .clear }
+    /// #1474 b: the idle symbol's opacity until hover (1 under Increase Contrast). 0.75 is the least that keeps
+    /// textSecondary at 3:1 (non-text UI) over the sidebar on every bundled theme (0.6 left 8 of them under).
+    static let idleOpacity = 0.75
     static var segment: CGSize { CGSize(width: sz(20), height: sz(18)) }
 
     var body: some View {
         let mini = model.sidebarMode == .mini
         let stack = mini ? AnyLayout(VStackLayout(spacing: sz(2))) : AnyLayout(HStackLayout(spacing: sz(2)))
         stack { ForEach(AgentSidebarMode.allCases, id: \.self) { button($0) } }
-            .opacity(hover || ThemeRuntime.increaseContrast ? 1 : 0.6)   // Increase Contrast: never dimmed
             .onHover { hover = $0 }
             .padding(.horizontal, mini ? 0 : sz(14)).padding(.vertical, sz(6))
             .frame(maxWidth: .infinity, alignment: mini ? .center : .leading)
             .accessibilityElement(children: .contain)
+            .accessibilityLabel("Sidebar mode")
     }
 
     func button(_ m: AgentSidebarMode) -> some View {
@@ -837,6 +840,7 @@ struct AgentSidebarModeSwitch: View {
         return Button { model.setSidebarMode(m) } label: {
             Image(systemName: Self.symbol(m)).font(Neon.font(11, weight: .medium))
                 .foregroundStyle(Self.ink(on))
+                .opacity(on || hover || ThemeRuntime.increaseContrast ? 1 : Self.idleOpacity)   // the current mode is never dimmed
                 .frame(width: Self.segment.width, height: Self.segment.height)
                 .background(RoundedRectangle(cornerRadius: sz(4)).fill(Self.fill(on)))
                 .contentShape(Rectangle())
