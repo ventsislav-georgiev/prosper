@@ -51,7 +51,10 @@ final class AgentWindowGroupChordTests: XCTestCase {
             (48, [.control, .capsLock], .terminal, false, false, .member(1), "Caps Lock is no modifier here"),
             (48, c, .text, true, false, .pass, "the rename field keeps it"),
             (48, cs, .text, true, false, .pass, "the rename field keeps Control-Shift-Tab"),
-            (48, c, .text, false, true, .swallow, "under the New session form: swallowed, as Command-<n>"),
+            // #1602 (QA #1486 B9): the form's (its prompt is a text view where Tab types a tab: Control-Tab is the way out).
+            (48, c, .text, false, true, .pass, "under the New session form: the form's, not swallowed"),
+            (48, cs, .text, false, true, .pass, "under the New session form: Control-Shift-Tab the form's"),
+            (48, c, .other, false, true, .pass, "under the New session form, from no text view: the form's too"),
             (48, [], .terminal, false, false, .pass, "Tab is the terminal's"),
             (48, .shift, .text, false, false, .pass, "Shift-Tab is the responder's"),
             (48, .option, .terminal, false, false, .pass, "Option-Tab"),
@@ -201,6 +204,41 @@ final class AgentWindowGroupChordTests: XCTestCase {
             XCTAssertEqual(PaneKeys.action(for: tab(), context: gateOn), .previousLayout, "control: #901's chord with the gate on")
             win.sendEvent(tab())
             XCTAssertEqual(m.selection, key("api-2"), "the group's step ran first")
+            XCTAssertEqual(raised, 0, "a key asks no key and front")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
+    /// #1602 (QA #1486 B9): outside a group, with the split gate on, Control-Tab through the window's sendEvent still runs
+    /// #901's previous layout (the MRU pair): the group's step gives false and the key goes on to layoutKey.
+    /// Red if `.member` is handled outside a group (perform's `return model.stepGroupMember(step)` at AgentsWindow.swift:472
+    /// made a plain call, so it falls to `return true` and sendEvent returns at :654, before layoutKey at :655).
+    func testControlTabOutsideAGroupStillRunsThePreviousLayout() throws {
+        try withPrefs {
+            AgentPaneLayout.splitsEnabled = true   // withRow puts it back
+            let a = d1.paneLayout([d1.paneTarget("web")]), b = d1.paneLayout([d1.paneTarget("web")])
+            let d = d1.layoutSuite()
+            d.set(try PaneLayoutStore(layouts: [a, b], active: a.id, mru: [a.id]).encode(), forKey: "agentWindowLayouts")
+            let st = d1.store(g.grouped)
+            st.pairSuffix = "-qa"
+            let m = d1.windowModel(st, layouts: d)
+            m.setVisible(true)
+            _ = d1.fakeTerminal(m)
+            defer { m.close() }
+            let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            defer { win.close() }
+            win.model = m
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // the recorder first: the real key-and-front never runs
+            m.click(key("web"))
+            XCTAssertTrue(m.selectionGroup == nil, "web is in no group")
+            XCTAssertTrue(m.switchLayout(number: 2) == nil, "layout 2 active, the MRU pair is 2 then 1")
+            XCTAssertEqual(m.layout.id, b.id)
+            win.sendEvent(tab())
+            XCTAssertEqual(m.layout.id, a.id, "Control-Tab outside a group: #901's previous layout")
+            XCTAssertEqual(m.selection, key("web"), "no member step")
             XCTAssertEqual(raised, 0, "a key asks no key and front")
             XCTAssertFalse(win.isVisible, "never shown")
         }

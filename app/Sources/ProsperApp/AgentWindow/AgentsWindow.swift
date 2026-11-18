@@ -348,7 +348,7 @@ final class AgentsNSWindow: NSWindow {
     /// row keys, Command-T, F, G, Up, Down and any shortcut added later stand down).
     /// #887 (QA #747 INFO-4): while the New session `form` covers the pane, a chord that acts on the session under it
     /// (Command-T, 1...9, F, G, Up, Down, Option-Command-1...9, Shift-Command-G) is swallowed; Command-W, Command-N and
-    /// Shift-Command-N stay the window's.
+    /// Shift-Command-N stay the window's. #1602: Control-Tab and Control-Shift-Tab pass on to the form.
     /// #1110: ⌘1…⌘9 from every responder, the terminal and a text view too; it stands down for the rename field and is
     /// swallowed under the form, as ⌘↑/⌘↓.
     static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
@@ -356,7 +356,10 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        case .session, .jump, .member, .find, .findNext, .font, .stopOrRemove, .xray:
+        // #1602 (QA #1486 B9): under the form Control-Tab is the form's (its prompt is a text view where Tab types a tab,
+        // so Control-Tab is the keyboard way out), in a group too: the form covers the pane, so no member step either.
+        case .member: return form ? .pass : r
+        case .session, .jump, .find, .findNext, .font, .stopOrRemove, .xray:
             return form ? .swallow : r
         default: return r
         }
