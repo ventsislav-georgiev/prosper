@@ -88,4 +88,13 @@ final class AppUpdaterHoldTests: XCTestCase {
         XCTAssertEqual(replies, [.install], "the dropped install never fired")
         dirty.report(a, dirty: false)
     }
+
+    /// #1606: the About pane's update note says the update waits on an open editor while held, not that it installs by itself.
+    func testAboutNoteSaysHeldUpdateWaits() {
+        XCTAssertEqual(TextViewerDirty.updateNote(downloading: true, held: true), TextViewerDirty.updateHeld)
+        XCTAssertEqual(TextViewerDirty.updateNote(downloading: false, held: true), TextViewerDirty.updateHeld)
+        XCTAssertEqual(TextViewerDirty.updateNote(downloading: true, held: false),
+                       "Downloading the new version — it will install and relaunch automatically.")
+        XCTAssertTrue(TextViewerDirty.updateNote(downloading: false, held: false) == nil)
+    }
 }

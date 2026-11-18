@@ -3269,7 +3269,9 @@ private struct AboutPane: View {
                     }
                     if downloading {
                         NeonProgressBar(progress: AppUpdater.shared.downloadProgress)
-                        Text("Downloading the new version — it will install and relaunch automatically.")
+                    }
+                    if let note = TextViewerDirty.updateNote(downloading: downloading, held: TextViewerDirty.shared.isHoldingUpdate) {
+                        Text(note)
                             .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                     NeonDivider()
