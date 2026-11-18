@@ -373,6 +373,10 @@ final class AgentIslandStore: ObservableObject {
     var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
     /// #578: sidekicks or history.
     var showsTabs: Bool { !split.sidekicks.isEmpty || !history.isEmpty }
+    /// #1537 (OQ-95): the Claude plan usage line (session and weekly limit); nil: none drawn.
+    @Published var planUsage: AgentPlanUsage?
+    /// #1537: the tab row is drawn for the tabs or for the plan usage at its right end.
+    var showsTabRow: Bool { showsTabs || planUsage != nil }
     /// #581: the collapsed island shows with a live session, or with none but
     /// history (the History tab). #579's New session lives in the open island's
     /// "⋯" menu, so with nothing live and no history it is not offered: the
@@ -575,7 +579,7 @@ final class AgentIslandStore: ObservableObject {
     }
 
     var size: CGSize {
-        expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight, tabs: showsTabs) : geometry.collapsedSize
+        expanded ? geometry.expandedSize(rows: rowHeights, cards: cardsHeight, tabs: showsTabRow) : geometry.collapsedSize
     }
 }
 
@@ -666,7 +670,7 @@ struct AgentIslandView: View {
     private var expanded: some View {
         VStack(spacing: 0) {
             header.frame(height: g.barHeight)
-            let tabs = store.showsTabs
+            let tabs = store.showsTabRow
             if tabs { tabRow.frame(height: AgentIslandGeometry.tabsHeight) }
             Group {
                 if g.listScrolls(rows: store.rowHeights, cards: store.cardsHeight, tabs: tabs) {
@@ -1038,14 +1042,26 @@ struct AgentIslandView: View {
         let split = store.split, history = store.historyTab
         let shows = AgentIsland.showsSidekicks(split, tab: store.sidekickTab)
         return HStack(spacing: 14) {
-            tab("Sessions (\(split.primary.count))", on: !history && !shows) { onTab(false) }
-            if !split.sidekicks.isEmpty {
-                tab("Sidekicks (\(split.sidekicks.count))", on: !history && shows) { onTab(true) }
-            }
-            if !store.history.isEmpty {
-                tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }
+            if store.showsTabs {   // #1537: the row may be up for the plan usage alone
+                tab("Sessions (\(split.primary.count))", on: !history && !shows) { onTab(false) }
+                if !split.sidekicks.isEmpty {
+                    tab("Sidekicks (\(split.sidekicks.count))", on: !history && shows) { onTab(true) }
+                }
+                if !store.history.isEmpty {
+                    tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }
+                }
             }
             Spacer(minLength: 0)
+            if let u = store.planUsage {   // #1537 (OQ-95): the plan's session and weekly limit, dim like the header counts
+                let help = u.help()
+                Text(verbatim: u.text)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Neon.faded(.white, 0.7))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityLabel(Text(verbatim: help))
+                    .help(Text(verbatim: help))
+            }
         }
         .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)
     }

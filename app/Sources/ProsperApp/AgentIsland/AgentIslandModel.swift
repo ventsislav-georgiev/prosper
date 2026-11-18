@@ -1235,3 +1235,56 @@ extension AgentIsland {
         return out
     }
 }
+
+/// #1537 (OQ-95 part 3): the Claude plan's session (5 h) and weekly limits for the open island, from the account
+/// pool's in-memory usage sample of its current account (CCPoolRuntime.planUsage) and that account's reset stamps.
+/// Pure. Stale is dropped, per limit: a value whose window rolled over (its reset passed) or, with no reset known,
+/// one older than its window belongs to a finished window and is wrong, not just old. nil: nothing to draw.
+struct AgentPlanUsage: Equatable, Sendable {
+    /// Anthropic's utilization, a fraction (0.42 = 42%); nil: not known or stale.
+    var session: Double?
+    var week: Double?
+    /// Epochs the windows roll over; nil: not reported.
+    var sessionReset: Int?
+    var weekReset: Int?
+
+    static let sessionWindow: Double = 5 * 3600
+    static let weekWindow: Double = 7 * 86400
+
+    /// `util` and `at` are the sample (claim -> fraction, its epoch); `reset` claim -> epoch.
+    init?(util: [String: Double], at: Double, reset: [String: Int], now: Double) {
+        func fresh(_ claim: String, window: Double) -> (value: Double, reset: Int?)? {
+            // Outside data: the pool keeps 0...100 (CCPoolCore.utils); checked again before the percent's Int().
+            guard let u = util[claim], (0...100).contains(u), at.isFinite, now.isFinite else { return nil }
+            if let r = reset[claim] { return Double(r) > now ? (u, r) : nil }
+            return now - at < window ? (u, nil) : nil
+        }
+        let s = fresh("five_hour", window: Self.sessionWindow), w = fresh("seven_day", window: Self.weekWindow)
+        guard s != nil || w != nil else { return nil }
+        session = s?.value; sessionReset = s?.reset
+        week = w?.value; weekReset = w?.reset
+    }
+
+    static func percent(_ u: Double) -> String { "\(Int((u * 100).rounded()))%" }
+
+    /// The island's line, the pool pane's words: "5h 42% · week 10%".
+    var text: String {
+        [session.map { "5h \(Self.percent($0))" }, week.map { "week \(Self.percent($0))" }]
+            .compactMap { $0 }.joined(separator: " \u{00B7} ")
+    }
+
+    /// The help (and spoken) text: what each figure is and when it resets.
+    func help(timeZone: TimeZone = .current) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = "EEE HH:mm"
+        func line(_ name: String, _ u: Double?, _ r: Int?) -> String? {
+            guard let u else { return nil }
+            return "\(name): \(Self.percent(u)) used" + (r.map { ", resets \(f.string(from: Date(timeIntervalSince1970: Double($0))))" } ?? "")
+        }
+        return (["Claude plan usage (account pool, current account)"]
+                + [line("Session limit", session, sessionReset), line("Weekly limit", week, weekReset)].compactMap { $0 })
+            .joined(separator: "\n")
+    }
+}

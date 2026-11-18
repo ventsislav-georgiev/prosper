@@ -233,6 +233,9 @@ final class AgentIslandController {
     /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
     /// and run on the runner's queue like a contributor. No runtime: none.
     var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
+    /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
+    /// (the ccpool extension off, or under XCTest): none.
+    var planUsage: @MainActor (_ now: Double) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0) }
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     /// #1096 3: `done.prompt` is the panel's button word, the caller's own.
@@ -354,6 +357,7 @@ final class AgentIslandController {
             return
         }
         deferred = nil
+        readPlanUsage()
         let was = Set(store.sessions.map(\.key))
         store.sessions = sessions
         reprobeIfStale()
@@ -1509,6 +1513,13 @@ final class AgentIslandController {
         return p
     }
 
+    /// #1537: the plan usage line, re-read with the clock now (a value past its reset drops); assigned only on a change.
+    private func readPlanUsage() {
+        guard let store else { return }
+        let u = planUsage(Date().timeIntervalSince1970)
+        if store.planUsage != u { store.planUsage = u }
+    }
+
     /// Only the panel's own view expands it, so a nil panel (tests) just skips the window work.
     func setExpanded(_ on: Bool) {
         guard let store, store.expanded != on, !on || store.showsIsland else { return }
@@ -1519,6 +1530,7 @@ final class AgentIslandController {
         if on, let d = deferred { deferred = nil; store.sessions = d }   // #768
         // #581: nothing live: open on History.
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
+        if on { readPlanUsage() }   // #1537: before layout(), the line's row counts in the size
         if !on {
             store.focusKey = nil   // #1536: the next open picks its own
             store.notices = [:]; store.cards = [:]; readAt = [:]

@@ -112,6 +112,14 @@ final class CCPoolRuntime {
     /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
     var routing: CCPool.Routing { service.routing(on: routeOn) }
 
+    /// #1537: the Agent Island's plan usage line: the current account's last usage sample (relayed replies or a
+    /// Refresh) and its reset stamps, as a plain island value. nil without a current account or a sample.
+    func planUsage(now: Double) -> AgentPlanUsage? {
+        let st = store.snapshot
+        guard let label = st.current, let account = st.accounts[label], let sample = store.usageSample(label) else { return nil }
+        return AgentPlanUsage(util: sample.util, at: sample.at, reset: account.reset, now: now)
+    }
+
     /// The app quits: the stop runs on the life cycle's queue, after any start in flight (#1190
     /// INFO-1), and no queued start binds again. Waits at most `timeout` on main; past it the
     /// published listener is stopped here as before and the queued stop catches a late one.

@@ -1860,6 +1860,9 @@ tag from the now-released section and put it on the new top draft.
   1.91.0 or newer. (#1357)
 - An extension can no longer use the id "collapse" or "timers", which Prosper's own settings already
   use. (#1548)
+- Agent Island: the open island shows your Claude plan usage (session and weekly limit) from the
+  account pool, with the reset times in its tooltip; nothing is shown when the pool has no fresh
+  figure. (#1537)
 
 ## v2.174.0
 
