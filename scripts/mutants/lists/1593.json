@@ -1,0 +1,41 @@
+{
+ "entry": 1593,
+ "filter": "KitStoreTests/testFirstInstallMakesAMissingConfigHome|KitStoreTests/testSymlinkedConfigHomeIsFollowedAsBefore|KitStoreTests/testConfigHomeThatIsAFileIsNotADirectory",
+ "mutants": [
+  {
+   "name": "noConfigHomeInLayout",
+   "file": "app/Sources/ProsperApp/Kit/KitStore.swift",
+   "old": "    func ensureLayout() throws {\n        try Self.ensureConfigHome(layout.configHome)\n",
+   "new": "    func ensureLayout() throws {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "noConfigHomeInRunner",
+   "file": "app/Sources/ProsperApp/Kit/KitStore.swift",
+   "old": "    func installRunner() throws -> Bool {\n        try Self.ensureConfigHome(layout.configHome)\n",
+   "new": "    func installRunner() throws -> Bool {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "lstatNotStat",
+   "file": "app/Sources/ProsperApp/Kit/KitStore.swift",
+   "old": "guard fstatat(AT_FDCWD, path, &st, 0) == 0, st.st_mode",
+   "new": "guard lstat(path, &st) == 0, st.st_mode",
+   "expect": "killed"
+  },
+  {
+   "name": "noDirCheck",
+   "file": "app/Sources/ProsperApp/Kit/KitStore.swift",
+   "old": "guard fstatat(AT_FDCWD, path, &st, 0) == 0, st.st_mode & S_IFMT == S_IFDIR else",
+   "new": "guard fstatat(AT_FDCWD, path, &st, 0) == 0 else",
+   "expect": "killed"
+  },
+  {
+   "name": "chmod0700",
+   "file": "app/Sources/ProsperApp/Kit/KitStore.swift",
+   "old": "if fchmod(fd, 0o755) != 0 { throw KitStoreError.io(\"chmod\", errno) }",
+   "new": "if fchmod(fd, 0o700) != 0 { throw KitStoreError.io(\"chmod\", errno) }",
+   "expect": "killed"
+  }
+ ]
+}

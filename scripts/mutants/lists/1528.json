@@ -5,8 +5,8 @@
   {
    "name": "turns-oldest-first",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "keyed.keys.sorted(by: >)",
-   "new": "keyed.keys.sorted(by: <)",
+   "old": "turns = keyed.keys.sorted(by: >)",
+   "new": "turns = keyed.keys.sorted(by: <)",
    "expect": "killed"
   },
   {
@@ -82,8 +82,8 @@
   {
    "name": "jump-no-chapter",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "guard let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n })",
-   "new": "guard let n = t.turn, let ch = chapters.last",
+   "old": "guard t.session == nil, let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n })",
+   "new": "guard t.session == nil, let n = t.turn, let ch = chapters.last",
    "expect": "killed"
   },
   {
@@ -96,7 +96,7 @@
   {
    "name": "header-no-title",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
-   "old": "let title = chapters.last { $0.ordinal == n }?.title ?? \"\"",
+   "old": "let title = t.session == nil ? (chapters.last(where: { $0.ordinal == n })?.title ?? \"\") : (t.title ?? \"\")",
    "new": "let title = \"\"",
    "expect": "killed"
   }

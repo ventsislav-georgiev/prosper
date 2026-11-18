@@ -61,7 +61,7 @@
   {
    "name": "no-window-hotkey",
    "file": "app/Sources/ProsperApp/AppDelegate.swift",
-   "old": "        case .agentIsland: return { _ = AgentIslandController.shared.openFocused() }\n",
+   "old": "        case .agentIsland: return { AgentIslandController.shared.toggleFocused() }\n",
    "new": "",
    "expect": "killed"
   }

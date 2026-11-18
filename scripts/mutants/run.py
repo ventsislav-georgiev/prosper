@@ -120,6 +120,31 @@ def swift(args, app, log, timeout):
         return rc, fh.read().decode("utf-8", "replace")
 
 
+def filter_problems(flt, root):
+    """--dry-run: every plain Class or Class/test in the filter must exist in app/Tests (a class or an extension)."""
+    src = ""
+    for d, _, fs in os.walk(os.path.join(root, "app", "Tests")):
+        for f in fs:
+            if f.endswith(".swift"):
+                with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
+                    src += fh.read()
+    errs = []
+    alts = []
+    for alt in re.split(r"\|(?![^()]*\))", flt):  # split on | outside parentheses
+        g = re.fullmatch(r"(\w+)/\((.*)\)", alt)
+        alts += [g.group(1) + "/" + t for t in g.group(2).split("|")] if g else [alt]
+    for alt in alts:
+        cls, _, fn = alt.partition("/")
+        if not re.fullmatch(r"\w+", cls) or (fn and not re.fullmatch(r"\w+", fn)):
+            continue  # a regex: shortcut, not checked
+        # shortcut: names match as prefixes (the filter is a regex); a test is found by `func name` anywhere in the tests.
+        if not re.search(r"\b(class|extension|struct)\s+" + cls, src):
+            errs.append(f"filter class {cls} not found")
+        elif fn and not re.search(r"\bfunc\s+" + fn, src):
+            errs.append(f"filter test {alt} not found")
+    return errs
+
+
 def run_list(path, root, logs, timeout, dry, stop_at):
     with open(path, encoding="utf-8") as fh:
         lst = json.load(fh)
@@ -132,7 +157,9 @@ def run_list(path, root, logs, timeout, dry, stop_at):
     stem = os.path.join(logs, os.path.splitext(name)[0])
     test = ["test", "--skip-build"] + FLAGS + ["--filter", lst["filter"]]
     base = None
-    if not dry:
+    if dry:
+        base = "; ".join(filter_problems(lst["filter"], root)) or None
+    else:
         log = stem + ".baseline.log"
         rc, out = swift(["build", "--build-tests"] + FLAGS, app, log, timeout)
         if rc == 0:

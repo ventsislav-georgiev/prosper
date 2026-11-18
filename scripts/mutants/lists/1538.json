@@ -50,6 +50,28 @@
    "old": "shown && (m.layoutRows != nil || m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))",
    "new": "shown",
    "expect": "killed"
+  },
+  {
+   "name": "close-pane-header-unlocked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-unlocked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed",
+   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-unlocked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
+   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
+   "expect": "survives",
+   "note": "no row: testAgentWindowLayoutEditLockedStructuralChangesAreRefused drops at .centre, which choose(_:into:) still refuses by its own lock guard; no row drops on an edge zone while locked"
   }
  ]
 }

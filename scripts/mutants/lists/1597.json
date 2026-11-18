@@ -1,0 +1,20 @@
+{
+ "entry": 1597,
+ "filter": "AgentWindowRemoteFollowTests",
+ "mutants": [
+  {
+   "name": "follow-cap-removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentRemoteFollow.swift",
+   "old": "pending.count + seg.count > Self.maxPending",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "follow-drop-stops-at-chunk",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentRemoteFollow.swift",
+   "old": "dropping = nl == nil",
+   "new": "dropping = false",
+   "expect": "killed"
+  }
+ ]
+}

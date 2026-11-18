@@ -1,0 +1,27 @@
+{
+ "entry": 1333,
+ "filter": "AgentWindowInteractionTests/testAgentWindowInteractionRefusesEveryWriteWhileARunningTextShows",
+ "mutants": [
+  {
+   "name": "lock-all",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        if let lock = AgentWindowControls.lock(row),\n           prompt == nil || ![AgentIsland.restartingText, AgentIsland.stoppingText].contains(lock) {",
+   "new": "        if let lock = AgentWindowControls.lock(row) {",
+   "expect": "killed"
+  },
+  {
+   "name": "lock-none",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        if let lock = AgentWindowControls.lock(row),\n           prompt == nil || ![AgentIsland.restartingText, AgentIsland.stoppingText].contains(lock) {",
+   "new": "        if false, let lock = AgentWindowControls.lock(row) {",
+   "expect": "killed"
+  },
+  {
+   "name": "lock-any-prompt",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        if let lock = AgentWindowControls.lock(row),\n           prompt == nil || ![AgentIsland.restartingText, AgentIsland.stoppingText].contains(lock) {",
+   "new": "        if prompt == nil, let lock = AgentWindowControls.lock(row) {",
+   "expect": "killed"
+  }
+ ]
+}

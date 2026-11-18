@@ -1,0 +1,41 @@
+{
+ "entry": 1576,
+ "filter": "CCPoolProxyTests/(testCCPoolClientHopByHopHeadersNeverForwarded|testCCPoolClientTransferEncodingNeverForwarded|testCCPoolTrailerNeverForwarded|testCCPoolProxyConnectionNeverForwarded)",
+ "mutants": [
+  {
+   "name": "strip-keep-alive",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "[\"connection\", \"keep-alive\", \"proxy-authenticate\",",
+   "new": "[\"connection\", \"proxy-authenticate\",",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-host",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "\"upgrade\", \"host\",\n",
+   "new": "\"upgrade\",\n",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-trailer",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "\"trailers\", \"trailer\", \"proxy-connection\"",
+   "new": "\"trailers\", \"proxy-connection\"",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-proxy-connection",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "\"trailer\", \"proxy-connection\", \"transfer-encoding\"",
+   "new": "\"trailer\", \"transfer-encoding\"",
+   "expect": "killed"
+  },
+  {
+   "name": "accept-transfer-encoding",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if head.header(\"transfer-encoding\") != nil {",
+   "new": "if false {",
+   "expect": "killed"
+  }
+ ]
+}

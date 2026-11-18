@@ -1,0 +1,20 @@
+{
+ "entry": 1598,
+ "filter": "DchCtlTests/testXrayAllowlist|XrayRefRunTests/testDashBidiAndEmptyTextsSpawnNothing",
+ "mutants": [
+  {
+   "name": "ctl-ref-leading-dash",
+   "file": "app/Sources/ProsperApp/Server/DchCtl.swift",
+   "old": "if v.hasPrefix(\"-\") || v.unicodeScalars",
+   "new": "if v.unicodeScalars",
+   "expect": "killed"
+  },
+  {
+   "name": "runref-leading-dash",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "guard DchCtl.refOK(text), !text.hasPrefix(\"-\"), !Self.overStdin(input)",
+   "new": "guard DchCtl.refOK(text), !Self.overStdin(input)",
+   "expect": "killed"
+  }
+ ]
+}

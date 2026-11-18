@@ -19,8 +19,8 @@
   {
    "name": "noNamePriority",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "            .layoutPriority(1)   // #1539",
-   "new": "            // .layoutPriority(1)   // #1539",
+   "old": "            .frame(maxWidth: .infinity, alignment: .leading)\n            needs()",
+   "new": "            needs()",
    "expect": "killed"
   }
  ]

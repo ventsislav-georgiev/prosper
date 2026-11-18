@@ -27,7 +27,7 @@ One file per ledger entry, `lists/<entry>.json`:
 - `filter`: the `swift test --filter` regex for every mutant of the list.
 - `file`: repo-relative. `old` must occur exactly once in it; `new` replaces it.
 - `expect`: `killed` (a test must fail) or `survives` (a known survivor, kept on
-  record; it does not fail the run).
+  record; it does not fail the run). An optional `note` says why (the reason a survivor is accepted).
 - Never a mutant of a clipboard, event, defaults, delete or sandbox guard: `run.py`
   refuses text that names one (`GUARD` in run.py).
 

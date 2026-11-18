@@ -1,0 +1,41 @@
+{
+ "entry": 1595,
+ "filter": "CCPoolProxyTests/testCCPoolOAuthBeta",
+ "mutants": [
+  {
+   "name": "oauth-beta-not-added",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "req.setValue(Self.withOAuthBeta(req.value(forHTTPHeaderField: \"anthropic-beta\")), forHTTPHeaderField: \"anthropic-beta\")",
+   "new": "_ = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "oauth-beta-replaces-list",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "list.trimmingCharacters(in: .whitespaces).isEmpty ? oauthBeta : list + \",\" + oauthBeta",
+   "new": "list.trimmingCharacters(in: .whitespaces).isEmpty ? oauthBeta : oauthBeta",
+   "expect": "killed"
+  },
+  {
+   "name": "oauth-beta-case-sensitive",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": ".caseInsensitiveCompare(oauthBeta) == .orderedSame",
+   "new": " == oauthBeta",
+   "expect": "killed"
+  },
+  {
+   "name": "oauth-beta-untrimmed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "$0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(oauthBeta)",
+   "new": "String($0).caseInsensitiveCompare(oauthBeta)",
+   "expect": "killed"
+  },
+  {
+   "name": "oauth-beta-substring",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "let has = list.split(separator: \",\").contains {",
+   "new": "let has = list.lowercased().contains(oauthBeta) || list.split(separator: \",\").contains {",
+   "expect": "killed"
+  }
+ ]
+}

@@ -82,8 +82,8 @@
   {
    "name": "pin-not-full",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        reset()\n        m.openRef(e)",
-   "new": "        reset()\n        _ = m.hoverRead(e)",
+   "old": "        m.openRef(e)\n",
+   "new": "        _ = m.hoverRead(e)\n",
    "expect": "killed"
   },
   {

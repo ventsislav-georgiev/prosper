@@ -1,0 +1,76 @@
+{
+ "entry": 922,
+ "filter": "KitShellPathTests|KitManifestTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "lua_guard",
+   "file": "app/Sources/ProsperApp/ManagedConfigHost/ManagedConfigLua.swift",
+   "old": "guard !target.hasPrefix(\"shellrc:\") else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "shellrc_kind",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+   "old": "guard kind == .block, shellRCFiles.contains(rel) else",
+   "new": "guard shellRCFiles.contains(rel) else",
+   "expect": "killed"
+  },
+  {
+   "name": "shellrc_files",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+   "old": "guard kind == .block, shellRCFiles.contains(rel) else",
+   "new": "guard kind == .block else",
+   "expect": "killed"
+  },
+  {
+   "name": "no_home",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+   "old": "guard let home = roots.home else",
+   "new": "guard let home = roots.home ?? Optional(roots.configHome) else",
+   "expect": "killed"
+  },
+  {
+   "name": "optin_default",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "return off().union(KitPieceSelection(v).optIn.subtracting(on))",
+   "new": "return off()",
+   "expect": "killed"
+  },
+  {
+   "name": "selection_on",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "on: Array(KitPieceSelection(v).optIn.subtracting(closed))",
+   "new": "on: []",
+   "expect": "killed"
+  },
+  {
+   "name": "setoff_keeps_on",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "try writePieces(off: ids, offTools: offTools(), on: pieces()?.on ?? [])",
+   "new": "try writePieces(off: ids, offTools: offTools(), on: [])",
+   "expect": "killed"
+  },
+  {
+   "name": "line_newline",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "guard !kitBin.unicodeScalars.contains(where: { $0 == \"\\n\" || $0 == \"\\r\" || $0 == \"\\0\" }) else { return nil }",
+   "new": "guard !kitBin.unicodeScalars.contains(where: { $0 == \"\\r\" || $0 == \"\\0\" }) else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "line_prepends",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "*) export PATH=\\\"$PATH\\\":\\(q) ;; esac\"",
+   "new": "*) export PATH=\\(q):\\\"$PATH\\\" ;; esac\"",
+   "expect": "killed"
+  },
+  {
+   "name": "rc_syntax",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedTextBlock.swift",
+   "old": "if hashNames.contains(url.lastPathComponent.lowercased()) { return .hash }",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

@@ -14,7 +14,8 @@
    "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
    "old": "            recordAnswer(400, acct: accountID)\n",
    "new": "",
-   "expect": "killed"
+   "expect": "survives",
+   "note": "accepted survivor: 971472d1 (#1588) made the 400 branch unreachable on macOS 14+ (URL(string:) no longer fails), so no test can reach the dropped row"
   }
  ]
 }
