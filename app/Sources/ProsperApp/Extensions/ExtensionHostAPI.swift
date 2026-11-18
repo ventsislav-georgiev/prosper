@@ -458,7 +458,7 @@ struct ExtensionHost {
     /// #1238: the host functions a call retired by a teardown may still make: they only read (nothing is held,
     /// shown, sent or written; `log` and `sleep` stay too). Every other one refuses a retired call.
     static let retiredReads: Set<String> = [
-        "__h_clip_read", "__h_clip_history", "__h_llm_complete", "__h_llm_translate", "__h_llm_chat",
+        "__h_clip_read", "__h_clip_history",
         "__h_proc_refusal", "__h_window_frame", "__h_time", "__h_date", "__h_sleep", "__h_pref_get",
         "__h_perms_has", "__h_json_decode", "__h_json_encode", "__h_fs_list_dirs", "__h_apps_search",
         "__h_snippets_all", "__h_snippets_get", "__h_snippets_expand", "__h_snippets_phone",
@@ -483,12 +483,15 @@ struct ExtensionHost {
                   "__h_menubar_set", "__h_menubar_remove", "__h_alert_show", "__h_fallback_save",
                   "__h_fallback_mode_set", "__h_app_launch", "__h_app_hide", "__h_keys_rules", "__h_keys_stroke",
                   "__h_keys_system", "__h_fs_watch", "__h_fs_unwatch"] { t[n] = { _ in 0 } }
-        for n in ["__h_shell_run", "__h_snippets_import_file", "__h_choose_app"] { t[n] = { rt in rt.push(""); return 1 } }
+        // #1242: the llm functions too: each starts a model job in CoreBridge's one slot per kind, which cancels
+        // a live caller's job, and spends power.
+        for n in ["__h_shell_run", "__h_snippets_import_file", "__h_choose_app",
+                  "__h_llm_complete", "__h_llm_translate", "__h_llm_chat"] { t[n] = { rt in rt.push(""); return 1 } }
         for n in ["__h_window_set", "__h_dialog_confirm", "__h_url_open", "__h_kbd_set", "__h_url_set_default",
                   "__h_menus_press"] { t[n] = { rt in rt.push(false); return 1 } }
         for n in ["__h_http_request", "__h_dialog_prompt"] { t[n] = { rt in rt.pushNil(); return 1 } }
         t["__h_fallback_import"] = { rt in rt.push(Double(0)); return 1 }
-        t["__h_proc_kill"] = { rt in rt.push("host.process: the extension is switched off"); return 1 }
+        t["__h_proc_kill"] = { rt in rt.push("host.process: this call was stopped (the extension was turned off, untrusted, reset, reinstalled or removed)"); return 1 }
         t["__h_osascript"] = { rt in rt.push(#"{"ok":false,"error":"not permitted"}"#); return 1 }
         t["__h_config"] = { rt in rt.push(ManagedConfigLua.inert(rt.stringArgument(1) ?? "")); return 1 }
         return t

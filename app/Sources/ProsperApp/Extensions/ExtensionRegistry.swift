@@ -205,7 +205,7 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
     func revive(id: String) { lock.lock(); down.remove(id); lock.unlock() }
 
     /// #1238: true while the call running on `id`'s lane has not been retired. Read by the lane VM's
-    /// acquiring host functions (ExtensionHost.isCurrent), on that lane.
+    /// gated host functions (ExtensionHost.isCurrent: every one outside retiredReads), on that lane.
     private func callIsCurrent(_ id: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return running[id] == (epochs[id] ?? 0)
@@ -263,8 +263,8 @@ final class AsyncExtensionRuntimes: @unchecked Sendable {
                 rt = cached
             } else {
                 rt = try LuaRuntime(allowLoad: spec.privileged || spec.trusted)
-                // #1238: formed here on the lane (nonisolated) and called on the lane by this VM's acquiring
-                // host functions; captures a weak Sendable self and a String. The VM outlives this call, so the
+                // #1238: formed here on the lane (nonisolated) and called on the lane by this VM's gate (every
+                // host function outside ExtensionHost.retiredReads, and take()); captures a weak Sendable self and a String. The VM outlives this call, so the
                 // check reads the epoch of the call running at that moment (running), not the one it was built in.
                 let id = spec.extensionID
                 try ExtensionHost(extensionID: spec.extensionID, services: services,

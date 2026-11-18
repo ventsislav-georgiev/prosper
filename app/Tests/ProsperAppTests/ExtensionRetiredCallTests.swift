@@ -13,9 +13,9 @@ private final class RetiredCallRecorder: ExtensionHostServices, @unchecked Senda
     func clipboardRead() -> String? { "clip" }
     func clipboardWrite(_ text: String) { act("clipboardWrite") }
     func clipboardHistory(limit: Int) -> [String] { [] }
-    func llmComplete(_ prompt: String) async -> String { "" }
-    func llmTranslate(_ text: String, target: String, source: String?) async -> String { "" }
-    func llmChat(_ prompt: String) async -> String { "" }
+    func llmComplete(_ prompt: String) async -> String { act("llmComplete"); return "" }
+    func llmTranslate(_ text: String, target: String, source: String?) async -> String { act("llmTranslate"); return "" }
+    func llmChat(_ prompt: String) async -> String { act("llmChat"); return "" }
     func shellRun(_ command: String) async -> String { act("shellRun"); return "" }
     func shellRunCapped(_ command: String) async -> (text: String, truncated: Bool) { act("shellRun"); return ("", false) }
     func httpRequest(method: String, url: String, headers: [String: String],
@@ -73,7 +73,7 @@ private final class RetiredCallRecorder: ExtensionHostServices, @unchecked Senda
     func menusPress(_ id: String) -> Bool { act("menusPress"); return false }
 }
 
-/// #1238 (N1238-a, A2): a call that a teardown (disable, untrust, reset) retired may still read, but every host
+/// #1238 (N1238-a, A2): a call that a teardown (disable, untrust, reset, reinstall, uninstall) retired may still read, but every host
 /// function that acts, holds, releases, shows or writes refuses it and gives what it gives when it declines.
 final class ExtensionRetiredCallTests: XCTestCase {
 
@@ -91,12 +91,27 @@ final class ExtensionRetiredCallTests: XCTestCase {
         "__h_fallback_mode_set": "nil", "__h_app_launch": "nil", "__h_app_hide": "nil", "__h_keys_rules": "nil",
         "__h_keys_stroke": "nil", "__h_keys_system": "nil", "__h_fs_watch": "nil", "__h_fs_unwatch": "nil",
         "__h_shell_run": "", "__h_snippets_import_file": "", "__h_choose_app": "",
+        "__h_llm_complete": "", "__h_llm_translate": "", "__h_llm_chat": "",
         "__h_window_set": "false", "__h_dialog_confirm": "false", "__h_url_open": "false", "__h_kbd_set": "false",
         "__h_url_set_default": "false", "__h_menus_press": "false",
         "__h_http_request": "nil", "__h_dialog_prompt": "nil", "__h_fallback_import": "0.0",
-        "__h_proc_kill": "host.process: the extension is switched off",
+        "__h_proc_kill": "host.process: this call was stopped (the extension was turned off, untrusted, reset, reinstalled or removed)",
         "__h_osascript": #"{"ok":false,"error":"not permitted"}"#,
         "__h_config": ManagedConfigLua.inert("a"),
+    ]
+
+    /// #1242 (QA 998 R1238b-1): every host function a retired call may still make, as a literal: a function moved
+    /// into ExtensionHost.retiredReads (or out of it) fails testEveryHostFunctionIsClassed until it is named here.
+    private static let reads: Set<String> = [
+        "__h_clip_read", "__h_clip_history", "__h_proc_refusal", "__h_window_frame", "__h_time", "__h_date",
+        "__h_sleep", "__h_pref_get", "__h_perms_has", "__h_json_decode", "__h_json_encode", "__h_fs_list_dirs",
+        "__h_apps_search", "__h_snippets_all", "__h_snippets_get", "__h_snippets_expand", "__h_snippets_phone",
+        "__h_snippets_replacements", "__h_snippets_config", "__h_snippets_collections", "__h_snippets_ignored",
+        "__h_quicklinks_all", "__h_files_search", "__h_timer_scheduled", "__h_log", "__h_env_get",
+        "__h_battery_source", "__h_battery_pct", "__h_network_reachable", "__h_network_addresses",
+        "__h_screen_all", "__h_screen_lid", "__h_dch_sessions", "__h_ccpool_status", "__h_app_frontmost",
+        "__h_app_windows", "__h_kbd_current", "__h_kbd_layouts", "__h_url_default", "__h_fs_exists",
+        "__h_fs_attrs", "__h_fallback_list", "__h_fallback_mode_get", "__h_fs_read", "__h_menus_list",
     ]
 
     /// The releasing host functions (A2): a retired call's release after a revive would drop the live take.
@@ -124,6 +139,8 @@ final class ExtensionRetiredCallTests: XCTestCase {
     /// production table matches the literal list above (a function added later fails here until it is classed).
     func testEveryHostFunctionIsClassed() throws {
         XCTAssertEqual(Set(ExtensionHost.retiredRefusals.keys), Set(Self.gated.keys))
+        XCTAssertEqual(ExtensionHost.retiredReads, Self.reads, "the read set moved")
+        XCTAssertEqual(Self.reads.count, 45)
         XCTAssertTrue(ExtensionHost.retiredReads.isDisjoint(with: Self.gated.keys), "a function is both read and refused")
         XCTAssertTrue(Set(Self.releases).isSubset(of: Self.gated.keys), "a releasing function is not refused")
         for (privileged, trusted) in [(true, true), (false, true), (false, false)] {
@@ -151,5 +168,37 @@ final class ExtensionRetiredCallTests: XCTestCase {
         let (lua, _) = try installed(svc, current: true)
         XCTAssertEqual(try call(lua, "__h_pref_set"), "nil")
         XCTAssertEqual(svc.acted, ["prefSet"])
+    }
+
+    /// #1242 (N1238-c): a retired call starts no model job (CoreBridge keeps one job slot per kind and a new job
+    /// cancels the live caller's); a current call still reaches each llm service.
+    func testRetiredCallStartsNoModelJob() throws {
+        let retired = RetiredCallRecorder()
+        let (old, _) = try installed(retired, current: false)
+        for name in ["__h_llm_complete", "__h_llm_translate", "__h_llm_chat"] {
+            XCTAssertEqual(try call(old, name), "", name)
+        }
+        XCTAssertEqual(retired.acted, [], "a retired call started a model job")
+        let live = RetiredCallRecorder()
+        let (lua, _) = try installed(live, current: true)
+        for name in ["__h_llm_complete", "__h_llm_translate", "__h_llm_chat"] { _ = try call(lua, name) }
+        XCTAssertEqual(live.acted, ["llmComplete", "llmTranslate", "llmChat"])
+    }
+
+    /// #1242 (item 4): a teardown's resetResources asks the event tap to re-probe, so a switched-off extension stops
+    /// being its active id. Only the recorder seam sees it: the shared EventTapHost's registry stays nil (no probe,
+    /// no VM, no tap), the id holds no lid flag or assertion (no helper call), and the defaults are a scratch suite.
+    @MainActor
+    func testResetResourcesRefreshesTheEventTap() async {
+        let tap = EventTapHost.shared
+        XCTAssertTrue(tap.registry == nil, "a row left a registry on the shared EventTapHost")
+        let seen = expectation(description: "refresh requested")
+        var ids: [String] = []
+        tap.onRefreshRequest = { ids.append($0); seen.fulfill() }
+        defer { tap.onRefreshRequest = nil }
+        LiveExtensionHostServices(defaults: scratchDefaults("retiredtap")).resetResources(extensionID: "com.test.tapreset")
+        await fulfillment(of: [seen], timeout: 5)
+        XCTAssertEqual(ids, ["com.test.tapreset"])
+        XCTAssertFalse(tap.isActive)
     }
 }

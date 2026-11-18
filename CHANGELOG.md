@@ -1872,6 +1872,10 @@ tag from the now-released section and put it on the new top draft.
 - Shell commands (`> cmd` and extensions' host.shell.run) no longer hang when they leave a
   background process running, and endless output such as `> yes` now stops after 256 MiB instead of
   running forever. (#1026)
+- Extensions: a background call still running when its extension is turned off, untrusted or reset
+  no longer starts an AI job (which could cancel one you started), the event-tap hook lets go of a
+  turned-off extension at once, and host.process kill gives a correct message for such a call.
+  (#1242)
 
 ## v2.174.0
 

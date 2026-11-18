@@ -410,6 +410,8 @@ Side-effecting host calls form two tiers above the open reads:
 
 For an **untrusted, non-system** extension every side-effecting call is an inert no-op (a refused `host.shell` returns `"error: host.shell is restricted to system extensions"`). A bare untrusted extension never executes at all. Gating logic: `automation = privileged || trusted` in [`ExtensionHostAPI.swift`](app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift).
 
+A background call still running when its extension is turned off, untrusted, reset, reinstalled or removed can still read private data (the clipboard, files), but every outward channel (writes, commands, network, UI, holds and the `host.llm` functions) answers it with its usual decline value and does nothing; only `host.log` is left, as for a live call (`retiredReads` and `retiredRefusals` in [`ExtensionHostAPI.swift`](app/Sources/ProsperApp/Extensions/ExtensionHostAPI.swift)).
+
 > ⚠️ **Trusting a config is not a full sandbox.** `host.osascript` is in the automation tier and AppleScript can `do shell script`, so a trusted config can run shell indirectly. Only trust configs you have read end-to-end. Granting System Access lets a trusted config run **any command as you** — a deliberate escalation; default is off.
 
 ### Automation calls

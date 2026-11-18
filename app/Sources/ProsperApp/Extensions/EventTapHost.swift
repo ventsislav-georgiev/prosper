@@ -52,10 +52,15 @@ final class EventTapHost {
     /// callback ever needs more headroom than this.
     nonisolated static let dispatchInstructionBudget: Int32 = 500_000
 
+    /// #1242: tests only: sees each refreshIfDeclares request first (the rows leave `registry` nil, so no probe runs).
+    var onRefreshRequest: ((String) -> Void)?
+
     /// Re-probe after an extension (re)installs its key rules — the moment its
     /// config (and thus its eventtap set) may have changed: launch, enable, disable,
-    /// reload. Cheap no-op unless the extension opted in. Called from keysSetRules.
+    /// reload. Cheap no-op unless the extension opted in. Called from keysSetRules and,
+    /// #1242, from resetResources (a teardown: disable, untrust, reset), so the tap drops a switched-off extension.
     func refreshIfDeclares(extensionID: String) {
+        onRefreshRequest?(extensionID)
         guard registry?.manifestDeclaresEventTaps(extensionID) == true else { return }
         refresh()
     }

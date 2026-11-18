@@ -977,6 +977,8 @@ final class LiveExtensionHostServices: ExtensionHostServices, @unchecked Sendabl
         Task { @MainActor in
             ExtensionMenuBar.shared.removeAll(extensionID: extensionID)
             ExtensionKeyRules.shared.removeRules(extensionID: extensionID)
+            // #1242: after the teardown returned (the record is off, or rebuilt by a reset), so the probe sees it.
+            EventTapHost.shared.refreshIfDeclares(extensionID: extensionID)
             ExtensionFSWatch.shared.removeAll(extensionID: extensionID)
         }
     }
