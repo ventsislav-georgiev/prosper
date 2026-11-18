@@ -1432,19 +1432,20 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
-- Ships dch 1.106.0 (was 1.74.0). An X-ray excerpt no longer starts on a lone accent mark where a
-  sentence is cut, and the X-ray card groups another session's mentions by that session even after
-  it is renamed. X-ray's full reference search keeps the newest mentions on very large transcripts,
-  a capped search keeps every whole turn, a quick search's time budget also ends a slow folder
-  lookup, and the X-ray view keeps more of a prompt's title on narrow terminals when an agent's name
-  is long; X-ray Refs also list the terms a session keeps coming back to, no longer counting code in
-  backticks or file names such as README.md as terms, and a mention in a tool's output names the
-  tool. (#1327) Resume under a new name also renames the Claude session, a session started while the
-  system is out of terminals retries for up to 2 s instead of failing at once, and a reference
-  lookup in a light shell keeps the definition of an older block. X-ray can define a reference with
-  a command of your own (dch's define_command setting), the X-ray view hides messages other agents
-  sent to a session until you press a (and remembers that choice), and stopping and resuming a
-  terminal job no longer leaves the X-ray view frozen. (#1348)
+- Ships dch 1.108.0 (was 1.74.0). An X-ray excerpt no longer starts on a lone accent mark or splits
+  a flag where a sentence is cut, the X-ray card counts emoji such as ❤️ and keycaps as two columns,
+  and the X-ray card groups another session's mentions by that session even after it is renamed.
+  X-ray's full reference search keeps the newest mentions on very large transcripts, a capped search
+  keeps every whole turn, a quick search's time budget also ends a slow folder lookup, and the X-ray
+  view keeps more of a prompt's title on narrow terminals when an agent's name is long; X-ray Refs
+  also list the terms a session keeps coming back to, no longer counting code in backticks or file
+  names such as README.md as terms, and a mention in a tool's output names the tool. (#1327) Resume
+  under a new name also renames the Claude session, a session started while the system is out of
+  terminals retries for up to 2 s instead of failing at once, and a reference lookup in a light
+  shell keeps the definition of an older block. X-ray can define a reference with a command of your
+  own (dch's define_command setting), the X-ray view hides messages other agents sent to a session
+  until you press a (and remembers that choice), and stopping and resuming a terminal job no longer
+  leaves the X-ray view frozen. (#1348)
 - Renaming an account in the account pool now renames its Keychain item too, so Keychain Access
   shows the new name. (#1326)
 - Agent Island: Kill all during a Stop all or Restart all started from the phone now still writes
