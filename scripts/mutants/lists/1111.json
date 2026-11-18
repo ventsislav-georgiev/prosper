@@ -10,10 +10,10 @@
    "expect": "killed"
   },
   {
-   "name": "member-not-swallowed-under-form",
+   "name": "member-swallowed-under-form",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "case .session, .jump, .member, .find,",
-   "new": "case .session, .jump, .find,",
+   "old": "case .member: return form ? .pass : r",
+   "new": "case .member: return form ? .swallow : r",
    "expect": "killed"
   },
   {
