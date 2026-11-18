@@ -251,12 +251,16 @@ final class ExtensionFSWatchTests: XCTestCase {
         counter.done.assertForOverFulfill = false
         var ctx = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(counter).toOpaque(),
                                        retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, count, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, _ in
             guard let info else { return }
             let c = Unmanaged<FSW983Counter>.fromOpaque(info).takeUnretainedValue()
             c.callbacks += 1
             c.paths += count
-            if c.paths >= 5_000 { c.done.fulfill() }
+            // #1449: events arrive in id order, so the last file's path means the burst is all delivered (CI drops
+            // most paths and never reaches 5000: the 30 s wait ran out on every run).
+            let list = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as NSArray
+            if list.contains(where: { ($0 as? String)?.hasSuffix("/m4999.txt") == true }) { c.lastSeen = true }
+            if c.paths >= 5_000 || c.lastSeen { c.done.fulfill() }
         }
         let stream = try XCTUnwrap(FSEventStreamCreate(kCFAllocatorDefault, callback, &ctx, [dir] as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow), ExtensionFSWatch.latency, ExtensionFSWatch.streamFlags))
@@ -273,7 +277,8 @@ final class ExtensionFSWatchTests: XCTestCase {
         settle.isInverted = true
         _ = XCTWaiter().wait(for: [settle], timeout: ExtensionFSWatch.latency * 3)
         let upper = (dir as NSString).deletingLastPathComponent + "/" + (dir as NSString).lastPathComponent.uppercased()
-        print("FSW983 MEASURE: 5000 files -> \(counter.callbacks) FSEvents callbacks, \(counter.paths) event paths;"
+        print("FSW983 MEASURE: 5000 files -> \(counter.callbacks) FSEvents callbacks, \(counter.paths) event paths,"
+              + " last file seen: \(counter.lastSeen);"
               + " coalesced watch: \(runs) handler runs, \(listed) listed paths, more=\(more);"
               + " case variant resolves to \(SecretPaths.canonical(upper) == SecretPaths.canonical(dir) ? "the same" : "a different") key")
     }
@@ -352,7 +357,7 @@ final class ExtensionFSWatchTests: XCTestCase {
 
 /// #983 measurement: a raw FSEvents stream's callbacks and paths, touched only on the main queue.
 private final class FSW983Counter: @unchecked Sendable {
-    var callbacks = 0, paths = 0
+    var callbacks = 0, paths = 0, lastSeen = false
     let done: XCTestExpectation
     init(_ done: XCTestExpectation) { self.done = done }
 }
