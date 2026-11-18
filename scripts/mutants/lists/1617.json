@@ -1,0 +1,20 @@
+{
+ "entry": 1617,
+ "filter": "AgentWindowLayoutEditTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "split-no-edit",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }",
+   "new": "if false, case .split = a { layoutEditing = true }",
+   "expect": "killed"
+  },
+  {
+   "name": "split-edit-after-adopt",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }\n            adopt(l)",
+   "new": "adopt(l)\n            if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }",
+   "expect": "killed"
+  }
+ ]
+}
