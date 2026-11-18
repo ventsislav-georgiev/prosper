@@ -408,10 +408,30 @@ struct KitStore: Sendable {
     /// kits/<ext-id> and its dirs, mode 0700: a wider one is narrowed, a link or a file in a dir's place is refused.
     /// prosper/ and kits/ are created when missing, never re-moded (a link there is refused all the same).
     func ensureLayout() throws {
+        try Self.ensureConfigHome(layout.configHome)
         try fs.ensureDir(layout.prosper, narrow: false)
         try fs.ensureDir(layout.kits, narrow: false)
         try fs.ensureDir(layout.root, narrow: true)
         for d in layout.dirs { try fs.ensureDir(d, narrow: true) }
+    }
+
+    /// #1593: <configHome> (XDG ~/.config) is the person's own dir and is absent on a fresh Mac: made 0755 when missing
+    /// (one level; an inherited ACL dropped, as ensureDir does for the dirs it makes), never re-moded when there. A link
+    /// to a dir (a dotfile manager's ~/.config) is followed, as before #1593; a file or anything else in its place is
+    /// .notADirectory(configHome). The O_NOFOLLOW checks of prosper/ and below are ensureDir's, unchanged.
+    static func ensureConfigHome(_ path: String) throws {
+        if mkdir(path, 0o755) == 0 {
+            let fd = Darwin.open(path, dirFlags)
+            guard fd >= 0 else { throw KitStoreError.io("open", errno) }
+            defer { _ = close(fd) }
+            try dropACL(fd)
+            if fchmod(fd, 0o755) != 0 { throw KitStoreError.io("chmod", errno) } // exactly 0755, whatever the umask
+            return
+        }
+        guard errno == EEXIST else { throw KitStoreError.io("mkdir", errno) }
+        var st = stat()
+        // fstatat without AT_SYMLINK_NOFOLLOW (stat, not lstat): a link is followed to what it names
+        guard fstatat(AT_FDCWD, path, &st, 0) == 0, st.st_mode & S_IFMT == S_IFDIR else { throw KitStoreError.notADirectory(path) }
     }
 
     /// readdir through the stream seam; a read error part-way is nil, never a short list.
@@ -904,6 +924,7 @@ struct KitStore: Sendable {
     /// mode differ. kit-runtime/ is made 0700. Returns whether it wrote.
     @discardableResult
     func installRunner() throws -> Bool {
+        try Self.ensureConfigHome(layout.configHome)
         try fs.ensureDir(layout.prosper, narrow: false)
         try fs.ensureDir(layout.kitRuntime, narrow: true)
         let dir = try fs.openDir(layout.kitRuntime)

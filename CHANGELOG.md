@@ -1977,6 +1977,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions rows and the Agent Island cards show how many shells a Claude session is running
   (beside the sub-agents count); hover the count to see the commands grouped by who started them,
   and turn it off under Row details > Shells. (#1558, #1583)
+- Installing a kit on a Mac that has no ~/.config folder yet no longer fails with a "mkdir" error:
+  Prosper now creates ~/.config first (and still works when ~/.config is a link from a dotfile
+  manager). (#1593)
 
 ## v2.174.0
 

@@ -295,6 +295,79 @@ final class KitStoreTests: XCTestCase {
         XCTAssertEqual(KitPOSIXFS().kind(elsewhere.path), .directory)
     }
 
+    // MARK: #1593: <configHome> (~/.config) itself
+
+    /// A fresh Mac has no ~/.config: the first install makes it, 0755, and stages under it; the runner's path makes it too.
+    func testFirstInstallMakesAMissingConfigHome() throws {
+        let root = tempDir()
+        let f = try makeKitDir(under: root, label: #function)
+        let store = try KitStore(configHome: root.appendingPathComponent("config", isDirectory: true), extID: Self.ext)
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.configHome), .missing)
+        let staged = try stage(store, f.kit)
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.configHome), .directory)
+        XCTAssertEqual(mode(store.layout.configHome), 0o755)
+        XCTAssertEqual(mode(store.layout.prosper), 0o700)
+        XCTAssertEqual(KitPOSIXFS().kind(staged.path), .directory)
+        let other = try KitStore(configHome: root.appendingPathComponent("config2", isDirectory: true), extID: Self.ext)
+        XCTAssertTrue(try other.installRunner())
+        XCTAssertEqual(mode(other.layout.configHome), 0o755)
+        XCTAssertEqual(KitPOSIXFS().kind(other.layout.runner), .file(mode: UInt16(KitStore.shimMode), size: Int64(KitRunner.script.utf8.count)))
+        // an existing one is never re-moded
+        try FileManager.default.setAttributes([.posixPermissions: 0o750], ofItemAtPath: other.layout.configHome)
+        try other.ensureLayout()
+        XCTAssertEqual(mode(other.layout.configHome), 0o750)
+    }
+
+    /// A dotfile manager's ~/.config is a link to a dir: followed as before #1593 (prosper/ lands in the target, the
+    /// link stays a link, the target keeps its mode); a link in place of prosper/ is still refused.
+    func testSymlinkedConfigHomeIsFollowedAsBefore() throws {
+        let root = tempDir()
+        let f = try makeKitDir(under: root, label: #function)
+        let target = root.appendingPathComponent("dotfiles/config", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o751], ofItemAtPath: target.path)
+        let home = root.appendingPathComponent("config", isDirectory: true)
+        try FileManager.default.createSymbolicLink(atPath: home.path, withDestinationPath: target.path)
+        let store = try KitStore(configHome: home, extID: Self.ext)
+        _ = try stage(store, f.kit)
+        XCTAssertTrue(try store.installRunner())
+        XCTAssertEqual(KitPOSIXFS().kind(store.layout.configHome), .symlink)
+        XCTAssertEqual(mode(target.path), 0o751)
+        XCTAssertEqual(list(target.path), ["prosper"])
+        XCTAssertEqual(list(target.path + "/prosper"), ["kit-runtime", "kits"])
+        // the O_NOFOLLOW check of prosper/ stays: a link there is refused, its target untouched
+        let elsewhere = root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+        let bare = root.appendingPathComponent("config3", isDirectory: true)
+        try FileManager.default.createDirectory(at: bare, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: bare.path + "/prosper", withDestinationPath: elsewhere.path)
+        let linked = try KitStore(configHome: bare, extID: Self.ext)
+        // O_DIRECTORY | O_NOFOLLOW on a link: ENOTDIR here, ELOOP elsewhere; both are the refusal (as testLayoutRefusesALinkInPlaceOfTheKitDir)
+        XCTAssertThrowsError(try linked.ensureLayout()) { e in
+            XCTAssertTrue((e as? KitStoreError).map { [KitStoreError.link(linked.layout.prosper), .notADirectory(linked.layout.prosper)].contains($0) } ?? false, "\(e)")
+        }
+        XCTAssertEqual(KitPOSIXFS().kind(linked.layout.prosper), .symlink)
+        XCTAssertEqual(list(elsewhere.path), [])
+    }
+
+    /// A file (or a link to nothing) in ~/.config's place: .notADirectory(configHome), nothing written, the file kept.
+    func testConfigHomeThatIsAFileIsNotADirectory() throws {
+        let root = tempDir()
+        let f = try makeKitDir(under: root, label: #function)
+        let home = root.appendingPathComponent("config", isDirectory: false)
+        try Data("x".utf8).write(to: home)
+        let store = try KitStore(configHome: home, extID: Self.ext)
+        let refused: (Error) -> Void = { XCTAssertEqual($0 as? KitStoreError, .notADirectory(store.layout.configHome)) }
+        XCTAssertThrowsError(try stage(store, f.kit), "stage", refused)
+        XCTAssertThrowsError(try store.installRunner(), "runner", refused)
+        XCTAssertEqual(try Data(contentsOf: home), Data("x".utf8))
+        let dangling = root.appendingPathComponent("config-dangling", isDirectory: true)
+        try FileManager.default.createSymbolicLink(atPath: dangling.path, withDestinationPath: root.path + "/gone")
+        let store2 = try KitStore(configHome: dangling, extID: Self.ext)
+        XCTAssertThrowsError(try store2.ensureLayout()) { XCTAssertEqual($0 as? KitStoreError, .notADirectory(store2.layout.configHome)) }
+        XCTAssertEqual(KitPOSIXFS().kind(root.path + "/gone"), .missing)
+    }
+
     // MARK: S5b-1: directory-relative walks (R917-s5a-q1), write n == 0 (R917-s5a-n1), swap, sweep
 
     /// A canary dir OUTSIDE the store and the source: b/file with known bytes.
