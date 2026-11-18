@@ -190,11 +190,13 @@ extension AgentWindowD1Tests {
             XrayPanels.shared.open[pane] = XrayPanelModel(target: try XCTUnwrap(XrayTarget.of(row)), tab: .tasks)
             XCTAssertEqual(button()?.selected, true, "open: selected")
             XCTAssertEqual(button()?.enabled, true)
+            XCTAssertEqual(button()?.value, "", "on: no value (s1)")
         }
         try xrayButtonSeams(nil) { _ in
             let b = button()
             XCTAssertEqual(b?.enabled, false, "no dch: off")
             XCTAssertEqual(b?.help, AgentXrayButton.noDch, "the tooltip says why")
+            XCTAssertEqual(b?.value, AgentXrayButton.noDch, "s1: the reason reaches AXValue, not only AXHelp")
         }
         try xrayButtonSeams([1, 77, 0]) { _ in
             XCTAssertEqual(button()?.enabled, false, "below X-ray's dch: off")
@@ -204,6 +206,49 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(AgentXrayButton.offReason(nil), AgentXrayButton.noSession, "no session")
             XCTAssertNil(AgentXrayButton.offReason(XrayTarget.of(row)))
         }
+    }
+
+    /// #1476 b m1. Red without the publish in XrayPanels.publish (warm's MainActor Task calls it): the header is drawn
+    /// with no probe yet (off, "needs dch"), the probe lands, and the same hosted header re-reads enabled with the
+    /// tooltip "X-ray (shift-command-X)" because XrayPanels.shared published. Mutant probe-not-published.
+    @MainActor
+    func testXrayButtonTurnsOnWhenTheProbeLandsAfterTheFirstDraw() throws {
+        _ = ThemeStore.shared   // #1510
+        let saved = ThemeRuntime.scale, probe = XrayPanels.probed
+        defer { ThemeRuntime.scale = saved; XrayPanels.probed = probe }
+        ThemeRuntime.scale = 1.0
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
+        let s = session("api", .idle)
+        let m = windowModel(store([s]))
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(s.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        XrayPanels.probed = nil
+        let size = CGSize(width: 500, height: AgentCompactHeader.height)
+        let header = AgentCompactHeader.of(row, s, cwd: nil, ended: false, store: nil, ask: { _ in }, open: {},
+                                           xrayPane: m.layout.focused)
+        let host = NSHostingView(rootView: header.frame(width: size.width, height: size.height, alignment: .top))
+        host.frame = CGRect(origin: .zero, size: size)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        defer { win.contentView = nil; win.close() }
+        win.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func button(until done: @escaping (AXTreeNode) -> Bool) -> AXTreeNode? {
+            AXTreeSupport.poll(host) { $0.contains { $0.named(AgentXrayButton.label) && done($0) } }
+                .first { $0.named(AgentXrayButton.label) && !$0.ignored }
+        }
+        let first = button { _ in true }
+        XCTAssertEqual(first?.enabled, false, "no probe yet: off")
+        XCTAssertEqual(first?.help, AgentXrayButton.noDch)
+        XrayPanels.publish(DchCommand.Binary(path: "/fake/dch", version: [1, 93, 0]))   // what warm's Task does
+        let now = button { $0.enabled }
+        XCTAssertEqual(now?.enabled, true, "the probe landed: the same header turns on")
+        XCTAssertEqual(now?.help, AgentXrayButton.help, "X-ray (\u{21E7}\u{2318}X)")
+        XCTAssertEqual(now?.value, "", "on: no AXValue")
+        XCTAssertFalse(win.isVisible, "never on screen")
     }
 
     /// Red at base (no button). The compact header keeps every slot: the title, the X-ray button and the "..." sit at the

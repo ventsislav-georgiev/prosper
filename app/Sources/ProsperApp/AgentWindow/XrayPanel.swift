@@ -163,13 +163,19 @@ final class XrayPanels: ObservableObject {
     /// The bundled (else installed) dch's version, probed off main by `warm`; nil until then and under XCTest.
     static var probed: DchCommand.Binary?   // internal: rows set it (#1443)
 
+    /// #1476 b: sets `probed` and tells the views that read the gate (the header X-ray buttons drew off before it).
+    @MainActor static func publish(_ b: DchCommand.Binary?) {
+        probed = b
+        shared.objectWillChange.send()
+    }
+
     /// shortcut: probed once per window open, so a dch upgrade shows on the next open; re-probe per toggle if needed.
     static func warm() {
         guard NSClassFromString("XCTestCase") == nil else { return }
         DispatchQueue.global(qos: .utility).async {
             let path = DchCommand.dchPath
             let b = DchCommand.probedVersion(path).map { DchCommand.Binary(path: path, version: $0) }
-            Task { @MainActor in probed = b }
+            Task { @MainActor in publish(b) }
         }
     }
 }

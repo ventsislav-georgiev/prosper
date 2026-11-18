@@ -1984,6 +1984,7 @@ struct AgentXrayButton: View {
         .disabled(off != nil).opacity(off == nil ? 1 : 0.45)
         .help(off ?? Self.help)
         .accessibilityLabel(Self.label)
+        .accessibilityValue(off ?? "")
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
