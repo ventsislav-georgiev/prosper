@@ -852,10 +852,12 @@ final class TextViewerWindowTests: XCTestCase {
         }
     }
 
-    /// The brief: Read is on the left and is the only mode; Edit is drawn, disabled, until P3.
+    /// The brief: Read is on the left; Edit is drawn, disabled, until P3, unless #1109's Terminal setting turns it on.
     func testReadIsLeftAndEditIsOff() {
-        XCTAssertEqual(TextViewerModeSwitch.segments,
+        XCTAssertEqual(TextViewerModeSwitch.segments(canEdit: false),
                        [.init(title: "Read", enabled: true), .init(title: "Edit", enabled: false)])
+        XCTAssertEqual(TextViewerModeSwitch.segments(canEdit: true),
+                       [.init(title: "Read", enabled: true), .init(title: "Edit", enabled: true)])
     }
 
     private func key(_ chars: String, _ mods: NSEvent.ModifierFlags, code: UInt16) throws -> NSEvent {
@@ -872,7 +874,7 @@ final class TextViewerWindowTests: XCTestCase {
         XCTAssertEqual(TextViewerNSWindow.route(try key("g", .command, code: 5)), R.find(.nextMatch))
         XCTAssertEqual(TextViewerNSWindow.route(try key("G", [.command, .shift], code: 5)), R.find(.previousMatch))
         XCTAssertEqual(TextViewerNSWindow.route(try key("e", .command, code: 14)), R.useSelectionForFind)
-        XCTAssertEqual(TextViewerNSWindow.route(try key("t", .command, code: 17)), R.pass, "no Edit until P3")
+        XCTAssertEqual(TextViewerNSWindow.route(try key("t", .command, code: 17)), R.toggleMode, "#1109: Read | Edit (passed on while Edit is off)")
         XCTAssertEqual(TextViewerNSWindow.route(try key("c", .command, code: 8)), R.pass, "⌘C is the Edit menu's")
         XCTAssertEqual(TextViewerNSWindow.route(try key("w", [], code: 13)), R.pass)
         // R1118-4: ⌘W with Command alone; ⇧⌘W and ⌥⌘W are not this window's close.

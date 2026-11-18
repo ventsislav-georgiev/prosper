@@ -460,6 +460,9 @@ enum Preferences {
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
         static let agentWindowClipboardWrites = "agentWindowClipboardWrites"
+        // #1109 (R7): Settings › Text Viewer's Edit with and editor command; per Mac, not in SyncedKeys, written only by TextViewerPane.
+        static let textViewerEditWith = "textViewerEditWith"
+        static let textViewerEditorCommand = "textViewerEditorCommand"
         // #895: the Agent Sessions terminal's text size in points (Command-plus, Command-minus, Command-0); per Mac, not in SyncedKeys.
         static let agentWindowTerminalFontSize = "agentWindowTerminalFontSize"
         // #847: the folder the window's last new session started in (expanded path); per Mac, not in SyncedKeys.
@@ -1417,6 +1420,22 @@ enum Preferences {
         set {
             if let newValue { defaults.set(newValue, forKey: Keys.xrayDrawerWidth) }
             else { defaults.removeObject(forKey: Keys.xrayDrawerWidth) }
+        }
+    }
+
+    /// #1109: "builtin" (the default, also for any other value) or "terminal".
+    static let textViewerEditWithTerminal = "terminal"
+    static var textViewerEditWith: String {
+        get { defaults.string(forKey: Keys.textViewerEditWith) ?? "builtin" }
+        set { defaults.set(newValue, forKey: Keys.textViewerEditWith) }
+    }
+
+    /// #1109: the terminal editor's command, run as a program (R7: as trusted as the shell profile); "" = detected.
+    static var textViewerEditorCommand: String {
+        get { defaults.string(forKey: Keys.textViewerEditorCommand) ?? "" }
+        set {
+            let t = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { defaults.removeObject(forKey: Keys.textViewerEditorCommand) } else { defaults.set(t, forKey: Keys.textViewerEditorCommand) }
         }
     }
 

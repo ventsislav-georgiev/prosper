@@ -1815,6 +1815,11 @@ tag from the now-released section and put it on the new top draft.
 - Turning off the Calculator, Units or Currency extension now stops its answers in the launcher, and
   turning off OpenLid also turns off Remote Wake (it comes back with your saved setting when OpenLid
   is turned on again). (#1072)
+- Text Viewer: Edit can now open the file in your own terminal editor (such as nvim) inside the
+  window, through dch. Choose "Terminal editor (dch)" under Settings › Text Viewer › Edit with; the
+  editor comes from your login shell's VISUAL or EDITOR, or the command you type there. Quitting the
+  editor returns to Read with the file reloaded, and closing the window ends the editor session.
+  (#1109)
 
 ## v2.174.0
 

@@ -244,7 +244,9 @@ enum AgentIsland {
         guard !p.isEmpty else { return (list, []) }
         let texts = list.map(sidekickTexts)
         var hits = sidekickFind(p, in: texts.flatMap { $0 }).hits[...]
+        // #1109 R9: an editor session is never a sidekick, whatever its file's name.
         let tagged = zip(list, texts.map { t in defer { hits = hits.dropFirst(t.count) }; return hits.prefix(t.count).contains(true) })
+            .map { ($0.0, $0.1 && !TerminalEditor.isEditSession($0.0.key.name)) }
         return (tagged.filter { !$0.1 }.map(\.0), tagged.filter(\.1).map(\.0))
     }
 
@@ -777,13 +779,17 @@ enum AgentIsland {
                 rows = DchCommand.parseListTSV(String(decoding: tsv, as: UTF8.self))
             }
             return rows.map { row -> AgentSession in
+                // #1109 R9: a Text Viewer editor session shows an untrusted file's bytes: never Needs input (idle on the
+                // island and to the phone) and never a Claude Code (#935's auto-allow test reads claudeSessionID).
+                let edit = TerminalEditor.isEditSession(row.name)
                 let s = AgentSession(key: AgentSessionKey(dir: dir, name: row.name), alias: row.alias,
-                             activity: TimeInterval(row.activityEpoch), state: AgentState(dch: row.state),
+                             activity: TimeInterval(row.activityEpoch), state: edit ? .idle : AgentState(dch: row.state),
                              agents: row.agents, meta: row.meta, version: row.version, metaEpoch: row.metaEpoch,
                              autoAllowed: row.autoAllowed,
-                             claudeSessionID: mapping[row.name]?.sessionID, transcriptPath: mapping[row.name]?.path,
+                             claudeSessionID: edit ? nil : mapping[row.name]?.sessionID,
+                             transcriptPath: edit ? nil : mapping[row.name]?.path,
                              claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
-                             wireState: row.state)
+                             wireState: edit ? "idle" : row.state)
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }

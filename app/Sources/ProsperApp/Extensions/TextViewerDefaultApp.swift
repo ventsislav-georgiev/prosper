@@ -96,9 +96,9 @@ struct TextViewerDefaultAppSection: View {
     static let buttonTitle = "Make Prosper the Default"
     static let explanation = "Nothing changes until you click the button. Then .txt, .md and .markdown files open in Prosper when you double-click them. Other plain-text files that have no app of their own, such as some .log, .csv, script or source files, may open in Prosper too. macOS may ask you to confirm. To change it back, select a file in Finder, choose File \u{203A} Get Info, pick an app under Open With and click Change All. If you turn the Text Viewer off, these files still open in Prosper, which then only shows a notice."
 
-    /// The page footer ExtensionSettingsPane adds for the Text Viewer, and only for it.
+    /// The page footer ExtensionSettingsPane adds for the Text Viewer, and only for it. #1109: then its Editing section.
     static func footer(forExtension id: String) -> AnyView? {
-        id == TextViewerDefaultApp.extensionID ? AnyView(TextViewerDefaultAppSection()) : nil
+        id == TextViewerDefaultApp.extensionID ? AnyView(Group { TextViewerDefaultAppSection(); TextViewerPane() }) : nil
     }
 
     /// What VoiceOver reads for one type's line.

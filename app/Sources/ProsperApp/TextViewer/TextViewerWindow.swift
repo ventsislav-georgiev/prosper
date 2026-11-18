@@ -188,6 +188,75 @@ final class TextViewerModel: ObservableObject {
     }
 
     func openInDefaultApp() { if let app = defaultApp { actions.openWith(url, app) } }
+
+    // MARK: #1109 (D13): Edit in a terminal
+
+    enum Mode: Equatable { case read, terminal }
+    /// Never persisted: a window always opens in Read.
+    @Published private(set) var mode = Mode.read
+    /// The editor session this window started; kept after Read (it lives on) so the window's close ends it (OQ-118 Q3).
+    @Published private(set) var terminal: TextViewerTerminalEdit?
+    var editor = TerminalEditorSeams.current
+    /// The plan of the Edit in flight (the login shell and dch are asked off main); a row awaits it.
+    private(set) var planning: Task<Void, Never>?
+    private var closed = false
+
+    /// Edit is on with Settings › Text Viewer › Edit with set to Terminal (the built-in editor is P3's).
+    var canEdit: Bool { editor.settings().terminal }
+
+    /// The Edit button or ⌘T: only here are the login shell and dch asked, and only for a file shown as text.
+    func edit() {
+        let settings = editor.settings()
+        guard settings.terminal, mode == .read, planning == nil, !closed, document?.readOnly == false else { return }
+        let path = resolved.path, io = editor.io, cache = editor.cache
+        planning = Task { [weak self] in
+            let plan = await Task.detached(priority: .userInitiated) {
+                TerminalEditor.plan(command: settings.command, path: path, io: io, cache: cache)
+            }.value
+            self?.planned(plan)
+        }
+    }
+
+    private func planned(_ plan: TerminalEditor.Plan) {
+        planning = nil
+        guard !closed, mode == .read else { return }   // closed meanwhile: nothing starts for a gone window
+        switch plan {
+        case .refused(let why): say(why)
+        case .spawn(let spawn):
+            terminal?.controller.detach()
+            terminal = TextViewerTerminalEdit(spawn, controller: editor.makeController()) { [weak self] in self?.editorEnded() }
+            mode = .terminal
+        }
+    }
+
+    /// Read while the editor runs: the client detaches, the session lives on, the disk is shown.
+    func showRead() {
+        guard mode == .terminal else { return }
+        terminal?.controller.detach()
+        mode = .read
+        reload()
+    }
+
+    /// ⌘T.
+    func toggleMode() { mode == .read ? edit() : showRead() }
+
+    /// The editor quit (the controller's `.ended`): back to Read with the file read again.
+    private func editorEnded() {
+        guard let t = terminal, t.controller.phase == .ended else { return }
+        terminal = nil
+        mode = .read
+        reload()
+    }
+
+    /// The window closed: its client goes, and OQ-118 Q3: its editor session ends too. An Edit in flight starts nothing.
+    func closeTerminal() {
+        closed = true
+        planning?.cancel()
+        guard let t = terminal else { return }
+        terminal = nil
+        t.controller.detach()
+        editor.end(t.spawn)
+    }
     func reveal() { actions.reveal(url) }
 
     /// D15 (#1107): what the last Screenshot did, shown under the header for 5 s.
@@ -205,7 +274,12 @@ final class TextViewerModel: ObservableObject {
         guard let text = output?.text, let view = textView, let column = view.textContainer?.size.width else { return }
         let said = DocumentImage.copy(text, column: column, appearance: view.effectiveAppearance, background: DocumentImage.surface,
                                       backing: view.window?.backingScaleFactor ?? 1, to: Pasteboard.general)
-        notice = said
+        say(said)
+    }
+
+    /// Shows `text` under the header for 5 s (a newer notice is left in place, even when it says the same).
+    func say(_ text: String) {
+        notice = text
         noticeGeneration += 1
         let generation = noticeGeneration
         // Runs on the main actor; a newer screenshot's notice is left in place, even when it says the same.
@@ -246,6 +320,8 @@ final class TextViewerWindows {
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
     var actions: () -> TextViewerActions = { .live }
     var imageLoader: TextViewerImageLoader = ImagePolicy.load
+    /// #1109: the terminal editor's seams for each new window.
+    var editorSeams: () -> TerminalEditorSeams = { .current }
     /// R896-1: a path on an automount or network location is looked at a bounded number of times (FileWatcher.remote).
     /// The live check reads the mount table only (FileWatcher.onAutomountOrNetwork); rows inject one.
     var isRemote: (URL) -> Bool = { FileWatcher.onAutomountOrNetwork($0.path) }
@@ -262,6 +338,7 @@ final class TextViewerWindows {
         }) { return present(open.window) }
 
         let model = TextViewerModel(url: url, resolved: resolved, actions: actions(), imageLoader: imageLoader)
+        model.editor = editorSeams()
         let win = build(model)
         if let last = entries.last?.window {   // cascade from the newest window
             win.setFrameTopLeftPoint(NSPoint(x: last.frame.minX + sz(24), y: last.frame.maxY - sz(24)))
@@ -333,6 +410,7 @@ final class TextViewerWindows {
         if let o = entry.observer { NotificationCenter.default.removeObserver(o) }
         entry.observer = nil
         entry.model.onFirstLoad = nil   // a load still on its way starts no watcher for a closed window
+        entry.model.closeTerminal()   // #1109
         dismissed(win)
         DispatchQueue.main.async { win.contentViewController = nil }
     }
@@ -340,11 +418,11 @@ final class TextViewerWindows {
 
 /// D9 keys, routed by the window itself (the global main menu does not change): ⌘W closes;
 /// ⌘F, ⌘G, ⇧⌘G drive the find bar; ⌘E puts the selection on the find pasteboard seam (R1).
-/// ⌘T stays unrouted until Edit exists (P3).
+/// #1109: ⌘T switches Read and Edit.
 final class TextViewerNSWindow: NSWindow {
     weak var model: TextViewerModel?
 
-    enum KeyRoute: Equatable { case close, find(NSTextFinder.Action), useSelectionForFind, pass }
+    enum KeyRoute: Equatable { case close, find(NSTextFinder.Action), useSelectionForFind, toggleMode, pass }
 
     static func route(_ event: NSEvent) -> KeyRoute {
         guard event.type == .keyDown else { return .pass }
@@ -357,6 +435,7 @@ final class TextViewerNSWindow: NSWindow {
         case "f": return .find(.showFindInterface)
         case "g": return .find(.nextMatch)
         case "e": return .useSelectionForFind
+        case "t": return .toggleMode
         default: return .pass
         }
     }
@@ -370,6 +449,9 @@ final class TextViewerNSWindow: NSWindow {
         case .useSelectionForFind:
             guard let view = model?.textView else { return super.performKeyEquivalent(with: event) }
             view.useSelectionForFind()
+        case .toggleMode:
+            guard let model, model.canEdit else { return super.performKeyEquivalent(with: event) }
+            model.toggleMode()
         case .pass: return super.performKeyEquivalent(with: event)
         }
         return true
@@ -384,6 +466,9 @@ struct TextViewerRootView: View {
             TextViewerHeader(model: model)
             Rectangle().fill(Neon.stroke).frame(height: 1)
             if let notice = model.notice { banner(notice) }
+            if model.mode == .terminal, let t = model.terminal {
+                TextViewerTerminalPane(controller: t.controller)
+            } else {
             switch model.state {
             case nil:
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)   // the first load is on its way
@@ -395,6 +480,7 @@ struct TextViewerRootView: View {
                 }
             case .failure(let refusal)?:
                 refused(refusal)
+            }
             }
         }
         .background(SettingsBackground())
@@ -431,7 +517,7 @@ struct TextViewerHeader: View {
 
     var body: some View {
         HStack(spacing: sz(10)) {
-            TextViewerModeSwitch()
+            TextViewerModeSwitch(model: model)
             Text(model.shownName)
                 .font(Neon.font(13, weight: .semibold))
                 .foregroundStyle(Neon.textPrimary)
@@ -468,7 +554,7 @@ struct TextViewerHeader: View {
                 label("Open With", "arrow.up.forward.app", titles: titles)
             }
             .menuStyle(.borderlessButton).fixedSize()
-            TextViewerScreenshotButton(model: model)
+            if model.mode == .read { TextViewerScreenshotButton(model: model) }
         }
     }
 
@@ -498,17 +584,19 @@ struct TextViewerScreenshotButton: View {
     }
 }
 
-/// Read | Edit, drawn like the old Agent Sessions detail picker's labels style (gone, #1471). Read is first (left) and is the
-/// only mode; Edit is drawn disabled until the built-in editor lands (P3).
+/// Read | Edit, drawn like the old Agent Sessions detail picker's labels style (gone, #1471). Read is first (left) and the
+/// default. #1109: Edit opens the terminal editor when Settings › Text Viewer › Edit with is Terminal; otherwise it is
+/// drawn disabled until the built-in editor lands (P3).
 struct TextViewerModeSwitch: View {
+    @ObservedObject var model: TextViewerModel
     struct Segment: Hashable { let title: String; let enabled: Bool }
-    static let segments = [Segment(title: "Read", enabled: true), Segment(title: "Edit", enabled: false)]
+    static func segments(canEdit: Bool) -> [Segment] { [Segment(title: "Read", enabled: true), Segment(title: "Edit", enabled: canEdit)] }
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(Self.segments, id: \.title) { seg in
-                let on = seg.title == "Read"
-                Button {} label: {
+            ForEach(Self.segments(canEdit: model.canEdit), id: \.title) { seg in
+                let on = (seg.title == "Read") == (model.mode == .read)
+                Button { seg.title == "Read" ? model.showRead() : model.edit() } label: {
                     Text(seg.title)
                         .font(Neon.font(10.5, weight: .medium))
                         .foregroundStyle(on ? Neon.textPrimary : Neon.textSecondary)
@@ -520,7 +608,7 @@ struct TextViewerModeSwitch: View {
                 .buttonStyle(.plain)
                 .disabled(!seg.enabled)
                 .opacity(seg.enabled ? 1 : 0.45)
-                .help(seg.enabled ? "Read" : "Editing comes in a later version")
+                .help(seg.enabled ? "\(seg.title) (\u{2318}T)" : "Editing comes in a later version")
                 .accessibilityLabel("\(seg.title) mode")
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
@@ -552,5 +640,24 @@ struct TextViewerTextRepresentable: NSViewRepresentable {
     private func update(_ view: TextViewerTextView) {
         view.show(output.text)
         model.restyle(.current)   // a no-op unless the theme moved since this text was rendered
+    }
+}
+
+/// #1109: the Edit pane, the editor's dch session drawn as the Agent Sessions window draws one.
+struct TextViewerTerminalPane: View {
+    @ObservedObject var controller: AgentTerminalController
+
+    var body: some View {
+        AgentTerminalRepresentable(controller: controller, screen: controller.screen)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay { if let why = Self.card(controller.phase) { Text(why).font(Neon.font(13)).foregroundStyle(Neon.textSecondary) } }
+    }
+
+    /// What the pane says over the terminal: a failed start or a client that left (Read, then Edit, attaches again).
+    static func card(_ phase: AgentTerminalController.Phase) -> String? {
+        switch phase {
+        case .failed(let why), .detached(let why): why
+        default: nil
+        }
     }
 }
