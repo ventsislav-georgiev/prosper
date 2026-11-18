@@ -801,6 +801,53 @@ enum AgentSidebarMode: String, CaseIterable {
     }
 }
 
+/// #1474 (operator 2026-11-17): the sidebar's mode switch at its bottom edge, radio-like and icon only (no text drawn; the
+/// mode's label on hover and to VoiceOver). A row in Full and in Slide's slid-in sidebar, stacked in Mini's rail; dimmed
+/// until the pointer is over it. A click is the model's setter, which Settings and the Go menu use too.
+struct AgentSidebarModeSwitch: View {
+    @ObservedObject var model: AgentWindowModel
+    @State private var hover = false
+
+    static func symbol(_ m: AgentSidebarMode) -> String {
+        switch m {
+        case .full: return "sidebar.left"
+        case .mini: return "sidebar.squares.left"
+        case .slide: return "rectangle"
+        }
+    }
+    /// The theme's inks: the current mode in the accent on a faint fill of it, the others secondary on nothing.
+    static func ink(_ on: Bool) -> Color { on ? Neon.blue : Neon.textSecondary }
+    /// Not Neon.faded: Increase Contrast would make the fill opaque, the accent symbol on it unseen (the X-ray button's fill).
+    static func fill(_ on: Bool) -> Color { on ? Neon.blue.opacity(0.2) : .clear }
+    static var segment: CGSize { CGSize(width: sz(20), height: sz(18)) }
+
+    var body: some View {
+        let mini = model.sidebarMode == .mini
+        let stack = mini ? AnyLayout(VStackLayout(spacing: sz(2))) : AnyLayout(HStackLayout(spacing: sz(2)))
+        stack { ForEach(AgentSidebarMode.allCases, id: \.self) { button($0) } }
+            .opacity(hover || ThemeRuntime.increaseContrast ? 1 : 0.6)   // Increase Contrast: never dimmed
+            .onHover { hover = $0 }
+            .padding(.horizontal, mini ? 0 : sz(14)).padding(.vertical, sz(6))
+            .frame(maxWidth: .infinity, alignment: mini ? .center : .leading)
+            .accessibilityElement(children: .contain)
+    }
+
+    func button(_ m: AgentSidebarMode) -> some View {
+        let on = model.sidebarMode == m
+        return Button { model.setSidebarMode(m) } label: {
+            Image(systemName: Self.symbol(m)).font(Neon.font(11, weight: .medium))
+                .foregroundStyle(Self.ink(on))
+                .frame(width: Self.segment.width, height: Self.segment.height)
+                .background(RoundedRectangle(cornerRadius: sz(4)).fill(Self.fill(on)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(m.label)
+        .accessibilityLabel(m.label)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
 /// #1379 Slide: a pointer tracker that never takes a click (no hit). `edge`: the window's left hover area, whose enter or
 /// move (true) and exit (false) go to the model's dwell and hide (#1458); else behind the slid-in sidebar, whose exit
 /// slides it out. Tests call the handlers directly.
@@ -932,6 +979,7 @@ struct AgentSidebarView: View {
             Spacer(minLength: 0)
             // #829 G0: the dir strip's fixed slot under the list (QA #665 INFO-4/5: the list ends above it).
             if let store = model.store { AgentDirStatusStrip(store: store) }
+            AgentSidebarModeSwitch(model: model)   // #1474: at the very bottom, in every mode
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onReceive(model.store.map { $0.$details.eraseToAnyPublisher() } ?? Just(.all).eraseToAnyPublisher()) { details = $0 }

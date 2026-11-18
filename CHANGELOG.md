@@ -1778,6 +1778,8 @@ tag from the now-released section and put it on the new top draft.
 - Each pane's header has an X-ray button (next to the "..." menu) that opens or closes the X-ray
   drawer for that pane; with split panes the window keeps one drawer at its right edge, and it
   follows the focused pane. (#1476)
+- Agent Sessions: switch the sidebar between Full, Mini and Hidden from the small icon switch at its
+  bottom edge, without opening Settings; hover a segment for its name. (#1474)
 
 ## v2.174.0
 
