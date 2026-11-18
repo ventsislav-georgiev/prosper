@@ -533,6 +533,7 @@ final class AgentsNSWindow: NSWindow {
             if open.target == target || target == nil { return true }
         }
         guard let target else { return true }
+        for other in model.layout.order where other != pane { panels.close(other) }   // #1476: one drawer per window
         let p = XrayPanelModel(target: target, tab: tab ?? Preferences.xrayLastTab)
         p.close = { panels.close(pane) }
         p.fallback = fallback
@@ -561,6 +562,21 @@ final class AgentsNSWindow: NSWindow {
     }
 
     @MainActor static func xrayChosen(pane: UUID) { window(of: pane)?.toggleXray() }
+
+    /// #1476: a pane header's X-ray button: that pane takes the focus first, then the window's one drawer toggles for it.
+    @MainActor static func xrayClicked(pane: UUID, in win: AgentsNSWindow?) {
+        guard let win, let m = win.model else { return }
+        if pane != m.layout.focused { m.focusPane(pane) }
+        win.toggleXray()
+    }
+
+    /// #1476 (operator: "One for the window"): focus moved from `old` while its drawer was open: the drawer follows to the
+    /// focused pane on the same tab (closed when that pane shows no session X-ray can read).
+    func xrayFollow(from old: UUID) {
+        guard let model, old != model.layout.focused, let open = XrayPanels.shared.open[old] else { return }
+        XrayPanels.shared.close(old)
+        toggleXray(on: open.tab)
+    }
 
     /// Q3: the Todos chip opens the panel on Tasks when X-ray is there and the read finds a Tasks tab; else (the list
     /// already open, the gate off, no Tasks tab) `list` runs, today's AgentTodosList.
@@ -1933,6 +1949,45 @@ extension AgentSidebarRowView {
     }
 }
 
+/// #1476: every pane header's X-ray button, just before the "...": open, the accent on a subtle fill and read as
+/// selected; off (dimmed, the tooltip says why) where the "..." has no X-ray item. One slot in every state.
+struct AgentXrayButton: View {
+    @ObservedObject var panels = XrayPanels.shared
+    let pane: UUID
+    let target: XrayTarget?
+
+    static let label = "X-ray"
+    static let help = "X-ray (\u{21E7}\u{2318}X)"
+    static let noDch = "X-ray needs dch 1.78 or later"
+    static let noSession = "No session to X-ray in this pane"
+    static var width: CGFloat { sz(22) }
+
+    /// Why the button is off, nil when on: AgentsNSWindow.xrayItem's rule (the gate, then a session).
+    @MainActor static func offReason(_ target: XrayTarget?) -> String? {
+        XrayPanels.dch() == nil ? noDch : target == nil ? noSession : nil
+    }
+
+    /// The drawer is open for this pane on the session it shows (what XrayDrawer draws).
+    var open: Bool { target != nil && panels.open[pane]?.target == target }
+
+    var body: some View {
+        let on = open, off = Self.offReason(target)
+        Button { AgentsNSWindow.xrayClicked(pane: pane, in: AgentsNSWindow.window(of: pane)) } label: {
+            Image(systemName: "sidebar.right").font(Neon.font(11, weight: .medium))
+                .foregroundStyle(on ? Neon.blue : Neon.textSecondary)
+                .frame(width: Self.width, height: sz(18))
+                .background(RoundedRectangle(cornerRadius: sz(4)).fill(on ? Neon.blue.opacity(0.2) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: Self.width, height: sz(18))
+        .disabled(off != nil).opacity(off == nil ? 1 : 0.45)
+        .help(off ?? Self.help)
+        .accessibilityLabel(Self.label)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
 /// #836 (b): a remote session's header: its title and host, then the transcript controls drawn disabled with their
 /// reason (a remote session has no transcript or todo list here).
 struct AgentRemoteHeader: View {
@@ -1944,6 +1999,13 @@ struct AgentRemoteHeader: View {
     let pane: UUID
     /// The row whose last chip click found no Tasks tab (a click on another session starts clean).
     @State private var none: AgentSidebar.RowID? = nil
+
+    /// #1476: rows build the header too (the private @State keeps the memberwise init in this file).
+    init(row: AgentSidebar.Row, remote: AgentSidebar.Remote, pane: UUID) {
+        self.row = row
+        self.remote = remote
+        self.pane = pane
+    }
 
     static func todosHelp(noList: Bool) -> String { noList ? todosReason : todosOpens }
 
@@ -1967,6 +2029,7 @@ struct AgentRemoteHeader: View {
             .buttonStyle(.plain).help(Self.todosHelp(noList: noList)).accessibilityLabel(Self.todosOpens)
             .accessibilityValue(noList ? Self.todosReason : "")
             .background(XrayCardAnchor())   // #1401: window(of: pane) finds this window, and the X-ray card hangs from the chip
+            AgentXrayButton(pane: pane, target: XrayTarget.of(row))   // #1476: where the disabled mode toggle was (no "..." here)
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
     }
@@ -2083,7 +2146,7 @@ struct AgentDetailView: View {
                     if compact {
                         AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
                                               ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
-                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) })
+                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id)
                     } else {
                         AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                            todos: transcript.todos,
@@ -2091,7 +2154,7 @@ struct AgentDetailView: View {
                                            store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                            rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                            endRename: { model.endRename($0, $1) }, panes: panes,
-                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) })
+                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id)
                     }
                 }
                 .modifier(AgentPaneProbe(kind: "header"))
@@ -2107,7 +2170,8 @@ struct AgentDetailView: View {
                             .overlay(alignment: .top) { overTop(row, s) }
                     }
                 }
-                .overlay(alignment: .trailing) { XrayDrawer(pane: id, target: XrayTarget.of(row)) }   // #1351: over, never resizing
+                // #1351: over, never resizing. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
+                .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: id, target: XrayTarget.of(row)) } }
             }
         } else if let row = model.selectedRow, let r = row.remote {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
@@ -2117,7 +2181,7 @@ struct AgentDetailView: View {
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "terminal"))
-                    .overlay(alignment: .trailing) { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) }
+                    .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) } }
             }
         } else if let row = model.selectedRow, let r = row.record {
             titled(row.title) {
@@ -2478,6 +2542,18 @@ struct AgentPaneArea: View {
                         .position(x: d.hitArea.midX, y: d.hitArea.midY)
                 }
             }
+            // #1476 (operator: "One for the window"): several panes: one X-ray drawer at the area's trailing edge, under the
+            // top row's headers, for the focused pane; one pane: the pane draws it as before (AgentDetailView).
+            .overlay(alignment: .trailing) {
+                if compact {
+                    XrayDrawer(pane: model.layout.focused, target: model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil)
+                        .padding(.top, AgentCompactHeader.height + 1)
+                        .environment(\.agentPaneID, model.layout.focused)   // its links and probe: the focused pane's, as in the pane
+                }
+            }
+            .onChange(of: model.layout.focused) { old, new in
+                (AgentsNSWindow.window(of: old) ?? AgentsNSWindow.window(of: new))?.xrayFollow(from: old)
+            }
             .coordinateSpace(.named(agentPaneAreaSpace))
             .onAppear { feed(area) }
             .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
@@ -2630,7 +2706,8 @@ struct AgentUnfocusedPane: View {
                                       ask: { model.ask($0, p.session) }, open: { model.openSession(p.session) },
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
                                       panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
-                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) })
+                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
+                                      xrayPane: runtime.pane)
                     .modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if !ended || kept != nil {   // #1471: Terminal is the only mode
@@ -2719,16 +2796,19 @@ struct AgentCompactHeader: View {
     var chip: AgentStateChip?
     var ended = false
     var menu: AgentSessionMenuButton?
+    /// #1476: the X-ray button before the "...", with the menu (a session's header).
+    var xray: AgentXrayButton?
 
     static var height: CGFloat { sz(26) }
 
     static func of(_ row: AgentSidebar.Row, _ s: AgentSession, cwd: String?, ended: Bool, store: AgentIslandStore?,
                    ask: @escaping (AgentWindowVerb) -> Void, open: @escaping () -> Void, panes: [AgentWindowMenuEntry] = [],
-                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }) -> AgentCompactHeader {
+                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }, xrayPane: UUID? = nil) -> AgentCompactHeader {
         AgentCompactHeader(title: row.title, project: AgentSessionHeader.project(cwd: cwd, session: s),
                            chip: AgentStateChip(state: s.state, ended: ended), ended: ended,
                            menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended,
-                                                        panes: panes, pane: pane))
+                                                        panes: panes, pane: pane),
+                           xray: xrayPane.map { AgentXrayButton(pane: $0, target: XrayTarget.of(row)) })
     }
 
     var body: some View {
@@ -2737,6 +2817,7 @@ struct AgentCompactHeader: View {
                 .lineLimit(1).truncationMode(.middle), label: title, project: project, help: project.map { "\(title)\n\($0)" })
             if let chip { chip }
             Spacer(minLength: 0)
+            if let xray { xray }   // #1476: narrower than the icon pair it replaces (sz(22) against about 60 points times the scale)
             if let menu { menu.background(XrayCardAnchor()) }   // #1319: the list's popover hangs from it
         }
         .padding(.horizontal, sz(10))
@@ -2797,6 +2878,8 @@ struct AgentSessionHeader: View {
     /// #900 B2 step 6a: the "⋯" pane items (empty with the gate off) and their run.
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
+    /// #1476: the pane the X-ray button acts on; nil: no button (a header drawn outside a pane).
+    var xrayPane: UUID?
 
     /// #1191: the session's folder, no longer drawn in the header: the title's tooltip and accessibility value carry it
     /// (two sessions of one name stay apart for VoiceOver). Nil when there is no text at all.
@@ -2924,6 +3007,7 @@ struct AgentSessionHeader: View {
             Text(row.title).font(Neon.font(15, weight: .semibold)).lineLimit(1)
             stateChip
             if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+            if xrayPane != nil { Color.clear.frame(width: AgentXrayButton.width, height: sz(18)) }   // #1476: the X-ray button
             Color.clear.frame(width: sz(18), height: sz(18))   // the "⋯"
         }
         .hidden()
@@ -2938,6 +3022,7 @@ struct AgentSessionHeader: View {
             // push the line past the header, so they sit at the right edge, where the mode does not move them.
             titleSlot.frame(minWidth: 0, maxWidth: .infinity, alignment: .leading).clipped()
             if let todos = shownTodos { AgentTodosChip(todos: todos, open: todosOpen) }
+            if let xrayPane { AgentXrayButton(pane: xrayPane, target: XrayTarget.of(row)) }   // #1476: just before the "..."
             menuButton.background(XrayCardAnchor())   // #829: always last, fixed size; #1319: the list hangs from it
         }
     }

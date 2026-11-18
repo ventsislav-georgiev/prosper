@@ -1775,6 +1775,9 @@ tag from the now-released section and put it on the new top draft.
 - The small Command number in the Mini sidebar is readable on every theme. (#1505)
 - A session row's detail line (state, counts, age) now follows the UI size: at a smaller size the
   row is no longer held 14 pt tall by an empty age slot. (#1500)
+- Each pane's header has an X-ray button (next to the "..." menu) that opens or closes the X-ray
+  drawer for that pane; with split panes the window keeps one drawer at its right edge, and it
+  follows the focused pane. (#1476)
 
 ## v2.174.0
 
