@@ -1,0 +1,306 @@
+import AppKit
+import GhosttyTerminal
+import XCTest
+@testable import ProsperApp
+
+/// #1559 (X-T a): ref marks on the Terminal grid. A fake follow (XrayFollowTests.Fake through the XrayPanels.follow seam)
+/// hands in dch's lines, the viewport text is the rows' own, the settle item is kept and performed by hand, and the window
+/// is never ordered in (its visibility is the overlay's windowShown seam). No dch, no pty, no event posted, no card shown.
+@MainActor
+final class XrayGridMarksTests: XCTestCase {
+    typealias F = XrayRefLinkFixture
+    let local = AgentSessionKey(dir: "/Users/example/dch", name: "api")
+    let shell = AgentSessionKey(dir: "/Users/example/dch", name: "shell")
+    let grid = TerminalGridMetrics(columns: 80, rows: 24, widthPixels: 1280, heightPixels: 816, cellWidthPixels: 16, cellHeightPixels: 34)
+    static let viewport = "$ git log\nfix #12 now, API-7 too\nsee #1\n"
+
+    static func snapshot(_ refs: String = F.refs) -> String {
+        XrayFollowTests.snapshot(String(decoding: XrayRefsParseTests.object(refs: refs), as: UTF8.self))
+    }
+
+    static func refDelta(_ key: String, text: String, underline: Bool, count: Int = 2) -> String {
+        #"{"schema":1,"ref":{"key":"\#(key)","shape":"issue","text":"\#(text)","count":\#(count),"underline":\#(underline)}}"#
+    }
+
+    /// The seams set for the body and put back after it (follow, its gate, the dch path, gate B).
+    func withSeams(_ body: (XrayFollowTests.Fake) throws -> Void) rethrows {
+        let (ok, follow, dch, decorate) = (XrayPanels.followOK, XrayPanels.follow, XrayPanels.dch, XrayRefLink.decorate)
+        defer {
+            (XrayPanels.followOK, XrayPanels.follow, XrayPanels.dch, XrayRefLink.decorate) = (ok, follow, dch, decorate)
+            // the shared LRU keeps no follow of these rows' (a later row's attach would find it running on this fake)
+            for f in XrayPanels.shared.follows.follows where f.target.dir == local.dir { XrayPanels.shared.follows.drop(f) }
+        }
+        let fake = XrayFollowTests.Fake()
+        XrayPanels.followOK = { true }
+        XrayPanels.follow = fake.follow
+        XrayPanels.dch = XrayPanelTasksTests.gate([1, 99, 0])
+        XrayRefLink.decorate = { true }
+        try body(fake)
+    }
+
+    final class Rig {
+        let t: AgentTerminalController
+        let v: AgentTerminalHostView
+        var child: AgentTerminalTests.FakeChild?
+        var io: AgentTerminalIO?
+        var items: [DispatchWorkItem] = []
+        init(t: AgentTerminalController, v: AgentTerminalHostView) { (self.t, self.v) = (t, v) }
+    }
+
+    /// A live local terminal with its host view (not in a window unless the row puts it in one), the settle kept.
+    func rig(_ key: AgentSessionKey, viewport: String = XrayGridMarksTests.viewport) -> Rig {
+        let t = AgentTerminalController()
+        let v = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
+        let r = Rig(t: t, v: v)
+        t.spawn = { [weak r] _, io in let c = AgentTerminalTests.FakeChild(); r?.child = c; r?.io = io; return c }
+        t.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+        v.owner = t
+        t.view = v
+        v.gridMetrics = grid
+        v.viewportText = { viewport }
+        v.marks.windowShown = { _ in true }
+        v.marks.after = { [weak r] _, item in r?.items.append(item) }
+        t.attach(key)
+        t.gridChanged(cols: 80, rows: 24)
+        t.gridChanged(cols: 80, rows: 24, generation: t.generation)
+        XCTAssertEqual(t.phase, .live)
+        return r
+    }
+
+    /// A follow of `target` with the snapshot in (a fresh XrayFollows; the fake's start n).
+    func follow(_ fake: XrayFollowTests.Fake, _ n: Int, _ target: XrayTarget, refs: String = F.refs) throws -> XrayFollow {
+        let f = try XCTUnwrap(XrayFollows().attach(target, dch: "/fake/dch"))
+        fake.send(n, Self.snapshot(refs))
+        return f
+    }
+
+    static func keys(_ v: AgentTerminalHostView) -> [String] { v.marks.marks.map(\.key) }
+
+    /// Red if a ref dch did not underline, or a url or file ref (libghostty's own link), gets a mark, or a mark's row,
+    /// column or width is off.
+    func testMarksOnlyForUnderlinedKeys() throws {
+        var refs = try F.parsed().entries
+        let lines = Self.viewport.components(separatedBy: "\n")
+        XCTAssertEqual(XrayGridMarksView.marks(lines, refs, rows: 24),
+                       [.init(row: 1, col: 4, cells: 3, key: "issue:#12"), .init(row: 2, col: 4, cells: 2, key: "issue:#1")])
+        XCTAssertFalse(XrayGridMarksView.marks(lines, refs, rows: 24).contains { $0.key == "ticket:API-7" }, "underline:false")
+        refs[0].shape = .url
+        refs[2].shape = .file
+        XCTAssertTrue(XrayGridMarksView.marks(lines, refs, rows: 24).isEmpty, "url and file refs are libghostty's links")
+        XCTAssertTrue(XrayGridMarksView.marks(lines, try F.parsed().entries, rows: 2).map(\.row) == [1], "rows past the grid")
+        XCTAssertTrue(XrayGridMarksView.marks(lines, try F.parsed().entries, rows: 0).isEmpty)
+    }
+
+    /// Red if a `ref` delta that turns underline off, or a count 0 that removes the ref, leaves its mark drawn, or one
+    /// that turns it on draws none until output.
+    func testADeltaTurningUnderlineOffRemovesTheMark() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            let f = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            r.v.marks.follow = f
+            XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+            fake.send(1, Self.refDelta("issue:#12", text: "#12", underline: false))
+            XCTAssertEqual(Self.keys(r.v), ["issue:#1"])
+            fake.send(1, Self.refDelta("issue:#12", text: "#12", underline: true))
+            XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+            fake.send(1, Self.refDelta("issue:#1", text: "#1", underline: true, count: 0))
+            XCTAssertEqual(Self.keys(r.v), ["issue:#12"])
+        }
+    }
+
+    /// Red if output leaves the marks drawn, uses a timer (more than one live item, or the old one not cancelled), or the
+    /// settle places them more than once or not at all. Output comes through the controller's real drain path.
+    func testOutputClearsAndTheSettlePlacesOnce() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+            let io = try XCTUnwrap(r.io)
+            io.output(Array("x".utf8))
+            let drained = expectation(description: "drain")
+            DispatchQueue.main.async { drained.fulfill() }   // after the drain: main is FIFO
+            wait(for: [drained], timeout: 2)
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "output clears at once")
+            XCTAssertEqual(r.items.count, 1)
+            r.v.marks.output()
+            XCTAssertEqual(r.items.count, 2)
+            XCTAssertTrue(r.items.first?.isCancelled == true, "re-armed: the older item is cancelled")
+            XCTAssertTrue(r.items.last?.isCancelled == false)
+            // a delta while settling places nothing yet
+            fake.send(1, Self.refDelta("issue:#12", text: "#12", underline: true))
+            XCTAssertTrue(r.v.marks.marks.isEmpty)
+            r.items.last?.perform()
+            XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+            XCTAssertTrue(r.v.marks.settle == nil)
+            XCTAssertEqual(r.items.count, 2, "the settle arms nothing after it")
+        }
+    }
+
+    /// Red if an unfocused pane, a hidden window, a hidden pane, a remote row or gate B off draws marks.
+    func testUnfocusedOrHiddenPaneDrawsNone() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+            r.t.paneFocused = { false }
+            r.v.marks.place()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "unfocused")
+            r.t.paneFocused = { true }
+            r.v.marks.windowShown = { _ in false }
+            r.v.marks.place()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "window hidden")
+            r.v.marks.windowShown = { _ in true }
+            r.v.isHidden = true
+            r.v.marks.place()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "pane hidden")
+            r.v.isHidden = false
+            XrayRefLink.decorate = { false }
+            r.v.marks.place()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "gate B off")
+            XrayRefLink.decorate = { true }
+            r.v.marks.place()
+            XCTAssertEqual(Self.keys(r.v).count, 2, "back")
+            let far = rig(AgentSessionKey(dir: "@example-host", name: "api"))
+            far.v.marks.follow = r.v.marks.follow
+            far.v.marks.place()
+            XCTAssertTrue(far.v.marks.marks.isEmpty, "remote row")
+        }
+    }
+
+    /// Red if placing, clearing or a follow's lines write anything to the pty.
+    func testNoBytesReachThePty() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            r.v.marks.output()
+            r.items.last?.perform()
+            fake.send(1, Self.refDelta("issue:#12", text: "#12", underline: false))
+            r.t.writer.flush()
+            XCTAssertEqual(r.child?.written.count, 0)
+            XCTAssertEqual(r.child?.resizes.count, 0)
+        }
+    }
+
+    /// Red if the overlay sizes the terminal: its frame, its grid, the pty's size, or the overlay not covering the view.
+    func testFrameAndGridUnchangedWithTheOverlayOn() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            let (frame, metrics, sent) = (r.v.frame, r.v.gridMetrics, r.t.sentSize.map { [$0.cols, $0.rows] })
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+            XCTAssertEqual(r.v.frame, frame)
+            XCTAssertEqual(r.v.gridMetrics, metrics)
+            XCTAssertTrue(r.t.sentSize.map { [$0.cols, $0.rows] } == sent)
+            XCTAssertTrue(r.v.marks.superview === r.v)
+            XCTAssertEqual(r.v.marks.frame, r.v.bounds)
+            XCTAssertEqual(r.v.marks.autoresizingMask, [.width, .height], "it follows the view, never the reverse")
+        }
+    }
+
+    /// Red if the overlay takes a click: its hitTest is nil and the terminal's own is the terminal.
+    func testTheOverlaysHitTestIsNil() {
+        let v = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
+        XCTAssertTrue(v.marks.hitTest(NSPoint(x: 10, y: 10)) == nil)
+        XCTAssertTrue(v.hitTest(NSPoint(x: 10, y: 10)) === v)
+        XCTAssertFalse(v.marks.isAccessibilityElement())
+    }
+
+    /// Red if pane focus does not attach the target's follow once, or blur (nil, another target) does not detach it.
+    func testPaneFocusAttachesAndBlurDetaches() throws {
+        try withSeams { fake in
+            let follows = XrayFollows(), w = ObjectIdentifier(self)
+            let a = try XCTUnwrap(follows.focus(XrayTarget(name: "api", dir: local.dir), window: w, dch: "/fake/dch"))
+            XCTAssertEqual(a.users, 1)
+            XCTAssertTrue(follows.focus(XrayTarget(name: "api", dir: local.dir), window: w, dch: "/fake/dch") === a)
+            XCTAssertTrue(a.users == 1 && fake.args.count == 1, "the same focus again: no second attach")
+            let b = try XCTUnwrap(follows.focus(XrayTarget(name: "shell", dir: shell.dir), window: w, dch: "/fake/dch"))
+            XCTAssertTrue(a.users == 0 && b.users == 1)
+            XCTAssertTrue(follows.focused(in: w) === b)
+            XCTAssertTrue(follows.focus(nil, window: w, dch: nil) == nil)
+            XCTAssertEqual(b.users, 0)
+            XCTAssertTrue(follows.focused(in: w) == nil)
+            // a held follow that ended and left the LRU is not handed out again: the focus starts a new one
+            let c = try XCTUnwrap(follows.focus(XrayTarget(name: "api", dir: local.dir), window: w, dch: "/fake/dch"))
+            follows.drop(c)
+            let d = try XCTUnwrap(follows.focus(XrayTarget(name: "api", dir: local.dir), window: w, dch: "/fake/dch"))
+            XCTAssertFalse(c === d)
+            XCTAssertTrue(follows.follows.contains { $0 === d })
+        }
+    }
+
+    /// The shell pane in a window that is never ordered in, with a window model (its focused pane is the click's).
+    func windowed(_ r: Rig) -> (AgentsNSWindow, AgentWindowModel) {
+        let w = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled], backing: .buffered, defer: true)
+        w.isReleasedWhenClosed = false
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        w.model = m
+        w.contentView?.addSubview(r.v)   // viewDidMoveToWindow: the focused pane takes its follow
+        return (w, m)
+    }
+
+    /// Red if a shell pane (no transcript) gets no follow, no marks or no refs for a Cmd-click: the #1357 path read them
+    /// only for a session whose transcript the pane had.
+    func testAShellTargetGetsMarks() throws {
+        try withSeams { fake in
+            let r = rig(shell)
+            let (w, m) = windowed(r)
+            try withExtendedLifetime(m) {
+                XCTAssertEqual(fake.args.last.map { Array($0.prefix(3)) }, ["--xray", "shell", "--follow"])
+                fake.send(fake.args.count, Self.snapshot())
+                XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+                XCTAssertTrue(XrayRefCache.focused(in: w) == nil, "no transcript: the old path had nothing")
+                let refs = try XCTUnwrap(XrayRefLink.terminalRefs(w, shell))
+                XCTAssertEqual(refs.target, XrayTarget(name: "shell", dir: shell.dir))
+                XCTAssertTrue(XrayRefLink.terminalRefs(w, local) == nil, "another session")
+                r.t.attach(nil)   // the window hides: the focused pane's attach(nil) lets the follow go
+                XCTAssertTrue(XrayPanels.shared.follows.focused(in: ObjectIdentifier(w)) == nil)
+                XCTAssertTrue(r.v.marks.marks.isEmpty)
+            }
+        }
+    }
+
+    /// Red if a Cmd-click on a shell pane's underlined ref does not open its card (the pane's open panel shows it).
+    func testCmdClickOnAShellPaneOpensTheCard() throws {
+        try withSeams { fake in
+            let r = rig(shell)
+            let (w, m) = windowed(r)
+            withExtendedLifetime((w, m)) {
+                fake.send(fake.args.count, Self.snapshot())
+                let pane = m.layout.focused
+                let panel = XrayPanelModel(target: XrayTarget(name: "shell", dir: shell.dir), tab: .refs)
+                XrayPanels.shared.open[pane] = panel
+                defer { XrayPanels.shared.open[pane] = nil; r.t.attach(nil) }
+                // a cell in points at the window's own backing scale (it is never on a screen: 1x or 2x)
+                let s = w.backingScaleFactor, cw = 16 / s, ch = 34 / s
+                // row 1, column 4: "#12" (the default openRef: XrayRefLink.openOnGrid)
+                XCTAssertTrue(r.v.refClick(at: CGPoint(x: 4 + cw * 4 + 1, y: 2 + ch + 1)))
+                XCTAssertEqual(panel.refCard?.key, "issue:#12")
+                XCTAssertFalse(r.v.refClick(at: CGPoint(x: 4 + cw * 14 + 1, y: 2 + ch + 1)), "API-7 is underline:false")
+            }
+        }
+    }
+
+    /// Red if another pane's focus in the same window leaves the old pane's marks drawn (blur), or an unfocused pane's
+    /// attach takes the window's follow.
+    func testAnotherPaneFocusClearsTheOldPanesMarks() throws {
+        try withSeams { fake in
+            let a = rig(local), b = rig(shell)
+            var focused = "a"
+            a.t.paneFocused = { focused == "a" }
+            b.t.paneFocused = { focused == "b" }
+            let (w, m) = windowed(a)
+            withExtendedLifetime((w, m)) {
+                w.contentView?.addSubview(b.v)   // unfocused: takes nothing
+                XCTAssertEqual(fake.args.count, 1)
+                fake.send(1, Self.snapshot())
+                XCTAssertEqual(Self.keys(a.v).count, 2)
+                focused = "b"
+                b.t.attach(shell)   // follow() asks the newly focused pane's terminal
+                XCTAssertTrue(a.v.marks.follow == nil)
+                XCTAssertTrue(a.v.marks.marks.isEmpty, "blurred")
+                XCTAssertEqual(fake.args.last.map { Array($0.prefix(3)) }, ["--xray", "shell", "--follow"])
+                b.t.attach(nil)
+            }
+        }
+    }
+}

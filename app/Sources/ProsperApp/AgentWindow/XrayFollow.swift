@@ -245,6 +245,24 @@ final class XrayFollows {
 
     func detach(_ f: XrayFollow) { f.users = max(0, f.users - 1) }
 
+    /// #1559 (X-T a): each window's focused pane's follow, by the window's identity.
+    private var held: [ObjectIdentifier: XrayFollow] = [:]
+
+    /// #1559: pane focus. The window's focused live local pane holds its target's follow (one attach); another target,
+    /// nil (the focused pane is not live, the window hid) or no dch detaches the one it held. A follow that ended and
+    /// left the LRU is attached again. nil: none held (gate closed, no room, no target).
+    @discardableResult
+    func focus(_ target: XrayTarget?, window: ObjectIdentifier, dch: String?) -> XrayFollow? {
+        if let f = held[window], f.target == target, follows.contains(where: { $0 === f }) { return f }
+        if let f = held.removeValue(forKey: window) { detach(f) }
+        guard let target, let dch, let f = attach(target, dch: dch) else { return nil }
+        held[window] = f
+        return f
+    }
+
+    /// #1559: the follow the window's focused pane holds (its refs mark the grid and answer a Cmd-click).
+    func focused(in window: ObjectIdentifier) -> XrayFollow? { held[window] }
+
     /// Below `cap` follows matching `pool`, after evicting the oldest one no panel shows if needed.
     private func room(_ pool: (XrayFollow) -> Bool, _ cap: Int) -> Bool {
         guard follows.filter(pool).count >= cap else { return true }

@@ -1928,6 +1928,9 @@ tag from the now-released section and put it on the new top draft.
 - Built-in extensions can now run a program directly (host.process.run): no shell, a fixed
   environment, at most 10 seconds and 1 MB of output per stream, two at a time, and every one is
   stopped when Prosper quits. (#1563)
+- In a focused Terminal pane, issues, pull requests, tickets and other refs X-ray knows now get a
+  dotted underline on the terminal itself, for shell and Codex sessions too, and Command-clicking
+  one opens its card. (#1559)
 
 ## v2.174.0
 

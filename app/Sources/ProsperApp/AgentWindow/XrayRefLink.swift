@@ -8,6 +8,8 @@ import SwiftUI
 // #1357 (P9): Terminal mode too. The cache reads for the focused live (Terminal) pane as well; a Cmd-click on an underlined
 // ref on the grid, or a prosper-xray OSC 8 link, opens the same card through the same panel (AgentTerminalHostView.refClick,
 // AgentTerminalController.open).
+// #1559 (X-T a): the Terminal pane's refs come from the focused pane's follow (terminalRefs), and its grid draws their
+// marks (XrayGridMarks.swift); the cache below stays the Transcript prose's.
 
 @MainActor
 enum XrayRefLink {
@@ -64,12 +66,13 @@ enum XrayRefLink {
         return m
     }
 
-    /// #1357 (P9): the refs read for `key` when it is the window's focused pane's session (a Cmd-click reaches only the
-    /// focused pane: the window's first-click rule takes a focusing down), its target and that pane. Nil: gate B off, no
-    /// window, another session, a remote row (no dir), or nothing read yet.
+    /// #1357 (P9): the refs for `key` when it is the window's focused pane's session (a Cmd-click reaches only the
+    /// focused pane: the window's first-click rule takes a focusing down), its target and that pane. #1559: from the
+    /// follow that pane's focus attached (XrayFollows.focus), not the transcript, so a shell or Codex pane has them too.
+    /// Nil: gate B off, no window, another session, a remote row (never focused into a follow), or no snapshot yet.
     static func terminalRefs(_ w: AgentsNSWindow?, _ key: AgentSessionKey?) -> (refs: XrayRefs, target: XrayTarget, pane: UUID)? {
-        guard decorate(), let w, let key, let m = w.model, let f = XrayRefCache.focused(in: w), f.key == key,
-              let refs = XrayRefCache.of(w).refs(key, sessionID: f.sessionID) else { return nil }
+        guard decorate(), let w, let key, let m = w.model, let f = XrayPanels.shared.follows.focused(in: ObjectIdentifier(w)),
+              f.target == XrayTarget(name: key.name, dir: key.dir), let refs = f.state?.refs else { return nil }
         return (refs, f.target, m.layout.focused)
     }
 

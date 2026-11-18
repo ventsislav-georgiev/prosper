@@ -313,6 +313,13 @@ final class AgentTerminalController: ObservableObject {
     /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
     var paneFocused: () -> Bool = { true }
     private var wheelRemainder = 0.0
+    /// #1559 (X-T a): the window's focused pane's follow for `target` (nil: none held); rows hand in a fake.
+    var focusFollow: @MainActor (XrayTarget?, ObjectIdentifier) -> XrayFollow? = {
+        XrayPanels.shared.follows.focus($0, window: $1, dch: $0 == nil ? nil : XrayPanels.dch())
+    }
+    /// #1559: the terminal that holds each window's pane focus (its marks go when another takes it).
+    private struct FocusHolder { weak var terminal: AgentTerminalController? }
+    private static var focusHolders: [ObjectIdentifier: FocusHolder] = [:]
 
     enum SpawnError: Error, CustomStringConvertible {
         case underTests
@@ -329,6 +336,7 @@ final class AgentTerminalController: ObservableObject {
     /// Attach to `key`, or detach (nil). The window model calls this from follow(): visible, a live
     /// session selected, and its mode Terminal. The same key again changes nothing.
     func attach(_ key: AgentSessionKey?) {
+        defer { followFocus() }   // #1559: the same key too (another pane's focus may have come back to this one)
         if held != nil { held = nil }
         if key != armed { armed = nil }
         guard key != self.key else { return }
@@ -341,6 +349,20 @@ final class AgentTerminalController: ObservableObject {
         closeFind(refocus: false)   // QA #694 INFO-1: the find bar goes with the session, the keys stay put
         guard key != nil else { phase = .idle; return }
         begin()
+    }
+
+    /// #1559 (X-T a): pane focus. The window's focused pane holds its local session's follow (XrayFollows.focus), whose
+    /// refs mark the grid and answer a Cmd-click; no session, a remote one or gate B off holds none (the window's follow
+    /// is detached). The terminal that held the window's focus before loses its marks (blur). An unfocused pane changes
+    /// nothing: its attach after the rest must not take the focused pane's follow. No view or window yet: nothing
+    /// (viewDidMoveToWindow asks again).
+    func followFocus() {
+        guard paneFocused(), let view, let w = view.window else { return }
+        let id = ObjectIdentifier(w)
+        let target = XrayRefLink.decorate() && remoteHost == nil ? key.map { XrayTarget(name: $0.name, dir: $0.dir) } : nil
+        if let old = Self.focusHolders[id]?.terminal, old !== self { old.view?.marks.follow = nil }
+        Self.focusHolders[id] = FocusHolder(terminal: self)
+        view.marks.follow = focusFollow(target, id)
     }
 
     /// #1330: the human's pick of remote `key`: the next attach to it starts.
@@ -483,6 +505,7 @@ final class AgentTerminalController: ObservableObject {
         let bytes = box.take()
         guard !bytes.isEmpty else { return }
         screen.feed(bytes)
+        view?.marks.output()   // #1559: the grid moved: marks off now, placed again once output rests
         fed = true
         revealed = true
     }
@@ -812,7 +835,13 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         registerForDraggedTypes(registeredDraggedTypes + [.agentRow])   // #1492: libghostty's own types and a row's
         setAccessibilityRole(.textArea)
         setAccessibilityLabel("Terminal")
+        marks.frame = bounds   // #1559: over the whole grid, hitTest nil; it never sizes the view or the pty
+        marks.host = self
+        addSubview(marks)
     }
+
+    /// #1559 (X-T a): the ref marks over the grid (XrayGridMarks.swift).
+    let marks = XrayGridMarksView(frame: .zero)
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -856,8 +885,9 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }
-        // #1357: the window's ref cache starts with its terminal, so refs are read before the first Cmd-click
-        if XrayRefLink.decorate(), let w = window as? AgentsNSWindow, w.model != nil { _ = XrayRefCache.of(w) }
+        // #1559: the focused pane's follow starts with its terminal in a window, so refs are there before the first
+        // Cmd-click (it replaces #1357's ref cache read, which needed the session's transcript)
+        owner?.followFocus()
         show(wanted)
         if owner?.focusPending == true { owner?.focus() }
     }
@@ -1025,6 +1055,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// on 2x: 46x16, then 101x26 ~25 ms later); the client starts once that report reaches this grid.
     func terminalDidResize(_ size: TerminalGridMetrics) {
         gridMetrics = size
+        marks.output()   // #1559: new cells: the marks settle again
         owner?.gridChanged(cols: Int(size.columns), rows: Int(size.rows))
     }
 
