@@ -1865,8 +1865,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: right-click a group in the sidebar and choose "Add session to this group" to open
   the New session form with that group, its folder and its command already filled in; picking None
   in the form's group choice now brings back a name you had typed. (#1400)
-- Text viewer: Edit now works in every window. Switch to Edit (or press ⌘T) to change the file in
-  place, ⌘S saves it, and closing, quitting or updating with unsaved changes asks first. If the
+- Text viewer: Edit now works in every window that shows a text file (not a binary, too-large or
+  lossy one). Switch to Edit (or press ⌘T) to change the file in place, ⌘S saves it, closing or
+  quitting with unsaved changes asks first, and an update waits until they are saved. If the
   terminal editor cannot start, the built-in editor opens and says why. (#1544)
 - Shell commands (`> cmd` and extensions' host.shell.run) no longer hang when they leave a
   background process running, and endless output such as `> yes` now stops after 256 MiB instead of
