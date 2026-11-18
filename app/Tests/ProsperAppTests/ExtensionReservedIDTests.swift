@@ -56,14 +56,16 @@ final class ExtensionReservedIDTests: XCTestCase {
                                   services: QuietServices()), user)
     }
 
-    /// Every "ext.<word>." literal in Sources, but "com": the one dotted id's own key (ext.com.prosper.currency.fetchedAt).
+    /// Every "ext.<word>." literal in Sources' code, but "com": the one dotted id's own key (ext.com.prosper.currency.fetchedAt).
+    /// Comment lines are no key (#1542's doc quotes an example "ext.A.x.y.k").
     func testReservedListIsTheWordsTheSourcesHold() throws {
         let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         let re = try NSRegularExpression(pattern: #""ext\.([A-Za-z0-9_-]+)\."#)
         var found = Set<String>()
         for case let url as URL in fm.enumerator(at: sources, includingPropertiesForKeys: nil)! where url.pathExtension == "swift" {
-            let text = try String(contentsOf: url, encoding: .utf8)
+            let text = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                .filter { !$0.drop(while: { $0 == " " }).hasPrefix("//") }.joined(separator: "\n")
             for m in re.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 found.insert(String(text[Range(m.range(at: 1), in: text)!]))
             }

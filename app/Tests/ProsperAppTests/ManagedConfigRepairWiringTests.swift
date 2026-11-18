@@ -201,19 +201,24 @@ final class ManagedConfigRepairWiringTests: XCTestCase {
         XCTAssertTrue(env.consent.seen.count == 1, "only the setup's apply asked")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.state.appendingPathComponent("state.json").path), "no state written")
 
-        // #1232 r2 (F1232-1): byte-equal but unrecorded: adopted in Prosper's own state, not named; the edited one still is
+        // #1232 r2 (F1232-1): byte-equal but unrecorded: adopted in Prosper's own state, not named; the edited one still is.
+        // OQ-144 (b) (b73795eb): the uninstall goes on, so the adopted block is removed with its record; the edited one stays
         let piece = MCPieces.block("other", text: "Other rules.")
         let block = ManagedTextBlock.render(owner: o.id, piece: "other", version: o.version, body: "Other rules.",
                                             syntax: try XCTUnwrap(ManagedTextBlock.syntax(for: env.claudeMD)))
         let withOther = edited + Array(block.utf8)
         try Data(withOther).write(to: env.claudeMD)
         let twice = await ExtensionRegistry.removeManagedPieces(owner: o, declared: [MCPieces.block(), piece], provider: provider)
-        XCTAssertTrue(twice.stop == nil, "no record of the edited one: no sheet, nothing stops")
+        XCTAssertTrue(twice.stop == nil, "no record of the edited one: nothing stops")
         let both = try XCTUnwrap(twice.left)
         XCTAssertTrue(both.contains(#"rules in "claude:CLAUDE.md""#), both)
         XCTAssertFalse(both.contains("other in "), both)
-        XCTAssertEqual(env.mc.ownerIDs(), [o.id], "the byte-equal block is adopted in Prosper's state")
-        XCTAssertEqual(env.bytes(env.claudeMD), withOther, "the person's bytes are unchanged")
+        XCTAssertEqual(env.mc.ownerIDs(), [], "the byte-equal block was adopted, then removed with its record")
+        XCTAssertEqual(env.consent.seen.count, 2, "the removal went through the sheet")
+        // the hand-appended block sits at EOF with no final newline: ManagedTextBlock.removing takes the newline before it
+        // too (the mirror of inserting's no-final-newline case), so the file is `edited` without its last "\n"
+        XCTAssertEqual(edited.last, 0x0A, "the premise")
+        XCTAssertEqual(env.bytes(env.claudeMD), Array(edited.dropLast()), "only the adopted block is gone: the edited block is unchanged")
     }
 
     @MainActor

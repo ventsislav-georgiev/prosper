@@ -18,7 +18,7 @@ final class XrayRefStreamTests: XCTestCase {
 
     func testGoldenShapeParsesEveryKind() {
         let s = Self.parse(Self.golden)
-        XCTAssertEqual(s.first, XrayRefStream.First(session: "api", key: "issue:#12", shape: "issue", text: "#12"))
+        XCTAssertEqual(s.first, XrayRefStream.First(session: "api", key: "issue:#12", shape: "issue", text: "#12", elapsed: 0))
         XCTAssertEqual(s.definitions.count, 1)
         XCTAssertEqual(s.definitions.first?.title, "Login retries")
         XCTAssertEqual(s.definitions.first?.passage, "The login retries twice.\nSecond line.")

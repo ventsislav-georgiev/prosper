@@ -45,8 +45,8 @@ final class DchXrayFlagParityTests: XCTestCase {
             ["--search", "ab", "--clear"], ["--search", "ab", "--tasks"], ["--search", "ab", "--memory"],
             ["--search", "ab", "--follow"], ["--search", "ab", "--chapter", "c1"], ["--search", "ab", "--ref", "x"],
             ["--clear", "--tasks"], ["--clear", "--memory"], ["--clear", "--follow"], ["--clear", "--chapter", "c1"],
-            ["--clear", "--ref", "x"], ["--tasks", "--memory"], ["--tasks", "--follow"], ["--tasks", "--chapter", "c1"],
-            ["--tasks", "--ref", "x"], ["--memory", "--follow"], ["--memory", "--chapter", "c1"], ["--memory", "--ref", "x"],
+            ["--clear", "--ref", "x"], ["--tasks", "--memory"], ["--tasks", "--chapter", "c1"],
+            ["--tasks", "--ref", "x"], ["--memory", "--chapter", "c1"], ["--memory", "--ref", "x"],
         ]
         for p in pairs {
             XCTAssertEqual(why(["--json"] + p), exclusion, p.joined(separator: " "))
@@ -126,7 +126,8 @@ final class DchXrayFlagParityTests: XCTestCase {
 
     /// Red on the old exclusion: --follow beside --tasks or --memory was refused (rframe.c:674-675, #446).
     func testFollowTakesTasksAndMemory() {
-        for a in [["--follow", "--tasks"], ["--follow", "--memory"], ["--follow", "--tasks", "--memory"], ["--tasks", "--follow", "--memory"]] {
+        for a in [["--follow", "--tasks"], ["--follow", "--memory"], ["--follow", "--tasks", "--memory"], ["--tasks", "--follow", "--memory"],
+                  ["--tasks", "--follow"], ["--memory", "--follow"]] {
             XCTAssertTrue(why(["--json"] + a) == nil, a.joined(separator: " "))
         }
         for a in [["--follow", "--clear"], ["--follow", "--search", "ab"], ["--follow", "--ref", "x"], ["--follow", "--chapter", "c1"],

@@ -38,8 +38,12 @@ final class ProcessRunTests: XCTestCase {
 
     private func luaRun(_ rt: LuaRuntime, _ opts: String) throws -> [String: Any] {
         try rt.run("function probe() return host.json.encode(host.process.run(\(opts))) end")
-        let json = try XCTUnwrap(try rt.callGlobal("probe"))
-        return try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        // the throwing calls stay outside XCTUnwrap: an error inside its autoclosure is a recorded failure, which the
+        // XCTAssertThrowsError rows below (a Lua raise) must not leave behind
+        let raw = try rt.callGlobal("probe")
+        let json = try XCTUnwrap(raw)
+        let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        return try XCTUnwrap(object as? [String: Any])
     }
 
     /// Lua's argv reaches the child as it is: no shell sees it, so a "; touch", "$(id)" or backticks stay text.
@@ -162,7 +166,9 @@ final class ProcessRunTests: XCTestCase {
         let lines = r.stdout.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.first, "[]|/usr/bin:/bin:/usr/sbin:/sbin|en_US.UTF-8|\(NSHomeDirectory())")
         XCTAssertTrue(lines.contains("read=1"), "stdin is not at EOF: \(lines)")
-        XCTAssertEqual(lines.last, dir.resolvingSymlinksInPath().path)
+        // realpath(3), as pwd -P: resolvingSymlinksInPath drops a leading /private (/var/folders is /private/var/folders)
+        let real = try XCTUnwrap(realpath(dir.path, nil).map { p in defer { free(p) }; return String(cString: p) })
+        XCTAssertEqual(lines.last, real)
         XCTAssertEqual(r.status, 0)
     }
 

@@ -441,7 +441,7 @@ final class DchCtlTests: XCTestCase {
         on.conn.ctl.xray = { true }
         send(on, Self.ctl(["--xray", "alpha"]))
         XCTAssertTrue(wait(5) { on.closes.count == 1 })
-        XCTAssertEqual(Self.object(all(on).first)["message"] as? String, "--xray needs --json", "with the gate on, its shape")
+        XCTAssertEqual(Self.object(all(on).first)["message"] as? String, "--xray needs --json (the view is client-side only)", "with the gate on, its shape")
     }
 
     /// amendment 3: --xray --follow streams with no timeout and no cap; a close sends SIGTERM, as for --follow.
