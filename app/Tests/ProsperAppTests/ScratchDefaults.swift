@@ -4,7 +4,15 @@ import XCTest
 
 /// #341: every test file and dir lives under $TMPDIR/prosper-tests/, never the $TMPDIR root
 /// (millions of entries on a dev Mac, 30-100 ms per create there, and leaks pile up).
-let testTempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("prosper-tests", isDirectory: true)
+/// #1508: FileManager.temporaryDirectory ignores a TMPDIR set in the environment on macOS, so an
+/// absolute TMPDIR (the heavy runner sets one per shard) is honoured here; anything else falls back.
+func tempRoot(environment: [String: String], fallback: URL) -> URL {
+    guard let t = environment["TMPDIR"], t.hasPrefix("/") else { return fallback }
+    return URL(fileURLWithPath: t, isDirectory: true)
+}
+
+let testTempRoot = tempRoot(environment: ProcessInfo.processInfo.environment, fallback: FileManager.default.temporaryDirectory)
+    .appendingPathComponent("prosper-tests", isDirectory: true)
 
 extension XCTestCase {
     /// A fresh, existing directory `prosper-tests/<label>-<8 hex>/`, removed at teardown.
