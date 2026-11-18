@@ -91,7 +91,7 @@ enum AgentMenuSymbol {
     /// Every name above, for the test that resolves each one (a typo draws no image).
     static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
                                    chapters, splitRight, splitDown, zoom, equalize, closePane, newSession, folder, chooseFolder,
-                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, xray]
+                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, model, effort, xray]
 }
 
 extension AgentWindowVerb {
