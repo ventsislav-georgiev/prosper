@@ -102,15 +102,16 @@ final class IncreaseContrastIslandTests: XCTestCase {
         // #1452: 26, TIP's ten faded-white inks back for Follow theme off (the shown tab, the History row's title and status,
         // the prompt card's context, Open terminal, plain answer, digit, hint and detail, the draft).
         // #1452 b: 29, the live session row's own white inks for Follow theme off (title, quiet words, a glyph with no state).
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 29, "the ear count, the text sites on the black shape and the shown tab's fallback")
+        // #1537: 30, the plan usage line's ink, dim like the header counts (Neon.faded(.white, 0.7)).
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 30, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
 
         let sessions = [
             "foregroundStyle(Neon.faded(Neon.textSecondary, 0.8))",
-            "Neon.faded(Neon.textSecondary, 0.6) : agentStateColor(row.state)",
-            ".strokeBorder(Neon.faded(Neon.blue, active ? 0.9 : 0.6), lineWidth: 1))",
+            "Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(row.state)",   // #1339: the glyph's 3:1 ink on light themes
+            "edge: Neon.faded(Neon.blue, active ? 0.9 : 0.6))",   // #1111: the chip is PositionKeyCap, its edge the stroke
             ".overlay(Capsule().stroke(Neon.faded(tint, 0.45), lineWidth: 1))",
         ]
         for line in sessions { XCTAssertEqual(Self.count(line, in: win), 1, line) }

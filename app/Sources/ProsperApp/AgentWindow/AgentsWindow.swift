@@ -1779,15 +1779,22 @@ extension AgentSidebarRowView {
         HStack(spacing: sz(4)) {
             mark
             HStack(alignment: .top, spacing: sz(1)) {
-                Text(name).font(Neon.font(11, weight: .medium)).foregroundStyle(ink).lineLimit(1).truncationMode(.tail)
-                    .modifier(AgentSidebarRowProbe(kind: "miniName", title: title))
+                // A cut Text is as wide as its whole glyphs, up to a glyph short of what it was offered: a name that does not fit
+                // takes the whole offer, so its slot ends at the superscript (a short one stays its own width).
+                ViewThatFits(in: .horizontal) {
+                    Text(name).fixedSize()
+                    Text(name).lineLimit(1).truncationMode(.tail).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(Neon.font(11, weight: .medium)).foregroundStyle(ink)
+                .modifier(AgentSidebarRowProbe(kind: "miniName", title: title))
                 ZStack(alignment: .leading) {
                     ForEach(1...9, id: \.self) { miniSuperscript($0, selected: selected).hidden() }
                     if let number { miniSuperscript(number, selected: selected).modifier(AgentSidebarRowProbe(kind: "miniSup", title: title)) }
                 }
             }
-            .layoutPriority(1)   // #1539: the name takes the row up to the needs-you slot before the spacer gets any
-            Spacer(minLength: 0)
+            // #1539: the name takes the row up to the needs-you slot. #1585: a frame, not a Spacer, takes a short name's rest
+            // (a zero-width Spacer still had the stack's spacing on both sides: sz(4) empty after a cut name's superscript).
+            .frame(maxWidth: .infinity, alignment: .leading)
             needs()
         }
         .padding(.horizontal, sz(6))

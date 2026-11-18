@@ -24,20 +24,25 @@ extension AgentWindowD1Tests {
         return (light, dark)
     }
 
+    /// The store at its defaults (opacity 1, frost off, UI size 1.0, no probe theme). Each backing's pass starts here:
+    /// a pass that started where the last one ended would apply the same UI size and opacity again, a no-op (x2 read 10.2
+    /// before and after "UI size", CI run 44297110831).
+    @MainActor
+    func rethemeReset() {
+        ThemeStore.shared.setOpacity(1.0)
+        ThemeStore.shared.setFrost(false)
+        ThemeStore.shared.setScale(1.0)
+        Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
+        ThemeStore.shared.setAvailable([])
+    }
+
     @MainActor
     func withRethemeStore(_ body: () throws -> Void) rethrows {
         let saved = (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost, Preferences.agentWindowTerminalFontSize)
-        func reset() {
-            ThemeStore.shared.setOpacity(1.0)
-            ThemeStore.shared.setFrost(false)
-            ThemeStore.shared.setScale(1.0)
-            Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
-            ThemeStore.shared.setAvailable([])
-        }
-        reset()
+        rethemeReset()
         Preferences.agentWindowTerminalFontSize = nil   // the terminal's size follows the UI size (12 x scale)
         defer {
-            reset()
+            rethemeReset()
             (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost) = (saved.0, saved.1, saved.2)
             Preferences.agentWindowTerminalFontSize = saved.3
         }
@@ -85,6 +90,7 @@ extension AgentWindowD1Tests {
         try withRethemeStore {
             let probes = try rethemeProbes()
             for backing: CGFloat in [1, 2] {
+                rethemeReset()
                 let (m, key, log) = rethemeModel()
                 defer { m.close() }
                 XCTAssertEqual(log.spawned().count, 1, "attached once (x\(Int(backing)))")
@@ -134,6 +140,7 @@ extension AgentWindowD1Tests {
         try withRethemeStore {
             let probes = try rethemeProbes()
             for backing: CGFloat in [1, 2] {
+                rethemeReset()
                 let (m, key, _) = rethemeModel()
                 defer { m.close() }
                 let rig = OverlayRig(m, size: CGSize(width: 1000, height: 680), backing: backing)

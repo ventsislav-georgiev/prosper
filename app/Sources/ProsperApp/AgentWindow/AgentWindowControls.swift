@@ -1228,8 +1228,13 @@ struct AgentRenameField: NSViewRepresentable {
         /// ViewThatFits variants) ends editing before it learns it is leaving, and the field built in its place
         /// may come after; only a field still the edit's own then ends it.
         /// r2: the field is held until then, so a field freed meanwhile still ends its edit (finish needs it).
+        /// #1585: a field editing again by then never lost the focus (a makeFirstResponder on the field that already had it
+        /// resigns its field editor and takes a new one at once): the edit goes on.
         func controlTextDidEndEditing(_ obj: Notification) {
-            DispatchQueue.main.async { [self, field] in MainActor.assumeIsolated { withExtendedLifetime(field) { finish(nil) } } }
+            DispatchQueue.main.async { [self, field] in MainActor.assumeIsolated { withExtendedLifetime(field) {
+                if field?.currentEditor() != nil { return }
+                finish(nil)
+            } } }
         }
     }
 }

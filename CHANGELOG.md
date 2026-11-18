@@ -1972,6 +1972,8 @@ tag from the now-released section and put it on the new top draft.
   the phone now says why under the fan controls. (#982)
 - Agent Sessions: adding or closing a second pane no longer rebuilds the focused pane's terminal
   view when the top band appears or goes away. (#1586)
+- Agent Sessions Mini: a long session name now uses the whole row up to its Command number, with no
+  empty gap before the needs-you dot. (#1585)
 
 ## v2.174.0
 
