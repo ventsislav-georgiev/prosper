@@ -1957,8 +1957,8 @@ tag from the now-released section and put it on the new top draft.
   host whose dch has no X-ray says so, and Esc in the terminal closes an open card. (#1568)
 - X-ray: an extension can now teach Terminal panes its own refs (say ACME-12): a ref that shows at
   least twice on screen is underlined, and hovering or pinning it shows a card the extension fills
-  in, with up to four open or copy actions. An example extension is in app/Examples/extensions/xref-
-  example. (#1569)
+  in, with up to four open or copy actions. An example extension is in
+  app/Examples/extensions/xref-example. (#1569)
 - Agent Sessions: trackpad scrolling in a terminal pane ends smoothly, because every momentum phase now reaches the
   terminal (libghostty-spm fork 2.2.2026110702-prosper.2). (#1468)
 
