@@ -451,6 +451,12 @@ final class AgentsNSWindow: NSWindow {
         model?.setSidebarMode(m)
     }
 
+    /// #1538: the Go menu's Edit Layout (no key) through the window as every item (#1586): the model's toggle.
+    func performEditLayout() {
+        lastPerformed = .editLayout
+        model?.toggleLayoutEditing()
+    }
+
     /// #1359: what a routed key does, for the key (performKeyEquivalent) and the Go menu's items alike: one function.
     /// False: not the window's (.sidebar, .pass, a refused Command-T), so the key goes on to super.
     @discardableResult func perform(_ r: KeyRoute) -> Bool {
@@ -764,18 +770,16 @@ struct AgentWindowRootView: View {
             }
             // #831 9.1: the band over the pane area, one whatever the number of panes, only while the split gate is on
             // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
-            Group {
-                if AgentWindowBand.shows(model) {
-                    // #900 B2 step 3: the band's chip reads the pane area from this geometry (the model's paneArea is
-                    // not published, so a resize to too small would not redraw the band).
-                    GeometryReader { proxy in
-                        VStack(spacing: 0) {
-                            AgentWindowBand(model: model, area: CGRect(x: 0, y: 0, width: proxy.size.width,
-                                                                       height: max(0, proxy.size.height - AgentWindowBand.height)))
-                            AgentPaneArea(model: model, scrolls: scrolls)
-                        }
+            // #900 B2 step 3: the band's chip reads the pane area from this geometry (the model's paneArea is
+            // not published, so a resize to too small would not redraw the band).
+            // #1586: the pane area keeps one place in the tree whether the band shows or not (#1538 flips it at two
+            // panes), so a band coming or going never remakes the panes' terminals.
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    if AgentWindowBand.shows(model) {
+                        AgentWindowBand(model: model, area: CGRect(x: 0, y: 0, width: proxy.size.width,
+                                                                   height: max(0, proxy.size.height - AgentWindowBand.height)))
                     }
-                } else {
                     AgentPaneArea(model: model, scrolls: scrolls)
                 }
             }

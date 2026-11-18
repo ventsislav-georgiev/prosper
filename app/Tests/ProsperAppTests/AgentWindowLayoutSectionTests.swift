@@ -431,6 +431,11 @@ extension AgentWindowD1Tests {
         _ = ThemeStore.shared   // seeds ThemeRuntime.scale first, before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
+        // #1538: the band shows only with something in it, and one layout of one pane has nothing; the sidebar hidden
+        // (both models) gives it the show glyph, so the slot-less band is built at the same width as the two-layout one.
+        let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
+        defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
+        Preferences.agentWindowSidebarHidden = true
         let size = CGSize(width: 1400, height: 800)
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale

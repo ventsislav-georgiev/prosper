@@ -73,7 +73,9 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(AgentsNSWindow.layoutKey(e, m, responder: r), "\(e.keyCode) \(r)")
             }
             let today = AgentsNSWindow.route(e, responder: .terminal, sidebarFocused: false, terminalMode: true)
-            XCTAssertEqual(today, e.modifierFlags.contains(.command) ? AgentsNSWindow.KeyRoute.jump(1) : .pass, "\(e.keyCode): today's route")
+            // #1111: ⌃Tab routes to the group's step (perform gives false outside a group, so the key still goes on)
+            let expected: AgentsNSWindow.KeyRoute = e.modifierFlags.contains(.command) ? .jump(1) : e.keyCode == 48 ? .member(1) : .pass
+            XCTAssertEqual(today, expected, "\(e.keyCode): today's route")
         }
         XCTAssertEqual(m.layout, before)
         XCTAssertEqual(m.layoutWrites, 0, "nothing written")

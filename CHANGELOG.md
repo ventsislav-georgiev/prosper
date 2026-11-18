@@ -1970,6 +1970,8 @@ tag from the now-released section and put it on the new top draft.
 - Turning on manual fan control no longer stays on "Enabling manual control…" when the helper's
   registration hangs on a later fan, and a Manual click dropped by a sleep or an Automatic chosen on
   the phone now says why under the fan controls. (#982)
+- Agent Sessions: adding or closing a second pane no longer rebuilds the focused pane's terminal
+  view when the top band appears or goes away. (#1586)
 
 ## v2.174.0
 

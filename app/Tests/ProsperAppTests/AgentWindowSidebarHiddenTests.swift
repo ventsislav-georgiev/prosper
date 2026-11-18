@@ -123,7 +123,9 @@ extension AgentWindowD1Tests {
             let sidebar = m.sidebarFrame(in: size), area = m.paneAreaFrame(in: size)
             let side = measuredSidebarWidth(), lead = side + 1   // #1470 a2: TIP's sz(290) plus the chip column's growth
             XCTAssertEqual(sidebar, CGRect(x: 0, y: 0, width: side, height: 900))
-            XCTAssertEqual(area, CGRect(x: lead, y: 30, width: 1600 - lead, height: 870))
+            // #1538: shown, one pane, no saved layout: no band (nothing to show), the pane area from y = 0; hidden: the
+            // band's show-sidebar glyph, so 30 below
+            XCTAssertEqual(area, CGRect(x: lead, y: 0, width: 1600 - lead, height: 900))
             XCTAssertTrue(m.perform(.toggleSidebar))
             XCTAssertTrue(m.sidebarFrame(in: size) == nil, "hidden: no sidebar frame")
             XCTAssertEqual(m.paneAreaFrame(in: size), CGRect(x: 0, y: 30, width: 1600, height: 870), "from x = 0")
@@ -291,6 +293,7 @@ extension AgentWindowD1Tests {
                 AgentPaneLayout.splitsEnabled = false
                 let off = try sidebarTitleFrame(m, size)
                 AgentPaneLayout.splitsEnabled = true
+                bandTwoPanes(m)   // #1538: the band shows only with something in it (two panes here)
                 let on = try sidebarTitleFrame(m, size)
                 // Screen coordinates, bottom-left origin: lower on screen is a smaller y.
                 XCTAssertEqual(off.minY - on.minY, AgentWindowBand.height, accuracy: pixel, "the band's height (\(scale))")

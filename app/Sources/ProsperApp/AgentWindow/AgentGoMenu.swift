@@ -137,7 +137,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         case .key(let r): window.perform(r)
         case .pane(let a): window.perform(pane: a)
         case .sidebarMode(let m): window.perform(mode: m)
-        case .editLayout: window.model?.toggleLayoutEditing()
+        case .editLayout: window.performEditLayout()
         }
     }
 

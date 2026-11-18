@@ -63,7 +63,18 @@ final class AgentGoMenuTests: XCTestCase {
         go.menuNeedsUpdate(menu)
         let items = menu.items.filter { !$0.isSeparatorItem }
         XCTAssertEqual(items.count, go.shown.count)
-        XCTAssertEqual(items.count, 43, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on")
+        XCTAssertEqual(items.count, 44, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
+        // #1586: the list itself, literal (no model: one pane, so #1367's Command-W item reads Close Window)
+        XCTAssertEqual(items.map(\.title), [
+            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
+            "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
+            "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
+            "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",
+            "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Bigger Text",
+            "Smaller Text", "Actual Size", "New Session", "New Shell", "Stop or Remove", "Close Window",
+            "Next Needs You", "Toggle Sidebar", "Split Right", "Split Down", "Next Pane", "Previous Pane", "Zoom Pane",
+            "Edit Layout", "Full Sidebar", "Mini Sidebar", "Slide-In Sidebar",
+        ])
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
             XCTAssertEqual(item.action, #selector(AgentGoMenu.pick(_:)), item.title)

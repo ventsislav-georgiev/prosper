@@ -770,10 +770,13 @@ final class AgentIslandControlsTests: XCTestCase {
         let release = DispatchSemaphore(value: 0)
         var pidGate: DispatchSemaphore?
         let launched = DispatchSemaphore(value: 0)
+        /// #1586: the launch has begun (before `pidGate`): past the runner's #1104 cancelled-before-launch check.
+        let entered = DispatchSemaphore(value: 0)
 
         func runner(bound: TimeInterval = 60) -> DchActionRunner {
             DchActionRunner(bound: bound, launch: { path, args, env, cwd, onPid, onOutput in
                 self.lock.withLock { self.launches.append((path, args, env["DCH_SOCKET_DIR"], cwd)); self.envs.append(env) }
+                self.entered.signal()
                 self.pidGate?.wait()
                 onPid(4242)
                 let early = self.lock.withLock { Data(self.progress.utf8) }
@@ -949,6 +952,8 @@ final class AgentIslandControlsTests: XCTestCase {
         let gate = DispatchSemaphore(value: 0)
         f.pidGate = gate
         XCTAssertTrue(runner.start(k, path: "/fake/dch", args: [], env: { [:] }, done: res.add))
+        // #1586: cancel once the launch has begun, as the row means (sooner is #1104's launch-nothing path, a slow runner's race)
+        XCTAssertEqual(f.entered.wait(timeout: .now() + 5), .success)
         runner.cancel(k)
         XCTAssertEqual(f.sent, [])
         gate.signal()

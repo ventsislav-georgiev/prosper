@@ -181,6 +181,8 @@ final class AgentWindowGroupChordTests: XCTestCase {
             win.isReleasedWhenClosed = false
             defer { win.close() }
             win.model = m
+            var raised = 0
+            win.raise = { _ in raised += 1 }   // #1586 (QA 1092's belt): the recorder first: the real key-and-front never runs
             m.click(key("api"))
             XCTAssertTrue(win.enabled(.key(.member(1))))
             XCTAssertTrue(win.enabled(.key(.member(-1))))
@@ -199,6 +201,7 @@ final class AgentWindowGroupChordTests: XCTestCase {
             XCTAssertEqual(PaneKeys.action(for: tab(), context: gateOn), .previousLayout, "control: #901's chord with the gate on")
             win.sendEvent(tab())
             XCTAssertEqual(m.selection, key("api-2"), "the group's step ran first")
+            XCTAssertEqual(raised, 0, "a key asks no key and front")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }

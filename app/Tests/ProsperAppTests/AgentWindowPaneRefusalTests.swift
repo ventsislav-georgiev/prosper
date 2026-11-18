@@ -572,7 +572,8 @@ extension AgentWindowD1Tests {
         // #1471: AgentWindowChapterListTests left the list with its Transcript-only rows (no gate-on sendEvent now)
         let listed: Set<String> = ["AgentWindowKeyFocusTests.swift",
                                    "AgentWindowSplitTerminalBTests.swift",   // #1477 b2 (R1477b-m1): right / middle clicks
-                                   "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift"]
+                                   "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift",
+                                   "AgentWindowGroupChordTests.swift"]   // #1111: Control-Tab through sendEvent, gate on
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil)
         var found: Set<String> = [], raises: [String: Bool] = [:], read = 0
