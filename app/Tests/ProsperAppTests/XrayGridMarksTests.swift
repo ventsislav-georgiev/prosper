@@ -248,7 +248,6 @@ final class XrayGridMarksTests: XCTestCase {
                 XCTAssertEqual(fake.args.last.map { Array($0.prefix(3)) }, ["--xray", "shell", "--follow"])
                 fake.send(fake.args.count, Self.snapshot())
                 XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
-                XCTAssertTrue(XrayRefCache.focused(in: w) == nil, "no transcript: the old path had nothing")
                 let refs = try XCTUnwrap(XrayRefLink.terminalRefs(w, shell))
                 XCTAssertEqual(refs.target, XrayTarget(name: "shell", dir: shell.dir))
                 XCTAssertTrue(XrayRefLink.terminalRefs(w, local) == nil, "another session")

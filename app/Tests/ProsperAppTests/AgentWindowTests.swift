@@ -153,17 +153,6 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertEqual(a.blocks[1].children.count, 1)
     }
 
-    // QA #621 F4: model text links open http/https only.
-    func testMarkdownLinksKeepOnlyHttpAndHttps() throws {
-        let a = try XCTUnwrap(transcriptMarkdown(
-            "[a](https://a.test/x) [b](http://b.test) [c](prosper://sleep) [d](file:///tmp/x.command) "
-            + "[e](javascript:alert(1)) [f](mailto:f@example.com) <prosper://sleep> ![g](file:///tmp/g.png)"))
-        XCTAssertEqual(a.runs.compactMap { $0.link?.absoluteString }, ["https://a.test/x", "http://b.test"])
-        XCTAssertTrue(a.runs.allSatisfy { $0.imageURL == nil })
-        let plain = String(a.characters)
-        for t in ["a", "b", "c", "d", "e", "f"] { XCTAssertTrue(plain.contains(t), "\(t) stays as text: \(plain)") }
-    }
-
     // QA #621 INFO-2: "Show all" on the text of a [thinking, text] line expands the text.
     func testExpandReturnsTheClipItWasCutFrom() throws {
         let think = String(repeating: "t", count: 7000), say = String(repeating: "s", count: 7000)

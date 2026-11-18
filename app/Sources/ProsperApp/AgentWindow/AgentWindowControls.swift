@@ -1286,19 +1286,3 @@ private struct OpenInTerminalLabelStyle: LabelStyle {
     }
 }
 
-/// Inline Markdown for model text, with links only for http/https. Model output is
-/// untrusted: any other scheme (prosper://sleep, file://, javascript:, mailto:, other
-/// apps' schemes) is reduced to plain text, so it is neither drawn as a link nor clickable.
-func transcriptMarkdown(_ s: String) -> AttributedString? {
-    guard var a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-    else { return nil }
-    let unsafe = a.runs.filter { r in
-        r.imageURL != nil || r.link.map { !["http", "https"].contains($0.scheme?.lowercased() ?? "") } == true
-    }.map(\.range)
-    for r in unsafe {
-        a[r].link = nil
-        a[r].imageURL = nil
-    }
-    return a
-}
-

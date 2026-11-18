@@ -606,7 +606,7 @@ final class XrayPanelModel: ObservableObject {
                    XrayChapterCard.size) { [weak read] in read?.cancel() }
     }
 
-    /// #1472: a link in the chapter card (XrayRefScope's rule for the transcript's): a ref of this panel's read opens
+    /// #1472: a link in the chapter card (XrayRefLink.open's rule): a ref of this panel's read opens
     /// its ref card; http, https and mailto: go to the system; anything else is dropped.
     func openLink(_ url: URL) -> XrayRefLink.Outcome {
         XrayRefLink.open(url, refs: refs) { [weak self] in self?.openRef($0) }

@@ -87,18 +87,13 @@ final class XrayRefSpansTests: XCTestCase {
         XCTAssertEqual(texts("#1, #12", XrayRefSpans.find("#1, #12", refs)), ["#1", "#12"], "#1 never inside #12")
     }
 
-    /// Red without the code-span skip, in raw text (find) and in Markdown code runs (decorate).
+    /// Red without the code-span skip in raw text (find).
     func testInsideACodeSpanGivesNone() throws {
         let refs = try F.parsed().entries
         let s = "`#12` and `see #12` but #12"
         let spans = XrayRefSpans.find(s, refs)
         XCTAssertEqual(texts(s, spans), ["#12"])
         XCTAssertEqual(spans.first?.range.lowerBound, s.range(of: "but #12").map { s.index($0.lowerBound, offsetBy: 4) })
-        var a = try XCTUnwrap(transcriptMarkdown("`#12` then #12"))
-        XrayRefSpans.decorate(&a, refs: refs, color: .white)
-        XCTAssertEqual(F.links(a).count, 1)
-        let code = a.runs.first { $0.inlinePresentationIntent?.contains(.code) == true }
-        XCTAssertTrue(code?.link == nil, "the code run keeps no link")
     }
 
     /// #1419 (R1418-i1): find over 2000 underlined refs and a 2 KB clip, as one clip pass draws it, stays under 2 s (the
@@ -129,127 +124,22 @@ final class XrayRefSpansTests: XCTestCase {
     /// (M4b), and lays out to the same size.
     func testDecorationKeepsRunsAndRects() throws {
         let refs = try F.parsed().entries.filter(\.underline)
-        let s = "Fix **#12** now; the login retries in #12 were the cause, see `#12` and https://example.org/acme for more."
-        let plain = try XCTUnwrap(transcriptMarkdown(s))
-        let decorated = try XCTUnwrap(F.gateOn { XrayRefSpans.attributed(s, markdown: true, refs: refs, color: .white) })
+        let s = "Fix #12 now; the login retries in #12 were the cause, see `#12` and https://example.org/acme for more."
+        let plain = AttributedString(s)
+        let decorated = try XCTUnwrap(F.gateOn { XrayRefSpans.attributed(s, refs: refs, color: .white) })
         let key = try XCTUnwrap(XrayRefLink.url("issue:#12"))
         XCTAssertEqual(F.links(decorated).filter { $0.scheme == "prosper-xray" }, [key, key])
         let underlined = decorated.runs.filter { $0[AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self] != nil }
         XCTAssertEqual(underlined.count, 2)
-        // the https link Markdown made stays; the plain text has no underline of its own
         var stripped = decorated.transformingAttributes(\.link) { if $0.value?.scheme == "prosper-xray" { $0.value = nil } }
         stripped[AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self] = nil
-        XCTAssertEqual(F.links(stripped), [try XCTUnwrap(URL(string: "https://example.org/acme"))])
+        XCTAssertEqual(F.links(stripped), [])
         XCTAssertEqual(stripped, plain, "every other run and attribute as before")
         func size(_ a: AttributedString) -> CGSize {
             NSHostingView(rootView: Text(a).font(Neon.font(12.5)).fixedSize(horizontal: false, vertical: true)
                 .frame(width: 220)).fittingSize
         }
         XCTAssertEqual(size(decorated), size(plain))
-    }
-}
-
-@MainActor
-final class XrayRefCacheTests: XCTestCase {
-    typealias F = XrayRefLinkFixture
-    let key = AgentSessionKey(dir: "/tmp/dch-test", name: "api")
-
-    func cache(_ run: XrayRefRunTests.Run, _ clock: @escaping () -> Date, _ focus: @escaping @MainActor () -> XrayRefCache.Focus?) -> XrayRefCache {
-        run.answer = (0, XrayRefsParseTests.object(refs: F.refs))
-        let c = XrayRefCache()
-        (c.dch, c.run, c.now, c.focus) = ({ "/fake/dch" }, run.run, clock, focus)
-        return c
-    }
-
-    func focus(active: Bool = true, session: String = F.sessionID, mark: Int) -> XrayRefCache.Focus {
-        XrayRefCache.Focus(active: active, target: XrayRefRunTests.local, key: key, sessionID: session, mark: mark)
-    }
-
-    /// Red if a tick reads while blurred or hidden (M4e) or reads again with no growth.
-    func testOneReadOnFocusNoneWhileBlurredOrHidden() async throws {
-        let run = XrayRefRunTests.Run()
-        var clock = Date(timeIntervalSince1970: 1_000_000)
-        var f: XrayRefCache.Focus? = focus(active: false, mark: 5)
-        let c = cache(run, { clock }, { f })
-        for _ in 0..<3 { c.tick() }
-        f = nil   // no focus: no window model, a remote row (#1357: a Terminal pane has one now)
-        c.tick()
-        XCTAssertEqual(run.calls.count, 0, "blurred, hidden or no focus: no read")
-        f = focus(mark: 5)
-        c.tick()
-        await c.reading?.value
-        XCTAssertEqual(run.calls, [["--xray", "api", "--json"]])
-        XCTAssertEqual(c.refs(key, sessionID: F.sessionID)?.entries.count, 3)
-        clock += 60
-        c.tick()
-        XCTAssertEqual(run.calls.count, 1, "no growth: no read")
-        f = focus(active: false, mark: 9)
-        c.tick()
-        XCTAssertEqual(run.calls.count, 1, "grown and 60 s on, but blurred: no read")
-    }
-
-    /// Red if a growth inside 30 s, or 30 s without growth, reads again.
-    func testRereadOnlyAfterGrowthAnd30s() async throws {
-        let run = XrayRefRunTests.Run()
-        var clock = Date(timeIntervalSince1970: 1_000_000)
-        var f: XrayRefCache.Focus? = focus(mark: 5)
-        let c = cache(run, { clock }, { f })
-        c.tick()
-        await c.reading?.value
-        f = focus(mark: 6)
-        clock += 29
-        c.tick()
-        XCTAssertEqual(run.calls.count, 1, "grown, 29 s: no read")
-        f = focus(mark: 5)
-        clock += 1
-        c.tick()
-        XCTAssertEqual(run.calls.count, 1, "30 s, not grown: no read")
-        f = focus(mark: 6)
-        c.tick()
-        await c.reading?.value
-        XCTAssertEqual(run.calls.count, 2, "grown and 30 s: one read")
-    }
-
-    /// Red if another session_id (a /clear or resume) keeps the old refs.
-    func testASessionIDChangeDropsTheEntry() async throws {
-        let run = XrayRefRunTests.Run()
-        let clock = Date(timeIntervalSince1970: 1_000_000)
-        var f: XrayRefCache.Focus? = focus(mark: 5)
-        let c = cache(run, { clock }, { f })
-        c.tick()
-        await c.reading?.value
-        XCTAssertNotNil(c.refs(key, sessionID: F.sessionID))
-        f = focus(session: "1c2d3e4f-0000-4000-8000-000000000002", mark: 5)
-        c.tick()
-        XCTAssertTrue(c.entries[key]?.sessionID == nil, "dropped at once")
-        XCTAssertTrue(c.refs(key, sessionID: F.sessionID) == nil)
-        await c.reading?.value
-        XCTAssertEqual(run.calls.count, 2, "the new conversation is read")
-        XCTAssertEqual(c.entries[key]?.sessionID, "1c2d3e4f-0000-4000-8000-000000000002")
-        XCTAssertTrue(c.refs(key, sessionID: "1c2d3e4f-0000-4000-8000-000000000002") == nil,
-                      "dch answered for the old conversation: nothing drawn")
-    }
-
-    /// Red if the window's close leaves the cache or its entries.
-    func testWindowCloseEmptiesTheCache() async throws {
-        let run = XrayRefRunTests.Run()
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
-        w.isReleasedWhenClosed = false
-        let f = focus(mark: 5)
-        let c = XrayRefCache.of(w) { f }
-        (c.dch, c.run) = ({ "/fake/dch" }, run.run)
-        run.answer = (0, XrayRefsParseTests.object(refs: F.refs))
-        c.tick()
-        await c.reading?.value
-        XCTAssertEqual(c.entries.count, 1)
-        XCTAssertTrue(XrayRefCache.of(w) { nil } === c, "one cache per window")
-        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: w)   // never shown: no close runs
-        let end = Date().addingTimeInterval(2)
-        while !c.entries.isEmpty, Date() < end { try? await Task.sleep(nanoseconds: 1_000_000) }
-        XCTAssertEqual(c.entries.count, 0)
-        let next = XrayRefCache.of(w) { nil }
-        XCTAssertFalse(next === c, "a closed window's cache is gone")
-        next.clear()
     }
 }
 
@@ -296,7 +186,7 @@ final class XrayRefOpenTests: XCTestCase {
         let refs = try F.parsed().entries.filter(\.underline)
         XCTAssertTrue(XrayRefLink.ships, "gate B ships on")
         XCTAssertTrue(XrayRefLink.decorate(), "the product default follows ships")
-        let a = try XCTUnwrap(XrayRefSpans.attributed("#12 here", markdown: true, refs: refs, color: .white), "no override: linked")
+        let a = try XCTUnwrap(XrayRefSpans.attributed("#12 here", refs: refs, color: .white), "no override: linked")
         XCTAssertEqual(F.links(a).count, 1)
     }
 
@@ -307,7 +197,7 @@ final class XrayRefOpenTests: XCTestCase {
         let old = XrayRefLink.decorate
         XrayRefLink.decorate = { false }
         defer { XrayRefLink.decorate = old }
-        XCTAssertTrue(XrayRefSpans.attributed("#12 here", markdown: true, refs: refs, color: .white) == nil)
+        XCTAssertTrue(XrayRefSpans.attributed("#12 here", refs: refs, color: .white) == nil)
     }
 
     /// #1419 (R1418-i1): XrayRefLink.panel opens its card on the pane's panel: a new one on the target with the refs and the

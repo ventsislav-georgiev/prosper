@@ -137,7 +137,6 @@ final class XrayTerminalRefTests: XCTestCase {
     func testAWindowWithoutAModelOpensNothing() {
         let w = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
         w.isReleasedWhenClosed = false
-        XCTAssertTrue(XrayRefCache.focused(in: w) == nil)
         XCTAssertTrue(XrayRefLink.terminalRefs(w, local) == nil)
         XCTAssertFalse(XrayRefLink.openOnGrid(w, key: local, line: "fix #12 now", column: 4))
         XCTAssertFalse(XrayRefLink.openOnGrid(nil, key: local, line: "fix #12 now", column: 4))

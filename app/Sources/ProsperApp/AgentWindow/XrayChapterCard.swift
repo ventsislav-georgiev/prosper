@@ -104,14 +104,14 @@ struct XrayChapterCard: View {
         }
         .padding(sz(12))
         .environment(\.openURL, OpenURLAction { url in
-            let outcome = MainActor.assumeIsolated { link(url) }   // SwiftUI calls the action on main (as XrayRefScope)
+            let outcome = MainActor.assumeIsolated { link(url) }   // SwiftUI calls the action on main (as the terminal link)
             return switch outcome { case .handled: .handled; case .system: .systemAction; case .discarded: .discarded }
         })
     }
 
     private func answerText(_ answer: String?, empty: String) -> some View {
         Group {
-            if let answer, let a = XrayRefSpans.attributed(answer, markdown: false, refs: refs, color: Neon.blue) {
+            if let answer, let a = XrayRefSpans.attributed(answer, refs: refs, color: Neon.blue) {
                 Text(a)
             } else {
                 Text(verbatim: answer ?? empty)

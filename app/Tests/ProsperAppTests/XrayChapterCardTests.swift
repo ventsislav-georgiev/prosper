@@ -152,7 +152,7 @@ final class XrayChapterCardTests: XCTestCase {
         c.response = "Fixed in #12, see the notes"
         let answer = try XCTUnwrap(XrayChapterCard.response(c))
         let a = try XCTUnwrap(XrayRefLinkFixture.gateOn {
-            XrayRefSpans.attributed(answer, markdown: false, refs: refs.entries, color: .blue)
+            XrayRefSpans.attributed(answer, refs: refs.entries, color: .blue)
         })
         let url = try XCTUnwrap(XrayRefLinkFixture.links(a).first)
         XCTAssertEqual(p.openLink(url), .handled)
