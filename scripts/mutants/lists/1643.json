@@ -1,0 +1,13 @@
+{
+  "entry": 1643,
+  "filter": "XrayFollowTasksTests|XrayRefsParseTests|XrayRefResultsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+  "mutants": [
+    {
+      "name": "head-ignored",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+      "old": "bytes == o.bytes && head == o.head && done",
+      "new": "bytes == o.bytes && done",
+      "expect": "killed"
+    }
+  ]
+}

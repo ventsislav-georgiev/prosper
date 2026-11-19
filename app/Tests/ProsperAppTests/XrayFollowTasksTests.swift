@@ -145,6 +145,30 @@ final class XrayFollowTasksTests: XCTestCase {
         XCTAssertEqual(f.state?.memory?.items.map(\.id), ["m1"])
     }
 
+    /// #1643 (QA r1 on #1642): Block.same compares the header too. The same task rows and done line resent under a header
+    /// whose source changed (none -> command; the title is padded so both headers have the same byte length, which the
+    /// `bytes` check cannot tell apart) are one more parse and the new source is shown. Red with head-ignored (the
+    /// `head == o.head` term dropped from Block.same, XrayFollow.swift:47): blockParses stays 1 and the source stays nil.
+    func testTheSameRowsUnderAHeaderWithAnotherSourceParseAgain() {
+        let f = XrayFollow(target: XrayFollowTests.target("api"))
+        let lines = { (ls: [String]) in ls.map { Data($0.utf8) } }
+        let head = { (source: String, title: String) in
+            #"{"schema":1,"session":"api","session_id":"s-1","source":"# + source + #","title":""# + title + #"","partial":false}"#
+        }
+        let (none, command) = (head("null", "Example Org api"), head(#""command""#, "Example Or"))
+        XCTAssertEqual(none.utf8.count, command.utf8.count, "equal byte length: only the head comparison can tell them apart")
+        let rows = ["1", "2"].map { Self.task($0) } + [Self.done]
+        f.take(lines([XrayFollowTests.snapshot(), none] + rows))
+        XCTAssertEqual(f.blockParses, 1)
+        XCTAssertTrue(f.state?.tasks?.source == nil)
+        f.take(lines([none] + rows))
+        XCTAssertEqual(f.blockParses, 1, "the same header and rows again: no parse")
+        f.take(lines([command] + rows))
+        XCTAssertEqual(f.blockParses, 2, "a changed header is a changed block")
+        XCTAssertEqual(f.state?.tasks?.source, "command")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["1", "2"])
+    }
+
     /// dch 1.92.0: a reset why "range" with a tail snapshot and its blocks, then a reset why "full" with the whole
     /// snapshot and its blocks. Each reset drops the follow's state; the panel shows each snapshot's rows.
     /// Red with reset-keeps-old (the six chapters and the first blocks stay through the second reset).
