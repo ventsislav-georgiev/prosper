@@ -1,0 +1,62 @@
+{
+ "entry": 1629,
+ "filter": "XrayFollowTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "split-rescan",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "var from = tail.endIndex, start = tail.startIndex",
+   "new": "var from = tail.startIndex, start = tail.startIndex",
+   "expect": "killed"
+  },
+  {
+   "name": "split-copy-per-line",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "            (start, from) = (nl + 1, nl + 1)\n",
+   "new": "            tail = Data(tail[(nl + 1)...]); touched &+= tail.count; (start, from) = (tail.startIndex, tail.startIndex)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "pending-per-batch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "return first && !ls.isEmpty",
+   "new": "return !ls.isEmpty",
+   "expect": "killed"
+  },
+  {
+   "name": "refs-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "refs = all || dirty.contains(\"refs\")",
+   "new": "refs = true",
+   "expect": "killed"
+  },
+  {
+   "name": "chapters-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "let chapters = all || dirty.contains(\"chapters\")",
+   "new": "let chapters = true",
+   "expect": "killed"
+  },
+  {
+   "name": "repeat-builds",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "(list[k] as? NSDictionary)?.isEqual(to: r) == true { continue }",
+   "new": "(list[k] as? NSDictionary)?.isEqual(to: r) == true { }",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-not-dirty",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "                dirty.insert(\"refs\")\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "snapshot-not-whole",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "let all = state == nil || dirty.contains(\"snapshot\")",
+   "new": "let all = state == nil",
+   "expect": "killed"
+  }
+ ]
+}
