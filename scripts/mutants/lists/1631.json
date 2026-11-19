@@ -1,0 +1,62 @@
+{
+ "entry": 1631,
+ "filter": "XrayFollowTests|XrayFollowTasksTests|XrayRefsParseTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "ref-cache-ignores-changed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefs.swift",
+   "old": "if let key, !changed.contains(key), let hit = cache.rows[key]",
+   "new": "if let key, let hit = cache.rows[key]",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-cache-never-hits",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefs.swift",
+   "old": "if let key, !changed.contains(key), let hit = cache.rows[key]",
+   "new": "if let key, false, let hit = cache.rows[key]",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-cache-keeps-twice-keys",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefs.swift",
+   "old": "for key in twice { next.removeValue(forKey: key) }",
+   "new": "_ = twice",
+   "expect": "killed"
+  },
+  {
+   "name": "snapshot-keeps-ref-cache",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if all { refCache.rows = [:] }",
+   "new": "if false { refCache.rows = [:] }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-generation-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard g == generation else { return }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "build-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard Self.buildOffMain() else { return land(builder.build(job), g) }",
+   "new": "guard false else { return land(builder.build(job), g) }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-repeat-row-skip",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if !gone, b.rows[i].line == d { return true }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-repeat-block-skip",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "let now = blocks[k], now.same(was) { return true }",
+   "new": "let now = blocks[k], false, now.same(was) { return true }",
+   "expect": "killed"
+  }
+ ]
+}
