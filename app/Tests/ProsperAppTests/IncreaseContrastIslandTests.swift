@@ -110,7 +110,7 @@ final class IncreaseContrastIslandTests: XCTestCase {
 
         let sessions = [
             "foregroundStyle(Neon.faded(Neon.textSecondary, 0.8))",
-            "Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(row.state)",   // #1339: the glyph's 3:1 ink on light themes
+            "Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(state)",   // #1339 (#1661: the shared static mark): the glyph's 3:1 ink on light themes
             "edge: Neon.faded(Neon.blue, active ? 0.9 : 0.6))",   // #1111: the chip is PositionKeyCap, its edge the stroke
             ".overlay(Capsule().stroke(Neon.faded(tint, 0.45), lineWidth: 1))",
         ]
