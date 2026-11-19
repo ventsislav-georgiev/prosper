@@ -237,7 +237,10 @@ extension AgentWindowD1Tests {
                 defer { m.close() }
                 XCTAssertTrue(m.layout == two)
                 let view = AgentPaneArea(model: m, scrolls: false).pane(id, compact: true)
+                // #1645: gate on, a terminal pane is an AgentPaneTerminalColumn (focused or not); its header is a computed
+                // var, so read it as a value. AgentDetailView / AgentUnfocusedPane remain only for a pane with no terminal.
                 let body: Any = try { () throws -> Any in
+                    if let c = paneRiderFind(view, AgentPaneTerminalColumn.self) { return c.header }
                     if let d = paneRiderFind(view, AgentDetailView.self) { return d.body }
                     return try XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "pane \(i): a pane view").body
                 }()
