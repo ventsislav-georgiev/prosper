@@ -18,6 +18,16 @@ struct CCPoolServiceConfig: Sendable {
     /// Test seam (QA follow-up A6): runs on start()'s thread after the listener said .ready and
     /// before it is published, so a test can deliver a state change into that window. nil in production.
     var afterReady: (@Sendable (NWListener) -> Void)? = nil
+    /// #1660: the one place a signal is sent ("Stop ccpool and start"); tests inject a recorder. The
+    /// default refuses under XCTest, so no test signals a real process even without a fake.
+    var signal: @Sendable (_ pid: pid_t, _ sig: Int32) -> Bool = { pid, sig in
+        NSClassFromString("XCTestCase") == nil && kill(pid, sig) == 0
+    }
+    /// #1660: whether `pid` runs as this user (a seam: tests name fake pids).
+    var ownedByUser: @Sendable (_ pid: pid_t) -> Bool = CCPoolService.runsAsCurrentUser
+    /// #1660: how long a signalled ccpool gets to free the port, and how often the port is probed meanwhile.
+    var takeOverCeiling: TimeInterval = 4
+    var takeOverPoll: TimeInterval = 0.25
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on Network.framework, loopback only. Clients point
@@ -39,7 +49,8 @@ final class CCPoolService: @unchecked Sendable {
     enum Status: Equatable, Sendable {
         case stopped
         case running(port: UInt16)
-        /// Another ccpool proxy (the Python one, or another Prosper) holds the port. Never killed.
+        /// Another ccpool proxy (the Python one, or another Prosper) holds the port. Signalled only
+        /// by takeOver(pid:), the pane's "Stop ccpool and start" (#1660).
         case heldByCCPool(pid: Int?)
         /// Something that is not ccpool holds the port.
         case heldByOther
@@ -223,6 +234,52 @@ final class CCPoolService: @unchecked Sendable {
             guard case .heldByOther = s, lock.withLock({ bindRaced }), Date() < deadline else { return s }
             Thread.sleep(forTimeInterval: 0.2)
         }
+    }
+
+    enum TakeOver: Equatable, Sendable {
+        /// The port was re-probed (and freed when it held `pid`), then start(bindRetry:) ran.
+        case started(Status)
+        /// `pid` got SIGTERM and still held the port at the ceiling. No second signal is sent.
+        case didNotStop(pid: Int)
+        /// `pid` still holds the port but is never signalled: pid 1 or lower, this process, out of
+        /// pid_t range, another user's, or the signal was refused.
+        case refused(pid: Int)
+    }
+
+    /// #1660 "Stop ccpool and start": SIGTERM to the ccpool proxy the probe names at `pid`, wait for the
+    /// port to free, then the normal start. The port is re-probed first: a holder that changed (free,
+    /// another pid, not ccpool) is never signalled and the normal start reports it. Never SIGKILL,
+    /// never by name. Blocks up to probe + ceiling + start: off main only.
+    func takeOver(pid: Int, bindRetry: TimeInterval = 3) -> TakeOver {
+        if case .running = status { return .started(status) }
+        guard config.port != 0, Self.refusalUnderTest(config) == nil,
+              case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {
+            return .started(start(bindRetry: bindRetry))
+        }
+        guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid), config.ownedByUser(p),
+              config.signal(p, SIGTERM) else {
+            _ = finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not signalled")
+            return .refused(pid: pid)
+        }
+        logger.note(nil, "sent SIGTERM to the ccpool proxy holding the port")
+        let deadline = Date().addingTimeInterval(config.takeOverCeiling)
+        while config.portProbe(config.port, config.probeTimeout) != .free {
+            guard Date() < deadline else {
+                _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
+                return .didNotStop(pid: pid)
+            }
+            Thread.sleep(forTimeInterval: config.takeOverPoll)
+        }
+        return .started(start(bindRetry: bindRetry))
+    }
+
+    /// The process's real uid is this user's (sysctl; false when the pid is gone).
+    static func runsAsCurrentUser(_ pid: pid_t) -> Bool {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
+        return info.kp_eproc.e_pcred.p_ruid == getuid()
     }
 
     /// The Settings "Restart proxy": a listener restart (B25). Blocks: off main only.

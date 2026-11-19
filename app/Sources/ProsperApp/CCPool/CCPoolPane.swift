@@ -56,10 +56,9 @@ struct CCPoolPane: View {
         NeonSection("Proxy") {
             VStack(alignment: .leading, spacing: sz(10)) {
                 NeonRow(model.proxyText, subtitle: model.proxySubtitle) {
-                    Button(model.proxyRunning ? "Restart proxy" : "Start proxy") {
-                        if model.proxyRunning { _ = model.restartProxy() } else { _ = model.startProxy() }
-                    }
+                    Button(model.proxyButtonTitle) { model.proxyButtonAction() }
                     .buttonStyle(.neon)
+                    .accessibilityLabel(model.proxyButtonTitle)
                     .disabled(model.proxyBusy || !model.store.hasAccounts)
                     .fixedSize()
                 }

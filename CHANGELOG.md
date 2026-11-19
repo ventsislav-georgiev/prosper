@@ -2087,6 +2087,9 @@ tag from the now-released section and put it on the new top draft.
   session form, and an empty pane has a Close Pane button. (#1658)
 - Agent Sessions sidebar: with Settings > Agent Island > Row details > Shortcut off, the Layouts
   rows also hide their Control-number chip and give the room to the name. (#1657)
+- When another ccpool proxy holds the port, the ccpool pane's button now reads "Stop ccpool and
+  start": one click stops that proxy and starts Prosper's on the same port, and the pane says so if
+  it did not stop.
 
 ## v2.174.0
 

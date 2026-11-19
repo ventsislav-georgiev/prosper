@@ -61,6 +61,8 @@ final class CCPoolPaneModel: ObservableObject {
     @Published private(set) var busy = false
     /// Proxy starts, stops and restarts in flight (several events can queue one each).
     @Published private var proxyJobs = 0
+    /// #1660: the ccpool pid the last "Stop ccpool and start" signalled (or refused to) that still holds the port.
+    @Published private(set) var stuckPid: Int?
     var proxyBusy: Bool { proxyJobs > 0 }
     /// QA #739 INFO-8: whether the old vault exists, checked once per appearance and on Refresh,
     /// never per render.
@@ -131,13 +133,38 @@ final class CCPoolPaneModel: ObservableObject {
         switch service.status {
         case .running(let p): return "Running on 127.0.0.1:\(p)"
         case .stopped: return "Stopped"
+        case .heldByCCPool(let pid?) where pid == stuckPid:
+            return "ccpool (pid \(pid)) did not stop; quit it, then Start proxy."
+        case .heldByCCPool(let pid?) where pid == takeOverPid:
+            return "Another ccpool proxy (pid \(pid)) holds port \(service.config.port). "
+                + "Stop ccpool and start stops it and starts Prosper's proxy on the same port."
         case .heldByCCPool(let pid):
             return "Another ccpool proxy\(pid.map { " (pid \($0))" } ?? "") holds port \(service.config.port). "
-                + "Prosper never stops it: quit it, then Start proxy."
+                + "Quit it, then Start proxy."
         case .heldByOther: return "Port \(service.config.port) is in use by another program"
         // QA #739 INFO-11: the service's fixed reason, never a raw system error text.
         case .failed(let why): return "Not running: \(why)"
         }
+    }
+
+    /// #1660: the ccpool pid "Stop ccpool and start" would signal: the held port's pid when the probe
+    /// named one, never pid 1 or lower, never this process, never one that already did not stop.
+    var takeOverPid: Int? {
+        guard case .heldByCCPool(let pid?) = service.status, pid > 1, pid != Int(getpid()), pid != stuckPid else { return nil }
+        return pid
+    }
+
+    /// The proxy button's title, also its accessibility label.
+    var proxyButtonTitle: String {
+        proxyRunning ? "Restart proxy" : takeOverPid != nil ? "Stop ccpool and start" : "Start proxy"
+    }
+
+    /// The proxy button: restart, take over the port from another ccpool, or start.
+    @discardableResult
+    func proxyButtonAction() -> Task<Void, Never> {
+        if proxyRunning { return restartProxy() }
+        if let pid = takeOverPid { return takeOverProxy(pid: pid) }
+        return startProxy()
     }
 
     var currentText: String { store.snapshot.current ?? "none yet" }
@@ -472,6 +499,7 @@ final class CCPoolPaneModel: ObservableObject {
     /// runs in a detached task and, with a life cycle, on its serial queue.
     private func proxyTask(restart: Bool) -> Task<Void, Never> {
         proxyJobs += 1
+        stuckPid = nil
         let service = service, lifecycle = lifecycle
         return Task.detached { [weak self] in
             if let lifecycle {
@@ -486,6 +514,28 @@ final class CCPoolPaneModel: ObservableObject {
     }
 
     private func finishProxy() { proxyJobs -= 1 }
+
+    /// #1660 "Stop ccpool and start": the service re-probes, signals `pid` only if it still holds the
+    /// port, waits for the port off main, then starts. With a life cycle, on its serial queue.
+    @discardableResult
+    func takeOverProxy(pid: Int) -> Task<Void, Never> {
+        proxyJobs += 1
+        stuckPid = nil
+        let service = service, lifecycle = lifecycle
+        return Task.detached { [weak self] in
+            let result: CCPoolService.TakeOver
+            if let lifecycle { result = await lifecycle.takeOver(pid: pid) } else { result = service.takeOver(pid: pid) }
+            await self?.finishTakeOver(result)
+        }
+    }
+
+    private func finishTakeOver(_ result: CCPoolService.TakeOver) {
+        switch result {
+        case .didNotStop(let pid), .refused(let pid): stuckPid = pid
+        case .started: break
+        }
+        finishProxy()
+    }
 
     // MARK: Actions: import (spec 3.7)
 

@@ -155,6 +155,9 @@ final class CCPoolPaneTests: XCTestCase {
         let heldModel = CCPoolPaneModel(store: held.store, secrets: held.secrets, service: svc, logger: held.log,
                                         defaults: held.defaults, probeBase: held.base, vaultURL: held.vault)
         XCTAssertTrue(heldModel.proxyText.hasPrefix("Another ccpool proxy (pid 4242)"), heldModel.proxyText)
+        // #1660: the button (and its accessibility label) offers the takeover; nothing is clicked here.
+        XCTAssertTrue(viewStrings(heldModel).contains("Stop ccpool and start"), "\(viewStrings(heldModel).prefix(30))")
+        XCTAssertFalse(viewStrings(heldModel).contains("Start proxy"))
         states.append(("python proxy holds the port", heldModel))
 
         let offered = try ccpoolPaneRig()

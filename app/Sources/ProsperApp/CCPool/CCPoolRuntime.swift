@@ -49,6 +49,16 @@ final class CCPoolLifecycle: @unchecked Sendable {
         }
     }
 
+    /// #1660: "Stop ccpool and start" on the same queue as every start and stop; only while the proxy
+    /// should run (otherwise a settle, which never signals).
+    func takeOver(pid: Int) async -> CCPoolService.TakeOver {
+        await withCheckedContinuation { (done: CheckedContinuation<CCPoolService.TakeOver, Never>) in
+            queue.async { [self] in
+                done.resume(returning: shouldRun ? service.takeOver(pid: pid) : .started(settleNow(restart: false)))
+            }
+        }
+    }
+
     /// #1190 INFO-1: the app quits. Not live any more, and a stop queued behind any start or restart
     /// in flight, so a listener that start publishes late is stopped too. Blocks the caller (main, at
     /// quit) up to `timeout`; false when that ran out (a start still in its probe or bind): the stop
