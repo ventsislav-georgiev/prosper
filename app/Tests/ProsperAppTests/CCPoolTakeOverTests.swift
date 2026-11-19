@@ -53,6 +53,7 @@ final class CCPoolTakeOverTests: XCTestCase {
 
     private func service(port: UInt16, probe: CCPoolProbeScript, signals: CCPoolSignalRecorder,
                          owned: @escaping @Sendable (pid_t) -> Bool = { _ in true },
+                         listens: (@Sendable (pid_t, UInt16) -> Bool)? = nil,
                          ceiling: TimeInterval = 0.3) -> CCPoolService {
         var cfg = CCPoolServiceConfig()
         cfg.port = port
@@ -60,6 +61,8 @@ final class CCPoolTakeOverTests: XCTestCase {
         cfg.portProbe = { _, _ in probe.next() }
         cfg.signal = { signals.record($0, $1) }
         cfg.ownedByUser = owned
+        // Default fake: every pid listens on the configured port, and only on that one.
+        cfg.listensOn = listens ?? { _, p in p == port }
         cfg.takeOverCeiling = ceiling
         cfg.takeOverPoll = 0.05
         let svc = CCPoolService(config: cfg, store: CCPoolStore(directory: tempDir()), secrets: CCPoolMemorySecrets(),
@@ -121,11 +124,67 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(signals.sent, [], "another user's ccpool is never signalled")
     }
 
+    func testTakeOverNeverSignalsAPidWithoutAListeningSocketOnThePort() {
+        let rows: [(String, @Sendable (pid_t, UInt16) -> Bool)] = [
+            ("no listening socket", { _, _ in false }),
+            ("listens on another port only", { _, p in p == 47_020 &+ 1 }),
+            ("another pid listens", { pid, p in pid == 5151 && p == 47_020 }),
+        ]
+        for (name, listens) in rows {
+            let signals = CCPoolSignalRecorder()
+            let svc = service(port: 47_020, probe: CCPoolProbeScript([.ccpool(pid: 4242, impl: "python")]), signals: signals,
+                              listens: listens)
+            XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .refused(pid: 4242), name)
+            XCTAssertEqual(signals.sent, [], name)
+            XCTAssertEqual(svc.status, .heldByCCPool(pid: 4242), name)
+        }
+    }
+
+    /// The real libproc check, on a socket this test opens itself. It only reads; nothing is signalled.
+    func testListensOnLoopbackFindsOnlyAListeningSocketOnThatPort() {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return XCTFail("socket") }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0 }
+        }
+        XCTAssertTrue(bound, "bind")
+        let port = UInt16(bigEndian: addr.sin_port)
+        let me = getpid()
+        XCTAssertFalse(CCPoolService.listensOnLoopback(me, port), "bound but not listening")
+        XCTAssertEqual(listen(fd, 1), 0)
+        XCTAssertTrue(CCPoolService.listensOnLoopback(me, port), "this process listens on 127.0.0.1:\(port)")
+        XCTAssertFalse(CCPoolService.listensOnLoopback(me, freePort()), "a port nobody holds")
+        XCTAssertFalse(CCPoolService.listensOnLoopback(1, port), "launchd does not hold this socket")
+    }
+
     func testTakeOverDefaultSignalRefusesUnderTestAndOwnerCheckReadsTheUid() {
         // Signal 0 delivers nothing (an existence check): even a broken guard sends no signal here.
         XCTAssertFalse(CCPoolServiceConfig().signal(getpid(), 0), "the production seam never signals under XCTest")
         XCTAssertTrue(CCPoolService.runsAsCurrentUser(getpid()))
         XCTAssertFalse(CCPoolService.runsAsCurrentUser(1), "launchd runs as root")
+    }
+
+    func testTakeOverReportsTheHolderAtTheCeilingWhenTheSignalledPidIsGone() {
+        let rows: [(String, CCPoolPortProbe.Result, CCPoolService.Status)] = [
+            ("a new ccpool pid", .ccpool(pid: 5353, impl: "python"), .heldByCCPool(pid: 5353)),
+            ("another program", .other, .heldByOther),
+        ]
+        for (name, later, want) in rows {
+            // Re-probe and the first wait probe name 4242; from then on the port has another holder.
+            let probe = CCPoolProbeScript([.ccpool(pid: 4242, impl: "python"), .ccpool(pid: 4242, impl: "python"), later])
+            let signals = CCPoolSignalRecorder()
+            let svc = service(port: 47_021, probe: probe, signals: signals)
+            XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(want), name)
+            XCTAssertEqual(svc.status, want, name)
+            XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], name)
+            XCTAssertTrue(probe.calls < 30, "\(name): \(probe.calls)")
+        }
     }
 
     func testLifecycleTakesOverOnlyWhileTheProxyShouldRun() async throws {

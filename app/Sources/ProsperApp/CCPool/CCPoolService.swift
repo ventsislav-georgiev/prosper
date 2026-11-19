@@ -25,6 +25,10 @@ struct CCPoolServiceConfig: Sendable {
     }
     /// #1660: whether `pid` runs as this user (a seam: tests name fake pids).
     var ownedByUser: @Sendable (_ pid: pid_t) -> Bool = CCPoolService.runsAsCurrentUser
+    /// #1660: whether `pid` itself holds a listening TCP socket on 127.0.0.1:`port` (a seam: tests
+    /// name fake pids). The pid the probe reports comes from the holder's own health answer; this
+    /// ties it to the socket. The default only reads (libproc).
+    var listensOn: @Sendable (_ pid: pid_t, _ port: UInt16) -> Bool = CCPoolService.listensOnLoopback
     /// #1660: how long a signalled ccpool gets to free the port, and how often the port is probed meanwhile.
     var takeOverCeiling: TimeInterval = 4
     var takeOverPoll: TimeInterval = 0.25
@@ -237,19 +241,20 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     enum TakeOver: Equatable, Sendable {
-        /// The port was re-probed (and freed when it held `pid`), then start(bindRetry:) ran.
+        /// The port was re-probed (and freed when it held `pid`), then start(bindRetry:) ran; or at the
+        /// ceiling `pid` no longer held the port and the status names the holder the last probe found.
         case started(Status)
         /// `pid` got SIGTERM and still held the port at the ceiling. No second signal is sent.
         case didNotStop(pid: Int)
         /// `pid` still holds the port but is never signalled: pid 1 or lower, this process, out of
-        /// pid_t range, another user's, or the signal was refused.
+        /// pid_t range, another user's, without a listening socket on the port, or the signal was refused.
         case refused(pid: Int)
     }
 
     /// #1660 "Stop ccpool and start": SIGTERM to the ccpool proxy the probe names at `pid`, wait for the
     /// port to free, then the normal start. The port is re-probed first: a holder that changed (free,
-    /// another pid, not ccpool) is never signalled and the normal start reports it. Never SIGKILL,
-    /// never by name. Blocks up to probe + ceiling + start: off main only.
+    /// another pid, not ccpool) is never signalled and the normal start reports it. Signalled only when
+    /// `pid` itself listens on the port (config.listensOn). Never SIGKILL, never by name. Blocks up to probe + ceiling + start: off main only.
     func takeOver(pid: Int, bindRetry: TimeInterval = 3) -> TakeOver {
         if case .running = status { return .started(status) }
         guard config.port != 0, Self.refusalUnderTest(config) == nil,
@@ -257,20 +262,59 @@ final class CCPoolService: @unchecked Sendable {
             return .started(start(bindRetry: bindRetry))
         }
         guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid), config.ownedByUser(p),
-              config.signal(p, SIGTERM) else {
+              config.listensOn(p, config.port), config.signal(p, SIGTERM) else {
             _ = finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not signalled")
             return .refused(pid: pid)
         }
         logger.note(nil, "sent SIGTERM to the ccpool proxy holding the port")
         let deadline = Date().addingTimeInterval(config.takeOverCeiling)
-        while config.portProbe(config.port, config.probeTimeout) != .free {
+        while true {
+            let now = config.portProbe(config.port, config.probeTimeout)
+            if now == .free { break }
             guard Date() < deadline else {
-                _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
-                return .didNotStop(pid: pid)
+                // The last probe ran at or after the deadline: report who holds the port now.
+                switch now {
+                case .ccpool(let holder?, _) where holder == pid:
+                    _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
+                    return .didNotStop(pid: pid)
+                case .ccpool(let holder, _):
+                    return .started(finishStart(.heldByCCPool(pid: holder), note: "the signalled ccpool proxy is gone; another ccpool proxy holds the port"))
+                default:
+                    return .started(finishStart(.heldByOther, note: "the signalled ccpool proxy is gone; another program holds the port"))
+                }
             }
             Thread.sleep(forTimeInterval: config.takeOverPoll)
         }
         return .started(start(bindRetry: bindRetry))
+    }
+
+    /// True when `pid` has a TCP socket in LISTEN on `port` whose local address accepts 127.0.0.1
+    /// (127.0.0.1 or 0.0.0.0, or :: for IPv6). Reads only: proc_pidinfo(PROC_PIDLISTFDS), then
+    /// proc_pidfdinfo(PROC_PIDFDSOCKETINFO) per socket fd. False when the pid is gone or unreadable.
+    static func listensOnLoopback(_ pid: pid_t, _ port: UInt16) -> Bool {
+        let need = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard need > 0 else { return false }
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(need) / stride + 16)
+        let got = fds.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count)) }
+        guard got > 0 else { return false }
+        let size = Int32(MemoryLayout<socket_fdinfo>.size)
+        for fd in fds.prefix(min(Int(got) / stride, fds.count)) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
+            var si = socket_fdinfo()
+            guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &si, size) == size,
+                  si.psi.soi_kind == Int32(SOCKINFO_TCP) else { continue }
+            let tcp = si.psi.soi_proto.pri_tcp
+            let ini = tcp.tcpsi_ini
+            guard tcp.tcpsi_state == TSI_S_LISTEN,
+                  UInt16(bigEndian: UInt16(truncatingIfNeeded: ini.insi_lport)) == port else { continue }
+            if ini.insi_vflag & UInt8(INI_IPV4) != 0 {
+                let a = ini.insi_laddr.ina_46.i46a_addr4.s_addr
+                if a == 0 || a == UInt32(0x7f00_0001).bigEndian { return true }
+            } else if ini.insi_vflag & UInt8(INI_IPV6) != 0 {
+                if withUnsafeBytes(of: ini.insi_laddr.ina_6, { $0.allSatisfy { $0 == 0 } }) { return true }
+            }
+        }
+        return false
     }
 
     /// The process's real uid is this user's (sysctl; false when the pid is gone).
