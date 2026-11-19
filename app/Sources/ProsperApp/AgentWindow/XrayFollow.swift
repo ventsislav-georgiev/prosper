@@ -56,32 +56,24 @@ final class XrayFollow: ObservableObject {
     /// The stream ended before any snapshot (exit 2 from a dch without the form, no session, unreachable), or its object
     /// grew past maxKept (#1475 a2).
     @Published private(set) var failed = false
-    /// The snapshot with every delta since applied: dch's `--json` object of this moment (README "X-ray queries").
-    private var object: [String: Any]?
-    /// #1475 a2 (QA r1436 s1): the bytes `object` holds (the snapshot line, plus each delta line, less what a delta
-    /// replaced or dropped), bounded as XrayChapters.parse bounds one read; rows set it and restore it.
-    static var maxKept = XrayChapters.maxBytes
-    private var kept = 0
+    /// #1475 a2 (QA r1436 s1): the bytes the object holds (the snapshot line, plus each delta line, less what a delta
+    /// replaced or dropped), bounded as XrayChapters.parse bounds one read. #1638: read on the follow's queue; rows set
+    /// it and restore it between lines, the product never writes it.
+    nonisolated(unsafe) static var maxKept = XrayChapters.maxBytes
     /// #1475 c2 (QA r1451 s1): the most rows one block keeps, as the one-shot parsers (XrayTasks.maxRows, memory's too);
-    /// past it the follow ends like pastCap. Rows set it and restore it.
-    static var maxBlockRows = XrayTasks.maxRows
-    /// #1475 c: the kept blocks by row key ("task", "memory"), the one whose done line has not come, the ones changed.
-    private var blocks: [String: Block] = [:]
-    private var openBlock: String?
-    /// #1631: the block a new header replaces, held until the new one's done line: an equal block changes nothing.
-    private var replaced: [String: Block] = [:]
-    private var dirty: Set<String> = []
-    /// #1631: the keys of the ref lines since the last build (only those refs are parsed again).
-    private var refKeys: Set<String> = []
-    /// #1631: the state builds run here, in order, off main; main swaps the finished state in. A build newer than the
-    /// one that arrives is on its way (or pastCap ended the stream): `generation` drops the older one.
+    /// past it the follow ends like pastCap. Rows set it and restore it (as maxKept).
+    nonisolated(unsafe) static var maxBlockRows = XrayTasks.maxRows
+    /// #1631, #1638: the object model (line decode, deltas, cap accounting) and the state builds run here, in order, on
+    /// its queue; main gets each take's result (XrayStateBuilder.Taken) and swaps the finished state in.
     private let builder = XrayStateBuilder()
-    private let queue = DispatchQueue(label: "eu.illegible.prosper.xray-follow", qos: .utility)
-    private var generation = 0
-    /// #1631: builds go to `queue`. Off under XCTest so the rows that read the state right after a line keep reading it
-    /// there (the build runs on main); the rows that prove the hop set it and restore it. Set it only between follows:
-    /// the builder is used on one thread at a time.
+    /// #1638: the last landed take left a snapshot in the object (`ended` reads it after every line before it landed).
+    private var hasSnapshot = false
+    /// #1631: takes go to the builder's queue. Off under XCTest so the rows that read the state right after a line keep
+    /// reading it there (the take runs on main); the rows that prove the hop set it and restore it. Set it only between
+    /// follows: the builder is used on one thread at a time.
     static var buildOffMain: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
+    /// #1638: this run's lines go to the queue (buildOffMain at its start).
+    private var offMain = false
     /// #1475 c: this run carries `--tasks --memory` (the probed dch is 1.91.0 or newer and the host did not refuse it).
     private(set) var withTasks = false
     private var tasksRefused = false
@@ -102,8 +94,40 @@ final class XrayFollow: ObservableObject {
         failed = false
         self.dch = dch
         withTasks = !tasksRefused && XrayPanels.followTasksOK()
+        offMain = Self.buildOffMain()
         stopProcess = XrayPanels.follow(dch, target.followArgs(tasks: withTasks), target.env,
-                                        { [weak self] in self?.take($0) }, { [weak self] in self?.ended($0) })
+                                        Self.sink(builder, offMain, self), { [weak self] in self?.ended($0) })
+    }
+
+    /// #1638: the follow's line sink, called on the reader's thread (the product) or on main (rows' fakes). With the hop
+    /// on, lines wait in `pending` and one drain per wait runs on the queue (#1629: one take per wait, not per read; main
+    /// is not woken per batch); off, the take runs here on main.
+    private nonisolated static func sink(_ b: XrayStateBuilder, _ offMain: Bool, _ f: XrayFollow) -> @Sendable ([Data]) -> Void {
+        { [weak f] ls in
+            guard offMain else { return MainActor.assumeIsolated { f?.land(b.take(ls, b.next())) } }
+            guard b.pending.add(ls) else { return }
+            b.queue.asyncAfter(deadline: .now() + XrayPendingLines.wait) { XrayFollow.onQueue(b, b.pending.drain(), nil, f) }
+        }
+    }
+
+    /// #1638: on the queue: take `lines` as take `n` (nil: numbered now; no lines: only the hop), then land the result
+    /// and run `then` on main, in order.
+    private nonisolated static func onQueue(_ b: XrayStateBuilder, _ lines: [Data], _ n: Int?, _ f: XrayFollow?,
+                                            _ then: (@MainActor @Sendable () -> Void)? = nil) {
+        let t = lines.isEmpty ? nil : b.take(lines, n ?? b.next())
+        guard t != nil || then != nil else { return }
+        DispatchQueue.main.async { MainActor.assumeIsolated { if let t { f?.land(t) }; then?() } }
+    }
+
+    /// #1638: `then` on main after every take sent so far landed; `drain`: the lines still waiting are taken first.
+    private nonisolated static func after(_ b: XrayStateBuilder, drain: Bool, _ f: XrayFollow?,
+                                          _ then: @escaping @MainActor @Sendable () -> Void) {
+        b.queue.async { XrayFollow.onQueue(b, drain ? b.pending.drain() : [], nil, f, then) }
+    }
+
+    /// #1638: rows wait here for every take and end sent so far to land (the queue, then main). Nothing is drained.
+    func settled() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in Self.after(builder, drain: false, nil) { c.resume() } }
     }
 
     /// SIGTERM (the LRU's eviction); the state goes with the follow.
@@ -113,115 +137,59 @@ final class XrayFollow: ObservableObject {
         s?()
     }
 
+    /// #1638: with the hop on, the lines still waiting are taken and landed first (the queue, then main), then the end.
     private func ended(_ status: Int32) {
+        guard offMain else { return finish(status) }
+        Self.after(builder, drain: true, self) { [weak self] in self?.finish(status) }
+    }
+
+    private func finish(_ status: Int32) {
         guard stopProcess != nil else { return }   // stopped by us: not news
         stopProcess = nil
         // #1475 c: an older host's "bad usage: --tasks and --follow": the same follow without them, once; polls for those
-        if status == XrayPanels.followTasksRefused, withTasks, object == nil { tasksRefused = true; return start(dch) }
-        if object == nil { failed = true; onEnd(self) }   // never a snapshot: the panels go back to today's reads
+        if status == XrayPanels.followTasksRefused, withTasks, !hasSnapshot { tasksRefused = true; return start(dch) }
+        if !hasSnapshot { failed = true; onEnd(self) }   // never a snapshot: the panels go back to today's reads
     }
 
-    /// One batch of lines, in order; the state is built once per batch.
+    /// One batch of lines, in order; the state is built once per batch. #1638: the batch goes to the queue whole (no
+    /// line is decoded on main) unless buildOffMain is off.
     func take(_ lines: [Data]) {
-        for d in lines {
-            guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
-            // #1475 c: a block's rows and done line carry no schema (the one-shot lines); a delta may
-            if takeBlockLine(o, d) {
-                if pastCap() { return }
-                continue
-            }
-            guard o["schema"] as? Int == 1 else { continue }
-            XrayRefResults.followed(target, o)   // #1567: a ref, evict or reset drops the windows' cached --ref answers
-            // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
-            if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; dirty.formUnion(Self.whole); continue }
-            if o["reset"] != nil {
-                object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0
-                (blocks, openBlock, replaced) = ([:], nil, [:]); dirty = Self.whole.union(["task", "memory"])   // #1475 c: the blocks come again after it
-                continue
-            }
-            if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
-                let k = o["session"] != nil ? "task" : "memory"
-                if let cut = openBlock, cut != k { dirty.insert(cut); replaced[cut] = nil }   // a block with no done line ends here (partial)
-                replaced[k] = blocks[k]
-                blocks[k] = Block(d); openBlock = k   // shown at its done line, not row by row
-                if pastCap() { return }
-                continue
-            }
-            guard var obj = object else { continue }   // a delta before any snapshot has nothing to apply to
-            if let c = o["chapter"] as? [String: Any] {
-                var list = obj["chapters"] as? [Any] ?? []
-                if let a = c["anchor"] as? String, let k = list.lastIndex(where: { ($0 as? [String: Any])?["anchor"] as? String == a }) {
-                    kept -= Self.bytes(list[k])
-                    list[k] = c
-                } else {
-                    list.append(c)
-                    if list.count > XrayChapters.maxRows {   // the newest, as parse
-                        let n = list.count - XrayChapters.maxRows
-                        kept -= list.prefix(n).reduce(0) { $0 + Self.bytes($1) }
-                        list.removeFirst(n)
-                    }
-                }
-                obj["chapters"] = list
-                dirty.insert("chapters")
-            } else if let r = o["ref"] as? [String: Any], let key = r["key"] as? String {
-                var list = obj["refs"] as? [Any] ?? []
-                let k = list.firstIndex { ($0 as? [String: Any])?["key"] as? String == key }
-                // #1629: a ref line equal to the kept ref changes nothing: no parse, no $state, no redraw
-                if let k, (r["count"] as? Int).map({ $0 <= 0 }) != true, (list[k] as? NSDictionary)?.isEqual(to: r) == true { continue }
-                dirty.insert("refs"); refKeys.insert(key)
-                if let k { kept -= Self.bytes(list[k]) }
-                if (r["count"] as? Int).map({ $0 <= 0 }) == true { if let k { list.remove(at: k) } }
-                else if let k { list[k] = r }
-                // shortcut: a new key past dch's 2000 is not held (no dropped_keys bump), until the next snapshot
-                else if list.count < XrayRefs.maxRows { list.append(r) }
-                obj["refs"] = list
-            } else if let e = o["evict"] as? [String: Any], let seq = e["seq"] as? Int {
-                let all = obj["chapters"] as? [Any] ?? []
-                let keep = all.filter { (($0 as? [String: Any])?["offset"] as? Int).map { $0 >= seq } ?? true }
-                kept -= all.reduce(0) { $0 + Self.bytes($1) } - keep.reduce(0) { $0 + Self.bytes($1) }
-                obj["chapters"] = keep
-                dirty.insert("chapters")
-            } else { continue }
-            kept += d.count   // a removal (count 0, evict) adds its own small line too
-            object = obj
-            if pastCap() { return }
-        }
-        guard !dirty.isEmpty, let object else { return }
-        // #1631: the parse runs on `queue` (XrayStateBuilder.build); here only copies of values (the object's and the
-        // blocks' storage is shared, not copied, until main's next delta writes its own)
-        let job = XrayStateBuilder.Job(object: object, dirty: dirty, refKeys: refKeys,
-                                       task: dirty.contains("task") ? blocks["task"] : nil,
-                                       memory: dirty.contains("memory") ? blocks["memory"] : nil)
-        (dirty, refKeys) = ([], [])
-        applies += 1
-        generation &+= 1
-        let g = generation
-        guard Self.buildOffMain() else { return land(builder.build(job), g) }
-        Self.build(on: queue, builder, job) { [weak self] built in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.land(built, g) } }
-        }
+        guard Self.buildOffMain() else { return land(builder.take(lines, builder.next())) }
+        Self.takeOnQueue(builder, lines, builder.next(), self)   // numbered now: a take sent after it is newer
     }
 
     /// #1631: the hop, nonisolated so the closure that runs on `queue` is not main's.
-    private nonisolated static func build(on queue: DispatchQueue, _ builder: XrayStateBuilder, _ job: XrayStateBuilder.Job,
-                                          _ done: @escaping @Sendable (XrayStateBuilder.Built) -> Void) {
-        queue.async { done(builder.build(job)) }
+    private nonisolated static func takeOnQueue(_ b: XrayStateBuilder, _ lines: [Data], _ n: Int, _ f: XrayFollow) {
+        b.queue.async { [weak f] in XrayFollow.onQueue(b, lines, n, f) }
     }
 
-    /// #1631: main's part of a build: count its work, then swap its state in unless a newer build is on its way.
-    private func land(_ b: XrayStateBuilder.Built, _ g: Int) {
-        if b.chapters { parsed.chapters += 1 }
-        if b.refs { parsed.refs += 1 }
-        refRows += b.refRows
-        blockParses += b.blocks
-        if b.onMain { builtOnMain += 1 }
-        guard g == generation else { return }
+    /// #1631, #1638: main's part of a take, in the order they were sent: count its work, replay its #1567 lines, hold
+    /// its build, and swap the held state in once no newer take is on its way (a newer one lands after it, with or
+    /// without a build of its own). Past the cap the follow ends and nothing held lands.
+    private func land(_ t: XrayStateBuilder.Taken) {
+        decoded += t.decoded
+        if t.onMain { decodedOnMain += t.decoded }
+        for o in t.followed { XrayRefResults.followed(target, o) }   // #1567: a ref, evict or reset drops cached --ref answers
+        hasSnapshot = t.snapshot
+        if let b = t.built {
+            applies += 1
+            if b.chapters { parsed.chapters += 1 }
+            if b.refs { parsed.refs += 1 }
+            refRows += b.refRows
+            blockParses += b.blocks
+            if b.onMain { builtOnMain += 1 }
+            held = b.state
+        }
+        if t.pastCap { held = nil; failed = true; return onEnd(self) }
+        guard t.take == builder.sent.withLock({ $0 }), let s = held else { return }
+        held = nil
         swapped += 1
-        state = b.state
+        state = s
     }
 
-    /// #1629: what a snapshot or reset makes stale (every part of the object); a delta marks only its own part.
-    private static let whole: Set<String> = ["snapshot", "chapters", "refs"]
+    /// #1631: a build that landed while a newer take was on its way.
+    private var held: State?
+
     /// #1629: state builds so far and the parts parsed in them (the cost rows count them: a burst of lines is one
     /// build, a repeated line none, a ref line parses no chapters). Counters only: they never reach Int.max.
     private(set) var applies = 0
@@ -233,6 +201,171 @@ final class XrayFollow: ObservableObject {
     private(set) var blockParses = 0
     private(set) var builtOnMain = 0
     private(set) var swapped = 0
+    /// #1638: lines decoded (JSONSerialization) so far, and those decoded on main (0 with the hop on). Counters only.
+    private(set) var decoded = 0
+    private(set) var decodedOnMain = 0
+}
+
+/// #1631, #1638: a follow's object model and state builds, run in order on its queue (or on main where
+/// XrayFollow.buildOffMain is off): each line's decode, the deltas, the cap accounting, then one build per take that
+/// starts from the one before, so a ref line parses that ref alone and the parts no line changed are kept.
+final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and written by one take at a time
+    let queue = DispatchQueue(label: "eu.illegible.prosper.xray-follow", qos: .utility)
+    /// #1629, #1638: the lines read and not yet taken (the reader adds, a drain on `queue` takes them).
+    let pending = XrayPendingLines()
+    /// #1631, #1638: the takes numbered so far (main's take numbers its own as it sends it; a drain on `queue`, as it
+    /// runs): a landing whose number is below it has a newer take on its way.
+    let sent = OSAllocatedUnfairLock(initialState: 0)
+    func next() -> Int { sent.withLock { $0 &+= 1; return $0 } }   // a counter only: wrapping is harmless
+
+    /// What one build reads. The object is JSONSerialization's values (immutable Foundation objects, Swift values).
+    struct Job {
+        var object: [String: Any]
+        var dirty: Set<String>
+        var refKeys: Set<String>
+        var task: XrayFollow.Block?
+        var memory: XrayFollow.Block?
+    }
+
+    /// The finished state and the work it took: the parts parsed, the ref rows parsed, whether it ran on main.
+    struct Built {
+        var state: XrayFollow.State
+        var chapters: Bool
+        var refs: Bool
+        var refRows: Int
+        var blocks: Int
+        var onMain: Bool
+    }
+
+    /// #1638: one take's result for main: its build (nil: nothing changed), the take's number, the #1567 lines to replay,
+    /// whether a snapshot is held after it, whether it passed the cap, the lines it decoded and where.
+    struct Taken: @unchecked Sendable {   // State's parts are values; `followed` is JSONSerialization's values
+        var built: Built?
+        var take: Int
+        var followed: [[String: Any]] = []
+        var snapshot = false
+        var pastCap = false
+        var decoded = 0
+        var onMain: Bool
+    }
+
+    /// The snapshot with every delta since applied: dch's `--json` object of this moment (README "X-ray queries").
+    private var object: [String: Any]?
+    private var kept = 0
+    /// #1638: each kept chapter's and ref's own line bytes, at its place in the object's lists (0: it came in a snapshot,
+    /// whose line is counted whole). shortcut: a snapshot element replaced or dropped frees 0 bytes, so `kept` may run
+    /// up to one snapshot's bytes high until the next snapshot or reset; split the snapshot line per element if that
+    /// ever ends a big follow early.
+    private var chapterBytes: [Int] = [], refBytes: [Int] = []
+    /// #1475 c: the kept blocks by row key ("task", "memory"), the one whose done line has not come, the ones changed.
+    private var blocks: [String: XrayFollow.Block] = [:]
+    private var openBlock: String?
+    /// #1631: the block a new header replaces, held until the new one's done line: an equal block changes nothing.
+    private var replaced: [String: XrayFollow.Block] = [:]
+    private var dirty: Set<String> = []
+    /// #1631: the keys of the ref lines since the last build (only those refs are parsed again).
+    private var refKeys: Set<String> = []
+    /// #1638: past the cap the follow is over: later lines are not read and nothing is built.
+    private var capped = false
+    private var last: XrayFollow.State?
+    private var refCache = XrayRefs.Cache()
+
+    /// #1629: what a snapshot or reset makes stale (every part of the object); a delta marks only its own part.
+    private static let whole: Set<String> = ["snapshot", "chapters", "refs"]
+
+    /// One batch of lines, in order: decoded, applied, then built once.
+    func take(_ lines: [Data], _ n: Int) -> Taken {
+        var t = Taken(take: n, onMain: Thread.isMainThread)
+        guard !capped else { return t }
+        for d in lines {
+            t.decoded += 1   // a counter only: at most the lines in hand
+            guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+            // #1475 c: a block's rows and done line carry no schema (the one-shot lines); a delta may
+            if takeBlockLine(o, d) {
+                if pastCap() { return ended(t) }
+                continue
+            }
+            guard o["schema"] as? Int == 1 else { continue }
+            if o["ref"] != nil || o["evict"] != nil || o["reset"] != nil { t.followed.append(o) }   // #1567, replayed on main
+            // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
+            if let s = o["snapshot"] as? [String: Any] {
+                object = s; kept = d.count; dirty.formUnion(Self.whole)
+                chapterBytes = Array(repeating: 0, count: (s["chapters"] as? [Any])?.count ?? 0)
+                refBytes = Array(repeating: 0, count: (s["refs"] as? [Any])?.count ?? 0)
+                continue
+            }
+            if o["reset"] != nil {
+                object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; (chapterBytes, refBytes) = ([], [])
+                (blocks, openBlock, replaced) = ([:], nil, [:]); dirty = Self.whole.union(["task", "memory"])   // #1475 c: the blocks come again after it
+                continue
+            }
+            if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
+                let k = o["session"] != nil ? "task" : "memory"
+                if let cut = openBlock, cut != k { dirty.insert(cut); replaced[cut] = nil }   // a block with no done line ends here (partial)
+                replaced[k] = blocks[k]
+                blocks[k] = XrayFollow.Block(d); openBlock = k   // shown at its done line, not row by row
+                if pastCap() { return ended(t) }
+                continue
+            }
+            guard var obj = object else { continue }   // a delta before any snapshot has nothing to apply to
+            // #1638: each list and its bytes change together (same places), from the line's own bytes, never re-serialised
+            if let c = o["chapter"] as? [String: Any] {
+                var list = obj["chapters"] as? [Any] ?? []
+                if let a = c["anchor"] as? String, let k = list.lastIndex(where: { ($0 as? [String: Any])?["anchor"] as? String == a }) {
+                    kept -= chapterBytes[k]
+                    list[k] = c; chapterBytes[k] = d.count
+                } else {
+                    list.append(c); chapterBytes.append(d.count)
+                    if list.count > XrayChapters.maxRows {   // the newest, as parse
+                        let n = list.count - XrayChapters.maxRows
+                        kept -= chapterBytes.prefix(n).reduce(0, +)
+                        list.removeFirst(n); chapterBytes.removeFirst(n)
+                    }
+                }
+                obj["chapters"] = list
+                dirty.insert("chapters")
+            } else if let r = o["ref"] as? [String: Any], let key = r["key"] as? String {
+                var list = obj["refs"] as? [Any] ?? []
+                let k = list.firstIndex { ($0 as? [String: Any])?["key"] as? String == key }
+                // #1629: a ref line equal to the kept ref changes nothing: no parse, no $state, no redraw
+                if let k, (r["count"] as? Int).map({ $0 <= 0 }) != true, (list[k] as? NSDictionary)?.isEqual(to: r) == true { continue }
+                dirty.insert("refs"); refKeys.insert(key)
+                if let k { kept -= refBytes[k] }
+                if (r["count"] as? Int).map({ $0 <= 0 }) == true { if let k { list.remove(at: k); refBytes.remove(at: k) } }
+                else if let k { list[k] = r; refBytes[k] = d.count }
+                // shortcut: a new key past dch's 2000 is not held (no dropped_keys bump), until the next snapshot
+                else if list.count < XrayRefs.maxRows { list.append(r); refBytes.append(d.count) }
+                obj["refs"] = list
+            } else if let e = o["evict"] as? [String: Any], let seq = e["seq"] as? Int {
+                var keep: [Any] = [], keepBytes: [Int] = []
+                for (c, n) in zip(obj["chapters"] as? [Any] ?? [], chapterBytes) {
+                    if (((c as? [String: Any])?["offset"] as? Int).map { $0 >= seq } ?? true) { keep.append(c); keepBytes.append(n) }
+                    else { kept -= n }
+                }
+                obj["chapters"] = keep; chapterBytes = keepBytes
+                dirty.insert("chapters")
+            } else { continue }
+            kept += d.count   // a removal (count 0, evict) adds its own small line too
+            object = obj
+            if pastCap() { return ended(t) }
+        }
+        t.snapshot = object != nil
+        guard !dirty.isEmpty, let object else { return t }
+        let job = Job(object: object, dirty: dirty, refKeys: refKeys,
+                      task: dirty.contains("task") ? blocks["task"] : nil,
+                      memory: dirty.contains("memory") ? blocks["memory"] : nil)
+        (dirty, refKeys) = ([], [])
+        t.built = build(job)
+        return t
+    }
+
+    /// #1475 a2: past the cap the object goes and later lines are not read (main drops what it holds).
+    private func ended(_ t: Taken) -> Taken {
+        var t = t
+        object = nil; capped = true
+        t.pastCap = true
+        return t
+    }
 
     /// #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow);
     /// #1475 c: the blocks' bytes count too (each sum at most maxKept plus one line after the check per line: no overflow).
@@ -240,11 +373,8 @@ final class XrayFollow: ObservableObject {
     /// scans the rows). shortcut: the per-delta firstIndex over the rows stays linear, now bounded by maxBlockRows; an
     /// id index would need re-numbering on every removal.
     private func pastCap() -> Bool {
-        guard kept + blocks.values.reduce(0, { $0 + $1.bytes }) > Self.maxKept
-                || blocks.values.contains(where: { $0.rows.count > Self.maxBlockRows }) else { return false }
-        object = nil; failed = true; generation &+= 1   // #1631: a build on its way no longer lands
-        onEnd(self)
-        return true
+        kept + blocks.values.reduce(0, { $0 + $1.bytes }) > XrayFollow.maxKept
+            || blocks.values.contains(where: { $0.rows.count > XrayFollow.maxBlockRows })
     }
 
     /// #1475 c: a block's row or done line, or a `task` / `memory` delta (by id; `gone` removes; a delta for no block
@@ -274,40 +404,7 @@ final class XrayFollow: ObservableObject {
         return true
     }
 
-    /// One kept element's size as JSON (its line's, give or take the wrapper and escapes); 0 for what is not a JSON
-    /// object or array (data(withJSONObject:) raises on those).
-    private static func bytes(_ e: Any) -> Int {
-        guard JSONSerialization.isValidJSONObject(e) else { return 0 }
-        return (try? JSONSerialization.data(withJSONObject: e, options: .withoutEscapingSlashes).count) ?? 0
-    }
-}
-
-/// #1631: a follow's state builds, run in order on its queue (or on main where XrayFollow.buildOffMain is off): each
-/// build starts from the one before, so a ref line parses that ref alone and the parts no line changed are kept.
-final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and written by one build at a time
-    /// What one build reads. The object is JSONSerialization's values (immutable Foundation objects, Swift values).
-    struct Job: @unchecked Sendable {
-        var object: [String: Any]
-        var dirty: Set<String>
-        var refKeys: Set<String>
-        var task: XrayFollow.Block?
-        var memory: XrayFollow.Block?
-    }
-
-    /// The finished state and the work it took: the parts parsed, the ref rows parsed, whether it ran on main.
-    struct Built: @unchecked Sendable {   // State's parts are values
-        var state: XrayFollow.State
-        var chapters: Bool
-        var refs: Bool
-        var refRows: Int
-        var blocks: Int
-        var onMain: Bool
-    }
-
-    private var last: XrayFollow.State?
-    private var refCache = XrayRefs.Cache()
-
-    func build(_ j: Job) -> Built {
+    private func build(_ j: Job) -> Built {
         // #1475 c: a block is parsed again only when it changed (up to 50000 rows); #1629: so are refs and chapters (a
         // delta changes only its own part; the top-level fields and the corpus change only with a snapshot or reset)
         let all = last == nil || j.dirty.contains("snapshot")
@@ -409,9 +506,10 @@ extension XrayFollow {
 
 extension XrayPanels {
     /// One follow: (path, argv, env, lines, ended) -> its stop (SIGTERM). `lines` gets each batch of whole lines in
-    /// order, `ended` the exit status once, after the last batch; both on main.
+    /// order, on one thread at a time (#1638: the reader's in the product, main in rows); `ended` the exit status once,
+    /// on main, after the last batch was handed to `lines`.
     typealias Follow = @MainActor (_ path: String, _ args: [String], _ env: [String: String],
-                                   _ lines: @escaping @MainActor @Sendable ([Data]) -> Void,
+                                   _ lines: @escaping @Sendable ([Data]) -> Void,
                                    _ ended: @escaping @MainActor @Sendable (Int32) -> Void) -> () -> Void
 
     /// #1475: the gate for follows (XrayFollow.minimumDch on the probed dch). Off under XCTest as searchTab is, so the
@@ -429,18 +527,11 @@ extension XrayPanels {
     /// The product's: a dch child whose stdout is read line by line. Never under XCTest (rows put a fake here).
     static var follow: Follow = { path, args, env, lines, ended in
         guard NSClassFromString("XCTestCase") == nil else { return {} }
-        let child = XrayChild(), pending = XrayPendingLines()
+        let child = XrayChild()
         DispatchQueue.global(qos: .utility).async {
-            let status = streamLines(child, path, args, env) { batch in
-                // #1629: one main hop per wait, not per read: a burst of batches is one take (one state build)
-                guard pending.add(batch) else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + XrayPendingLines.wait) {
-                    MainActor.assumeIsolated { let ls = pending.drain(); if !ls.isEmpty { lines(ls) } }
-                }
-            }
-            DispatchQueue.main.async {   // after every batch: what still waits goes first
-                MainActor.assumeIsolated { let ls = pending.drain(); if !ls.isEmpty { lines(ls) }; ended(status) }
-            }
+            // #1638: each batch straight to the follow's sink, off main (it coalesces them on its queue, #1629)
+            let status = streamLines(child, path, args, env) { lines($0) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { ended(status) } }   // the follow drains what waits first
         }
         return { child.cancel() }
     }
@@ -507,7 +598,7 @@ struct XrayLineSplit {
     }
 }
 
-/// #1629: a follow's lines read but not yet taken on main. `add` is true for the first lines since the last drain:
+/// #1629: a follow's lines read but not yet taken (#1638: on its queue). `add` is true for the first lines since the last drain:
 /// the reader schedules one drain for them and the lines after join it. Bounded as the main queue's blocks were: by
 /// what dch writes while main is busy (each line at most XrayLineSplit's cap).
 final class XrayPendingLines: Sendable {

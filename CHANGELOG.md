@@ -2047,6 +2047,8 @@ tag from the now-released section and put it on the new top draft.
   off the main thread, so long agent turns stay smooth and use less battery. (#1633)
 - Auto-hide of the menu bar, the idle model unload and the new-session start check now let macOS
   coalesce their wakeups, which saves a little battery. (#1637)
+- X-ray's live follow no longer reads and decodes its stream on the main thread, so a busy session's
+  X-ray updates no longer make the app stutter. (#1638)
 
 ## v2.174.0
 

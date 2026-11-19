@@ -12,7 +12,7 @@ final class XrayFollowTests: XCTestCase {
     @MainActor final class Fake {
         var args: [[String]] = []
         var stopped: [Int] = []
-        private var sinks: [(lines: @MainActor @Sendable ([Data]) -> Void, ended: @MainActor @Sendable (Int32) -> Void)] = []
+        private var sinks: [(lines: @Sendable ([Data]) -> Void, ended: @MainActor @Sendable (Int32) -> Void)] = []
 
         var follow: XrayPanels.Follow {
             { [self] _, a, _, lines, ended in
@@ -599,6 +599,137 @@ final class XrayFollowTests: XCTestCase {
         XCTAssertEqual(out?.last, Data("line 1999".utf8))
         let total = (1 << 20) + 2 + short.count
         XCTAssertLessThanOrEqual(s.touched, 2 * total, "touched \(s.touched) for \(total) bytes")
+    }
+
+    /// #1638 (sample2: 37 samples of JSONSerialization under take on main): with the hop on, the follow's lines (two
+    /// batches from the reader) wait in its pending list and are decoded, applied and built on its queue in one take;
+    /// main only swaps the finished state in. Red at base: take decoded every line on main (XrayFollow.swift:127,
+    /// decodedOnMain 3) and each batch was its own wait on main (XrayFollow.swift:437). The hop-off follow at the end
+    /// shows the counter counts.
+    func testLinesAreDecodedOffMainInOneTakePerWait() async {
+        let offMain = XrayFollow.buildOffMain
+        defer { XrayFollow.buildOffMain = offMain }
+        XrayFollow.buildOffMain = { true }
+        let lines = [Self.snapshot(), Self.chapter7, #"{"schema":1,"ref":"# + Self.ref(7) + "}"]
+        await withFollow { fake, _ in
+            let f = XrayFollow(target: Self.target("api"))
+            let landed = expectation(description: "a state landed")
+            let sink = f.$state.dropFirst().sink { _ in landed.fulfill() }
+            defer { sink.cancel() }
+            f.start("/fake/dch")
+            fake.send(1, lines[0], lines[1])
+            fake.send(1, lines[2])
+            XCTAssertTrue(f.state == nil, "main does not decode or build")
+            await fulfillment(of: [landed], timeout: 10)
+            XCTAssertEqual(f.decoded, 3)
+            XCTAssertEqual(f.decodedOnMain, 0, "no line decoded on main")
+            XCTAssertEqual(f.builtOnMain, 0)
+            XCTAssertEqual(f.applies, 1, "two batches in one wait: one take, one build")
+            XCTAssertEqual(f.state?.chapters?.count, 7)
+            XCTAssertEqual(f.state?.refs?.entries.contains { $0.key == "issue:#7" }, true)
+            f.stop()
+        }
+        XrayFollow.buildOffMain = { false }
+        let g = XrayFollow(target: Self.target("api"))
+        g.take(lines.map { Data($0.utf8) })
+        XCTAssertEqual(g.decodedOnMain, 3, "the counter counts: on main with the hop off")
+    }
+
+    /// #1638: the end comes after the lines before it. A snapshot still waiting (inside the 100 ms wait) is taken and
+    /// landed before the end is read, so a follow that had its snapshot is not failed, keeps its state and stays in the
+    /// LRU; a follow whose lines held no snapshot fails after them. Red with ended-skips-drain (the end is read before
+    /// the snapshot lands: failed, onEnd) and with ended-no-hop (the end is read at once: not running before settled).
+    func testEndedLandsAfterTheLinesBeforeIt() async {
+        let offMain = XrayFollow.buildOffMain
+        defer { XrayFollow.buildOffMain = offMain }
+        XrayFollow.buildOffMain = { true }
+        await withFollow { fake, _ in
+            let f = XrayFollow(target: Self.target("api")), g = XrayFollow(target: Self.target("api-qa"))
+            var ends: [String] = []
+            f.onEnd = { ends.append($0.target.name) }
+            g.onEnd = { ends.append($0.target.name) }
+            f.start("/fake/dch")
+            fake.send(1, Self.snapshot())
+            fake.end(1, 0)
+            XCTAssertTrue(f.running, "the end waits for the lines before it")
+            await f.settled()
+            XCTAssertFalse(f.running)
+            XCTAssertFalse(f.failed, "it had its snapshot")
+            XCTAssertEqual(f.state?.chapters?.count, 6)
+            g.start("/fake/dch")
+            fake.send(2, Self.chapter7)   // a delta before any snapshot
+            fake.end(2, 0)
+            await g.settled()
+            XCTAssertTrue(g.failed, "no snapshot: the panels go back to the reads")
+            XCTAssertEqual(ends, ["api-qa"])
+            XCTAssertEqual(f.decodedOnMain + g.decodedOnMain, 0)
+        }
+    }
+
+    /// #1631 QA rider (supervisor add-on to #1638): with the hop on, a snapshot with refs, a ref delta, a reset, a new
+    /// snapshot and another ref delta (five takes) go through the real queue. The state that lands equals the one the
+    /// same lines build with the hop off, and holds the new snapshot's refs and chapters plus the last delta only:
+    /// nothing from before the reset. Red with swap-every-landing (swapped 5: every older build lands first).
+    func testResetThroughTheQueueEqualsTheHopOff() async {
+        let lines = [
+            Data(Self.snapshot(#"{"schema":1,"chapters":[{"anchor":"s:10","offset":10,"i":1,"title":"old","kind":"prompt"}],"refs":["#
+                               + Self.ref(1) + "," + Self.ref(2) + "]}").utf8),
+            Data((#"{"schema":1,"ref":"# + Self.ref(2, count: 9) + "}").utf8),
+            Data(Self.reset.utf8),
+            Data(Self.snapshot(#"{"schema":1,"chapters":[{"anchor":"s:30","offset":30,"i":1,"title":"new","kind":"prompt"}],"refs":["#
+                               + Self.ref(3) + "]}").utf8),
+            Data((#"{"schema":1,"ref":"# + Self.ref(4, count: 2) + "}").utf8),
+        ]
+        let offMain = XrayFollow.buildOffMain
+        defer { XrayFollow.buildOffMain = offMain }
+        XrayFollow.buildOffMain = { false }
+        let plain = XrayFollow(target: Self.target("api"))
+        for l in lines { plain.take([l]) }
+        XrayFollow.buildOffMain = { true }
+        let f = XrayFollow(target: Self.target("api"))
+        for l in lines { f.take([l]) }
+        XCTAssertTrue(f.state == nil, "main does not wait")
+        await f.settled()
+        XCTAssertEqual(f.decodedOnMain, 0)
+        XCTAssertEqual(f.builtOnMain, 0)
+        XCTAssertEqual(f.applies, 5)
+        XCTAssertEqual(f.swapped, 1, "only the newest of the five builds lands")
+        XCTAssertTrue(f.state?.refs != nil && f.state?.refs == plain.state?.refs, "the same refs as the hop off")
+        XCTAssertEqual(f.state?.chapters?.map(\.title), plain.state?.chapters?.map(\.title))
+        XCTAssertEqual(f.state?.anchors, plain.state?.anchors)
+        XCTAssertEqual(f.state?.refs?.entries.map(\.key), ["issue:#3", "issue:#4"], "the new snapshot's refs and the last delta only")
+        XCTAssertEqual(f.state?.refs?.entries.last?.count, 2)
+        XCTAssertEqual(f.state?.chapters?.map(\.title), ["new"], "nothing from before the reset")
+        XCTAssertEqual(f.state?.anchors, ["s:30": 1])
+    }
+
+    /// #1638: the cap counts each delta's own line bytes (never re-serialised): an evicted chapter and a removed ref free
+    /// what their lines added. A test-sized cap holds an empty snapshot, the evict and removal lines and three chapter
+    /// lines; after three chapters are evicted and a ref is added then removed, three new chapters still fit, one more
+    /// does not. Red with evict-frees-nothing and with ref-removal-frees-nothing (failed after the second three).
+    func testEvictedChaptersAndRemovedRefsFreeTheirLineBytes() {
+        let cap = XrayFollow.maxKept
+        defer { XrayFollow.maxKept = cap }
+        func chapter(_ n: Int) -> Data {
+            Data(#"{"schema":1,"chapter":{"anchor":"s:\#(n)","offset":\#(n),"i":\#(n),"title":"chapter \#(n)","kind":"prompt"}}"#.utf8)
+        }
+        let snap = Data(Self.snapshot(#"{"schema":1,"chapters":[],"refs":[]}"#).utf8)
+        let evict = Data(#"{"schema":1,"evict":{"seq":1000}}"#.utf8)
+        let add = Data((#"{"schema":1,"ref":"# + Self.ref(5) + "}").utf8)
+        let remove = Data(##"{"schema":1,"ref":{"key":"issue:#5","text":"#5","count":0}}"##.utf8)
+        XrayFollow.maxKept = snap.count + evict.count + remove.count + 3 * chapter(100).count
+        let f = XrayFollow(target: Self.target("api"))
+        f.take([snap, chapter(100), chapter(200), chapter(300)])
+        f.take([evict, add, remove])
+        f.take([chapter(400), chapter(500), chapter(600)])
+        XCTAssertFalse(f.failed, "the evicted chapters and the removed ref freed their bytes")
+        XCTAssertEqual(f.state?.chapters?.map(\.title), ["chapter 400", "chapter 500", "chapter 600"])
+        f.take([chapter(700)])
+        XCTAssertTrue(f.failed, "one line more passes the cap")
+        let swapped = f.swapped
+        f.take([snap])
+        XCTAssertEqual(f.swapped, swapped, "past the cap nothing more is read or built")
+        XCTAssertEqual(f.decoded, 11, "the snapshot after the cap is not even decoded")
     }
 }
 
