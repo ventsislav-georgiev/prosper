@@ -2034,6 +2034,9 @@ tag from the now-released section and put it on the new top draft.
 - The Agents window no longer redraws an open conversation every two seconds when nothing new was
   written, and its timers let macOS group wakeups, which saves battery while the window is open.
   (#1632)
+- X-ray follow uses far less CPU on busy sessions: a changed ref, task or memory row no longer re-
+  reads the whole list, repeated updates are ignored, and the work runs off the main thread so the
+  app stays responsive. (#1631)
 
 ## v2.174.0
 

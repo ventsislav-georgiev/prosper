@@ -633,7 +633,7 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// #1475: the same of an object in hand (a follow's state, XrayFollow.swift).
-    static func anchors(_ o: [String: Any]) -> [String: Int] {
+    nonisolated static func anchors(_ o: [String: Any]) -> [String: Int] {   // #1631: a follow's build runs off main
         guard o["schema"] as? Int == 1, let list = o["chapters"] as? [Any] else { return [:] }
         var out: [String: Int] = [:]
         for (k, c) in list.suffix(XrayChapters.maxRows).compactMap({ $0 as? [String: Any] }).enumerated() {

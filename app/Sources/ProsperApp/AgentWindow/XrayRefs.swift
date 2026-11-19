@@ -49,26 +49,56 @@ struct XrayRefs: Equatable {
 
     /// #1475: the same parse of an object in hand (a follow's snapshot with its deltas applied, XrayFollow.swift).
     static func parse(_ o: [String: Any]) -> XrayRefs? {
-        guard o["schema"] as? Int == 1, let list = o["refs"] as? [Any] else { return nil }
-        func int(_ v: Any?) -> Int? { (v as? Int).map { min(max(0, $0), Int(Int32.max)) } }   // bounded: no overflow below
-        let entries = list.prefix(maxRows).enumerated().compactMap { (k, v) -> Entry? in
-            guard let c = v as? [String: Any], let rawText = c["text"] as? String, !rawText.isEmpty,
-                  rawText.utf8.count <= maxRefBytes, ((c["key"] as? String) ?? "").utf8.count <= maxRefBytes else { return nil }
-            let shapeWord = (c["shape"] as? String) ?? ""
-            let title = (c["title"] as? String).map { String($0.unicodeScalars.prefix(titleCap)) } ?? ""
-            return Entry(key: OutsideText.shown(c["key"] as? String ?? "", max: maxRefBytes), shape: Shape(rawValue: shapeWord),
-                         text: OutsideText.shown(rawText, max: maxRefBytes),
-                         full: (c["full"] as? String).map { OutsideText.shown($0, max: 40) }, count: int(c["count"]) ?? 0,
-                         lastOffset: int(c["last_offset"]), defined: c["defined"] as? Bool == true,
-                         definitions: int(c["definitions"]) ?? 0, title: OutsideText.shown(title, max: titleCap),
-                         underline: c["underline"] as? Bool == true, index: k)
+        var none = Cache()
+        return parse(o, reusing: &none, changed: [])
+    }
+
+    /// #1631: a follow's rows parsed before, by key (a key held once in the list; a skipped row is kept as nil), and the
+    /// rows parsed so far (the cost row counts them: one changed ref is one parse, not one per row).
+    struct Cache {
+        var rows: [String: Entry?] = [:]
+        private(set) var parses = 0
+        mutating func parsed() { parses &+= 1 }   // a counter only: wrapping is harmless
+    }
+
+    /// #1631: the same parse, where a row whose key is in `cache` and not in `changed` keeps its parsed value (only its
+    /// place is set again); the rest are parsed and `cache` becomes this list's rows. A key twice in the list (only a
+    /// snapshot can hold one: a delta replaces by key) is parsed each time and never kept.
+    static func parse(_ o: [String: Any], reusing cache: inout Cache, changed: Set<String>) -> XrayRefs? {
+        guard o["schema"] as? Int == 1, let list = o["refs"] as? [Any] else { cache.rows = [:]; return nil }
+        var entries: [Entry] = [], next: [String: Entry?] = [:], twice: Set<String> = []
+        for (k, v) in list.prefix(maxRows).enumerated() {
+            let key = (v as? [String: Any])?["key"] as? String
+            var e: Entry?
+            if let key, !changed.contains(key), let hit = cache.rows[key] { e = hit; e?.index = k }
+            else { e = entry(v, k); cache.parsed() }
+            if let key, next.updateValue(e, forKey: key) != nil { twice.insert(key) }
+            if let e { entries.append(e) }
         }
+        for key in twice { next.removeValue(forKey: key) }
+        cache.rows = next
         // both counts are of arrays in hand (at most the 16 MiB read): no overflow; dch's count is bounded by int
         let over = list.count - entries.count
         return XrayRefs(entries: entries, droppedKeys: (int(o["dropped_keys"]) ?? 0) + over,
                         complete: o["complete"] as? Bool != false, why: (o["why"] as? String).map { OutsideText.shown($0, max: 40) },
                         sessionID: (o["session_id"] as? String).map { OutsideText.shown($0, max: 64) },
                         otherProjects: int(o["other_projects"]) ?? 0)
+    }
+
+    private static func int(_ v: Any?) -> Int? { (v as? Int).map { min(max(0, $0), Int(Int32.max)) } }   // bounded: no overflow below
+
+    /// One row (at place `k`), or nil when skipped: the OutsideText work of a parse.
+    private static func entry(_ v: Any, _ k: Int) -> Entry? {
+        guard let c = v as? [String: Any], let rawText = c["text"] as? String, !rawText.isEmpty,
+              rawText.utf8.count <= maxRefBytes, ((c["key"] as? String) ?? "").utf8.count <= maxRefBytes else { return nil }
+        let shapeWord = (c["shape"] as? String) ?? ""
+        let title = (c["title"] as? String).map { String($0.unicodeScalars.prefix(titleCap)) } ?? ""
+        return Entry(key: OutsideText.shown(c["key"] as? String ?? "", max: maxRefBytes), shape: Shape(rawValue: shapeWord),
+                     text: OutsideText.shown(rawText, max: maxRefBytes),
+                     full: (c["full"] as? String).map { OutsideText.shown($0, max: 40) }, count: int(c["count"]) ?? 0,
+                     lastOffset: int(c["last_offset"]), defined: c["defined"] as? Bool == true,
+                     definitions: int(c["definitions"]) ?? 0, title: OutsideText.shown(title, max: titleCap),
+                     underline: c["underline"] as? Bool == true, index: k)
     }
 
     /// dch's Refs order: latest mention first (last_offset), then count, then later in dch's list first; terms after the

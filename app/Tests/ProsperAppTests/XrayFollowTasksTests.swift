@@ -115,6 +115,36 @@ final class XrayFollowTasksTests: XCTestCase {
         }
     }
 
+    /// #1631 (dch's sample of a live follow: 6522 of 8160 task lines in 90 s byte-equal to a held row; the ~1.3 MB
+    /// tasks block sent whole again up to 4 times): a whole block equal to the held one and a row's own bytes again
+    /// parse nothing and build no state; a changed row is one block parse; a changed whole block replaces the kept
+    /// one; `gone` still removes. Red at base: XrayFollow.swift:209 marked each done line dirty and :219 each delta
+    /// (blockParses 4 and applies 3 after the repeats, not 2 and 1).
+    func testARepeatedBlockOrRowParsesNothing() {
+        let f = XrayFollow(target: XrayFollowTests.target("api"))
+        let lines = { (ls: [String]) in ls.map { Data($0.utf8) } }
+        f.take(lines([XrayFollowTests.snapshot()] + Self.blocks(tasks: ["1", "2"], memories: ["m1"])))
+        XCTAssertEqual(f.applies, 1)
+        XCTAssertEqual(f.blockParses, 2)
+        f.take(lines(Self.blocks(tasks: ["1", "2"], memories: ["m1"])))
+        XCTAssertEqual(f.blockParses, 2, "the same blocks again: no parse")
+        f.take(lines([Self.task("2"), Self.memory("m1")]))
+        XCTAssertEqual(f.applies, 1, "the held rows' bytes again: no build")
+        f.take(lines([Self.task("2", "done")]))
+        XCTAssertEqual(f.applies, 2)
+        XCTAssertEqual(f.blockParses, 3, "one changed row: one tasks parse, memory kept")
+        XCTAssertEqual(f.state?.tasks?.tasks.last?.status, .done)
+        f.take(lines(Self.blocks(tasks: ["1", "3"], memories: ["m1"])))
+        XCTAssertEqual(f.blockParses, 4, "a changed tasks block replaces the kept one; the equal memory block is skipped")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["1", "3"])
+        XCTAssertEqual(f.state?.memory?.items.map(\.id), ["m1"])
+        f.take(lines([#"{"task":{"id":"1","gone":true}}"#]))
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["3"], "gone removes")
+        f.take(lines([XrayFollowTests.reset, XrayFollowTests.snapshot()] + Self.blocks(tasks: ["3"], memories: ["m1"])))
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["3"], "after a reset the blocks come again and are shown")
+        XCTAssertEqual(f.state?.memory?.items.map(\.id), ["m1"])
+    }
+
     /// dch 1.92.0: a reset why "range" with a tail snapshot and its blocks, then a reset why "full" with the whole
     /// snapshot and its blocks. Each reset drops the follow's state; the panel shows each snapshot's rows.
     /// Red with reset-keeps-old (the six chapters and the first blocks stay through the second reset).

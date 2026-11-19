@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import ProsperApp
 
@@ -511,6 +512,76 @@ final class XrayFollowTests: XCTestCase {
         XCTAssertEqual(f.state?.anchors, [:])
         XCTAssertTrue(pending.add([Data("x".utf8)]), "after a drain the next lines get their own hop")
         XCTAssertFalse(pending.add([]), "no hop for nothing")
+    }
+
+    static func ref(_ n: Int, count: Int = 1, text: String? = nil) -> String {
+        ##"{"key":"issue:#\##(n)","shape":"issue","text":"\##(text ?? "#\(n)")","count":\##(count)}"##
+    }
+
+    /// A snapshot with refs 0..<n and one chapter.
+    static func refsSnapshot(_ n: Int, text1: String? = nil) -> Data {
+        Data(snapshot(#"{"schema":1,"chapters":[{"anchor":"s:10","offset":10,"i":1,"title":"one","kind":"prompt"}],"refs":["#
+                      + (0..<n).map { ref($0, text: $0 == 1 ? text1 : nil) }.joined(separator: ",") + "]}").utf8)
+    }
+
+    /// #1631 (sample2: XrayRefs.parse 1193 samples under take, OutsideText.shown 410 of them): one changed ref in a list
+    /// of 50 parses that ref alone; a removal and a repeat parse none; a new key parses one; a snapshot parses every
+    /// row again (a same-key ref with new text shows it). Red at base: XrayFollow.swift:181 `XrayRefs.parse(object)`
+    /// parsed all 50 rows for each ref line (refRows 100 after the first delta, not 51).
+    func testOneChangedRefParsesThatRefAlone() {
+        let f = XrayFollow(target: Self.target("api"))
+        f.take([Self.refsSnapshot(50)])
+        XCTAssertEqual(f.refRows, 50)
+        f.take([Data(#"{"schema":1,"ref":"#.utf8) + Data(Self.ref(7, count: 5).utf8) + Data("}".utf8)])
+        XCTAssertEqual(f.refRows, 51, "one changed ref: one row parsed")
+        XCTAssertEqual(f.state?.refs?.entries.first { $0.key == "issue:#7" }?.count, 5)
+        XCTAssertEqual(f.state?.refs?.entries.filter { $0.count == 1 }.count, 49, "the rest keep their parsed value")
+        XCTAssertEqual(f.state?.refs?.entries.map(\.index), Array(0..<50))
+        f.take([Data(##"{"schema":1,"ref":{"key":"issue:#0","text":"#0","count":0}}"##.utf8)])
+        XCTAssertEqual(f.refRows, 51, "a removal parses no row")
+        XCTAssertEqual(f.state?.refs?.entries.first?.key, "issue:#1")
+        XCTAssertEqual(f.state?.refs?.entries.map(\.index), Array(0..<49), "each kept row at its new place")
+        f.take([Data(#"{"schema":1,"ref":"#.utf8) + Data(Self.ref(99).utf8) + Data("}".utf8)])
+        XCTAssertEqual(f.refRows, 52, "a new key: one row")
+        XCTAssertEqual(f.state?.refs?.entries.last?.key, "issue:#99")
+        XCTAssertEqual(f.parsed.chapters, 1, "no chapters parsed for ref lines")
+        f.take([Self.refsSnapshot(50, text1: "#1 again")])
+        XCTAssertEqual(f.refRows, 102, "a snapshot parses every row")
+        XCTAssertEqual(f.state?.refs?.entries.first { $0.key == "issue:#1" }?.text, "#1 again", "not the kept #1")
+    }
+
+    /// #1631: a key twice in a snapshot is parsed each time (never kept by key): each row keeps its own text.
+    func testAKeyTwiceInASnapshotIsNeverReused() {
+        let f = XrayFollow(target: Self.target("api"))
+        f.take([Data(Self.snapshot(#"{"schema":1,"chapters":[],"refs":["# + Self.ref(1) + "," + Self.ref(1, text: "#1b") + "," + Self.ref(2) + "]}").utf8)])
+        f.take([Data(#"{"schema":1,"ref":"#.utf8) + Data(Self.ref(2, count: 4).utf8) + Data("}".utf8)])
+        XCTAssertEqual(f.refRows, 6, "3 rows, then the twice-held key's 2 rows and the changed #2")
+        XCTAssertEqual(f.state?.refs?.entries.map(\.text), ["#1", "#1b", "#2"])
+    }
+
+    /// #1631: with the hop on (the product's), the build runs on the follow's queue and main swaps in the result; two
+    /// builds asked before main turns land as one state, the newer one (the older is dropped by its generation), and
+    /// the newer one's parse reused the older one's rows. Red with the build on main (builtOnMain 2) or without the
+    /// generation check (the first state that lands is the older one, #7 at count 1).
+    func testTheBuildRunsOffMainAndOnlyTheNewestLands() async {
+        let offMain = XrayFollow.buildOffMain
+        defer { XrayFollow.buildOffMain = offMain }
+        XrayFollow.buildOffMain = { true }
+        let f = XrayFollow(target: Self.target("api"))
+        let landed = expectation(description: "a state landed")
+        landed.assertForOverFulfill = false   // a mutant without the generation check lands twice: its asserts say so
+        let sink = f.$state.dropFirst().sink { _ in landed.fulfill() }
+        defer { sink.cancel() }
+        f.take([Self.refsSnapshot(50)] + XrayFollowTasksTests.blocks(tasks: ["1", "2"], memories: ["m1"]).map { Data($0.utf8) })
+        f.take([Data(#"{"schema":1,"ref":"#.utf8) + Data(Self.ref(7, count: 5).utf8) + Data("}".utf8)])
+        XCTAssertTrue(f.state == nil, "main does not wait for the build")
+        await fulfillment(of: [landed], timeout: 10)
+        XCTAssertEqual(f.builtOnMain, 0, "both builds ran off main")
+        XCTAssertEqual(f.swapped, 1, "the older build was overtaken: one state swapped in")
+        XCTAssertEqual(f.state?.refs?.entries.first { $0.key == "issue:#7" }?.count, 5, "the newer build's")
+        XCTAssertEqual(f.refRows, 51, "the newer build parsed #7 alone")
+        XCTAssertEqual(f.blockParses, 2, "tasks and memory parsed once, off main")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["1", "2"])
     }
 
     /// #1629 (sample2: XrayLineSplit.take 1895 samples in Data.firstIndex): a 1 MiB line in 1 KiB reads, then 2000
