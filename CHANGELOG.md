@@ -2078,6 +2078,8 @@ tag from the now-released section and put it on the new top draft.
   Sessions. (#1653)
 - Agent Sessions: the Layouts list now shows each layout's Control-number shortcut as the same key
   badge the sessions use, at the right edge of the row. (#1654)
+- In a split, only the focused pane shows a solid blinking cursor; the other panes show a hollow
+  box, like Ghostty. (#1656)
 
 ## v2.174.0
 

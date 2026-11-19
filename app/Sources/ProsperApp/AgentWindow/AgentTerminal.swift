@@ -315,6 +315,8 @@ final class AgentTerminalController: ObservableObject {
     var clearAction: @MainActor (AgentTerminalHostView?) -> Void = { _ = $0?.surface?.performBindingAction("clear_screen") }
     /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
     var paneFocused: () -> Bool = { true }
+    /// #1656 rows: every focus the wrapper hands libghostty for this terminal's surface (core.setFocus tells the view).
+    var focusSent: ((Bool) -> Void)?
     /// #1559 (X-T a): the window's focused pane's follow for `target` (nil: none held); rows hand in a fake.
     var focusFollow: @MainActor (XrayTarget?, ObjectIdentifier) -> XrayFollow? = {
         XrayPanels.shared.follows.focus($0, window: $1, dch: $0 == nil ? nil : XrayPanels.dch())
@@ -842,7 +844,7 @@ extension TerminalClipboardConfirmationRequest: AgentClipboardRequest {}
 /// through the controller's openURL, find, focus and live resize to the controller.
 final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDelegate,
     TerminalSurfaceClipboardConfirmationDelegate, TerminalSurfaceOpenURLDelegate, TerminalSurfaceSearchDelegate,
-    TerminalSurfaceGridResizeDelegate {
+    TerminalSurfaceGridResizeDelegate, TerminalSurfaceFocusDelegate {
     weak var owner: AgentTerminalController?
     /// Public only through the lifecycle delegate.
     private(set) var surface: TerminalSurface?
@@ -918,10 +920,25 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     }
 
     override func becomeFirstResponder() -> Bool {
-        let ok = super.becomeFirstResponder()
+        let ok = super.becomeFirstResponder()   // the wrapper hands libghostty focus true here, key window or not
         if ok, window?.isKeyWindow == true { owner?.focusIn() }
+        if !libghosttyFocus(responder: ok) { unfocusSurface() }   // #1656: a window that is not key, or not the focused pane
         return ok
     }
+
+    /// #1656 (operator 2026-11-19): libghostty focus (a solid blinking cursor; without it Ghostty's hollow, steady box)
+    /// exactly while the window is key, this is its focused pane and this view is the first responder. The wrapper sends
+    /// it on first responder in and out and on the window's key change (AppTerminalView+Lifecycle.swift); this view adds
+    /// the two it misses: a first responder in a window that is not key, and a new surface (libghostty starts focused).
+    private func libghosttyFocus(responder: Bool) -> Bool {
+        responder && window?.isKeyWindow == true && owner?.paneFocused() != false
+    }
+
+    /// #1656: focus false through the wrapper's own call (its resign hook runs core.setFocus(false); NSView's answers yes
+    /// and changes nothing): the responder chain, the grid and the pty stay as they are.
+    private func unfocusSurface() { _ = super.resignFirstResponder() }
+
+    func terminalDidChangeFocus(_ focused: Bool) { owner?.focusSent?(focused) }
 
     override func viewWillStartLiveResize() {
         super.viewWillStartLiveResize()
@@ -1099,7 +1116,11 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 
     // MARK: Delegates
 
-    func terminalDidAttachSurface(_ surface: TerminalSurface) { self.surface = surface }
+    func terminalDidAttachSurface(_ surface: TerminalSurface) {
+        self.surface = surface
+        // #1656: a new surface starts focused (beta.31's never-focused split pane drew the solid cursor): off unless the rule holds
+        if !libghosttyFocus(responder: window?.firstResponder === self) { unfocusSurface() }
+    }
     func terminalDidDetachSurface() { surface = nil }
 
     /// The grid as laid out, on main right after the surface took its pixel size: the only size the pty
