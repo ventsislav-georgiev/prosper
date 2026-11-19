@@ -1,0 +1,27 @@
+{
+ "entry": 1635,
+ "filter": "TranscriptIdleWorkTests|AgentWindowTests/testTheCanaryLogsTierCountsOncePerNewVersionWithoutContent|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "canary-empty-counts",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "queue.async { emit(line(version: v, a.value.counts())) }",
+   "new": "queue.async { emit(line(version: v, [:])) }",
+   "expect": "killed"
+  },
+  {
+   "name": "canary-rereads",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, decoded: assembler) }",
+   "new": "if let v = assembler.latestVersion { _ = r.tail.read(0..<r.tail.offset); TranscriptCanary.runIfNew(version: v, decoded: assembler) }",
+   "expect": "killed"
+  },
+  {
+   "name": "canary-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "queue.async { emit(line(version: v, a.value.counts())) }",
+   "new": "emit(line(version: v, a.value.counts()))",
+   "expect": "killed"
+  }
+ ]
+}
