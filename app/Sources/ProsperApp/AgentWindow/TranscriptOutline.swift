@@ -271,21 +271,32 @@ enum TranscriptOutline {
         private mutating func drop(to f: Int, _ blocks: [TranscriptBlock], _ asides: [TranscriptBlock]) {
             floor = f
             let k = turn(of: f)
-            guard k >= 0, k < turns.count - 1 else {
+            var j = k + 1, seg: [TranscriptBlock] = []
+            if k >= 0, j < turns.count {
+                seg = Self.merged(blocks, asides, from: f, below: turns[j].id)
+                examined += seg.count
+                // the cut turn's rest is only prompts and images: `turns` joins it to the next turn (that one has a step)
+                if !seg.contains(where: { !TranscriptOutline.isPrompt($0) && $0.body != .image }) {
+                    j += 1
+                    if j < turns.count {
+                        seg = Self.merged(blocks, asides, from: f, below: turns[j].id)
+                        examined += seg.count
+                    }
+                }
+            }
+            guard k >= 0, j < turns.count else {
                 chapters = []
                 turns = []
                 return refold(0, at: f, blocks, asides)
             }
-            let seg = Self.merged(blocks, asides, from: f, below: turns[k + 1].id)
-            examined += seg.count
             var head: [Chapter] = [], ts: [(id: Int, chapter: Int)] = []
             for t in TranscriptVerbosity.turns(seg) {
                 ts.append((t[0].id, head.count))
                 head += TranscriptOutline.chapters(turn: t, from: head.count + 1)
             }
-            let cut = turns[k + 1].chapter, shift = head.count - cut
+            let cut = turns[j].chapter, shift = head.count - cut
             chapters = head + chapters[cut...].map { var c = $0; c.ordinal += shift; return c }
-            turns = ts + turns[(k + 1)...].map { (id: $0.id, chapter: $0.chapter + shift) }
+            turns = ts + turns[j...].map { (id: $0.id, chapter: $0.chapter + shift) }
         }
 
         private mutating func syncLast() {

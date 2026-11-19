@@ -202,6 +202,23 @@ final class TranscriptOutlineBuilderTests: XCTestCase {
         XCTAssertEqual(o.chapters, full(blocks, []))
     }
 
+    /// CI 44507460812 step 287: a front drop leaves only an image of the cut turn, so `turns` joins it to the next
+    /// prompt's turn. Red before: the drop kept it a partial chapter of its own (id 2) ahead of the slash chapter (id 3).
+    func testADropThatLeavesOnlyAnImageJoinsItToTheNextTurn() {
+        var blocks = [user(0, "A"), bash(1, "make"), b(2, .image), b(3, .command(name: "/model", args: "opus")),
+                      bash(4, "ls"), user(5, "B"), say(6, "b")]
+        var o = TranscriptOutline.Builder()
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        let e = o.examined
+        blocks.removeFirst(2)
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.chapters.map(\.id), [2, 5])
+        XCTAssertEqual(o.chapters.map(\.kind), [.slash, .prompt])
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        XCTAssertEqual(o.examined - e, 4, "the cut rest (1) and the joined turn (3); B's turn is kept, not read")
+    }
+
     /// A seeded stream of appends, prompts, images, peer asides, compactions, results in place (in old turns and the
     /// last part), a tool that changes kind, subagent steps and front drops (to empty too), in batches: after every
     /// update the kept chapters equal a full build. Red under each fold mutant in mutants.txt.
