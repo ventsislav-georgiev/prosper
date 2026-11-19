@@ -12,8 +12,8 @@
   {
    "name": "mark-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "            AgentSidebarRowView.stateMark(row.working ? .working : .idle)\n                .modifier(AgentSidebarRowProbe(kind: \"layoutMark\", title: \"\\(row.number) \\(row.working ? \"working\" : \"idle\")\", global: true))\n",
-   "new": "",
+   "old": "            AgentSidebarRowView.stateMark(row.working ? .working : .idle)\n                .accessibilityHidden(true)",
+   "new": "            EmptyView()\n                .accessibilityHidden(true)",
    "expect": "killed"
   },
   {
