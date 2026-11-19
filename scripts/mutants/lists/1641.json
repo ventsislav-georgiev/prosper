@@ -1,0 +1,27 @@
+{
+  "entry": 1641,
+  "filter": "XrayRefResultsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+  "mutants": [
+    {
+      "name": "footer",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+      "old": "out.append(\"This session \\(ge)\\(n.session)\")",
+      "new": "out.append(\"\\(ge)\\(n.session) session\")",
+      "expect": "killed"
+    },
+    {
+      "name": "line",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+      "old": "return said.count > m.line.count ? said : m.line",
+      "new": "return m.line",
+      "expect": "killed"
+    },
+    {
+      "name": "always-sentence",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+      "old": "return said.count > m.line.count ? said : m.line",
+      "new": "return said.isEmpty ? m.line : said",
+      "expect": "killed"
+    }
+  ]
+}
