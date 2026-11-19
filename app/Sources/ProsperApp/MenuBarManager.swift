@@ -255,9 +255,17 @@ final class MenuBarManager: NSObject {
         // (chevron click / shortcut). No timer to arm.
         guard Preferences.menuBarStore.autoRehideEnabled else { rehideTimer = nil; return }
         let secs = TimeInterval(Preferences.menuBarStore.clampedAutoRehide)
-        rehideTimer = Timer.scheduledTimer(withTimeInterval: secs, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setRevealed(false) }
-        }
+        let t = Self.makeRehideTimer(secs) { [weak self] in self?.setRevealed(false) }
+        RunLoop.main.add(t, forMode: .default)
+        rehideTimer = t
+    }
+
+    /// #1637: the rehide timer, built but not scheduled (a row reads its tolerance). A rehide a few tenths late is
+    /// not noticed, so 10 % slack lets macOS coalesce the wakeup.
+    static func makeRehideTimer(_ secs: TimeInterval, _ fire: @escaping @MainActor @Sendable () -> Void) -> Timer {
+        let t = Timer(timeInterval: secs, repeats: false) { _ in MainActor.assumeIsolated { fire() } }
+        t.tolerance = secs / 10
+        return t
     }
 
     // MARK: - Spacing

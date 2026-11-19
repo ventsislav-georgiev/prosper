@@ -99,3 +99,22 @@ final class TranscriptIdleWorkTests: XCTestCase {
         XCTAssertEqual(clock.tolerance, 3, accuracy: 0.001)
     }
 }
+
+/// #1637: the remaining one-shot timers have a 10 % tolerance; each is built unarmed so no wall clock is needed.
+@MainActor
+final class OneShotTimerToleranceTests: XCTestCase {
+    func testTheIdleUnloadTimerHasATolerance() {
+        let t = ModelIdleUnloader.makeTimer(120) {}
+        XCTAssertEqual(t.tolerance, 12, accuracy: 0.001)
+    }
+
+    func testTheSpawnDeadlineTimerHasATolerance() {
+        let t = AgentWindowModel.makeSpawnDeadline(15.5) { _ in }
+        XCTAssertEqual(t.tolerance, 1.55, accuracy: 0.001)
+    }
+
+    func testTheRehideTimerHasATolerance() {
+        let t = MenuBarManager.makeRehideTimer(10) {}
+        XCTAssertEqual(t.tolerance, 1, accuracy: 0.001)
+    }
+}

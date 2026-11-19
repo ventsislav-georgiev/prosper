@@ -32,10 +32,17 @@ final class ModelIdleUnloader {
     /// Scheduler seam. Default uses a one-shot `Timer`; tests inject a synchronous fake.
     var scheduler: (TimeInterval, @escaping @Sendable () -> Void) -> Cancellable = { interval, fire in
         // Timer scheduled on the main runloop fires on the main thread → already isolated.
-        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { _ in
-            MainActor.assumeIsolated { fire() }
-        }
+        let t = ModelIdleUnloader.makeTimer(interval, fire)
+        RunLoop.main.add(t, forMode: .default)
         return Cancellable { t.invalidate() }
+    }
+
+    /// #1637: the idle timer, built but not scheduled (a row reads its tolerance). The unload is minutes away and
+    /// nobody sees the moment, so 10 % slack lets macOS coalesce the wakeup.
+    static func makeTimer(_ interval: TimeInterval, _ fire: @escaping @Sendable () -> Void) -> Timer {
+        let t = Timer(timeInterval: interval, repeats: false) { _ in MainActor.assumeIsolated { fire() } }
+        t.tolerance = interval / 10
+        return t
     }
 
     private var pending: Cancellable?

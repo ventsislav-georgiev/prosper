@@ -2045,6 +2045,8 @@ tag from the now-released section and put it on the new top draft.
   this Mac) as soon as something changes or you switch tab. (#1636)
 - The Agents window's chapter outline now updates with only the new part of a streaming transcript,
   off the main thread, so long agent turns stay smooth and use less battery. (#1633)
+- Auto-hide of the menu bar, the idle model unload and the new-session start check now let macOS
+  coalesce their wakeups, which saves a little battery. (#1637)
 
 ## v2.174.0
 

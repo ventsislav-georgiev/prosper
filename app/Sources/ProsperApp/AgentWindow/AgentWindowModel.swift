@@ -2395,7 +2395,16 @@ final class AgentWindowModel: ObservableObject {
     static let spawnSlack: TimeInterval = 15
     /// #1096 4: the deadline's timer; a test records the interval it asks for (no wall clock).
     var scheduleDeadline: (TimeInterval, @escaping @Sendable (Timer) -> Void) -> Timer = {
-        Timer.scheduledTimer(withTimeInterval: $0, repeats: false, block: $1)
+        let t = AgentWindowModel.makeSpawnDeadline($0, $1)
+        RunLoop.main.add(t, forMode: .default)
+        return t
+    }
+    /// #1637: the spawn deadline, built but not scheduled. The "ended at once" text lands a moment late at worst, so
+    /// 10 % slack lets macOS coalesce the wakeup.
+    static func makeSpawnDeadline(_ every: TimeInterval, _ fire: @escaping @Sendable (Timer) -> Void) -> Timer {
+        let t = Timer(timeInterval: every, repeats: false, block: fire)
+        t.tolerance = every / 10
+        return t
     }
     /// #1096 1c: the store listed the pending start while the window was hidden (its sink runs, the rebuild does not).
     private(set) var spawnSeen = false
