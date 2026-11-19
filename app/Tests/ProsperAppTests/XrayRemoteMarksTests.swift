@@ -288,4 +288,20 @@ final class XrayRemoteMarksTests: XCTestCase {
             await r.panels.refReading?.value
         }
     }
+
+    /// #1625: a key into the terminal ends the recap strip and still goes on to the pty. Red without the keyDown line
+    /// (XrayRecaps.shared.dismiss in AgentTerminalHostView.keyDown).
+    func testKeystrokeDismissesTheRecap() async throws {
+        try await withSeams { _ in
+            let r = rig()
+            let recaps = XrayRecaps.shared, t = XrayTarget(name: "api", dir: "/Users/example/.dch")
+            recaps.focus(t)
+            defer { recaps.leave(t) }
+            recaps.take((0, Data(#"{"schema":1,"chapters":[{"chapter":"a:1","turn_title":"Fix the login test"}],"refs":[]}"#.utf8)), for: t)
+            XCTAssertEqual(recaps.shown?.target, t)
+            r.v.keyDown(with: try Self.esc())
+            XCTAssertTrue(recaps.shown == nil, "the keystroke dismissed it")
+            XCTAssertEqual(r.passed.count, 1, "and reached the pty")
+        }
+    }
 }

@@ -17,7 +17,7 @@ enum XrayTab: String, CaseIterable {
 }
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
-struct XrayTarget: Equatable {
+struct XrayTarget: Hashable {
     let name: String
     /// The local session's socket dir; nil for a remote row (the default dir's dch dials the host).
     let dir: String?

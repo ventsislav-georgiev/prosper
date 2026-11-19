@@ -995,6 +995,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {
             return
         }
+        XrayRecaps.shared.dismiss()   // #1625: a keystroke into the terminal ends the recap strip
         passedKey?(event)
         super.keyDown(with: event)
     }

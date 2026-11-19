@@ -36,8 +36,9 @@ final class XrayRequests: NSObject {
         let line = lines[target.name] ?? XrayRequestLine(name: target.name, spawn: spawn)
         lines[target.name] = line
         let name = target.name, search = XraySearch.scoped(XrayPanels.probed?.version)   // #1611: dch 1.110.0 takes --search
+        let since = XrayRecap.supported(XrayPanels.probed?.version)   // #1625: dch 1.113.0 takes --since
         return { path, args, env in
-            guard XrayPanels.stdin.get() == nil, let argv = XrayRequests.form(args, name: name, search: search),
+            guard XrayPanels.stdin.get() == nil, let argv = XrayRequests.form(args, name: name, search: search, since: since),
                   let r = await line.request(path, argv, env) else { return await cold(path, args, env) }
             return r
         }
@@ -46,7 +47,8 @@ final class XrayRequests: NSObject {
     /// dch's request forms (README v1.99.0:1287-1289): the flags after `--xray <name>`, for --json alone, --ref,
     /// --chapter and --clear; nil for anything else (it runs cold).
     /// #1611 (README v1.110.0:1299-1302): with `search` (the local dch is 1.110.0+), `--search <text> [--scope <s>] --json` too.
-    nonisolated static func form(_ args: [String], name: String, search: Bool = false) -> [String]? {
+    /// #1625 (README v1.113.0:1304): with `since` (the local dch is 1.113.0+), `--since <time> --json` too.
+    nonisolated static func form(_ args: [String], name: String, search: Bool = false, since: Bool = false) -> [String]? {
         guard args.count >= 3, args.first == "--xray", args.dropFirst().first == name else { return nil }
         let rest = Array(args.dropFirst(2))
         switch rest.first {
@@ -55,6 +57,7 @@ final class XrayRequests: NSObject {
         case "--search":
             guard search, rest.last == "--json", rest.count == 3 || (rest.count == 5 && rest.dropFirst(2).first == "--scope") else { return nil }
             return rest
+        case "--since": return since && rest.count == 3 && rest.last == "--json" ? rest : nil
         default: return nil
         }
     }

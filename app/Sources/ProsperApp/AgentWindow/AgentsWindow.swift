@@ -2335,6 +2335,7 @@ struct AgentDetailView: View {
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "terminal"))
+                    .overlay(alignment: .top) { XrayRecapStrip(pane: model.layout.focused, target: XrayTarget.of(row)) }   // #1625
                     .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) } }
             }
         } else if let row = model.selectedRow, let r = row.record {
@@ -2396,6 +2397,7 @@ struct AgentDetailView: View {
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
                     overTop(row, s)
+                    XrayRecapStrip(pane: model.layout.focused, target: XrayTarget.of(row))   // #1625
                     if let u = model.unsentFirst, u.key == s.key, !model.focusedEnded {
                         AgentUnsentFirstHost(model: model, terminal: model.terminal)
                     }
