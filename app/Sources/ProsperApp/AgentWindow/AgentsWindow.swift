@@ -1434,7 +1434,10 @@ struct AgentLayoutRowView: View {
     private func trailing(count: some View, chip: some View) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             count.frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
-            if let editLabel { Self.editText(editLabel).hidden() }
+            if let editLabel {
+                Self.editText(editLabel).hidden()
+                    .modifier(AgentSidebarRowProbe(kind: "layoutEditRoom", title: editLabel, global: true))
+            }
             ZStack { AgentSidebarRowView.digitColumn; chip }
         }
     }
@@ -1448,6 +1451,10 @@ struct AgentLayoutRowView: View {
                 .opacity(edit == nil ? 1 : 0).accessibilityHidden(edit != nil)
                 .overlay(alignment: .leading) { if let edit { AgentLayoutNameField(placeholder: row.name, text: edit, end: end) } }
                 .modifier(AgentSidebarRowProbe(kind: "layoutName", title: "\(row.number)", global: true))
+                // #1654: the name's slot, all the room before the Spacer (priority 1: the Spacer gets 0, the Text the
+                // same offer as before); a middle-truncated Text ends at a glyph edge, short of its slot
+                .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                .modifier(AgentSidebarRowProbe(kind: "layoutSlot", title: "\(row.number)", global: true))
             Spacer(minLength: 0)
             trailing(count: Color.clear, chip: EmptyView()).hidden().frame(height: 0)   // the slots' widths, no height
         }

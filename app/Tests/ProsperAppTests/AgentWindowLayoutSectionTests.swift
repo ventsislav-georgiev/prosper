@@ -546,7 +546,8 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.setLayoutEditing(false)
             XCTAssertGreaterThanOrEqual(m.numberedIDs.count, 2, "two numbered session rows (\(scale))")
-            let want = ["layoutChip 1", "layoutChip 2", "layoutName 1", "layoutName 2", "layoutEdit Edit", "digitChip 1", "digitChip 2"]
+            let want = ["layoutChip 1", "layoutChip 2", "layoutName 1", "layoutName 2", "layoutSlot 1", "layoutSlot 2", "layoutEdit Edit",
+                        "layoutEditRoom Edit", "digitChip 1", "digitChip 2"]
             let f = sidebarProbes(m, want)
             XCTAssertTrue(want.allSatisfy { f[$0] != nil }, "every part drawn (\(scale)): \(f.keys.sorted())")
             for n in 1...2 {
@@ -563,10 +564,23 @@ extension AgentWindowD1Tests {
             XCTAssertLessThanOrEqual(active.maxX, edit.minX + pixel, "the name before the Edit (\(scale)): \(active) \(edit)")
             XCTAssertLessThanOrEqual(other.maxX, chip1.minX + pixel, "the name before the chip (\(scale)): \(other) \(chip1)")
             XCTAssertEqual(active.minX, other.minX, accuracy: pixel, "the names start at one x (\(scale))")
-            // the name keeps all the room the button leaves: the active name + the Edit + its sz(8) gap fill the other's
-            XCTAssertGreaterThanOrEqual(active.width, other.width - edit.width - sz(8) - 2 * pixel,
-                                        "the name is not pushed out (\(scale)): \(other) \(active) \(edit)")
-            let ratio = active.width / max(other.width, 1)
+            // the row's room for Edit is the button's own width, at its place
+            let room = try XCTUnwrap(f["layoutEditRoom Edit"])
+            XCTAssertEqual(room.width, edit.width, accuracy: pixel, "the Edit room is the button's width (\(scale)): \(room) \(edit)")
+            XCTAssertEqual(room.minX, edit.minX, accuracy: pixel, "the button lies over its room (\(scale)): \(room) \(edit)")
+            // the name keeps all the room the button leaves: the active name's slot + the Edit + its sz(8) gap fill the
+            // other's. The slots, not the Texts: a middle-truncated Text ends at a glyph edge, up to a glyph short of its
+            // slot, and the two names cut at different glyphs (CI at 0.7, 1x: Texts 118 and 93 against 94.4).
+            let otherSlot = try XCTUnwrap(f["layoutSlot 1"]), activeSlot = try XCTUnwrap(f["layoutSlot 2"])
+            XCTAssertTrue(active.maxX <= activeSlot.maxX + pixel && other.maxX <= otherSlot.maxX + pixel,
+                          "each name inside its slot (\(scale)): \(active) \(activeSlot) \(other) \(otherSlot)")
+            XCTAssertLessThanOrEqual(activeSlot.maxX, edit.minX + pixel, "the slot before the Edit (\(scale)): \(activeSlot) \(edit)")
+            // and reaches the trailing parts: past the attention slot and its gaps (one sz(8) spare for the Spacer's)
+            XCTAssertGreaterThanOrEqual(activeSlot.maxX, edit.minX - AgentLayoutsSection.attentionWidth - 3 * sz(8) - pixel,
+                                        "the slot reaches the attention slot (\(scale)): \(activeSlot) \(edit)")
+            XCTAssertGreaterThanOrEqual(activeSlot.width, otherSlot.width - edit.width - sz(8) - 2 * pixel,
+                                        "the name is not pushed out (\(scale)): \(otherSlot) \(activeSlot) \(edit)")
+            let ratio = activeSlot.width / max(otherSlot.width, 1)
             if let r1 = ratio1 { XCTAssertGreaterThanOrEqual(ratio, r1 - 0.02, "name width in proportion to 1.0 (\(scale))") } else { ratio1 = ratio }
             let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
             let labels = unique(tree) { $0.label.contains("Control ") && $0.role == "AXButton" }.map(\.label)
