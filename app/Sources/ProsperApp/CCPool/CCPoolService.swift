@@ -263,7 +263,14 @@ final class CCPoolService: @unchecked Sendable {
     /// #1665: the NWError's code word for the log (EADDRINUSE, dns -65554), never a system message text.
     static func errorWord(_ e: NWError) -> String {
         switch e {
-        case .posix(let c): return "\(c)"
+        case .posix(let c):
+            switch c {
+            case .EADDRINUSE: return "EADDRINUSE"
+            case .EADDRNOTAVAIL: return "EADDRNOTAVAIL"
+            case .EACCES: return "EACCES"
+            case .EPERM: return "EPERM"
+            default: return "errno \(c.rawValue)"
+            }
         case .dns(let c): return "dns \(c)"
         case .tls(let c): return "tls \(c)"
         @unknown default: return "unknown"

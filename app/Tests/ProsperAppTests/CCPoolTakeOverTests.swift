@@ -378,6 +378,7 @@ final class CCPoolTakeOverTests: XCTestCase {
 
     func testBindFailureReasonIsLoggedOncePerStart() throws {
         XCTAssertEqual(CCPoolService.errorWord(.posix(.EADDRINUSE)), "EADDRINUSE")
+        XCTAssertEqual(CCPoolService.errorWord(.posix(.ENOENT)), "errno \(POSIXErrorCode.ENOENT.rawValue)", "an unlisted code is its number")
         // Bound, not listening: connect is refused and bind fails with EADDRINUSE (CCPoolFollowUpTests' staging).
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw XCTSkip("no socket") }

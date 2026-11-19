@@ -348,7 +348,8 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertTrue(launch.contains(enable) && !enable.isEmpty, "the enable callback is set at launch")
         XCTAssertTrue(enable.contains("CCPoolRuntime.setExtensionLive(self.ccpoolExtLive)"), "enable and disable push it")
         XCTAssertTrue(quit.contains("CCPoolRuntime.shared?.quit()"), "quit stops the proxy")
-        XCTAssertEqual(text.components(separatedBy: "CCPoolRuntime.").count - 1, 3, "no other ccpool hook")
+        XCTAssertEqual(text.components(separatedBy: "CCPoolRuntime.").count - 1, 4, "no other ccpool hook")
+        XCTAssertTrue(body("func handleOpenedLink(", indent: 4).contains(#"case "ccpool": CCPoolRuntime.openLink(u)"#), "the prosper://ccpool route lives in handleOpenedLink")
         XCTAssertTrue(text.contains(#"record(id: "com.prosper.ccpool")?.isLive ?? false"#), "live = enabled and trusted")
     }
 
