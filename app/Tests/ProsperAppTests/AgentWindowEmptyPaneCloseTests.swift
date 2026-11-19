@@ -21,7 +21,7 @@ extension AgentWindowD1Tests {
     func emptyPanePills(_ m: AgentWindowModel, _ id: UUID) throws -> [AgentPillButton] {
         let view = AgentPaneArea(model: m, scrolls: false).pane(id, compact: m.layout.panes.count > 1)
         if let d = paneRiderFind(view, AgentDetailView.self) { return emptyPanePills(d.body) }
-        return emptyPanePills(try XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "a pane view").body)
+        return emptyPanePills(try XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "a pane view: \(type(of: view))").body)
     }
 
     /// ⌘W with two panes closes the focused EMPTY pane (the sidebar holding the keys), never the window.
@@ -150,8 +150,11 @@ extension AgentWindowD1Tests {
     @MainActor
     func testEmptyPaneClosePillOnlyWithSeveralPanesAndClosesItsOwnPane() throws {
         try withPaneMenu(true) {
+            // The first show fills the focused empty pane with the first row (#828): emptied again, as a person can.
             let single = sideOpenModel(paneLayout([nil]))
             defer { single.close() }
+            single.select(nil)
+            XCTAssertTrue(single.layout.panes.allSatisfy { $0.target == nil }, "the pane is empty")
             let alone = try emptyPanePills(single, single.layout.focused)
             XCTAssertEqual(alone.map(\.title), ["New session"], "one pane: no Close Pane")
 
@@ -159,6 +162,8 @@ extension AgentWindowD1Tests {
             let a = try XCTUnwrap(two.order.first), b = try XCTUnwrap(two.order.last)
             let m = sideOpenModel(two)
             defer { m.close() }
+            m.select(nil)
+            XCTAssertTrue(m.layout.panes.allSatisfy { $0.target == nil }, "both panes empty")
             XCTAssertEqual(m.layout.focused, a)
             let focused = try emptyPanePills(m, a)
             XCTAssertEqual(focused.map(\.title), ["Close Pane", "New session"], "the focused empty pane")
@@ -171,6 +176,8 @@ extension AgentWindowD1Tests {
 
             let m2 = sideOpenModel(two)
             defer { m2.close() }
+            m2.select(nil)
+            XCTAssertTrue(m2.layout.panes.allSatisfy { $0.target == nil }, "both panes empty")
             let pill = try XCTUnwrap(try emptyPanePills(m2, b).first { $0.title == "Close Pane" })
             XCTAssertEqual(m2.layout.focused, a)
             pill.action()
