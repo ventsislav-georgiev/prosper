@@ -590,6 +590,47 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1657 (QA R1654 n3): Row details > Shortcut off drops the Layouts rows' ⌃N chip and its column like the session rows' ⌘N
+    /// (the store's in-memory details, the same the session rows read; no preference is written), at 1.0: no layoutChip
+    /// and no session chipColumn is drawn, the names' slots end one trailing column (chip column + one sz(8) gap) further
+    /// right than with Shortcut on, and the active row's Edit button stays over its room at the trailing edge. GUARD
+    /// layout-chip-follows-row-details-shortcut.
+    @MainActor
+    func testAgentWindowLayoutChipFollowsTheRowDetailsShortcutToggle() throws {
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        gate(true)
+        let pixel = AXTreeSupport.devicePixel
+        let a = named(paneLayout([paneTarget("api")]), String(repeating: "review ", count: 12))
+        let b = named(paneLayout([paneTarget("api"), paneTarget("docs")]), String(repeating: "layout ", count: 12))
+        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+        defer { m.close() }
+        m.setLayoutEditing(false)
+        let parts = ["layoutName 1", "layoutName 2", "layoutSlot 1", "layoutSlot 2", "layoutEdit Edit", "layoutEditRoom Edit"]
+        let on = sidebarProbes(m, parts + ["layoutChip 1", "layoutChip 2", "digitChip 1"])
+        XCTAssertTrue((parts + ["layoutChip 1", "layoutChip 2"]).allSatisfy { on[$0] != nil }, "on: every part drawn: \(on.keys.sorted())")
+        let column = try XCTUnwrap(on.first { $0.key.hasPrefix("chipColumn ") }?.value, "on: the session rows' chip column")
+        let saveDetails = m.store?.details
+        defer { if let saveDetails { m.store?.details = saveDetails } }
+        var off = AgentIslandRowDetails.all
+        off.shortcut = false
+        m.store?.details = off
+        let f = sidebarProbes(m, parts)
+        XCTAssertTrue(parts.allSatisfy { f[$0] != nil }, "off: every part drawn: \(f.keys.sorted())")
+        XCTAssertTrue(f.keys.allSatisfy { !$0.hasPrefix("layoutChip ") && !$0.hasPrefix("chipColumn ") && !$0.hasPrefix("digitChip ") },
+                      "off: no chip, no chip column: \(f.keys.sorted())")
+        for n in 1...2 {
+            let was = try XCTUnwrap(on["layoutSlot \(n)"]), now = try XCTUnwrap(f["layoutSlot \(n)"])
+            XCTAssertEqual(now.maxX - was.maxX, column.width + sz(8), accuracy: pixel,
+                           "slot \(n) takes the chip column and its gap: \(was) \(now) \(column)")
+        }
+        let edit = try XCTUnwrap(f["layoutEdit Edit"]), room = try XCTUnwrap(f["layoutEditRoom Edit"]), slot = try XCTUnwrap(f["layoutSlot 2"])
+        XCTAssertEqual(edit.minX, room.minX, accuracy: pixel, "off: Edit stays over its room: \(edit) \(room)")
+        XCTAssertLessThanOrEqual(slot.maxX, edit.minX + pixel, "off: the name before the Edit: \(slot) \(edit)")
+    }
+
     /// #1648: the button itself is pressed (the hosted tree's accessibilityPerformPress, what VoiceOver does; never a posted
     /// event): the label flips Edit layout -> Done editing layout and `layoutEditing` with it, then back.
     @MainActor

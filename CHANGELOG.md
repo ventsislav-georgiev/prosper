@@ -2085,6 +2085,8 @@ tag from the now-released section and put it on the new top draft.
   thread. (#1655)
 - ⌘W now closes the focused pane in Agent Sessions splits even when it is empty or shows the New
   session form, and an empty pane has a Close Pane button. (#1658)
+- Agent Sessions sidebar: with Settings > Agent Island > Row details > Shortcut off, the Layouts
+  rows also hide their Control-number chip and give the room to the name. (#1657)
 
 ## v2.174.0
 

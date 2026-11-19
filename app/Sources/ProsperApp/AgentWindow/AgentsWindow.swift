@@ -1004,7 +1004,7 @@ struct AgentSidebarView: View {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
                             // #1379 Mini: the rail lists the rows alone (no Layouts section, no headers, nothing folded).
                             let mini = model.sidebarMode == .mini
-                            if !mini, let rows = model.layoutRows { AgentLayoutsSection(model: model, rows: rows) }
+                            if !mini, let rows = model.layoutRows { AgentLayoutsSection(model: model, rows: rows, show: details) }
                             ForEach(model.sections) { section in
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
@@ -1302,6 +1302,8 @@ struct AgentLayoutsSection: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
     let rows: [AgentWindowModel.LayoutRow]
+    /// #1657: the store's Row details, as the session rows get them; Shortcut off: no ⌃N chip and no chip column.
+    var show = AgentIslandRowDetails.all
     static let title = "Layouts"
     /// The attention slot's fixed width (section 10, step 5 fills it).
     static var attentionWidth: CGFloat { sz(14) }
@@ -1339,7 +1341,7 @@ struct AgentLayoutsSection: View {
                     model.endLayoutRename(r.id, $0)
                 }
             } else {
-                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, editLabel: r.active ? editLabel : nil) }
+                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, editLabel: r.active ? editLabel : nil, showShortcut: show.shortcut) }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Self.label(r))
                     .accessibilityValue(Self.value(r))
@@ -1356,7 +1358,7 @@ struct AgentLayoutsSection: View {
                     // Button: its own element, read after the row).
                     .overlay(alignment: .trailing) {
                         if r.active {
-                            HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }
+                            HStack(spacing: sz(8)) { editButton; if show.shortcut { AgentSidebarRowView.digitColumn } }
                                 .padding(.trailing, sz(10))
                         }
                     }
@@ -1428,6 +1430,8 @@ struct AgentLayoutRowView: View {
     var end: (String?) -> Void = { _ in }
     /// #1654: the active row's Edit / Done words: their room is kept before the chip (the section draws the button there).
     var editLabel: String? = nil
+    /// #1657: Row details > Shortcut; off: no chip and no chip column (the session rows' rule). The ⌃N keys work regardless.
+    var showShortcut = true
 
     /// #1654: the Edit / Done words, the button's label and the row's room for it alike.
     static func editText(_ s: String) -> some View {
@@ -1443,7 +1447,7 @@ struct AgentLayoutRowView: View {
                 Self.editText(editLabel).hidden()
                     .modifier(AgentSidebarRowProbe(kind: "layoutEditRoom", title: editLabel, global: true))
             }
-            ZStack { AgentSidebarRowView.digitColumn; chip }
+            if showShortcut { ZStack { AgentSidebarRowView.digitColumn; chip } }
         }
     }
 
