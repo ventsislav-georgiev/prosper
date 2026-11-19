@@ -154,7 +154,11 @@ final class SlackTimerToleranceTests: XCTestCase {
         XCTAssertEqual(SlackTimer.leeway(1), .nanoseconds(100_000_000))
         XCTAssertEqual(SlackTimer.leeway(120), .seconds(12))
         XCTAssertEqual(SlackTimer.leeway(.infinity), .nanoseconds(0))
-        XCTAssertEqual(SlackTimer.make(queue: .main, delay: 10) {}.leeway, .seconds(1))
+        let t = SlackTimer.make(queue: .main, delay: 10) {}
+        XCTAssertEqual(t.leeway, .seconds(1))
+        // libdispatch traps on releasing a never-resumed source: cancel first (handler never fires), then resume.
+        t.source.cancel()
+        t.source.resume()
     }
 
     func testTheHelperHoldAndIdleExitTimersUseTheSlackBuilder() throws {

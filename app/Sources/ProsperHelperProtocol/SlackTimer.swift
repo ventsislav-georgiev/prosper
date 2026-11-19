@@ -9,7 +9,7 @@ public enum SlackTimer {
         return .nanoseconds(Int(delay * 1e8))
     }
 
-    /// Built and scheduled but not resumed: the caller arms it with `resume()`; a row reads `leeway` without arming anything.
+    /// Built and scheduled but not resumed: the caller must resume() it (or cancel() then resume()) before it is released, or libdispatch traps.
     public static func make(queue: DispatchQueue, delay: TimeInterval, _ fire: @escaping @Sendable () -> Void)
         -> (source: DispatchSourceTimer, leeway: DispatchTimeInterval)
     {
