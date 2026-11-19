@@ -124,3 +124,137 @@ final class TranscriptOutlineTests: XCTestCase {
         XCTAssertEqual(m.chapters.map(\.title), ["Prompt 0", "Prompt 1", "Prompt 2"])
     }
 }
+
+/// #1633: the outline kept between polls (`TranscriptOutline.Builder`) reads only what a poll changed and always equals a
+/// full build. Fake literal blocks only; rows count blocks read, never time.
+final class TranscriptOutlineBuilderTests: XCTestCase {
+    private func b(_ id: Int, _ body: BlockBody, children: [TranscriptBlock] = []) -> TranscriptBlock {
+        TranscriptBlock(id: id, body: body, tier: .specific, version: "2.1.300", source: nil, children: children)
+    }
+    private func user(_ id: Int, _ text: String, peer: String? = nil) -> TranscriptBlock {
+        var c = Clip(text, cap: 10_000)
+        if let peer { c.origin = PromptOrigin(peer: peer) }
+        return b(id, .user(c))
+    }
+    private func say(_ id: Int, _ text: String) -> TranscriptBlock { b(id, .assistant(Clip(text, cap: 10_000))) }
+    private func bash(_ id: Int, _ cmd: String, error: Bool = false) -> TranscriptBlock {
+        b(id, .bash(command: cmd, description: nil, output: Clip("ok", cap: 100), isError: error))
+    }
+    /// What publish() built at 944bac96, over everything: the oracle.
+    private func full(_ blocks: [TranscriptBlock], _ asides: [TranscriptBlock]) -> [TranscriptOutline.Chapter] {
+        let floor = blocks.first?.id ?? Int.min
+        return TranscriptOutline.chapters((blocks + asides.filter { $0.id >= floor }).sorted { $0.id < $1.id })
+    }
+
+    /// Red before: publish() ran `TranscriptOutline.chapters` over all 1500 blocks for every poll with lines
+    /// (AgentTranscriptModel.swift:689 at 944bac96). One new step, its result, a new prompt: a constant few blocks read.
+    func testOneNewBlockReadsOneBlockNotTheTranscript() {
+        var blocks = (0..<500).flatMap { i in [user(3 * i, "Prompt \(i)"), bash(3 * i + 1, "make \(i)"), say(3 * i + 2, "Done \(i)")] }
+        var o = TranscriptOutline.Builder()
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        XCTAssertGreaterThanOrEqual(o.examined, 1500, "the first build reads everything")
+        var e = o.examined
+        blocks.append(bash(1500, "make more"))
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.examined - e, 1, "one new step over 1500 blocks: one block read")
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        e = o.examined
+        blocks[blocks.count - 1] = bash(1500, "make more", error: true)   // its result lands in place, failed
+        o.update(blocks: blocks, asides: [], dirty: [1500])
+        XCTAssertEqual(o.examined - e, 1, "a result in place: that step alone is read again")
+        XCTAssertTrue(o.chapters.last?.hasError == true)
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        e = o.examined
+        blocks.append(user(1501, "next"))
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertLessThanOrEqual(o.examined - e, 2, "a new prompt: only the new turn")
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        e = o.examined
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.examined - e, 0, "nothing new: nothing read")
+    }
+
+    /// The streaming case: one long turn (an agent at work), 1500 steps. Red before as above: the whole turn per poll.
+    func testOneNewStepOfALongTurnReadsOneBlock() {
+        var blocks = [user(0, "Refactor the parser")]
+            + (1...1500).map { i in i % 2 == 0 ? say(i, "step \(i)") : bash(i, "make \(i)") }
+        var o = TranscriptOutline.Builder()
+        o.update(blocks: blocks, asides: [], dirty: [])
+        var e = o.examined
+        blocks.append(bash(1501, "make test"))
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.examined - e, 1)
+        e = o.examined
+        blocks[blocks.count - 1] = bash(1501, "make test", error: true)
+        blocks.append(say(1502, "one failed"))
+        o.update(blocks: blocks, asides: [], dirty: [1501])
+        XCTAssertEqual(o.examined - e, 2, "the result in place and the new answer")
+        XCTAssertEqual(o.chapters, full(blocks, []))
+        XCTAssertEqual(o.chapters.last?.response, "one failed")
+        XCTAssertEqual(o.chapters.last?.tools, "Bash 751")
+        // A step that changed tool, and an answer rewritten: the turn is folded again (red under retally-name, -answer).
+        blocks[1] = b(1, .read(path: "/Users/example/a.swift", detail: nil))
+        blocks[blocks.count - 1] = say(1502, "all green")
+        o.update(blocks: blocks, asides: [], dirty: [1, 1502])
+        XCTAssertEqual(o.chapters.last?.tools, "Read 1, Bash 750")
+        XCTAssertEqual(o.chapters.last?.response, "all green")
+        XCTAssertEqual(o.chapters, full(blocks, []))
+    }
+
+    /// A seeded stream of appends, prompts, images, peer asides, compactions, results in place (in old turns and the
+    /// last part), a tool that changes kind, subagent steps and front drops (to empty too), in batches: after every
+    /// update the kept chapters equal a full build. Red under each fold mutant in mutants.txt.
+    func testEveryUpdateEqualsAFullBuild() {
+        var seed: UInt64 = 0x1633
+        func rnd(_ n: Int) -> Int {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Int((seed >> 33) % UInt64(n))
+        }
+        var blocks: [TranscriptBlock] = [], asides: [TranscriptBlock] = [], dirty = Set<Int>(), next = 0
+        var o = TranscriptOutline.Builder()
+        func take() -> Int { defer { next += 1 }; return next }
+        func someIndex(_ f: (TranscriptBlock) -> Bool) -> Int? {
+            let c = blocks.indices.filter { f(blocks[$0]) }
+            return c.isEmpty ? nil : c[rnd(c.count)]
+        }
+        func isBash(_ x: TranscriptBlock) -> Bool { if case .bash = x.body { true } else { false } }
+        for step in 0..<700 {
+            switch rnd(14) {
+            case 0, 1: blocks.append(bash(take(), "make", error: rnd(5) == 0))
+            case 2: blocks.append(say(take(), "answer \(step)"))
+            case 3: blocks.append(b(take(), .read(path: "/Users/example/a.swift", detail: nil)))
+            case 4: blocks.append(user(take(), "prompt \(step)"))
+            case 5: blocks.append(b(take(), .image))
+            case 6: asides.append(user(take(), "from a peer \(step)", peer: rnd(2) == 0 ? "api-qa" : ""))
+            case 7: blocks.append(rnd(2) == 0 ? b(take(), .compaction(trigger: "auto", preTokens: nil, summary: nil))
+                                               : b(take(), .command(name: "/model", args: "opus")))
+            case 8, 9:
+                if let i = someIndex(isBash), case .bash(let c, let d, let out, let err) = blocks[i].body {
+                    blocks[i].body = .bash(command: c, description: d, output: out, isError: !err)
+                    dirty.insert(blocks[i].id)
+                }
+            case 10:
+                if let i = someIndex(isBash) {
+                    blocks[i].body = .read(path: "/Users/example/b.swift", detail: rnd(2) == 0 ? "error: gone" : nil)
+                    dirty.insert(blocks[i].id)
+                }
+            case 11:
+                if let i = someIndex({ if case .thread = $0.body { true } else { false } }), rnd(2) == 0 {
+                    blocks[i].children.append(bash(take(), "sub", error: rnd(4) == 0))
+                    dirty.insert(blocks[i].id)
+                } else {
+                    blocks.append(b(take(), .thread(agentId: "a\(step)", title: "Explore"), children: [say(take(), "sub")]))
+                }
+            case 12: blocks.removeFirst(min(blocks.count, 1 + rnd(3)))
+            default: blocks.removeFirst(min(blocks.count, rnd(2)))
+            }
+            guard rnd(3) != 0 else { continue }   // some polls land several changes at once
+            o.update(blocks: blocks, asides: asides, dirty: dirty)
+            dirty = []
+            XCTAssertEqual(o.chapters, full(blocks, asides), "step \(step)")
+            if o.chapters != full(blocks, asides) { return }
+        }
+        XCTAssertGreaterThan(o.chapters.count, 3, "the stream ends with a few chapters")
+    }
+}

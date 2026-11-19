@@ -2043,6 +2043,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray Tasks, Prompts and Memory drawer now checks dch less often while nothing changes, slowing
   to at most once a minute to save battery, and goes back to its usual pace (every 5 s for a session on
   this Mac) as soon as something changes or you switch tab. (#1636)
+- The Agents window's chapter outline now updates with only the new part of a streaming transcript,
+  off the main thread, so long agent turns stay smooth and use less battery. (#1633)
 
 ## v2.174.0
 

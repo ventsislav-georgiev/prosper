@@ -43,6 +43,11 @@ struct TranscriptAssembler {
     /// #1354: another session's message (a peer prompt): never drawn (hidden and counted as at TIP), kept only for the
     /// outline's chapters (X-ray), with an id from the same counter so it sorts among `blocks`.
     private(set) var asides: [TranscriptBlock] = []
+    /// #1633: the chapters of `blocks` and `asides`, kept between polls (`refreshOutline()`, in the IO read).
+    private(set) var outline = TranscriptOutline.Builder()
+    /// Top-level ids changed in place since the last refresh; past `maxBlocks` of them the outline starts over.
+    private var touched: Set<Int> = []
+    private var touchedAll = false
     /// #923: the last few failed lines' reasons (version and reason, never content), oldest first.
     private(set) var parseErrors: [String] = []
     static let maxParseErrors = 5
@@ -151,6 +156,7 @@ struct TranscriptAssembler {
                     pendingOrder.removeAll { $0 == id }
                     let (body, tier) = ToolRenderer.render(name: p.name, input: p.input, result: r)
                     update(p.block, thread: p.thread) { $0.body = body; $0.tier = tier; $0.pending = false }
+                    touch(p.thread ?? p.block)
                     if let agent = TranscriptKeys.str(r.extra as? [String: Any], "agentId") {
                         let title = TranscriptKeys.str(p.input, "description") ?? p.name
                         agentTitles[agent] = title
@@ -167,6 +173,13 @@ struct TranscriptAssembler {
                 }
             }
         }
+    }
+
+    /// #1633: folds what changed since the last call into `outline` (the model reads `outline.chapters`).
+    mutating func refreshOutline() {
+        if touchedAll { outline.restart() }
+        outline.update(blocks: blocks, asides: asides, dirty: touched)
+        (touched, touchedAll) = ([], false)
     }
 
     /// A block that is a step: not a prompt, a command, a compaction or an image.
@@ -267,6 +280,12 @@ struct TranscriptAssembler {
 
     private mutating func take() -> Int { defer { nextID += 1 }; return nextID }
 
+    /// listShown and a thread's title are never in a chapter, so those writes do not count.
+    private mutating func touch(_ id: Int) {
+        guard !touchedAll else { return }
+        if touched.count >= maxBlocks { (touched, touchedAll) = ([], true) } else { touched.insert(id) }
+    }
+
     @discardableResult
     private mutating func append(_ b: TranscriptBlock, sidechain: String?) -> (block: Int, thread: Int?) {
         guard let agent = sidechain else {
@@ -287,6 +306,7 @@ struct TranscriptAssembler {
         }
         guard let ti = index(tid) else { return (b.id, nil) }
         blocks[ti].children.append(b)
+        touch(tid)
         if blocks[ti].children.count > maxChildren {
             let gone = blocks[ti].children.removeFirst()
             blocks[ti].droppedChildren += 1
@@ -314,6 +334,7 @@ struct TranscriptAssembler {
         guard sidechain == nil, let i = blocks.indices.last,
               case .compaction(let trig, let pre, nil) = blocks[i].body else { return false }
         blocks[i].body = .compaction(trigger: trig, preTokens: pre, summary: s)
+        touch(blocks[i].id)
         return true
     }
 
@@ -339,6 +360,7 @@ struct TranscriptAssembler {
     private mutating func remove(_ id: Int, thread: Int?) {
         if let thread, let t = index(thread) { blocks[t].children.removeAll { $0.id == id } }
         else if let i = index(id) { blocks.remove(at: i) }
+        touch(thread ?? id)
     }
 }
 
@@ -379,7 +401,7 @@ final class AgentTranscriptModel: ObservableObject {
     nonisolated static let healthThreshold = 0.5
 
     @Published private(set) var blocks: [TranscriptBlock] = []
-    /// #904 (spec 8.1): the chapters of `blocks`, computed on main in `publish()` (once per poll or page, never per draw).
+    /// #904 (spec 8.1): the chapters of `blocks`; #1633: folded off main in the IO read, only what a poll changed.
     @Published private(set) var chapters: [TranscriptOutline.Chapter] = []
     @Published private(set) var mode: AgentWindowMode = .terminalFirst("No session selected")
     @Published private(set) var banner: String?
@@ -597,6 +619,7 @@ final class AgentTranscriptModel: ObservableObject {
             r.readStore = true
         }
         r.assembler.fromStart = r.tail.earliestLoaded == 0
+        r.assembler.refreshOutline()   // #1633: off main, and only what this read changed
         return TranscriptHandoff(value: r)
     }
 
@@ -684,9 +707,9 @@ final class AgentTranscriptModel: ObservableObject {
     private func publish() {
         publishes += 1
         blocks = assembler.blocks
-        // #1354: the outline also sees the asides (peer prompts) at or after the first loaded block; the view never does
-        let floor = blocks.first?.id ?? Int.min
-        let c = TranscriptOutline.chapters((blocks + assembler.asides.filter { $0.id >= floor }).sorted { $0.id < $1.id })
+        // #1354: the outline also sees the asides (peer prompts) at or after the first loaded block; the view never does.
+        // #1633: the read folded them in off main; an unchanged outline is the same buffer, so the compare is O(1).
+        let c = assembler.outline.chapters
         if c != chapters { chapters = c }
         hiddenCount = assembler.hiddenTotal
         cwd = assembler.cwd
