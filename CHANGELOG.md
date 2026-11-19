@@ -2099,6 +2099,7 @@ tag from the now-released section and put it on the new top draft.
   s) for it to finish its open requests and release the port before starting, recognizes the Python
   proxy even when it does not answer, and can be triggered without the window via
   prosper://ccpool/takeover. (#1665)
+- ccpool keeps its usage record 35 days (was 14). (#1668)
 
 ## v2.174.0
 

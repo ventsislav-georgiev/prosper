@@ -123,11 +123,11 @@ final class CCPoolEventRecordTests: XCTestCase {
 
     // MARK: Retention and caps
 
-    func testFourteenDayRemovalTouchesOnlyOwnNames() throws {
+    func testThirtyFiveDayRemovalTouchesOnlyOwnNames() throws {
         let dir = tempDir().appendingPathComponent("events")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let foreign = ["events-2020-01-01.jsonl.bak", "Events-2020-01-01.jsonl", "events-2020-1-1.jsonl", "usage-2020-01-01.jsonl", "notes.txt"]
-        for n in foreign + ["events-2026-12-20.jsonl", "events-2027-01-01.jsonl", "events-2027-01-02.jsonl"] {
+        for n in foreign + ["events-2026-12-10.jsonl", "events-2026-12-11.jsonl", "events-2027-01-02.jsonl"] {
             try Data("x\n".utf8).write(to: dir.appendingPathComponent(n))
         }
         // A folder that carries an own name is never removed.
@@ -140,13 +140,16 @@ final class CCPoolEventRecordTests: XCTestCase {
 
     func testKeepDaysIsTheUsageConstant() {
         XCTAssertEqual(CCPoolEventRecord.keepDays, CCPoolUsageRecord.keepDays)
+        XCTAssertEqual(CCPoolUsageRecord.keepDays, 35)
+        XCTAssertEqual(CCPoolUsageRecord.folderMax, 512 << 20)
+        XCTAssertEqual(CCPoolEventRecord.folderMax, 512 << 20)
     }
 
     func testFolderCapRemovesTheOldestDayFirst() throws {
         let dir = tempDir().appendingPathComponent("events")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Eight days inside the 14 kept, 16 MiB each: the folder is at its cap.
-        for d in 7...14 { try sparse(dir.appendingPathComponent(String(format: "events-2027-01-%02d.jsonl", d)), size: 16 << 20) }
+        // Eight days inside the 35 kept, 64 MiB each: the folder is at its cap.
+        for d in 7...14 { try sparse(dir.appendingPathComponent(String(format: "events-2027-01-%02d.jsonl", d)), size: 64 << 20) }
         let w = CCPoolEventRecord(directory: dir, logger: ThrottleLog())
         w.add(row())
         w.stop()

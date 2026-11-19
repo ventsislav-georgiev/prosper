@@ -3,7 +3,7 @@ import XCTest
 
 // #1482 (#1183 R1): the usage record. Literal rows through the proxy (a UsageTapStub upstream on an ephemeral loopback
 // port, fake secrets, a fixed store clock, the wait recorder installed FIRST, the record under the row's tempDir()), then
-// the writer alone: the day cap, the folder cap, the 14-day removal and the row cap. No row sleeps.
+// the writer alone: the day cap, the folder cap, the 35-day removal and the row cap. No row sleeps.
 
 private let recNow = 1_800_000_000.25
 /// recNow's UTC day.
@@ -371,20 +371,20 @@ final class CCPoolUsageRecordTests: XCTestCase {
     func testFolderCapRemovesTheOldestDayFirst() throws {
         let dir = tempDir().appendingPathComponent("usage")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Eight days inside the 14 kept, 16 MiB each: the folder is at its cap.
-        for d in 7...14 { try sparse(dir.appendingPathComponent(String(format: "usage-2027-01-%02d.jsonl", d)), size: 16 << 20) }
+        // Eight days inside the 35 kept, 64 MiB each: the folder is at its cap.
+        for d in 7...14 { try sparse(dir.appendingPathComponent(String(format: "usage-2027-01-%02d.jsonl", d)), size: 64 << 20) }
         let w = CCPoolUsageRecord(directory: dir, logger: ThrottleLog())
         w.add(writerRow())
         w.stop()
         XCTAssertEqual(names(dir), (8...15).map { String(format: "usage-2027-01-%02d.jsonl", $0) })
     }
 
-    func testFourteenDayRemovalTouchesOnlyOwnNames() throws {
+    func testThirtyFiveDayRemovalTouchesOnlyOwnNames() throws {
         let dir = tempDir().appendingPathComponent("usage")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let foreign = ["usage-2020-01-01.jsonl.bak", "usage-2020-01-01.json", "Usage-2020-01-01.jsonl", "usage-2020-1-1.jsonl",
                        "xusage-2020-01-01.jsonl", "notes.txt"]
-        for n in foreign + ["usage-2026-12-20.jsonl", "usage-2027-01-01.jsonl", "usage-2027-01-02.jsonl"] {
+        for n in foreign + ["usage-2026-12-10.jsonl", "usage-2026-12-11.jsonl", "usage-2027-01-02.jsonl"] {
             try Data("x\n".utf8).write(to: dir.appendingPathComponent(n))
         }
         // A folder that carries an own name is never removed.

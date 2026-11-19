@@ -82,8 +82,8 @@ struct CCPoolUsageRow: Equatable, Sendable {
 final class CCPoolUsageRecord: @unchecked Sendable {
     static let rowMax = 2 << 10
     static let dayMax = 16 << 20
-    static let folderMax = 128 << 20
-    static let keepDays = 14
+    static let folderMax = 512 << 20
+    static let keepDays = 35
     static let flushRows = 64
     static let flushSeconds = 5.0
 
@@ -181,7 +181,7 @@ final class CCPoolUsageRecord: @unchecked Sendable {
         }
     }
 
-    /// Keep 14 days: at the first write of a new day, own files of days at or before today minus 14 go.
+    /// Keep 35 days: at the first write of a new day, own files of days at or before today minus 35 go.
     private func removeOld(today: String) {
         guard let date = dayFormat.date(from: today) else { return }
         let cutoff = dayFormat.string(from: date.addingTimeInterval(-Double(Self.keepDays) * 86400))
