@@ -1,0 +1,146 @@
+{
+ "entry": 1625,
+ "filter": "XrayRecapTests|XrayRemoteMarksTests/testKeystrokeDismissesTheRecap|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "gap_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "now.timeIntervalSince(l) >= XrayRecap.gap",
+   "new": "now.timeIntervalSince(l) >= 0",
+   "expect": "killed"
+  },
+  {
+   "name": "first_focus_reads",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "guard let target, let l = left[target], now",
+   "new": "guard let target, let l = Optional(left[target] ?? .distantPast), now",
+   "expect": "killed"
+  },
+  {
+   "name": "clock_back_reads",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "now.timeIntervalSince(l) >= XrayRecap.gap",
+   "new": "abs(now.timeIntervalSince(l)) >= XrayRecap.gap",
+   "expect": "killed"
+  },
+  {
+   "name": "clock_unbounded",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "if left.count > Self.maxKept,",
+   "new": "if left.count > Self.maxKept * 2,",
+   "expect": "killed"
+  },
+  {
+   "name": "same_target_dismisses",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "        guard target != clock.current else { return }\n        let since",
+   "new": "        let since",
+   "expect": "killed"
+  },
+  {
+   "name": "gate_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "XrayRecap.supported(self.version())",
+   "new": "true",
+   "expect": "killed"
+  },
+  {
+   "name": "minimum_low",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "static let minimumDch = [1, 113, 0]",
+   "new": "static let minimumDch = [1, 112, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "form_ungated",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "return since && rest.count == 3",
+   "new": "return rest.count == 3",
+   "expect": "killed"
+  },
+  {
+   "name": "take_any_status",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "guard clock.current == target, r.status == 0,",
+   "new": "guard clock.current == target,",
+   "expect": "killed"
+  },
+  {
+   "name": "take_stale_target",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "guard clock.current == target, r.status == 0,",
+   "new": "guard r.status == 0,",
+   "expect": "killed"
+  },
+  {
+   "name": "take_empty",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "let recap = XrayRecap.parse(r.out), !recap.isEmpty else",
+   "new": "let recap = XrayRecap.parse(r.out) else",
+   "expect": "killed"
+  },
+  {
+   "name": "chapter_cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "chapterRows.prefix(maxChapters)",
+   "new": "chapterRows.prefix(1000)",
+   "expect": "killed"
+  },
+  {
+   "name": "more_from_cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": " || chapterRows.count > maxChapters || refRows.count > maxRefs,",
+   "new": ",",
+   "expect": "killed"
+  },
+  {
+   "name": "title_raw",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "let t = OutsideText.shown(c.title ?? \"\", max: 60)",
+   "new": "let t = String((c.title ?? \"\").prefix(60))",
+   "expect": "killed"
+  },
+  {
+   "name": "refs_raw",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "OutsideText.shown($0.text, max: 40)",
+   "new": "$0.text",
+   "expect": "killed"
+  },
+  {
+   "name": "dismiss_noop",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "        if shown != nil { shown = nil }\n    }\n\n    /// A title",
+   "new": "        if false { shown = nil }\n    }\n\n    /// A title",
+   "expect": "killed"
+  },
+  {
+   "name": "leave_any",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "    func leave(_ target: XrayTarget) {\n        guard clock.current == target else { return }\n",
+   "new": "    func leave(_ target: XrayTarget) {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "recap_anchor_kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "        chapterAnchors = chapterAnchors.filter { $0.value != Self.recapOrdinal }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "known_chapter_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "if let i = chapterAnchors[c.anchor], let ch",
+   "new": "if false, let i = chapterAnchors[c.anchor], let ch",
+   "expect": "killed"
+  },
+  {
+   "name": "keystroke_kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        XrayRecaps.shared.dismiss()   // #1625",
+   "new": "        // #1625",
+   "expect": "killed"
+  }
+ ]
+}
