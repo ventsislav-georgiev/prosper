@@ -310,14 +310,11 @@ final class AgentTerminalController: ObservableObject {
     var clipboardWrites: () -> Bool = { Preferences.agentWindowClipboardWrites }
     /// #895: a font binding action for the surface, the call find makes (rows record it). Runs on main.
     var fontAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
-    /// #1477 (7.6): the scrollback action an unfocused pane's wheel becomes (rows record it). Runs on main.
-    var scrollAction: @MainActor (AgentTerminalHostView?, String) -> Void = { _ = $0?.surface?.performBindingAction($1) }
     /// #1566: Command-K's local clear: libghostty's own clear_screen action (`keybind = clear` dropped its super+k).
     /// Rows record it. Runs on main.
     var clearAction: @MainActor (AgentTerminalHostView?) -> Void = { _ = $0?.surface?.performBindingAction("clear_screen") }
     /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
     var paneFocused: () -> Bool = { true }
-    private var wheelRemainder = 0.0
     /// #1559 (X-T a): the window's focused pane's follow for `target` (nil: none held); rows hand in a fake.
     var focusFollow: @MainActor (XrayTarget?, ObjectIdentifier) -> XrayFollow? = {
         XrayPanels.shared.follows.focus($0, window: $1, dch: $0 == nil ? nil : XrayPanels.dch())
@@ -684,20 +681,6 @@ final class AgentTerminalController: ObservableObject {
         screen = kept
     }
 
-    /// #1477 (7.6): a wheel over an UNFOCUSED pane moves its local scrollback only, never libghostty's mouse path (that
-    /// writes a mouse report, or arrow keys on the alternate screen, to the program). `dy` is the event's scrollingDeltaY
-    /// (up positive): a notch is Ghostty's 3 lines; precise (trackpad) points are a line per 1.2 x the font size.
-    /// shortcut: the line height is estimated from the font size, not read from the surface; read the cell size if
-    /// trackpad scrolling in a neighbour feels off.
-    func scrollUnfocused(_ dy: Double, precise: Bool) {
-        guard dy.isFinite else { return }
-        wheelRemainder = min(max(wheelRemainder + (precise ? dy / (Self.fontSize * 1.2) : dy * 3), -1000), 1000)
-        let n = wheelRemainder.rounded(.towardZero)
-        guard n != 0 else { return }
-        wheelRemainder -= n
-        scrollAction(view, "scroll_page_lines:\(Int(-n))")
-    }
-
     /// OQ-66 (operator, 2026-11-10): a program sets the clipboard (OSC 52) only while someone is looking
     /// at this session: the pane attached, the session selected, and its window on screen, not minimized
     /// and not fully covered (occlusionState has .visible). Off in Settings: never.
@@ -950,15 +933,15 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         owner?.liveResizeEnded()
     }
 
-    /// #1477: the mouse path a focused pane's wheel takes (libghostty's `sendMouseScroll`); rows record it.
+    /// #1477: the mouse path a pane's wheel takes (libghostty's `sendMouseScroll`); rows record it.
     var mouseWheel: ((NSEvent) -> Void)?
 
-    /// #1477 (7.6): an unfocused pane's wheel scrolls its scrollback (scroll_page_lines) and never reaches the mouse path;
-    /// the pane does not take focus. The focused pane's goes to libghostty as before.
+    /// #1644 (operator 2026-11-19): the wheel scrolls the pane under the pointer, focused or not, and never moves focus
+    /// (was #1477 7.6: an unfocused pane's became scroll_page_lines, which left a program's own scrolling still). Its
+    /// point goes to libghostty first: an unfocused pane's moves never reach it (mouseMoved below), so after a focus
+    /// switch the wheel went to a stale point and did nothing until the mouse moved.
     override func scrollWheel(with event: NSEvent) {
-        if let owner, !owner.paneFocused() {
-            return owner.scrollUnfocused(Double(event.scrollingDeltaY), precise: event.hasPreciseScrollingDeltas)
-        }
+        super.mouseMoved(with: event)
         if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }
     }
 
