@@ -1384,9 +1384,11 @@ struct AgentLayoutsSection: View {
 
     /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
     static func label(_ r: AgentWindowModel.LayoutRow) -> String { "\(r.name), Control \(r.number)" }
-    /// #901 B3 step 5: the dot and count read aloud; nothing for 0 (the slot draws nothing).
+    /// #901 B3 step 5: the dot and count read aloud; nothing for 0 (the slot draws nothing). #1661: "Working" first when
+    /// the mark is (the session rows read their state word); idle reads nothing, as before.
     static func value(_ r: AgentWindowModel.LayoutRow) -> String {
-        r.blocked == 0 ? "" : r.blocked == 1 ? "1 session needs input" : "\(r.blocked) sessions need input"
+        let need = r.blocked == 0 ? nil : r.blocked == 1 ? "1 session needs input" : "\(r.blocked) sessions need input"
+        return [r.working ? AgentState.working.label : nil, need].compactMap { $0 }.joined(separator: ", ")
     }
 }
 
@@ -1455,6 +1457,9 @@ struct AgentLayoutRowView: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
+            // #1661 (operator 2026-11-19): the session rows' own mark, working if any of the layout's sessions is, else idle
+            AgentSidebarRowView.stateMark(row.working ? .working : .idle)
+                .modifier(AgentSidebarRowProbe(kind: "layoutMark", title: "\(row.number) \(row.working ? "working" : "idle")", global: true))
             Text(row.name).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.active ? Neon.blue : Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
@@ -1637,6 +1642,7 @@ struct AgentSidebarRowView: View {
             }
             .anchorPreference(key: AgentDigitChipSlot.self, value: .bounds) { AgentDigitChipSlot.Value(block: $0) }
             .modifier(AgentSidebarRowProbe(kind: "block", title: row.title))
+            .modifier(AgentSidebarRowProbe(kind: "nameAt", title: row.title, global: true))   // #1661 tests: the Layouts names' x
             // #1345: the ⌘<n> chip's own column on EVERY row (the widest digit's chip, at no height), so the badges and
             // the age end at one edge with a number or none and the row's height never changes. #1455: none with Shortcut off.
             if show.shortcut {
@@ -1681,13 +1687,15 @@ let agentSidebarRowSpace = "agentSidebarRow"
 /// R900-4b-2: the observer is attached only while the probe is set (read at body time), so the product has none.
 struct AgentSidebarRowProbe: ViewModifier {
     let kind: String, title: String
+    struct Probed: Equatable, Sendable { let title: String, frame: CGRect }
     /// #1457: the frame in the window (Mini's tooltip, outside any row) instead of the row's space.
     var global = false
     @ViewBuilder func body(content: Content) -> some View {
         if AgentSidebarRowView.probe != nil {
-            content.onGeometryChange(for: CGRect.self, of: { $0.frame(in: global ? .global : .named(agentSidebarRowSpace)) }) { r in
+            // #1661: the title is in the observed value, so a part whose title changes in place (a Layouts mark's state) reports again
+            content.onGeometryChange(for: Probed.self, of: { Probed(title: title, frame: $0.frame(in: global ? .global : .named(agentSidebarRowSpace))) }) { v in
                 agentProbeCalled()
-                AgentSidebarRowView.probe?(kind, title, r)
+                AgentSidebarRowView.probe?(kind, v.title, v.frame)
             }
         } else {
             content
@@ -1823,14 +1831,20 @@ struct AgentDigitChip: View {
 extension AgentSidebarRowView {
     /// The state mark's slot (#1371: moved out of `body` unchanged, the island's session row draws it too).
     var stateMark: some View {
+        Self.stateMark(row.state, pinned: row.record?.pinned == true, pin: ink(.quiet), inks: inks)
+    }
+
+    /// #1661: the mark itself, by state; a Layouts row draws it too (its layout's working or idle), so its name starts at
+    /// the session names' x.
+    static func stateMark(_ state: AgentState?, pinned: Bool = false, pin: Color = .clear, inks: Inks? = nil) -> some View {
         Group {   // #829 G7: a pinned History record's glyph, in the same slot
-            if row.record?.pinned == true {
-                Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(ink(.quiet))
+            if pinned {
+                Image(systemName: "pin.fill").font(Neon.font(9, weight: .bold)).foregroundStyle(pin)
             } else {
-                Text(row.state?.glyph ?? "\u{25CB}")
+                Text(state?.glyph ?? "\u{25CB}")
                     .font(Neon.font(11, weight: .bold))
-                    .foregroundStyle(inks.map { row.state?.color ?? $0.mark }   // #1452 b: off, AgentState's own colours
-                                     ?? (row.state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(row.state)))
+                    .foregroundStyle(inks.map { state?.color ?? $0.mark }   // #1452 b: off, AgentState's own colours
+                                     ?? (state == nil ? Neon.faded(Neon.textSecondary, 0.6) : agentGlyphColor(state)))
             }
         }
         .frame(width: sz(14))

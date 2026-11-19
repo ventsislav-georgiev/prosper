@@ -2092,6 +2092,9 @@ tag from the now-released section and put it on the new top draft.
   it did not stop. (#1660)
 - Agent Sessions window: with a Row details item turned off (for example Shortcut), the sidebar no
   longer flashes every detail for a moment when the window opens. (#1657)
+- Agent Sessions: each Layouts row now shows the same working or idle mark as the session rows
+  (working when any of its sessions is working), so layout names line up with the session names.
+  (#1661)
 
 ## v2.174.0
 

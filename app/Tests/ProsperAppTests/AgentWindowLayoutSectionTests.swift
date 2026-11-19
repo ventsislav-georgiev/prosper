@@ -774,4 +774,111 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.layoutWrites, 2, "the switch's one write only")
         XCTAssertEqual(savedLayouts(d).layouts.map(\.name), [nil, nil], "no name written")
     }
+
+    // MARK: #1661 the Layouts rows' state mark
+
+    /// #1661 (operator 2026-11-19: "the same idle / working status icon there, based on which ever of the two (or more) is
+    /// working, and only if none are working it is idle"): a layout is working when ANY of its panes' sessions is (one of
+    /// two is enough); blocked is not working; a gone session and an empty pane are idle. VoiceOver reads "Working" first.
+    /// A flip changes the row's value (`==` holds the state, so the section redraws). GUARD layout-working-is-any.
+    @MainActor
+    func testAgentWindowLayoutRowIsWorkingWhenAnyOfItsSessionsWorks() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("api"), paneTarget("docs")]), b = paneLayout([paneTarget("web")])
+        let c = paneLayout([paneTarget("gone"), nil])
+        let (m, _) = try sectionModel([a, b, c], sessions: ["api", "docs", "web"])
+        defer { m.close() }
+        XCTAssertEqual(m.layoutRows?.map(\.working), [false, false, false], "every session idle")
+        let store = try XCTUnwrap(m.store)
+        store.sessions = [session("api", .working), session("docs", .idle), session("web", .blocked)]
+        let busy = try XCTUnwrap(m.layoutRows)
+        XCTAssertEqual(busy.map(\.working), [true, false, false], "one of two working: working; blocked: idle; gone and empty: idle")
+        XCTAssertEqual(busy.map(AgentLayoutsSection.value), ["Working", "1 session needs input", ""])
+        store.sessions = [session("api", .working), session("docs", .working), session("web", .working)]
+        XCTAssertEqual(m.layoutRows?.map(\.working), [true, true, false], "all working")
+        XCTAssertEqual(m.layoutRows?.map(AgentLayoutsSection.value), ["Working", "Working", ""])
+        store.sessions = [session("api", .idle), session("docs", .done), session("web", .idle)]
+        let idle = try XCTUnwrap(m.layoutRows)
+        XCTAssertEqual(idle.map(\.working), [false, false, false], "none working: idle")
+        let was = try XCTUnwrap(busy.first), now = try XCTUnwrap(idle.first)
+        XCTAssertTrue(was.id == now.id && was.name == now.name && was.blocked == now.blocked && was.active == now.active,
+                      "only the state differs")
+        XCTAssertNotEqual(was, now, "a working/idle flip is a different row (redraw)")
+        XCTAssertEqual(m.layoutWrites, 0)
+    }
+
+    /// #1661 (operator 2026-11-19: "layouts name is not aligned with the session names"), at 1.0 and 0.85: each Layouts row
+    /// leads with the session rows' own mark (the sz(14) slot), the working one on the layout holding a working session and
+    /// the idle one on the other, so its name starts at a session name's x (within a pixel); VoiceOver reads the working
+    /// row's value "Working" and the idle one's nothing. GUARD layout-name-at-the-session-names.
+    @MainActor
+    func testAgentWindowLayoutMarkAlignsTheNameWithTheSessionNamesAtTwoScales() throws {
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let pixel = AXTreeSupport.devicePixel
+        for scale: CGFloat in [1.0, 0.85] {
+            ThemeRuntime.scale = scale
+            gate(true)
+            let a = paneLayout([paneTarget("docs")]), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+            let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+            defer { m.close() }
+            try XCTUnwrap(m.store).sessions = [session("api", .working), session("docs", .idle), session("ops", .idle)]
+            let want = ["layoutName 1", "layoutName 2", "layoutMark 1 idle", "layoutMark 2 working", "nameAt api", "nameAt docs"]
+            let f = sidebarProbes(m, want)
+            XCTAssertTrue(want.allSatisfy { f[$0] != nil }, "every part drawn (\(scale)): \(f.keys.sorted())")
+            XCTAssertTrue(f["layoutMark 1 working"] == nil && f["layoutMark 2 idle"] == nil, "one mark per row (\(scale)): \(f.keys.sorted())")
+            let session = try XCTUnwrap(f["nameAt api"]), other = try XCTUnwrap(f["nameAt docs"])
+            XCTAssertEqual(session.minX, other.minX, accuracy: pixel, "the session names start at one x (\(scale))")
+            for n in 1...2 {
+                let name = try XCTUnwrap(f["layoutName \(n)"])
+                XCTAssertEqual(name.minX, session.minX, accuracy: pixel, "layout \(n)'s name at the session names' x (\(scale)): \(name) \(session)")
+            }
+            let mark = try XCTUnwrap(f["layoutMark 2 working"])
+            XCTAssertEqual(mark.width, sz(14), accuracy: pixel, "the session rows' mark slot (\(scale)): \(mark)")
+            XCTAssertLessThan(mark.maxX, session.minX, "the mark before the name (\(scale))")
+            let tree = sidebarTree(m) { t in t.contains { $0.label == "api + docs, Control 2" && $0.value == "Working" } }
+            let rows = unique(tree) { $0.label.contains(", Control ") && $0.role == "AXButton" }
+            XCTAssertEqual(rows.map(\.label), ["docs, Control 1", "api + docs, Control 2"], "\(scale)")
+            XCTAssertEqual(rows.map(\.value), ["", "Working"], "VoiceOver reads the working state (\(scale))")
+        }
+    }
+
+    /// #1661: in ONE hosted sidebar (never shown), a session's state flip redraws the Layouts rows' marks in place: idle,
+    /// then working on both layouts holding the session that started working, then idle again when only a session in no
+    /// layout works. The probe reports a mark again when its state (its title) changes. GUARD layout-mark-redraws.
+    @MainActor
+    func testAgentWindowLayoutMarkRedrawsWhenASessionFlips() throws {
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1.0
+        gate(true)
+        let a = paneLayout([paneTarget("docs")]), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+        defer { m.close() }
+        let box = PaneProbeBox()
+        AgentSidebarRowView.probe = { kind, title, r in if kind == "layoutMark" { box.seen[title] = r } }
+        defer { AgentSidebarRowView.probe = nil }
+        let (win, host) = AXTreeSupport.hosted(AgentSidebarView(model: m), CGSize(width: AgentWindowModel.fullSidebarWidth - sz(16), height: 900))
+        defer { win.close() }
+        func settle(_ want: Set<String>) {
+            func pass() { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            let deadline = Date().addingTimeInterval(5)
+            repeat { pass() } while want.contains { box.seen[$0] == nil } && Date() < deadline
+            pass(); pass()
+        }
+        settle(["1 idle", "2 idle"])
+        XCTAssertEqual(Set(box.seen.keys), ["1 idle", "2 idle"], "every session idle")
+        box.seen = [:]
+        let store = try XCTUnwrap(m.store)
+        store.sessions = [session("api", .idle), session("docs", .working), session("ops", .idle)]
+        settle(["1 working", "2 working"])
+        XCTAssertEqual(Set(box.seen.keys), ["1 working", "2 working"], "docs works: both layouts redrawn working")
+        box.seen = [:]
+        store.sessions = [session("api", .idle), session("docs", .idle), session("ops", .working)]
+        settle(["1 idle", "2 idle"])
+        XCTAssertEqual(Set(box.seen.keys), ["1 idle", "2 idle"], "only a session in no layout works: both redrawn idle")
+        XCTAssertFalse(win.isVisible, "never on screen")
+    }
 }

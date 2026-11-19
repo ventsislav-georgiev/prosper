@@ -1582,6 +1582,8 @@ final class AgentWindowModel: ObservableObject {
         let active: Bool
         /// #901 B3 step 5 (section 10): blocked sessions in this layout's panes, an inactive layout only; 0 draws nothing.
         var blocked = 0
+        /// #1661: any session in this layout's panes is working (the row draws the working mark, else idle). In `==`, so a flip redraws.
+        var working = false
     }
 
     /// #901 B3 step 5 (section 10): what a session in a pane asks of the person: blocked outranks done (the sidebar's order).
@@ -1597,6 +1599,10 @@ final class AgentWindowModel: ObservableObject {
     /// Needs-you sessions by key, as of the last visible refresh (refresh(sessions:)); nil with the gate off or before
     /// the first visible refresh. Written only when it changes, so an equal refresh publishes nothing.
     @Published private(set) var needs: [AgentSessionKey: PaneNeed]?
+
+    /// #1661: the working sessions' keys, from the same visible refresh as `needs` and written only when they change; nil
+    /// with the gate off or before the first visible refresh (every Layouts row idle).
+    @Published private(set) var working: Set<AgentSessionKey>?
 
     static func needing(_ sessions: [AgentSession]) -> [AgentSessionKey: PaneNeed] {
         var out: [AgentSessionKey: PaneNeed] = [:]
@@ -1637,11 +1643,16 @@ final class AgentWindowModel: ObservableObject {
         guard AgentPaneLayout.splitsEnabled, let s = layouts, (parked ?? layout).panes.count >= 2 || s.layouts.count >= 2
         else { return nil }
         let counts = attention?.layouts ?? [:]   // step 5: inactive layouts only (the map skips the active one)
+        let busy = working ?? []
         return s.layouts.prefix(PaneLayoutStore.maxLayouts).enumerated().map { i, stored in
             let l = stored.id == layout.id ? layout : stored   // the active one as it is now (island off too)
             let name = l.name ?? PaneLayoutStore.automaticName(l.panes.map { layoutTitle($0.target) })
+            // #1661: any pane's session working; an empty pane, a gone session, history or remote: idle
+            let working = l.panes.contains { p in
+                if case let .session(d, n)? = p.target { busy.contains(AgentSessionKey(dir: d, name: n)) } else { false }
+            }
             return LayoutRow(id: l.id, number: i + 1, name: OutsideText.shown(name), active: l.id == layout.id,
-                             blocked: counts[l.id] ?? 0)
+                             blocked: counts[l.id] ?? 0, working: working)
         }
     }
 
@@ -1930,6 +1941,8 @@ final class AgentWindowModel: ObservableObject {
         // #901 B3 step 5 (section 10): the attention source, on this visible refresh only; gate off: stays nil.
         let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
         if n != needs { needs = n }
+        let w = AgentPaneLayout.splitsEnabled ? Set(sessions.lazy.filter { $0.state == .working }.map(\.key)) : nil
+        if w != working { working = w }
         // #1324: a remote Resume's text by its record id ("@" + host: never a local key).
         let inputs = SidebarInputs(history: history, sort: sort, pattern: pattern, details: details,
                                    actions: actions.merging(remoteResumeText) { a, _ in a }, remote: remoteSessions,
