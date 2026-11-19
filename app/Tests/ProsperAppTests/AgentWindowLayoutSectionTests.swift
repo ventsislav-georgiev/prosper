@@ -834,7 +834,7 @@ extension AgentWindowD1Tests {
             m.beginLayoutRename(a.id)
             XCTAssertTrue(m.layoutRenaming == a.id, "the rename row is up")
             let probes = sidebarProbes(m, ["layoutMark 1 \(state == .working ? "working" : "idle")"])
-            XCTAssertEqual(probes.count, 1, "the renamed row draws its mark (\(state)): \(probes.keys.sorted())")
+            XCTAssertNotNil(probes["layoutMark 1 \(state == .working ? "working" : "idle")"], "the renamed row draws its mark (\(state)): \(probes.keys.sorted())")
             let tree = sidebarTree(m) { t in t.contains { $0.label.hasPrefix("api + docs, Control") } }
             XCTAssertTrue(!tree.contains { !$0.ignored && glyphs.contains($0.label) },
                           "no element named by the mark glyph (\(state)): \(tree.filter { !$0.ignored }.map(\.label))")
