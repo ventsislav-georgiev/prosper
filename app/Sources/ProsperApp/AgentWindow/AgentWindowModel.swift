@@ -806,7 +806,15 @@ final class AgentWindowModel: ObservableObject {
     /// keys to the panes.
     func closePane(_ pane: UUID) {
         if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538
-        if case let .success(l) = layout.close(pane) { keyFocus = .pane; adopt(l) }
+        let shown = layout.focused
+        if case let .success(l) = layout.close(pane) { keyFocus = .pane; adopt(l); cancelFormOfClosed(pane, shown: shown) }
+    }
+
+    /// #1659: the one rule for every close (⌘W, Close Pane, the pills, a VoiceOver press): the form is drawn in the focused
+    /// pane (`shown`, read BEFORE the action), so when that pane closes the form goes with it (Cancel's path, nothing
+    /// starts). Another pane's close leaves it.
+    private func cancelFormOfClosed(_ pane: UUID, shown: UUID) {
+        if newSession != nil, pane == shown { cancelNewSession() }
     }
 
     /// #900 B2 step 1 (12.1, 7.3, 7.4): a tree key's action on the active layout; the window calls it only for
@@ -819,13 +827,16 @@ final class AgentWindowModel: ObservableObject {
     func perform(_ a: PaneAction, pane: UUID? = nil) -> Bool {
         guard !closed else { return false }
         // #900 B2 step 6b1 (R900-6a-1): `pane` (a header "⋯" item's) is focused in the result, so a choice writes once.
+        let shown = layout.focused
         let base = pane.flatMap { try? layout.focus($0).get() } ?? layout
         let next: Result<PaneLayout, PaneRefusal>
+        var closing: UUID?
         switch a {
         case let .split(axis):
             next = splitting(axis, pane: pane)
         case .closePane:
             if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed
+            closing = base.focused
             next = base.close(base.focused)
         case let .focus(d):
             // The tree's tiling in a fixed square: adjacency depends on the ratios only, never on the size or the minimum.
@@ -852,6 +863,7 @@ final class AgentWindowModel: ObservableObject {
             // the new empty pane; set before adopt, so its autosave saves the split (locked, it would not).
             if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }
             adopt(l)
+            closing.map { cancelFormOfClosed($0, shown: shown) }
             return true
         case let .failure(r):
             if base != layout { keyFocus = .pane; adopt(base) }   // the menu's pane is focused even when its action is refused

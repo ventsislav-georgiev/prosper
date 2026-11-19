@@ -446,11 +446,7 @@ final class AgentsNSWindow: NSWindow {
         lastPerformed = .pane(a)
         guard let model else { return false }
         if a == .nextNeedsYou { return model.nextNeedsYou() }
-        let panes = model.layout.panes.count
-        let done = model.perform(a)
-        // #1658: ⌘W (or Close Pane) under the New session form: the form goes with its pane (Cancel's path), nothing starts
-        if a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }
-        return done
+        return model.perform(a)   // #1659: a close of the form's pane cancels the form inside the model
     }
 
     /// #1379: the Go menu's sidebar mode: saved and this window's sidebar redrawn at once (the model's call; no model: nothing).

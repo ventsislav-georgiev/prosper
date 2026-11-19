@@ -69,6 +69,58 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1659: the rule lives in the model and follows the pane the form is DRAWN in (the focused one): perform(.closePane,
+    /// pane:) and closePane(_:) of it cancel the form and start nothing; a close of another pane leaves it; the form
+    /// opened in A and moved by focus to B goes when B closes.
+    @MainActor
+    func testClosePaneCancelsTheFormOnlyWhenItsShownPaneCloses() throws {
+        try withTreeGate(true) {
+            try withNewSessionPrefs {
+                Preferences.agentIslandNewSessionCommand = "claude"
+                let (win, m, _) = treeWindow()
+                defer { win.close(); m.close() }
+                m.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
+                m.home = "/Users/example"
+                m.spawnSession = { _, _, _, _ in XCTFail("no spawn"); return nil }
+                let a = m.layout.focused
+                XCTAssertTrue(press(win, "⌘D"))
+                let b = m.layout.focused
+                XCTAssertTrue(press(win, "⌘D"))
+                let c = m.layout.focused
+                m.openNewSession()
+                XCTAssertTrue(m.newSession != nil, "the form is open in the focused pane c")
+                // (b) another, unfocused pane closes: the form stays
+                m.closePane(a)
+                XCTAssertEqual(m.layout.panes.count, 2)
+                XCTAssertTrue(m.newSession != nil, "closePane of an unfocused pane leaves the form")
+                XCTAssertTrue(m.perform(.closePane, pane: b))
+                XCTAssertEqual(m.layout.order, [c])
+                XCTAssertTrue(m.newSession != nil, "perform on an unfocused pane leaves the form")
+                // (a) the focused pane closes through perform
+                XCTAssertTrue(press(win, "⌘D"))
+                let d = m.layout.focused
+                m.cancelNewSession()
+                m.openNewSession()
+                XCTAssertTrue(m.perform(.closePane, pane: d))
+                XCTAssertTrue(m.newSession == nil, "perform(.closePane, pane: focused): the form went")
+                // (a) through closePane
+                XCTAssertTrue(press(win, "⌘D"))
+                let e = m.layout.focused
+                m.openNewSession()
+                m.closePane(e)
+                XCTAssertTrue(m.newSession == nil, "closePane(focused): the form went")
+                // (c) opened with c focused, focus moves to f: the form is drawn in f and goes with it
+                XCTAssertTrue(press(win, "⌘D"))
+                let f = m.layout.focused
+                m.focusPane(c)
+                m.openNewSession()
+                m.focusPane(f)
+                m.closePane(f)
+                XCTAssertTrue(m.newSession == nil, "the form follows focus: closing the pane it is drawn in cancels it")
+            }
+        }
+    }
+
     /// One pane, the form open: ⌘W routes as before (the window's close, refused here), the layout and form untouched.
     @MainActor
     func testEmptyPaneCloseCommandWWithOnePaneRoutesAsBefore() throws {
