@@ -1,6 +1,6 @@
 {
  "entry": 1658,
- "filter": "AgentWindowD1Tests/testEmptyPaneClose|AgentWindowD1Tests/testTreeKeysPureRouteMapsOnlyTheTreeKeys|AgentWindowD1Tests/testAPaneWhoseSessionIsGoneSaysSoByNameAndDiffersFromTheEmptyPane|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowD1Tests/testClosePaneCancelsTheFormOnlyWhenItsShownPaneCloses|AgentWindowD1Tests/testEmptyPaneClose|AgentWindowD1Tests/testTreeKeysPureRouteMapsOnlyTheTreeKeys|AgentWindowD1Tests/testAPaneWhoseSessionIsGoneSaysSoByNameAndDiffersFromTheEmptyPane|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "form-guard-kept",
@@ -24,10 +24,24 @@
    "expect": "killed"
   },
   {
-   "name": "form-not-dismissed",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "if a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }",
-   "new": "if false, a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }",
+   "name": "any-close-cancels",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if newSession != nil, pane == shown { cancelNewSession() }",
+   "new": "        if newSession != nil { cancelNewSession() }",
+   "expect": "killed"
+  },
+  {
+   "name": "form-not-dismissed-closePane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "adopt(l); cancelFormOfClosed(pane, shown: shown) }",
+   "new": "adopt(l) }",
+   "expect": "killed"
+  },
+  {
+   "name": "form-not-dismissed-perform",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            closing.map { cancelFormOfClosed($0, shown: shown) }\n",
+   "new": "\n",
    "expect": "killed"
   }
  ]
