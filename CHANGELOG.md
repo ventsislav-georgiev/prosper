@@ -2024,7 +2024,7 @@ tag from the now-released section and put it on the new top draft.
   lookups). (#1627)
 - Agent Sessions: when you come back to a session after 30 minutes or more away, a one-line "Since
   you were last here" strip at the top of its pane lists the chapters begun and the links mentioned
-  since (needs dch 1.113.0); click a title to open that chapter, or press x or type to dismiss it.
+  since (needs dch 1.113.0); click a title to open that chapter, or click x or type to dismiss it.
   (#1625)
 
 ## v2.174.0
