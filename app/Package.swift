@@ -119,6 +119,7 @@ let package = Package(
                 .product(name: "GhosttyTerminal", package: "libghostty-spm"),
                 "LuaRuntime",
                 "ProsperHelperProtocol",
+                "CCPoolKeeperCore",
                 "StatsCore",
                 "SMCKit",
                 "llama",
@@ -169,6 +170,18 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("IOKit")
             ]
+        ),
+        // #1676: the ccpool port keeper. A tiny user-level process (Foundation/Darwin/Security, no AppKit) Prosper
+        // spawns detached; it holds the proxy's listening socket across a relaunch and hands it to the next Prosper
+        // over SCM_RIGHTS. Its core is a library so the app's link and the tests compile the same code. Embedded
+        // into the .app by scripts/bundle.sh beside ProsperHelper.
+        .target(
+            name: "CCPoolKeeperCore",
+            linkerSettings: [.linkedFramework("Security")]
+        ),
+        .executableTarget(
+            name: "CCPoolKeeper",
+            dependencies: ["CCPoolKeeperCore"]
         ),
         // Dummy GUI app driven by the e2e suites. A real external process so it
         // can be the frontmost app (xctest can't on macOS 14+); shows one

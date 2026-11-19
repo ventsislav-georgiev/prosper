@@ -313,6 +313,18 @@ else
   echo "warn: $LID_HELPER_BIN not found — lid-stay-awake (openlid) will be inert. Run scripts/build.sh $PROFILE first." >&2
 fi
 
+# #1676: the ccpool port keeper (Contents/MacOS/CCPoolKeeper), a user-level process the app spawns while the ccpool
+# proxy runs; it holds the port across an update relaunch and hands it only to a peer signed as Prosper with this
+# same team, so it carries the app's identity.
+KEEPER_BIN="$ROOT/app/.build/$PROFILE/CCPoolKeeper"
+if [[ -x "$KEEPER_BIN" ]]; then
+  cp "$KEEPER_BIN" "$APP/Contents/MacOS/CCPoolKeeper"
+  codesign "${SIGN_FLAGS[@]}" "$APP/Contents/MacOS/CCPoolKeeper" >/dev/null 2>&1 || \
+    echo "warn: codesign CCPoolKeeper failed." >&2
+else
+  echo "warn: $KEEPER_BIN not found — the ccpool port is not kept across a relaunch. Run scripts/build.sh $PROFILE first." >&2
+fi
+
 # Sign the bundled dch binary. It lives in Resources (not a --deep standard
 # code location), and DchSessionServer posix_spawns it — under hardened runtime
 # an unsigned/foreign-signed spawn is killed, so it needs this Team's signature.

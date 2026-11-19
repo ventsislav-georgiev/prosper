@@ -13,8 +13,15 @@ final class CCPoolLifecycle: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.prosper.ccpool.lifecycle")
     private let lock = NSLock()
     private var _live = false
+    private var _relaunching = false
 
     init(service: CCPoolService) { self.service = service }
+
+    /// #1676: Sparkle said it relaunches the app (an update): the stop at quit leaves the port keeper holding the port.
+    var relaunching: Bool {
+        get { lock.withLock { _relaunching } }
+        set { lock.withLock { _relaunching = newValue } }
+    }
 
     /// The extension's live flag, as AppDelegate last pushed it.
     var live: Bool {
@@ -30,6 +37,8 @@ final class CCPoolLifecycle: @unchecked Sendable {
     private func settleNow(restart: Bool) -> CCPoolService.Status {
         guard shouldRun else {
             if service.status != .stopped { service.stop() }
+            // #1676: ccpool off, or a quit that is not an update's relaunch: the keeper closes the port and exits.
+            if !relaunching { service.config.keeper?.exit() }
             return service.status
         }
         if restart { return service.restart() }
@@ -94,6 +103,7 @@ final class CCPoolRuntime {
     let model: CCPoolPaneModel
     /// P2b-2: the person's toggle as the pane writes it (the model's defaults), readable off main.
     private let routeOn: @Sendable () -> Bool
+    private var relaunchObserver: NSObjectProtocol?
 
     init(directory: URL, secrets: CCPoolSecrets, config: CCPoolServiceConfig, vaultURL: URL,
          defaults: UserDefaults = Preferences.defaults, probeBase: URL = CCPoolService.productionUpstream,
@@ -190,11 +200,21 @@ final class CCPoolRuntime {
     /// Application Support store, or reaches the Keychain through them.
     static func production() -> CCPoolRuntime? {
         guard NSClassFromString("XCTestCase") == nil else { return nil }
-        return CCPoolRuntime(directory: CCPoolStore.defaultDirectory, secrets: CCPoolKeychainSecrets(),
-                             config: CCPoolServiceConfig(),
-                             vaultURL: CCPoolMigration.vaultURL(home: FileManager.default.homeDirectoryForCurrentUser,
-                                                                environment: ProcessInfo.processInfo.environment),
-                             launcherPath: launcherPath(extensionsDir: ExtensionRegistry.bundledSystemDir))
+        var config = CCPoolServiceConfig()
+        let keeperDir = CCPoolStore.defaultDirectory.appendingPathComponent("keeper", isDirectory: true)
+        let keeperExe = Bundle.main.bundleURL.appending(path: "Contents/MacOS/CCPoolKeeper").path
+        config.keeper = CCPoolKeeperLink(directory: keeperDir, port: config.port,
+                                         spawner: CCPoolKeeperLink.posixSpawn(executable: keeperExe, directory: keeperDir, port: config.port))
+        let made = CCPoolRuntime(directory: CCPoolStore.defaultDirectory, secrets: CCPoolKeychainSecrets(),
+                                 config: config,
+                                 vaultURL: CCPoolMigration.vaultURL(home: FileManager.default.homeDirectoryForCurrentUser,
+                                                                    environment: ProcessInfo.processInfo.environment),
+                                 launcherPath: launcherPath(extensionsDir: ExtensionRegistry.bundledSystemDir))
+        // #1676: an update's relaunch keeps the port (the keeper holds it until the new app fetches it). Kept for the
+        // process's life, like the instance. @Sendable: Sparkle may post off main.
+        made.relaunchObserver = NotificationCenter.default.addObserver(forName: LiveStatusPublisher.updateWillRelaunch, object: nil,
+                                                                       queue: nil) { @Sendable [lifecycle = made.lifecycle] _ in lifecycle.relaunching = true }
+        return made
     }
 
     /// #915 (spec 3.5): the shipped launcher, inside the bundled ccpool extension in Contents/Resources/extensions

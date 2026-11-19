@@ -30,7 +30,7 @@ fi
 # clang takes that version from -isysroot or SDKROOT only, never from the
 # --sysroot swift-driver's link job passes, so SDKROOT must reach the link (see
 # the export above). Gate it here so no backend or shell can ship a 14.0 (QA #226).
-for bin in ProsperApp ProsperHelper; do
+for bin in ProsperApp ProsperHelper CCPoolKeeper; do
   got="$(xcrun vtool -show-build ".build/$PROFILE/$bin" | awk '/^ *sdk /{print $2}')"
   [[ "${got%%.*}" -ge 26 ]] || { echo "error: $bin linked against SDK ${got:-?} (expected >= 26)" >&2; exit 1; }
   echo "==> $bin links against SDK $got"

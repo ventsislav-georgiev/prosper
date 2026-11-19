@@ -41,6 +41,9 @@ struct CCPoolServiceConfig: Sendable {
     var argv: @Sendable (_ pid: pid_t) -> [String] = CCPoolService.processArgv
     var executable: @Sendable (_ pid: pid_t) -> String? = CCPoolService.executablePath
     var parentPid: @Sendable (_ pid: pid_t) -> pid_t? = CCPoolService.parentOf
+    /// #1676: the port keeper that holds the listening socket across a relaunch. nil (tests, unless a row sets a link
+    /// with a recording spawner): bind as before, nothing kept.
+    var keeper: CCPoolKeeperLink? = nil
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on a BSD loopback socket (#1675; Network.framework before), loopback only. Clients point
@@ -155,6 +158,13 @@ final class CCPoolService: @unchecked Sendable {
     func start() -> Status {
         if case .running = status { return status }
         if let why = Self.refusalUnderTest(config) { return finishStart(.failed(why), note: why) }
+        // #1676: a keeper holding the port (a relaunch) hands its socket over: the queued connections are served, no
+        // probe, no bind. One it refuses is closed here (start(listening:) leaves a refused fd to its owner).
+        if let fd = config.keeper?.fetch() {
+            let s = start(listening: fd)
+            if case .running = s { return s }
+            if s != .failed(Self.reasonLost) { Darwin.close(fd) }
+        }
         if config.port != 0 {
             switch probeHolder() {
             case .free: break
@@ -166,7 +176,11 @@ final class CCPoolService: @unchecked Sendable {
         }
         // #1675: a BSD socket on 127.0.0.1 with SO_REUSEADDR (CCPoolListener.open): past TIME_WAIT at once, never beside a live listener.
         switch CCPoolListener.open(port: config.port) {
-        case .success(let l): return serve(l)
+        case .success(let l):
+            let s = serve(l)
+            // #1676: a keeper holds a dup from now on (the spawner's posix_spawn dups it; ours stays open).
+            if case .running = s, let k = config.keeper, !k.spawn(listening: l.fd) { logger.note(nil, "port keeper not started") }
+            return s
         case .failure(.create(let c)):
             return finishStart(.failed(Self.reasonCreate), note: "listener could not be created", detail: " \(Self.errorWord(.posix(c)))")
         case .failure(.bind(let c)):
@@ -185,6 +199,10 @@ final class CCPoolService: @unchecked Sendable {
         }
         var bound = config
         bound.port = l.port?.rawValue ?? 0
+        // R1675 n11: a socket bound to another port than the configured one is refused like any other adopt refusal.
+        if config.port != 0, bound.port != config.port {
+            return finishStart(.failed(Self.reasonCreate), note: "listener on another port; not adopted")
+        }
         // The fd stays its owner's: a listener that was never started or cancelled does not close it.
         if let why = Self.refusalUnderTest(bound) { return finishStart(.failed(why), note: why) }
         return serve(l)
