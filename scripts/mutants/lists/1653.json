@@ -1,0 +1,41 @@
+{
+ "entry": 1653,
+ "filter": "EscapeHandBackTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-handback",
+   "file": "app/Sources/ProsperApp/WindowToggle.swift",
+   "old": "        if let back { _ = activate?(back) }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-is-prosper",
+   "file": "app/Sources/ProsperApp/WindowToggle.swift",
+   "old": "!t.isTerminated && t.processIdentifier != getpid()\n",
+   "new": "!t.isTerminated\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-still-active",
+   "file": "app/Sources/ProsperApp/WindowToggle.swift",
+   "old": "                && frontmost()?.processIdentifier == getpid() && !ownWindowKey() ? t : nil",
+   "new": "                && !ownWindowKey() ? t : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "no-own-window-key",
+   "file": "app/Sources/ProsperApp/WindowToggle.swift",
+   "old": "                && frontmost()?.processIdentifier == getpid() && !ownWindowKey() ? t : nil",
+   "new": "                && frontmost()?.processIdentifier == getpid() ? t : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "no-terminated",
+   "file": "app/Sources/ProsperApp/WindowToggle.swift",
+   "old": "!t.isTerminated && t.processIdentifier != getpid()\n",
+   "new": "t.processIdentifier != getpid()\n",
+   "expect": "killed"
+  }
+ ]
+}
