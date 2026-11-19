@@ -462,35 +462,94 @@ extension AgentWindowD1Tests {
     /// view (no active row) shows it nowhere. GUARD edit-only-on-the-active-row.
     @MainActor
     func testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly() throws {
+        _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
         let pixel = AXTreeSupport.devicePixel
+        var ratio1: CGFloat?   // #1648: the active row's width over the other row's at 1.0: the floor at 0.85 and 0.7
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            gate(true)
+            let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+            let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+            defer { m.close() }
+            m.setLayoutEditing(false)
+            let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
+            let edit = unique(tree) { $0.label == "Edit layout" }
+            XCTAssertEqual(edit.count, 1, "one Edit, on the active row only (\(scale))")
+            XCTAssertEqual(edit.first?.role, "AXButton", "\(scale)")
+            let rows = unique(tree) { ["Review, Control 1", "api + docs, Control 2"].contains($0.label) }
+            XCTAssertEqual(rows.map(\.label), ["Review, Control 1", "api + docs, Control 2"], "the rows keep their labels (\(scale))")
+            let other = try XCTUnwrap(rows.first), active = try XCTUnwrap(rows.last), button = try XCTUnwrap(edit.first)
+            XCTAssertEqual(button.frame.midY, active.frame.midY, accuracy: 2 * pixel, "on the active row's line (\(scale))")
+            XCTAssertTrue(button.frame.minX >= active.frame.maxX - pixel, "after the row's name (\(scale)): \(active.frame) \(button.frame)")
+            let plus = try XCTUnwrap(unique(tree) { $0.label == "New layout" }.first)
+            XCTAssertEqual(button.frame.maxX, plus.frame.maxX, accuracy: 2 * pixel, "right-aligned under the + (\(scale))")
+            // the name keeps all the room the button leaves: row + button + its trailing sz(8) fill the other row's width
+            XCTAssertGreaterThanOrEqual(active.frame.width, other.frame.width - button.frame.width - sz(8) - 2 * pixel,
+                                        "the name is not pushed out (\(scale)): \(other.frame) \(active.frame) \(button.frame)")
+            let ratio = active.frame.width / max(other.frame.width, 1)
+            if let r1 = ratio1 { XCTAssertGreaterThanOrEqual(ratio, r1 - 0.02, "name width in proportion to 1.0 (\(scale))") } else { ratio1 = ratio }
+            let order = tree.filter { !$0.ignored }.map(\.label)
+            let rowAt = try XCTUnwrap(order.firstIndex(of: "api + docs, Control 2")), editAt = try XCTUnwrap(order.firstIndex(of: "Edit layout"))
+            XCTAssertLessThan(rowAt, editAt, "VoiceOver: the row, then its Edit (\(scale))")
+            m.setLayoutEditing(true)
+            let editing = sidebarTree(m) { t in t.contains { $0.label == "Done editing layout" } }
+            XCTAssertEqual(unique(editing) { $0.label == "Done editing layout" }.count, 1, "Done while editing (\(scale))")
+            XCTAssertFalse(editing.contains { $0.label == "Edit layout" }, "\(scale)")
+            m.setLayoutEditing(false)
+            m.click(.live(paneKey("ops")))
+            XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, the section still built (\(scale))")
+            let single = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
+            XCTAssertFalse(single.contains { $0.label == "Edit layout" || $0.label == "Done editing layout" }, "no Edit in the view (\(scale))")
+        }
+    }
+
+    /// #1648: the button itself is pressed (the hosted tree's accessibilityPerformPress, what VoiceOver does; never a posted
+    /// event): the label flips Edit layout -> Done editing layout and `layoutEditing` with it, then back.
+    @MainActor
+    func testAgentWindowLayoutSectionEditButtonPressToggles() throws {
         gate(true)
         let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
-        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+        let (m, _) = try sectionModel([a, b], active: b.id)
         defer { m.close() }
         m.setLayoutEditing(false)
-        let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
-        let edit = unique(tree) { $0.label == "Edit layout" }
-        XCTAssertEqual(edit.count, 1, "one Edit, on the active row only")
-        XCTAssertEqual(edit.first?.role, "AXButton")
-        let rows = unique(tree) { ["Review, Control 1", "api + docs, Control 2"].contains($0.label) }
-        XCTAssertEqual(rows.map(\.label), ["Review, Control 1", "api + docs, Control 2"], "the rows keep their labels")
-        let active = try XCTUnwrap(rows.last), button = try XCTUnwrap(edit.first)
-        XCTAssertEqual(button.frame.midY, active.frame.midY, accuracy: 2 * pixel, "on the active row's line")
-        XCTAssertTrue(button.frame.minX >= active.frame.maxX - pixel, "after the row's name: \(active.frame) \(button.frame)")
-        let plus = try XCTUnwrap(unique(tree) { $0.label == "New layout" }.first)
-        XCTAssertEqual(button.frame.maxX, plus.frame.maxX, accuracy: 2 * pixel, "right-aligned under the +")
-        let order = tree.filter { !$0.ignored }.map(\.label)
-        let rowAt = try XCTUnwrap(order.firstIndex(of: "api + docs, Control 2")), editAt = try XCTUnwrap(order.firstIndex(of: "Edit layout"))
-        XCTAssertLessThan(rowAt, editAt, "VoiceOver: the row, then its Edit")
-        m.setLayoutEditing(true)
-        let editing = sidebarTree(m) { t in t.contains { $0.label == "Done editing layout" } }
-        XCTAssertEqual(unique(editing) { $0.label == "Done editing layout" }.count, 1, "Done while editing")
-        XCTAssertFalse(editing.contains { $0.label == "Edit layout" })
-        m.setLayoutEditing(false)
-        m.click(.live(paneKey("ops")))
-        XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, the section still built")
-        let single = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
-        XCTAssertFalse(single.contains { $0.label == "Edit layout" || $0.label == "Done editing layout" }, "no Edit in the view")
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let size = CGSize(width: (AgentWindowModel.fullSidebarWidth - sz(16)), height: 900)
+        let (win, host) = AXTreeSupport.hosted(AgentSidebarView(model: m), size)
+        defer { win.close() }
+        func settle(_ label: String) -> NSObject? {
+            _ = AXTreeSupport.poll(host) { t in t.contains { $0.label == label } }
+            return pressable(host, label: label)
+        }
+        XCTAssertFalse(m.layoutEditing)
+        let edit = try XCTUnwrap(settle("Edit layout"), "an Edit button that takes a press")
+        XCTAssertTrue(press(edit))
+        let done = try XCTUnwrap(settle("Done editing layout"), "the label flips to Done editing layout")
+        XCTAssertTrue(m.layoutEditing, "the press toggled the model on")
+        XCTAssertTrue(press(done))
+        XCTAssertNotNil(settle("Edit layout"), "and back to Edit layout")
+        XCTAssertFalse(m.layoutEditing, "the second press toggled it off")
+    }
+
+    private func pressable(_ e: Any, label: String, depth: Int = 0) -> NSObject? {
+        guard depth < 60, let o = e as? NSObject else { return nil }
+        let sel = NSSelectorFromString("accessibilityPerformPress")
+        if o.responds(to: Selector(("accessibilityLabel"))), (o.value(forKey: "accessibilityLabel") as? String) == label,
+           o.responds(to: sel) { return o }
+        for k in o.value(forKey: "accessibilityChildren") as? [Any] ?? [] {
+            if let found = pressable(k, label: label, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    private func press(_ o: NSObject) -> Bool {
+        let sel = NSSelectorFromString("accessibilityPerformPress")
+        guard o.responds(to: sel) else { return false }
+        if let p = o as? NSAccessibilityProtocol { return p.accessibilityPerformPress() }
+        _ = o.perform(sel)
+        return true
     }
 
     /// R901-s4a-q1: automaticName joins cleaned titles with " + " (and "…" when long); a title that starts with `cap`
