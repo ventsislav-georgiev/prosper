@@ -26,8 +26,8 @@
   {
    "name": "age-tolerance",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        t.tolerance = every / 10\n",
-   "new": "",
+   "old": "let t = Timer(timeInterval: every, repeats: true) { _ in MainActor.assumeIsolated { fire() } }\n        t.tolerance = every / 10",
+   "new": "let t = Timer(timeInterval: every, repeats: true) { _ in MainActor.assumeIsolated { fire() } }\n        t.tolerance = 0",
    "expect": "killed"
   }
  ]

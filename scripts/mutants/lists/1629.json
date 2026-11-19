@@ -26,14 +26,14 @@
   {
    "name": "refs-always",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "refs = all || dirty.contains(\"refs\")",
+   "old": "refs = all || j.dirty.contains(\"refs\")",
    "new": "refs = true",
    "expect": "killed"
   },
   {
    "name": "chapters-always",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "let chapters = all || dirty.contains(\"chapters\")",
+   "old": "let chapters = all || j.dirty.contains(\"chapters\")",
    "new": "let chapters = true",
    "expect": "killed"
   },
@@ -47,15 +47,15 @@
   {
    "name": "ref-not-dirty",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "                dirty.insert(\"refs\")\n",
-   "new": "",
+   "old": "dirty.insert(\"refs\"); refKeys.insert(key)",
+   "new": "refKeys.insert(key)",
    "expect": "killed"
   },
   {
    "name": "snapshot-not-whole",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "let all = state == nil || dirty.contains(\"snapshot\")",
-   "new": "let all = state == nil",
+   "old": "let all = last == nil || j.dirty.contains(\"snapshot\")",
+   "new": "let all = last == nil",
    "expect": "killed"
   }
  ]

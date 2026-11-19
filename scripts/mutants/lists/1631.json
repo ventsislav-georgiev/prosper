@@ -33,15 +33,15 @@
   {
    "name": "no-generation-check",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "guard g == generation else { return }",
-   "new": "",
+   "old": "guard t.take == builder.sent.withLock({ $0 }), let s = held else { return }",
+   "new": "guard let s = held else { return }",
    "expect": "killed"
   },
   {
    "name": "build-on-main",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "guard Self.buildOffMain() else { return land(builder.build(job), g) }",
-   "new": "guard false else { return land(builder.build(job), g) }",
+   "old": "guard Self.buildOffMain() else { return land(builder.take(lines, builder.next())) }",
+   "new": "guard false else { return land(builder.take(lines, builder.next())) }",
    "expect": "killed"
   },
   {
