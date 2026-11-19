@@ -1,0 +1,69 @@
+{
+ "entry": 1634,
+ "filter": "AgentWindowSidebarReageTests|AgentWindowRemoteRowsTests|AgentWindowRemoteFollowTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "reage-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let b = built, b.inputs == inputs, !sections.isEmpty,",
+   "new": "if false, let b = built, b.inputs == inputs, !sections.isEmpty,",
+   "expect": "killed"
+  },
+  {
+   "name": "order-guard-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if ordered, let p = rows.last?.session, !before(p, s) { return nil }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "publish-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "== sections.map(\\.rows).map { $0.map(\\.age) } ? sections : aged",
+   "new": "== sections.map(\\.rows).map { $0.map(\\.age) } ? aged : aged",
+   "expect": "killed"
+  },
+  {
+   "name": "history-age-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "r.age = rec.lastSeen > 0 ? AgentIsland.age(now - rec.lastSeen) : \"\"",
+   "new": "_ = rec",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-guard-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "b.inputs == inputs, !sections.isEmpty,",
+   "new": "b.inputs == inputs,",
+   "expect": "killed"
+  },
+  {
+   "name": "backoff-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "else if listed { remoteGap = min(remoteGap * 2, Self.remoteIdleMax) }",
+   "new": "else if listed { remoteGap = Self.remoteEvery }",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "remoteGap = min(remoteGap * 2, Self.remoteIdleMax)",
+   "new": "remoteGap = remoteGap * 2",
+   "expect": "killed"
+  },
+  {
+   "name": "reset-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if changed { remoteGap = Self.remoteEvery } else if listed",
+   "new": "if false {} else if listed",
+   "expect": "killed"
+  },
+  {
+   "name": "follow-lists",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let list = !following && (remoteAt.map",
+   "new": "let list = (remoteAt.map",
+   "expect": "killed"
+  }
+ ]
+}
