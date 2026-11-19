@@ -1,6 +1,6 @@
 {
  "entry": 1634,
- "filter": "AgentWindowSidebarReageTests|AgentWindowRemoteRowsTests|AgentWindowRemoteFollowTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowRemoteSpawnTests|AgentWindowSidebarReageTests|AgentWindowRemoteRowsTests|AgentWindowRemoteFollowTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "reage-off",
@@ -40,8 +40,8 @@
   {
    "name": "backoff-off",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "else if listed { remoteGap = min(remoteGap * 2, Self.remoteIdleMax) }",
-   "new": "else if listed { remoteGap = Self.remoteEvery }",
+   "old": "            remoteGap = min(remoteGap * 2, Self.remoteIdleMax)\n",
+   "new": "            remoteGap = Self.remoteEvery\n",
    "expect": "killed"
   },
   {
@@ -54,8 +54,8 @@
   {
    "name": "reset-off",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if changed { remoteGap = Self.remoteEvery } else if listed",
-   "new": "if false {} else if listed",
+   "old": "if changed || awaited { remoteGap = Self.remoteEvery }",
+   "new": "if awaited { remoteGap = Self.remoteEvery }",
    "expect": "killed"
   },
   {
@@ -63,6 +63,20 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "let list = !following && (remoteAt.map",
    "new": "let list = (remoteAt.map",
+   "expect": "killed"
+  },
+  {
+   "name": "atOnceCounts",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let counts = list && remoteAt != nil",
+   "new": "let counts = list",
+   "expect": "killed"
+  },
+  {
+   "name": "awaitedIgnored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if changed || awaited { remoteGap = Self.remoteEvery }",
+   "new": "if changed { remoteGap = Self.remoteEvery }",
    "expect": "killed"
   }
  ]
