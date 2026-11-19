@@ -1,0 +1,20 @@
+{
+ "entry": 1648,
+ "filter": "AgentWindowD1Tests/testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly|AgentWindowD1Tests/testAgentWindowLayoutSectionEditButtonPressToggles|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "edit-hidden-at-small-scale",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".lineLimit(1).fixedSize()\n            .foregroundStyle(model.layoutEditing ? Neon.blue",
+   "new": ".lineLimit(1)\n            .foregroundStyle(model.layoutEditing ? Neon.blue",
+   "expect": "killed"
+  },
+  {
+   "name": "press-noop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "\"Edit\") { model.toggleLayoutEditing() }",
+   "new": "\"Edit\") { }",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+{
+ "entry": 1645,
+ "filter": "AgentWindowD1Tests/testPaneFocusSwitch|AgentWindowD1Tests/testAgentWindowNoModeEndedPaneWithoutKeptFrameDrawsTheEndedCard|AgentWindowD1Tests/testPaneFocusResponderFollowsEveryPaneFocusAction|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "column-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if AgentPaneLayout.splitsEnabled, let r = model.runtimes[id],\n",
+   "new": "if false, let r = model.runtimes[id],\n",
+   "expect": "killed"
+  },
+  {
+   "name": "resign-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "                w.makeFirstResponder(nil)\n            }\n            // 4.1a:",
+   "new": "                _ = w.firstResponder\n            }\n            // 4.1a:",
+   "expect": "killed"
+  },
+  {
+   "name": "ended-terminal",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if case .local(_, _, true) = shown { return model.keptFrame(runtime.pane) != nil }",
+   "new": "if case .local(_, _, true) = shown { return true }",
+   "expect": "killed"
+  }
+ ]
+}

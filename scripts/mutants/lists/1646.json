@@ -1,0 +1,34 @@
+{
+ "entry": 1646,
+ "filter": "AgentWindowLayoutEditTests|AgentWindowD1Tests/testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly|AgentWindowD1Tests/testAgentWindowLayoutBandNameSlotAtThreeScales|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "toggle-from-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard on != layoutEditing, !closed, !on || parked == nil else { return }",
+   "new": "guard on != layoutEditing, !closed else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "shown-ignores-parked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "var layoutShown: Bool { parked == nil && layoutRows != nil }",
+   "new": "var layoutShown: Bool { layoutRows != nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "edit-on-every-row",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if r.active { editButton }",
+   "new": "editButton",
+   "expect": "killed"
+  },
+  {
+   "name": "band-shows-for-layouts",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && (m.layout.panes.count >= 2 ||",
+   "new": "shown && (m.layoutRows != nil || m.layout.panes.count >= 2 ||",
+   "expect": "killed"
+  }
+ ]
+}

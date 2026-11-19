@@ -939,7 +939,8 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// #1644 (operator 2026-11-19): the wheel scrolls the pane under the pointer, focused or not, and never moves focus
     /// (was #1477 7.6: an unfocused pane's became scroll_page_lines, which left a program's own scrolling still). Its
     /// point goes to libghostty first: an unfocused pane's moves never reach it (mouseMoved below), so after a focus
-    /// switch the wheel went to a stale point and did nothing until the mouse moved.
+    /// switch the wheel went to a stale point and did nothing until the mouse moved. In ?1002/?1003 that move also
+    /// writes one motion report at the wheel point (the operator's rule: the wheel reports to that program).
     override func scrollWheel(with event: NSEvent) {
         super.mouseMoved(with: event)
         if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }

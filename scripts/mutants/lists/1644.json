@@ -1,0 +1,27 @@
+{
+ "entry": 1644,
+ "filter": "AgentWindowD1Tests/testAgentWindowSplitTerminalWheelScrollsThePaneUnderThePointerFocusedOrNot|AgentTerminalTests/testSplitPaneWheelReportsAtItsOwnPointFocusedOrNotWithNoMoveFirst|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-point-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n",
+   "new": "    override func scrollWheel(with event: NSEvent) {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n",
+   "new": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n        if let owner, !owner.paneFocused() { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-scroll",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }\n    }\n\n    /// R1477b-m1",
+   "new": "    }\n\n    /// R1477b-m1",
+   "expect": "killed"
+  }
+ ]
+}
