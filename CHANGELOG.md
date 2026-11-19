@@ -2020,6 +2020,8 @@ tag from the now-released section and put it on the new top draft.
   Sessions ("Look up issues and pull requests on GitHub"); off covers this Mac and remote hosts
   running dch 1.113.0 or later (an older host still looks them up, with its own gh login). They stay
   on by default. (#1623)
+- VoiceOver names the switches in Settings > Agent Sessions (clipboard, rounded corners, GitHub
+  lookups). (#1627)
 
 ## v2.174.0
 

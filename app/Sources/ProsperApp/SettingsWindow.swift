@@ -1086,6 +1086,7 @@ struct AgentSessionsSection: View {
     @State private var sidebar = Preferences.agentSidebarMode
     @State private var colours = Preferences.agentTerminalColours
     @State private var github = Preferences.xrayGithubLookups
+    static let roundedLabel = "Rounded corners"
     static let githubLabel = "Look up issues and pull requests on GitHub"   // #1623
     static let githubHint = "Read-only, through gh; a remote host uses its own gh login. Off covers this Mac and hosts with dch 1.113.0 or later."
     /// #1456 (OQ-153): the "Terminal colours" choices, stored value first.
@@ -1100,7 +1101,7 @@ struct AgentSessionsSection: View {
     var body: some View {
         NeonSection("Agent Sessions",
                     footer: "A program in a session's terminal can set the clipboard only while that session is selected in the Agent Sessions window and the window is on screen. It can never read your clipboard.") {
-            NeonRow(Self.clipboardLabel) { Toggle("", isOn: $clipboard).labelsHidden() }
+            NeonRow(Self.clipboardLabel) { Toggle("", isOn: $clipboard).labelsHidden().accessibilityLabel(Self.clipboardLabel) }
             NeonDivider()
             // #1378: applied to an open window at once (AgentsWindow.restyle). Menu, not segmented: segmented ignores the UI scale.
             NeonRow("Window style") {
@@ -1110,8 +1111,8 @@ struct AgentSessionsSection: View {
                 .labelsHidden().pickerStyle(.menu).fixedSize()
             }
             NeonDivider()
-            NeonRow("Rounded corners", subtitle: Self.roundedHint(style)) {
-                Toggle("", isOn: $rounded).labelsHidden().disabled(style != .borderless)
+            NeonRow(Self.roundedLabel, subtitle: Self.roundedHint(style)) {
+                Toggle("", isOn: $rounded).labelsHidden().accessibilityLabel(Self.roundedLabel).disabled(style != .borderless)
             }
             NeonDivider()
             // #1379: applied to an open window at once (its model); the Go menu sets the same.
@@ -1130,7 +1131,7 @@ struct AgentSessionsSection: View {
                 .labelsHidden().pickerStyle(.menu).fixedSize()
             }
             NeonDivider()
-            NeonRow(Self.githubLabel, subtitle: Self.githubHint) { Toggle("", isOn: $github).labelsHidden() }
+            NeonRow(Self.githubLabel, subtitle: Self.githubHint) { Toggle("", isOn: $github).labelsHidden().accessibilityLabel(Self.githubLabel) }
         }
         .onChange(of: github) { _, v in Preferences.xrayGithubLookups = v }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
