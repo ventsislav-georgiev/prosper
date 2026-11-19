@@ -807,6 +807,40 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.layoutWrites, 0)
     }
 
+    /// #1661 rider (QA R1661 n2): a history pane and a remote pane never light the mark, even when a local session of the
+    /// same dir and name works elsewhere: the layout stays idle. GUARD layout-history-remote-idle.
+    @MainActor
+    func testAgentWindowLayoutRowStaysIdleForHistoryAndRemotePanes() throws {
+        gate(true)
+        let l = paneLayout([.history(dir: "/tmp/dch-test", id: "api", seen: nil), .remote(host: "box", name: "api"), nil])
+        let local = paneLayout([paneTarget("api"), paneTarget("docs")])   // positive control: a local pane of the working session
+        let (m, _) = try sectionModel([l, local], sessions: ["api", "docs"])
+        defer { m.close() }
+        try XCTUnwrap(m.store).sessions = [session("api", .working), session("docs", .idle)]
+        XCTAssertEqual(m.layoutRows?.map(\.working), [false, true], "history and remote panes: idle while the local api works; the local pane lights its layout")
+    }
+
+    /// #1661 rider (QA R1661 n1): under inline rename the row is no Button, so its mark glyph must be hidden from VoiceOver:
+    /// the hosted tree holds no unignored element named by the working or the idle glyph. GUARD layout-mark-hidden-from-voiceover.
+    @MainActor
+    func testAgentWindowLayoutRenameRowHidesItsMarkFromVoiceOver() throws {
+        gate(true)
+        let a = paneLayout([paneTarget("api")]), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs"])
+        defer { m.close() }
+        let glyphs = [AgentState.working.glyph, AgentState.idle.glyph]
+        for state: AgentState in [.working, .idle] {
+            try XCTUnwrap(m.store).sessions = [session("api", state), session("docs", .idle)]
+            m.beginLayoutRename(a.id)
+            XCTAssertTrue(m.layoutRenaming == a.id, "the rename row is up")
+            let probes = sidebarProbes(m, ["layoutMark 1 \(state == .working ? "working" : "idle")"])
+            XCTAssertEqual(probes.count, 1, "the renamed row draws its mark (\(state)): \(probes.keys.sorted())")
+            let tree = sidebarTree(m) { t in t.contains { $0.label.hasPrefix("api + docs, Control") } }
+            XCTAssertTrue(!tree.contains { !$0.ignored && glyphs.contains($0.label) },
+                          "no element named by the mark glyph (\(state)): \(tree.filter { !$0.ignored }.map(\.label))")
+        }
+    }
+
     /// #1661 (operator 2026-11-19: "layouts name is not aligned with the session names"), at 1.0 and 0.85: each Layouts row
     /// leads with the session rows' own mark (the sz(14) slot), the working one on the layout holding a working session and
     /// the idle one on the other, so its name starts at a session name's x (within a pixel); VoiceOver reads the working

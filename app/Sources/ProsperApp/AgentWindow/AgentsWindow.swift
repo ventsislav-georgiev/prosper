@@ -1459,6 +1459,7 @@ struct AgentLayoutRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
             // #1661 (operator 2026-11-19): the session rows' own mark, working if any of the layout's sessions is, else idle
             AgentSidebarRowView.stateMark(row.working ? .working : .idle)
+                .accessibilityHidden(true)   // the rename branch is no Button: VoiceOver would read the glyph (the state is the row's value)
                 .modifier(AgentSidebarRowProbe(kind: "layoutMark", title: "\(row.number) \(row.working ? "working" : "idle")", global: true))
             Text(row.name).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.active ? Neon.blue : Neon.textPrimary)
