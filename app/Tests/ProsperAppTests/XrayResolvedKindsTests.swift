@@ -53,7 +53,10 @@ final class XrayResolvedKindsTests: XCTestCase {
 
     /// A url ref with no fetch in the transcript: dch sends no resolved key, so no title line (red with a placeholder made up).
     func testUrlWithNoFetchShowsNoLine() {
-        let s = XrayRefStreamTests.parse([XrayRefStreamTests.first, XrayRefStreamTests.done])
+        let urlFirst = ##"{"schema":1,"first":{"session":"api","session_id":"0b1f6a52-4c1e-4d7a-9a51-2f6d8c3e7a10","key":"url:https://example.com/docs","shape":"url","text":"https://example.com/docs","project":"-Users-example-acme","mode":"full","scope":"project","budget_ms":null,"elapsed_ms":0}}"##
+        let s = XrayRefStreamTests.parse([urlFirst, XrayRefStreamTests.done])
+        XCTAssertEqual(s.first?.shape, "url")
+        XCTAssertEqual(s.first?.text, "https://example.com/docs")
         XCTAssertTrue(s.resolved == nil)
         XCTAssertTrue(s.done)
     }
