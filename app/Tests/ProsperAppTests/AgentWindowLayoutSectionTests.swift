@@ -422,17 +422,15 @@ extension AgentWindowD1Tests {
         XCTAssertTrue(back.contains { $0.label == "api + docs, Control 2" }, "unfolded: the rows again")
     }
 
-    /// Item 5 (9.1 :708) at 1.0, 0.85 and 0.7: with two layouts the band's slot draws the active row's "⌃N name" inside the
-    /// layout slot, and every band frame equals the one-layout-of-one-pane band's (no slot built there). Gate off: no slot
-    /// row and no band at all. GUARD band-slot-built-with-the-gate-off.
+    /// Item 5 (9.1 :708) at 1.0, 0.85 and 0.7; #1646 (operator 2026-11-19): the band draws no layout name and no Edit
+    /// layout (they moved to the Layouts section's active row): with two layouts every band frame equals the
+    /// one-layout-of-one-pane band's and no name or Edit is built. Gate off: no band at all. GUARD band-has-no-layout-parts.
     @MainActor
     func testAgentWindowLayoutBandNameSlotAtThreeScales() throws {
-        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         _ = ThemeStore.shared   // seeds ThemeRuntime.scale first, before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        // #1538: the band shows only with something in it, and one layout of one pane has nothing; the sidebar hidden
-        // (both models) gives it the show glyph, so the slot-less band is built at the same width as the two-layout one.
+        // #1538: the band shows only with something in it; the sidebar hidden (both models) gives it the show glyph.
         let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
         defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
         Preferences.agentWindowSidebarHidden = true
@@ -441,113 +439,58 @@ extension AgentWindowD1Tests {
             ThemeRuntime.scale = scale
             gate(true)
             let (one, _) = try sectionModel([paneLayout([paneTarget("api")])])
-            XCTAssertTrue(AgentWindowBand.layoutSlot(one) == nil, "\(scale)")
             let base = bandSnapshot(one, size)
             one.close()
             let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("docs")])
             let (two, _) = try sectionModel([a, b])
-            let slot = try XCTUnwrap(AgentWindowBand.layoutSlot(two))
-            XCTAssertEqual(slot.name, two.layoutRows?.first { $0.active }?.name)
-            XCTAssertEqual(slot.name, "Review")
-            XCTAssertEqual(slot.number, 1)
+            XCTAssertTrue(two.layoutShown, "\(scale)")
             let shown = bandSnapshot(two, size)
             two.close()
-            XCTAssertTrue(base["layoutName"] == nil, "one layout of one pane: not built (\(scale))")
             XCTAssertTrue(base["layout"] != nil, "\(scale)")
-            // #1616: the layout slot is its content's width and moves the chip; the rest of the band does not move.
-            for k in ["band", "sidebar", "all"] { XCTAssertEqual(shown[k], base[k], "\(k) unchanged (\(scale))") }
-            let name = try XCTUnwrap(shown["layoutName"], "\(scale)"), room = try XCTUnwrap(shown["layout"])
-            XCTAssertTrue(name.minX >= room.minX - pixel && name.maxX <= room.maxX + pixel, "in the slot (\(scale)): \(name) \(room)")
-            XCTAssertTrue(name.width > 0)
+            XCTAssertTrue(shown["layoutName"] == nil && shown["edit"] == nil, "no name, no Edit (\(scale)): \(shown.keys.sorted())")
+            XCTAssertEqual(shown, base, "the band of two layouts is the one-layout band (\(scale))")
             gate(false)
             let (off, _) = try sectionModel([a, b])
-            XCTAssertTrue(AgentWindowBand.layoutSlot(off) == nil, "gate off (\(scale))")
             XCTAssertTrue(bandSnapshot(off, size).isEmpty, "gate off: no band, no slot (\(scale))")
             off.close()
         }
     }
 
-    /// #1616 (operator 2026-11-18: "prosp...er-ios" with the band mostly empty, Edit layout far right on another baseline)
-    /// at 1.0, 0.85 and 0.7: a wide band draws the whole name "prosper + prosper-ios", Edit layout starts one spacing after
-    /// the name's frame on its vertical center, and in every narrower band the button stays inside the band (the name
-    /// is cut or gone before it). GUARD edit-layout-is-its-own-slot.
+    /// #1646 (operator 2026-11-19: "the edit (without the layout suffix) and done buttons directly on the sidebar, right
+    /// aligned"): the active Layouts row ends in a button "Edit" (VoiceOver "Edit layout"), "Done" while editing, its own
+    /// element after the row's name, its right edge under the header's "+"; the other rows have none. The single-pane
+    /// view (no active row) shows it nowhere. GUARD edit-only-on-the-active-row.
     @MainActor
-    func testAgentWindowLayoutBandNameIsWholeAndEditLayoutFollowsIt() throws {
+    func testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly() throws {
         let pixel = AXTreeSupport.devicePixel
-        _ = ThemeStore.shared
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
-        defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
-        Preferences.agentWindowSidebarHidden = true
         gate(true)
-        for scale: CGFloat in [1.0, 0.85, 0.7] {
-            ThemeRuntime.scale = scale
-            let a = paneLayout([paneTarget("prosper"), paneTarget("prosper-ios")]), b = paneLayout([paneTarget("docs")])
-            let (m, _) = try sectionModel([a, b], sessions: ["prosper", "prosper-ios", "docs"])
-            defer { m.close() }
-            XCTAssertEqual(AgentWindowBand.layoutSlot(m)?.name, "prosper + prosper-ios", "\(scale)")
-            let natural = NSHostingView(rootView: Text("prosper + prosper-ios").font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize())
-                .fittingSize.width
-            for width: CGFloat in [1400, 900, 700, 560, 480, 420, 360] {
-                let s = bandSnapshot(m, CGSize(width: width, height: 800))
-                let band = try XCTUnwrap(s["band"], "\(scale) \(width)")
-                let edit = try XCTUnwrap(s["edit"], "the button stays (\(scale) \(width))")
-                XCTAssertTrue(edit.minX >= band.minX - pixel && edit.maxX <= band.maxX + pixel, "inside the band (\(scale) \(width)): \(edit) \(band)")
-                guard let name = s["layoutName"] else { continue }
-                XCTAssertTrue(name.maxX <= edit.minX + pixel, "the name ends before the button (\(scale) \(width))")
-                XCTAssertTrue(edit.minX - name.maxX <= sz(8) + 2 * pixel, "right after the name (\(scale) \(width)): \(name) \(edit)")
-                XCTAssertEqual(edit.midY, name.midY, accuracy: 2 * pixel, "one vertical center (\(scale) \(width))")
-                if width == 1400 { XCTAssertTrue(name.width >= natural - 2 * pixel, "the whole name, no ellipsis (\(scale)): \(name.width) of \(natural)") }
-            }
-        }
-    }
-
-    /// #1619 (QA R1616, mutant no-short-tier): a saved layout with a 64-character name and a band between the noChip tier
-    /// with the whole name and the shortName tier (the name cut to `layoutWidth`): at 1.0, 0.85 and 0.7 the width is derived
-    /// from the measured parts (the fixed slots, "⌃1", the name, Edit layout), so the whole name provably does not fit and
-    /// the short one does. The tier is drawn: the name probe exists and is `layoutWidth` wide, Edit layout stays. Without
-    /// the tier ViewThatFits falls to noLayout and the name probe is gone. GUARD edit-layout-is-its-own-slot.
-    @MainActor
-    func testAgentWindowLayoutBandShortNameTierHoldsBetweenWholeNameAndNoLayout() throws {
-        let pixel = AXTreeSupport.devicePixel
-        _ = ThemeStore.shared
-        let saved = ThemeRuntime.scale
-        defer { ThemeRuntime.scale = saved }
-        let d = Preferences.defaults, hidden = d.object(forKey: Self.sidebarKey)
-        defer { if let hidden { d.set(hidden, forKey: Self.sidebarKey) } else { d.removeObject(forKey: Self.sidebarKey) } }
-        Preferences.agentWindowSidebarHidden = true
-        gate(true)
-        let long = "Quarterly planning review of the api and docs workspaces on staging"   // 67 characters; the store cuts it to 64
-        func measure(_ s: String, _ pt: CGFloat, _ w: Font.Weight, mono: Bool = false) -> CGFloat {
-            NSHostingView(rootView: Text(s).font(mono ? Neon.font(pt, weight: w).monospacedDigit() : Neon.font(pt, weight: w))
-                .lineLimit(1).fixedSize()).fittingSize.width
-        }
-        for scale: CGFloat in [1.0, 0.85, 0.7] {
-            ThemeRuntime.scale = scale
-            let a = named(paneLayout([paneTarget("api"), paneTarget("docs")]), long), b = paneLayout([paneTarget("docs")])
-            let (m, _) = try sectionModel([a, b])
-            defer { m.close() }
-            let name = try XCTUnwrap(AgentWindowBand.layoutSlot(m)?.name, "\(scale)")
-            XCTAssertTrue(name.count >= 60, "a long name (\(scale)): \(name.count)")
-            let edit = measure("Edit layout", 11, .medium), num = measure("⌃1", 10.5, .medium, mono: true)
-            // The line's other parts: padding both sides, a spacing between each of the four children, sidebar glyph, All.
-            let fixed = 2 * sz(16) + 3 * sz(8) + AgentWindowBand.sidebarWidth + AgentWindowBand.allWidth
-            let whole = fixed + num + sz(6) + measure(name, 11, .medium) + sz(8) + edit
-            let short = fixed + num + sz(6) + AgentWindowBand.layoutWidth + sz(8) + edit
-            let want = short + 4   // measured sizes round up to a point: a little room over the short tier
-            XCTAssertTrue(want + 40 < whole, "the whole name needs clearly more than the short one (\(scale)): \(want) \(whole)")
-            let reference = bandSnapshot(m, CGSize(width: 1400, height: 800))
-            let delta = 1400 - (try XCTUnwrap(reference["band"], "\(scale)")).width
-            let s = bandSnapshot(m, CGSize(width: want + delta, height: 800))
-            let band = try XCTUnwrap(s["band"], "\(scale)")
-            XCTAssertEqual(band.width, want, accuracy: 2 * pixel, "the band is the derived width (\(scale))")
-            let shown = try XCTUnwrap(s["layoutName"], "shortName tier: the name stays (\(scale)) \(s)")
-            XCTAssertTrue(shown.width <= AgentWindowBand.layoutWidth + pixel, "cut to the slot (\(scale)): \(shown.width)")
-            XCTAssertEqual(shown.width, AgentWindowBand.layoutWidth, accuracy: 2 * pixel, "the cut name fills the slot (\(scale))")
-            let button = try XCTUnwrap(s["edit"], "\(scale)")
-            XCTAssertTrue(button.minX >= shown.maxX - pixel && button.maxX <= band.maxX + pixel, "Edit layout inside the band (\(scale))")
-        }
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+        defer { m.close() }
+        m.setLayoutEditing(false)
+        let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
+        let edit = unique(tree) { $0.label == "Edit layout" }
+        XCTAssertEqual(edit.count, 1, "one Edit, on the active row only")
+        XCTAssertEqual(edit.first?.role, "AXButton")
+        let rows = unique(tree) { ["Review, Control 1", "api + docs, Control 2"].contains($0.label) }
+        XCTAssertEqual(rows.map(\.label), ["Review, Control 1", "api + docs, Control 2"], "the rows keep their labels")
+        let active = try XCTUnwrap(rows.last), button = try XCTUnwrap(edit.first)
+        XCTAssertEqual(button.frame.midY, active.frame.midY, accuracy: 2 * pixel, "on the active row's line")
+        XCTAssertTrue(button.frame.minX >= active.frame.maxX - pixel, "after the row's name: \(active.frame) \(button.frame)")
+        let plus = try XCTUnwrap(unique(tree) { $0.label == "New layout" }.first)
+        XCTAssertEqual(button.frame.maxX, plus.frame.maxX, accuracy: 2 * pixel, "right-aligned under the +")
+        let order = tree.filter { !$0.ignored }.map(\.label)
+        let rowAt = try XCTUnwrap(order.firstIndex(of: "api + docs, Control 2")), editAt = try XCTUnwrap(order.firstIndex(of: "Edit layout"))
+        XCTAssertLessThan(rowAt, editAt, "VoiceOver: the row, then its Edit")
+        m.setLayoutEditing(true)
+        let editing = sidebarTree(m) { t in t.contains { $0.label == "Done editing layout" } }
+        XCTAssertEqual(unique(editing) { $0.label == "Done editing layout" }.count, 1, "Done while editing")
+        XCTAssertFalse(editing.contains { $0.label == "Edit layout" })
+        m.setLayoutEditing(false)
+        m.click(.live(paneKey("ops")))
+        XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, the section still built")
+        let single = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
+        XCTAssertFalse(single.contains { $0.label == "Edit layout" || $0.label == "Done editing layout" }, "no Edit in the view")
     }
 
     /// R901-s4a-q1: automaticName joins cleaned titles with " + " (and "…" when long); a title that starts with `cap`

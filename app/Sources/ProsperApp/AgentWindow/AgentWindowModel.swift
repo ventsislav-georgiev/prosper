@@ -509,11 +509,14 @@ final class AgentWindowModel: ObservableObject {
         return parked != nil || layout.panes.count >= 2 || s.layouts.count >= 2
     }
 
-    /// #1538: the header's Edit layout / Done and the Go menu's item. On: back to the parked layout first (Edit edits the
-    /// layout, not the single-pane view). Off: the layout as it is now is saved once (still editing, so autosave writes).
+    /// #1646 (operator 2026-11-19): a saved layout is the one on screen: the Layouts section is built and the single-pane
+    /// view is not up (then a Layouts row is active, the one with Edit / Done). The Go menu's Edit Layout only then.
+    var layoutShown: Bool { parked == nil && layoutRows != nil }
+
+    /// #1538: Edit / Done (#1646: the active Layouts row's) and the Go menu's item. Off: the layout as it is now is saved once (still
+    /// editing, so autosave writes). #1646: on is refused in the single-pane view (it never switches to the parked layout).
     func setLayoutEditing(_ on: Bool) {
-        guard on != layoutEditing, !closed else { return }
-        if on, let p = parked { parked = nil; adopt(p) }
+        guard on != layoutEditing, !closed, !on || parked == nil else { return }
         if !on { autosave() }
         layoutEditing = on
     }

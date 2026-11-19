@@ -1286,7 +1286,7 @@ struct AgentSidebarTitleRow: View {
 /// #901 B3 step 4a (8.1 :625-631): the Layouts section, built only from `model.layoutRows` (gate on and the show rule).
 /// Header: the section label and count, then "+" (New layout); at 9 layouts the "+" is disabled and the fixed words
 /// "(9 layouts max)" show. Rows: "⌃N", the name (one line, middle-truncated), the fixed empty attention slot (step 5);
-/// the active row in accent text. Height: the header plus one fixed-height row per layout (text height at the scale +
+/// the active row in accent text, ending in Edit / Done (#1646). Height: the header plus one fixed-height row per layout (text height at the scale +
 /// sz paddings); the "⌃N" label and the words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
 /// up/down walk and the ⌘1…9 jump. Closures run on the main actor (Buttons, the field's handlers).
 /// Step 4b: the header folds through agentWindowCollapsedSections ("Layouts"; folded: rows left out, the active layout
@@ -1333,20 +1333,36 @@ struct AgentLayoutsSection: View {
                     model.endLayoutRename(r.id, $0)
                 }
             } else {
-                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(Self.label(r))
-                    .accessibilityValue(Self.value(r))
-                    .accessibilityAddTraits(r.active ? .isSelected : [])
-                    .contextMenu {
-                        ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
-                            Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
-                                Label(e.title, systemImage: e.symbol)   // #1358
-                            }.disabled(!e.enabled)
+                HStack(spacing: 0) {
+                    Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(Self.label(r))
+                        .accessibilityValue(Self.value(r))
+                        .accessibilityAddTraits(r.active ? .isSelected : [])
+                        .contextMenu {
+                            ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
+                                Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
+                                    Label(e.title, systemImage: e.symbol)   // #1358
+                                }.disabled(!e.enabled)
+                            }
                         }
-                    }
+                    // #1646: only the layout on screen (the single-pane view has no active row, so none there)
+                    if r.active { editButton }
+                }
             }
         }
+    }
+
+    /// #1646 (operator 2026-11-19: "the edit ... and done buttons directly on the sidebar, right aligned"): the active
+    /// row's Edit / Done (the band's Edit layout before), its right edge under the header's "+"; its own element after
+    /// the row's name.
+    var editButton: some View {
+        Button(model.layoutEditing ? "Done" : "Edit") { model.toggleLayoutEditing() }   // main actor
+            .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
+            .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
+            .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
+            .accessibilityLabel(model.layoutEditing ? "Done editing layout" : "Edit layout")
+            .padding(.trailing, sz(8))
     }
 
     /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
@@ -2486,7 +2502,7 @@ let agentBandSpace = "agentWindowBand"
 /// right: the layout slot (empty before the Layouts section) and the chip slot (zoom and too small: `chip`), the
 /// All slot (its room kept, empty until phase C: no control, no text, no accessibility element). #1471 b: the detail
 /// level picker is gone with the transcript. Fixed slots: each slot's size comes from the UI scale alone. A narrow band
-/// gives way in `Tier` order: the chip slot first, then the layout name (cut, then gone; #1616: Edit layout stays); the All slot never goes.
+/// gives way in `Tier` order: the chip slot first, then the layout slot; the All slot never goes.
 struct AgentWindowBand: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
@@ -2501,16 +2517,13 @@ struct AgentWindowBand: View {
     /// time, not observed: a flip shows at the next build of the view, as the split gate does.
     @MainActor static var shown: Bool { AgentPaneLayout.splitsEnabled }
     /// #1538 (operator 2026-11-18: "also a lot of empty space in the top?"): the band takes its height only when it has
-    /// something to show: a saved layout (the Layouts section is built: the layout slot and Edit layout), two panes or
-    /// more (the zoom and too-small chip), or the hidden sidebar's show glyph (Full and Mini; Slide has its hover edge,
+    /// something to show: two panes or more (the zoom and too-small chip; #1646: a saved layout alone no more, its
+    /// name and Edit left the band), or the hidden sidebar's show glyph (Full and Mini; Slide has its hover edge,
     /// and its slide-in must not move the panes). Else no band at all, as with the gate off. One rule for the view, the
     /// sidebar's top padding, the Slide hover area and AgentWindowModel.paneAreaFrame.
     @MainActor static func shows(_ m: AgentWindowModel) -> Bool {
-        shown && (m.layoutRows != nil || m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))
+        shown && (m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))
     }
-    /// #901 B3 step 4b: the layout slot's row, the Layouts section's active one; nil (gate off, one layout of one pane):
-    /// nothing is built in the slot.
-    @MainActor static func layoutSlot(_ m: AgentWindowModel) -> AgentWindowModel.LayoutRow? { m.layoutRows?.first { $0.active } }
     static var height: CGFloat { sz(30) }
     /// shortcut: fixed widths for slots that draw nothing before B2/B3/C; the phase that fills one sizes it to its widest.
     static var layoutWidth: CGFloat { sz(100) }
@@ -2521,9 +2534,7 @@ struct AgentWindowBand: View {
     static let chipWidest = "5 panes hidden, window too small"
 
     /// Widest first, so ViewThatFits takes the first that fits: the order in which the slots give way.
-    /// #1616: with a saved layout, `shortName` (the name cut to `layoutWidth`) sits between `noChip` and `noLayout`, and
-    /// Edit layout / Done stays in every tier.
-    enum Tier: CaseIterable { case full, noChip, shortName, noLayout }
+    enum Tier: CaseIterable { case full, noChip, noLayout }
 
     /// 7.4 / 3.4 (#900 B2 step 3): the chip slot's words for the pane area `area`. Zoomed (the view draws one pane over a
     /// tiling of more): "Zoomed · i of n", i the zoomed pane's place in tree order. Else too small: "k panes hidden,
@@ -2544,7 +2555,6 @@ struct AgentWindowBand: View {
         ViewThatFits(in: .horizontal) {
             line(.full, chip: chip)
             line(.noChip, chip: chip)
-            if model.layoutRows != nil { line(.shortName, chip: chip) }
             line(.noLayout, chip: chip)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2553,34 +2563,11 @@ struct AgentWindowBand: View {
         .coordinateSpace(.named(agentBandSpace))
     }
 
-    /// #1616: the layout slot. No saved layout (layoutRows nil): the fixed empty room, as before. Else one slot of its own
-    /// whose width is its content: "⌃N name" (the whole name; `shortName` cuts it to `layoutWidth`) and, a spacing after
-    /// it on its baseline, Edit layout / Done (#1538), which every tier keeps (`noLayout` drops the name only).
+    /// The layout slot: its fixed empty room in the wide tiers. #1646 (operator 2026-11-19): the layout name and Edit layout
+    /// / Done left the band (the Layouts section's active row has Edit / Done), so a layout alone never shows the band.
     @ViewBuilder func layoutSlotView(_ t: Tier) -> some View {
-        if model.layoutRows == nil {
-            if t == .full || t == .noChip {
-                Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
-            }
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-                if t != .noLayout, let r = Self.layoutSlot(model) {
-                    HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
-                        Text("⌃\(r.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
-                            .foregroundStyle(Neon.textSecondary).fixedSize()
-                        Text(r.name).font(Neon.font(11, weight: .medium)).foregroundStyle(Neon.textPrimary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
-                    .frame(maxWidth: t == .shortName ? Self.layoutWidth : nil, alignment: .leading)
-                    .accessibilityElement(children: .combine).accessibilityLabel(AgentLayoutsSection.label(r))
-                    .modifier(AgentBandProbe(kind: "layoutName"))
-                }
-                Button(model.layoutEditing ? "Done" : "Edit layout") { model.toggleLayoutEditing() }   // main actor
-                    .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
-                    .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
-                    .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
-                    .modifier(AgentBandProbe(kind: "edit"))
-            }
-            .modifier(AgentBandProbe(kind: "layout"))
+        if t == .full || t == .noChip {
+            Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
         }
     }
 

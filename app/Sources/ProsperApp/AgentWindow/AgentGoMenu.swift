@@ -155,8 +155,8 @@ extension AgentsNSWindow {
         let renaming = model.renaming != nil || model.layoutRenaming != nil, form = model.newSession != nil
         switch a {
         case .sidebarMode: return true
-        // #1538: while a saved layout exists (the band's Edit layout), or to turn an open edit off
-        case .editLayout: return AgentPaneLayout.splitsEnabled && !renaming && (model.layoutRows != nil || model.layoutEditing)
+        // #1538: while a saved layout is shown (#1646: not the single-pane view; the band's Edit layout), or to turn an open edit off
+        case .editLayout: return AgentPaneLayout.splitsEnabled && !renaming && (model.layoutShown || model.layoutEditing)
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form
         case .key(.xray) where XrayPanels.dch() == nil: return false   // #1351: below the gate the item is off (no process)
         case .key(.member) where model.selectionGroup == nil: return false   // #1111: off outside a group

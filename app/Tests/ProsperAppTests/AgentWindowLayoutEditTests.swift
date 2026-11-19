@@ -257,7 +257,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
     }
 
     /// Supervisor rider (operator 2026-11-18, "a lot of empty space in the top?"): one layout of one pane, no band
-    /// height and the pane area from y 0; two layouts, or two panes zoomed, the band and the area under it.
+    /// height and the pane area from y 0; #1646: two layouts of one pane the same; two panes zoomed, the band and the area
+    /// under it.
     @MainActor
     func testAgentWindowLayoutEditBandTakesNoHeightWithNothingToShow() throws {
         let size = CGSize(width: 1600, height: 900)
@@ -269,8 +270,9 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertEqual(m.paneAreaFrame(in: size)?.minY, 0, "the pane area from the top")
             XCTAssertEqual(m.paneAreaFrame(in: size)?.height, 900)
             XCTAssertTrue(m.newLayout() == nil)
-            XCTAssertTrue(AgentWindowBand.shows(m), "two layouts: the band")
-            XCTAssertEqual(m.paneAreaFrame(in: size)?.minY, AgentWindowBand.height, "the area under it")
+            XCTAssertTrue(m.layoutRows != nil, "two layouts: the Layouts section is built")
+            XCTAssertFalse(AgentWindowBand.shows(m), "#1646: two layouts of one pane: no band (Edit is on the sidebar row)")
+            XCTAssertEqual(m.paneAreaFrame(in: size)?.minY, 0, "#1646: the pane area from the top")
             let z = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle)]))
             defer { z.close() }
             z.adopt(base.paneLayout([t("api"), t("web")]))
@@ -283,6 +285,70 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             let m = base.windowModel(base.store([base.session("api", .idle)]))
             defer { m.close() }
             XCTAssertFalse(AgentWindowBand.shows(m), "gate off: no band, as before")
+        }
+    }
+
+    /// #1646 (operator 2026-11-19: "clicking it, goes and opens my saved layout which has nothing to do with the current
+    /// session"): in the single-pane view no saved layout is shown, so the Go menu's Edit Layout is off (layoutShown) and
+    /// the toggle does nothing: the view stays, the layout stays parked, nothing written. Back on the layout, it toggles.
+    @MainActor
+    func testAgentWindowLayoutEditToggleInTheSinglePaneViewDoesNothing() throws {
+        try withGate(true) {
+            let (m, d, two, bytes) = try locked()
+            defer { m.close() }
+            XCTAssertTrue(m.layoutShown, "the saved layout on screen")
+            m.click(row("docs"))
+            let view = m.layout.id, writes = m.layoutWrites
+            XCTAssertFalse(m.layoutShown, "the single-pane view is not a layout")
+            m.toggleLayoutEditing()
+            XCTAssertFalse(m.layoutEditing, "no Edit layout from the view")
+            XCTAssertEqual(m.layout.id, view, "the view stays (no switch to the parked layout)")
+            XCTAssertTrue(m.parked?.id == two.id, "still parked")
+            XCTAssertEqual(m.layoutWrites, writes, "nothing written")
+            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes, "the blob byte-equal")
+            XCTAssertTrue(m.switchLayout(two.id) == nil)
+            XCTAssertTrue(m.layoutShown)
+            m.toggleLayoutEditing()
+            XCTAssertTrue(m.layoutEditing, "on the layout: Edit")
+            m.toggleLayoutEditing()
+            XCTAssertFalse(m.layoutEditing, "Done")
+        }
+    }
+
+    /// #1646: the band carries no layout name and no Edit layout in any view. A saved two-pane layout: the band (its
+    /// panes) without them; the single-pane view from it with the sidebar shown: no band, the pane area from the top (the
+    /// header where it is with no saved layout); the sidebar hidden: the band for the show glyph only, the empty layout
+    /// room as with no saved layout.
+    @MainActor
+    func testAgentWindowLayoutEditBandHasNoLayoutNameOrEditInAnyView() throws {
+        let size = CGSize(width: 1600, height: 900)
+        let d = Preferences.defaults, hidden = d.object(forKey: AgentWindowD1Tests.sidebarKey)
+        defer {
+            if let hidden { d.set(hidden, forKey: AgentWindowD1Tests.sidebarKey) } else { d.removeObject(forKey: AgentWindowD1Tests.sidebarKey) }
+        }
+        for sidebarHidden in [false, true] {
+            Preferences.agentWindowSidebarHidden = sidebarHidden
+            try withGate(true) {
+                let (m, _, _, _) = try locked()
+                defer { m.close() }
+                XCTAssertEqual(m.sidebarShown, !sidebarHidden, "the preference read (\(sidebarHidden))")
+                XCTAssertTrue(AgentWindowBand.shows(m), "two panes: the band (\(sidebarHidden))")
+                let onLayout = base.bandSnapshot(m, size)
+                XCTAssertTrue(onLayout["band"] != nil, "\(sidebarHidden)")
+                XCTAssertTrue(onLayout["edit"] == nil && onLayout["layoutName"] == nil, "no name, no Edit (\(sidebarHidden)): \(onLayout.keys.sorted())")
+                m.click(row("docs"))
+                XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, a saved layout present")
+                let single = base.bandSnapshot(m, size)
+                XCTAssertTrue(single["edit"] == nil && single["layoutName"] == nil, "no name, no Edit (\(sidebarHidden))")
+                if sidebarHidden {
+                    XCTAssertTrue(AgentWindowBand.shows(m), "the show glyph keeps the band")
+                    XCTAssertTrue(single["sidebar"] != nil && single["layout"] != nil, "the glyph and the empty room: \(single.keys.sorted())")
+                } else {
+                    XCTAssertFalse(AgentWindowBand.shows(m), "no band in the single-pane view")
+                    XCTAssertTrue(single.isEmpty, "nothing built: \(single.keys.sorted())")
+                    XCTAssertEqual(m.paneAreaFrame(in: size)?.minY, 0, "the header from the top")
+                }
+            }
         }
     }
 }
