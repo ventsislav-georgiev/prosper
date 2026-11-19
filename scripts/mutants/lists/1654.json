@@ -22,6 +22,13 @@
    "old": "HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }",
    "new": "HStack(spacing: sz(8)) { editButton }",
    "expect": "killed"
+  },
+  {
+   "name": "edit-room-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            if let editLabel { Self.editText(editLabel).hidden() }\n",
+   "new": "",
+   "expect": "killed"
   }
  ]
 }
