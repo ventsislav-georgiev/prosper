@@ -3161,15 +3161,21 @@ final class AgentWindowModel: ObservableObject {
         clock?.invalidate()
         clock = nil
         if v {
-            let t = Timer(timeInterval: ageInterval, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
-            }
+            let t = Self.makeAgeClock(ageInterval) { [weak self] in self?.refresh() }
             // R1115-1: common modes, so the ages keep ticking while a scroll or a drag is tracking.
             RunLoop.main.add(t, forMode: .common)
             clock = t
             refresh()
         }
         follow()
+    }
+
+    /// #1632: the age clock, built but not scheduled (a row reads its tolerance without arming it). Ages show to the
+    /// minute, so a 10 % slack lets macOS coalesce the wakeup.
+    static func makeAgeClock(_ every: TimeInterval, _ fire: @escaping @MainActor @Sendable () -> Void) -> Timer {
+        let t = Timer(timeInterval: every, repeats: true) { _ in MainActor.assumeIsolated { fire() } }
+        t.tolerance = every / 10
+        return t
     }
 
     /// The window closed: stop everything for good.

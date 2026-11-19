@@ -2031,6 +2031,9 @@ tag from the now-released section and put it on the new top draft.
   pane is resized. (#1628)
 - Prosper no longer runs a full core and stalls the UI while a live session's refs stream in: the
   follow batches its updates, skips unchanged refs and splits lines without rescanning. (#1629)
+- The Agents window no longer redraws an open conversation every two seconds when nothing new was
+  written, and its timers let macOS group wakeups, which saves battery while the window is open.
+  (#1632)
 
 ## v2.174.0
 

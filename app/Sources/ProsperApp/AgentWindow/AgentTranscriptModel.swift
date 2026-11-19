@@ -408,7 +408,7 @@ final class AgentTranscriptModel: ObservableObject {
     private(set) var tail: TranscriptTail?
     private(set) var assembler = TranscriptAssembler()
     private var watch: AnyObject?
-    private var timer: Timer?
+    private(set) var timer: Timer?
     private var nullSince: Date?
     private var lastGrowth: Date?
     private var missing = false
@@ -440,6 +440,8 @@ final class AgentTranscriptModel: ObservableObject {
     /// #821: where Claude Code keeps the session's tasks (tests point it at a temp dir).
     var taskStoreDirectory: (AgentTranscriptSource) -> URL? = AgentTaskStore.directory
     private(set) var watchArms = 0
+    /// #1632: publish() runs (each one re-sends the transcript to SwiftUI); a poll that read nothing adds none.
+    private(set) var publishes = 0
 
     var counts: [String: TierCounts] { assembler.counts() }
     var latestVersion: String? { assembler.latestVersion }
@@ -483,6 +485,8 @@ final class AgentTranscriptModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: tickInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        // #1632: a backstop beside the kqueue watch (staleness is minutes): let macOS coalesce the wakeup
+        timer?.tolerance = tickInterval / 2
     }
 
     /// The view closed: stop the watch and timer and free the blocks (per-session
@@ -607,7 +611,9 @@ final class AgentTranscriptModel: ObservableObject {
         if r.grew { lastGrowth = now() }
         if r.readStore { lastStoreRead = now() }
         if running, watch == nil, !missing { arm(r.tail.path) }
-        publish()
+        // #1632: an idle tick (no lines, same file, no store read) changed no block: only the mode is re-checked,
+        // so a quiet pane never re-sends its blocks and outline to SwiftUI every tick
+        if r.grew || r.reopened || r.readStore { publish() } else { syncAsk(); evaluate() }
         if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, path: r.tail.path) }
         if r.more || pollAgain {
             pollAgain = false
@@ -676,6 +682,7 @@ final class AgentTranscriptModel: ObservableObject {
     }
 
     private func publish() {
+        publishes += 1
         blocks = assembler.blocks
         // #1354: the outline also sees the asides (peer prompts) at or after the first loaded block; the view never does
         let floor = blocks.first?.id ?? Int.min
