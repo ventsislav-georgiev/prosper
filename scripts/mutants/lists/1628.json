@@ -1,0 +1,55 @@
+{
+ "entry": 1628,
+ "filter": "XrayGridMarksTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "clear_all",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let lines = resized || marks.isEmpty || !shown() ? [] :",
+   "new": "let lines = true || resized || marks.isEmpty || !shown() ? [] :",
+   "expect": "killed"
+  },
+  {
+   "name": "keep_all",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "            return Self.span(lines[m.row], m) == was\n",
+   "new": "            return true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "resize_keeps",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "marks.output(resized: true)",
+   "new": "marks.output()",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden_keeps",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let lines = resized || marks.isEmpty || !shown() ? [] :",
+   "new": "let lines = resized || marks.isEmpty ? [] :",
+   "expect": "killed"
+  },
+  {
+   "name": "no_placed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        placedOn = lines\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "span_straddle",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "            if n == m.col { lo = i }\n",
+   "new": "            if n >= m.col, lo == nil { lo = i }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "span_short",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard i < line.endIndex, n < m.col + m.cells else { return nil }",
+   "new": "guard i < line.endIndex, n < m.col + m.cells else { return lo.map { line[$0...] } }",
+   "expect": "killed"
+  }
+ ]
+}
