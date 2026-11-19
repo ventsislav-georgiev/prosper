@@ -1,0 +1,34 @@
+{
+ "entry": 1657,
+ "filter": "AgentWindowD1Tests/testAgentWindowLayoutChipFollowsTheRowDetailsShortcutToggle|AgentWindowD1Tests/testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "chip-still-drawn",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            if showShortcut { ZStack { AgentSidebarRowView.digitColumn; chip } }",
+   "new": "            ZStack { if showShortcut { AgentSidebarRowView.digitColumn }; chip }",
+   "expect": "killed"
+  },
+  {
+   "name": "column-still-reserved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            if showShortcut { ZStack { AgentSidebarRowView.digitColumn; chip } }",
+   "new": "            ZStack { AgentSidebarRowView.digitColumn; if showShortcut { chip } }",
+   "expect": "killed"
+  },
+  {
+   "name": "overlay-column-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "HStack(spacing: sz(8)) { editButton; if show.shortcut { AgentSidebarRowView.digitColumn } }",
+   "new": "HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }",
+   "expect": "killed"
+  },
+  {
+   "name": "details-not-passed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "AgentLayoutsSection(model: model, rows: rows, show: details)",
+   "new": "AgentLayoutsSection(model: model, rows: rows)",
+   "expect": "killed"
+  }
+ ]
+}
