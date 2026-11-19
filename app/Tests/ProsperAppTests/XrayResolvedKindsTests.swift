@@ -43,6 +43,21 @@ final class XrayResolvedKindsTests: XCTestCase {
         XCTAssertEqual(XrayRefPopover.resolvedText(issue), "Login fails\nclosed \u{00B7} acme/api#7")
     }
 
+    /// #1624 (dch 1.113 #515): a url ref's fetched page title and "<host> . fetched <age> in <session>". Red with the url
+    /// kind dropped or the subtitle lost; the title is cleaned through OutsideText (bidi override, bell).
+    @MainActor func testUrlShowsFetchedTitleAndHostSubtitle() throws {
+        let r = try XCTUnwrap(Self.resolved(#"{"kind":"url","state":"ok","title":"Example \u202EDomain\u0007","subtitle":"example.com \#u{00B7} fetched 2h ago in api-qa","lines":[]}"#))
+        XCTAssertEqual(r.kind, "url")
+        XCTAssertEqual(XrayRefPopover.resolvedText(r), "Example Domain\nexample.com \u{00B7} fetched 2h ago in api-qa")
+    }
+
+    /// A url ref with no fetch in the transcript: dch sends no resolved key, so no title line (red with a placeholder made up).
+    func testUrlWithNoFetchShowsNoLine() {
+        let s = XrayRefStreamTests.parse([XrayRefStreamTests.first, XrayRefStreamTests.done])
+        XCTAssertTrue(s.resolved == nil)
+        XCTAssertTrue(s.done)
+    }
+
     /// Unknown sha, or gh missing, unauthed, offline, timed out, xray_github off: no resolved key, so no line (red with a
     /// placeholder resolved made up): the mentions and the done line stay.
     func testNoResolvedLineLeavesMentionsAndDone() {
