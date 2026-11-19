@@ -1,0 +1,27 @@
+{
+ "entry": 1661,
+ "filter": "AgentWindowD1Tests/testAgentWindowLayout(RowIsWorking|MarkAligns|MarkRedraws)|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "aggregate-all",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let working = l.panes.contains { p in",
+   "new": "let working = l.panes.allSatisfy { p in",
+   "expect": "killed"
+  },
+  {
+   "name": "mark-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            AgentSidebarRowView.stateMark(row.working ? .working : .idle)\n                .modifier(AgentSidebarRowProbe(kind: \"layoutMark\", title: \"\\(row.number) \\(row.working ? \"working\" : \"idle\")\", global: true))\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "equality-ignores-state",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        var working = false\n    }",
+   "new": "        var working = false\n        static func == (a: Self, b: Self) -> Bool {\n            a.id == b.id && a.number == b.number && a.name == b.name && a.active == b.active && a.blocked == b.blocked\n        }\n    }",
+   "expect": "killed"
+  }
+ ]
+}
