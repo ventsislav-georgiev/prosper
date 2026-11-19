@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // #786 rule 9 (bounded cost): read a transcript incrementally from the last offset,
 // never re-parse the file; start from the last page of a long one; re-open on an
@@ -173,13 +174,19 @@ struct TranscriptTail {
         return floor
     }
 
+    /// #1635: bytes every tail in the process has read (one lock per read call, a chunk or a probe): the row that
+    /// proves a transcript is read once.
+    static let bytesRead = OSAllocatedUnfairLock(initialState: UInt64(0))
+
     /// Bytes at `range`, read-only; nil when the file cannot be read.
     func read(_ range: Range<UInt64>) -> Data? {
         guard let h = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? h.close() }
         do {
             try h.seek(toOffset: range.lowerBound)
-            return try h.read(upToCount: Int(range.upperBound - range.lowerBound)) ?? Data()
+            let d = try h.read(upToCount: Int(range.upperBound - range.lowerBound)) ?? Data()
+            Self.bytesRead.withLock { $0 += UInt64(d.count) }
+            return d
         } catch { return nil }
     }
 }

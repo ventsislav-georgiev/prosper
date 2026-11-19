@@ -99,6 +99,29 @@ final class TranscriptIdleWorkTests: XCTestCase {
         defer { clock.invalidate() }
         XCTAssertEqual(clock.tolerance, 3, accuracy: 0.001)
     }
+
+    /// #1635: a pane that read its file whole fires the canary for the file's version, and the canary reads 0 bytes of
+    /// its own: every tail in the process read the file's size once, no more. Red at the parent, whose canary scanned
+    /// the file again from byte 0 (twice the size), and under mutant canary-rereads.
+    func testTheCanaryReadsNoBytesPastThePanesOneRead() throws {
+        TranscriptCanary.resetForTests()
+        defer { TranscriptCanary.resetForTests() }
+        let url = tempDir().appendingPathComponent("canary.jsonl")
+        try JumpFixture.write(url, JumpFixture.turns(3))
+        let size = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber).uint64Value
+        XCTAssertGreaterThan(size, 0)
+        TranscriptCanary.queue.sync {}
+        let before = TranscriptTail.bytesRead.withLock { $0 }
+        let m = JumpFixture.model(url)   // inline read: the whole file (under the 1 MiB page) in one poll
+        defer { m.stop() }
+        XCTAssertEqual(m.latestVersion, "2.1.300", "the version the canary fires for")
+        XCTAssertEqual(m.blocks.count, 9)
+        TranscriptCanary.queue.sync {}   // the canary's counts walk has run
+        XCTAssertFalse(TranscriptCanary.runIfNew(version: "2.1.300", decoded: TranscriptAssembler(), queue: .main) { _ in },
+                       "the pane fired the canary for its version")
+        let after = TranscriptTail.bytesRead.withLock { $0 }
+        XCTAssertEqual(after - before, size, "one pass over the file: the canary reads 0 bytes")
+    }
 }
 
 /// #1637: the remaining one-shot timers have a 10 % tolerance; each is built unarmed so no wall clock is needed.

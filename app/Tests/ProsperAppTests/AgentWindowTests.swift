@@ -620,7 +620,14 @@ final class AgentWindowTests: XCTestCase {
         TranscriptCanary.resetForTests()
         defer { TranscriptCanary.resetForTests() }
         let f = Self.corpus.appendingPathComponent("2.4.0/future-renamed-and-unknown.jsonl")
-        // #797 (a): the scan runs on the given queue, never on main.
+        // #1635: the canary counts what the pane decoded (here the whole file, one pass), never the file again.
+        var t = TranscriptTail(path: f.path, pageBytes: .max)
+        var decoded = TranscriptAssembler()
+        while case .lines(let ls, let more) = t.poll() {
+            for l in ls { decoded.add(TranscriptDecoder.decode(l), source: l.range) }
+            if !more { break }
+        }
+        // #797 (a): the counts walk runs on the given queue, never on main.
         let queue = DispatchQueue(label: "canary-test")
         let lines = OSAllocatedUnfairLock(initialState: [String]())
         let emitted = expectation(description: "emitted")
@@ -629,9 +636,9 @@ final class AgentWindowTests: XCTestCase {
             lines.withLock { $0.append(line) }
             emitted.fulfill()
         }
-        XCTAssertTrue(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path, queue: queue, emit: emit))
-        XCTAssertFalse(TranscriptCanary.runIfNew(version: "2.4.0", path: f.path, queue: queue, emit: emit), "once per version")
-        XCTAssertFalse(TranscriptCanary.runIfNew(version: "not a version", path: f.path, queue: queue, emit: emit))
+        XCTAssertTrue(TranscriptCanary.runIfNew(version: "2.4.0", decoded: decoded, queue: queue, emit: emit))
+        XCTAssertFalse(TranscriptCanary.runIfNew(version: "2.4.0", decoded: decoded, queue: queue, emit: emit), "once per version")
+        XCTAssertFalse(TranscriptCanary.runIfNew(version: "not a version", decoded: decoded, queue: queue, emit: emit))
         wait(for: [emitted], timeout: 10)
         queue.sync {}
         let all = lines.withLock { $0 }
@@ -640,7 +647,8 @@ final class AgentWindowTests: XCTestCase {
         XCTAssertTrue(line.hasPrefix("claude-code 2.4.0 (newer than tested): specific="), line)
         let re = try NSRegularExpression(pattern: #"^claude-code [0-9.]+( \(newer than tested\))?: specific=\d+ generic=\d+ degraded=\d+ failed=\d+ hidden=\d+ tested=[0-9.]+-[0-9.]+$"#)
         XCTAssertNotNil(re.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)), "numbers and versions only")
-        let c = TranscriptCanary.scan(path: f.path)["2.4.0"]
+        let c = decoded.counts()["2.4.0"]
+        XCTAssertEqual(line, TranscriptCanary.line(version: "2.4.0", decoded.counts()), "the logged counts are the decoded ones")
         XCTAssertEqual(c?.generic ?? 0 > 0, true, "the future shape shows up as tier 2, not as a break")
         XCTAssertEqual(c?.failed, 0)
         XCTAssertGreaterThan(c?.degraded ?? 0, 0, "renamed keys and unknown types count as drift")

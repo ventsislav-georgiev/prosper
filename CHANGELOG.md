@@ -2052,6 +2052,8 @@ tag from the now-released section and put it on the new top draft.
 - Prosper's idle timers (chat model release, helper keep-awake expiry and idle exit, a few one-
   second UI settles) now let macOS batch their wakeups, saving a little battery; each fires at most
   a tenth of its delay later. (#1640)
+- The Agents window no longer reads a whole transcript a second time when a new Claude Code version
+  first appears, so opening a long session costs less disk and battery. (#1635)
 
 ## v2.174.0
 

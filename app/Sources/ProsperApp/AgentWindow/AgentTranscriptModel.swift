@@ -637,7 +637,8 @@ final class AgentTranscriptModel: ObservableObject {
         // #1632: an idle tick (no lines, same file, no store read) changed no block: only the mode is re-checked,
         // so a quiet pane never re-sends its blocks and outline to SwiftUI every tick
         if r.grew || r.reopened || r.readStore { publish() } else { syncAsk(); evaluate() }
-        if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, path: r.tail.path) }
+        // #1635: the canary counts what this read already decoded; it opens no file of its own
+        if let v = assembler.latestVersion { TranscriptCanary.runIfNew(version: v, decoded: assembler) }
         if r.more || pollAgain {
             pollAgain = false
             poll()
@@ -767,26 +768,15 @@ final class AgentTranscriptModel: ObservableObject {
 
 // MARK: - Canary (rule 11)
 
-/// When a new Claude Code version first shows up, decode that session once and log
-/// its tier counts (numbers and the version only, never content) for QA.
+/// When a new Claude Code version first shows up, log the tier counts of what the pane decoded so far
+/// (numbers and the version only, never content) for QA.
+/// #1635: no second pass over the file. The counts cover the loaded window (the tail's last page and any older pages
+/// loaded): the version is the newest one in the file, so its lines are at the end, inside that window.
 enum TranscriptCanary {
     static let log = Logger(subsystem: "eu.illegible.prosper", category: "agent-window-compat")
+    /// Serial and utility: the counts walk and the log line never run on main; tests drain it with `sync`.
+    static let queue = DispatchQueue(label: "eu.illegible.prosper.transcript-canary", qos: .utility)
     @MainActor private static var logged: Set<String> = []
-
-    /// Tier counts per version for the whole file, decoded in bounded chunks and
-    /// a bounded block window (dropped blocks stay counted).
-    static func scan(path: String, maxBytes: UInt64 = 256 << 20) -> [String: TierCounts] {
-        var t = TranscriptTail(path: path, pageBytes: .max)
-        var a = TranscriptAssembler()
-        a.maxBlocks = 200
-        var read: UInt64 = 0
-        while read < maxBytes, case .lines(let lines, let more) = t.poll() {
-            for l in lines { a.add(TranscriptDecoder.decode(l), source: l.range) }
-            read = t.offset
-            if !more { break }
-        }
-        return a.counts()
-    }
 
     /// The logged line: counts for `v` (else all versions) and the tested range.
     static func line(version v: String, _ counts: [String: TierCounts]) -> String {
@@ -796,17 +786,18 @@ enum TranscriptCanary {
             + "tested=\(ClaudeCodeCompat.lower)-\(ClaudeCodeCompat.upper)"
     }
 
-    /// Once per version per process: scans `path` on `queue` (#797 (a): never on
-    /// main) and hands the line to `emit` there. False when this version was already
-    /// logged or is not a version.
+    /// Once per version per process: counts `decoded` on `queue` (#797 (a): never on main) and hands the line to
+    /// `emit` there. On main only the set check and a copy-on-write copy of the assembler. False when this version was
+    /// already logged or is not a version.
     @MainActor @discardableResult
-    static func runIfNew(version: String, path: String, queue: DispatchQueue = .global(qos: .utility),
+    static func runIfNew(version: String, decoded: TranscriptAssembler, queue: DispatchQueue = TranscriptCanary.queue,
                          emit: @escaping @Sendable (String) -> Void = { TranscriptCanary.log.notice("\($0, privacy: .public)") })
         -> Bool {
         let v = ClaudeCodeCompat.sanitized(version)
         guard v != "unknown", !logged.contains(v) else { return false }
         logged.insert(v)
-        queue.async { emit(line(version: v, scan(path: path))) }
+        let a = TranscriptHandoff(value: decoded)
+        queue.async { emit(line(version: v, a.value.counts())) }
         return true
     }
 
