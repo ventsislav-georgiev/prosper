@@ -50,6 +50,13 @@
    "old": "        generation += 1   // #1655: a compute in flight read the old text\n",
    "new": "",
    "expect": "killed"
+  },
+  {
+   "name": "M8-prepare-not-nfd",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "            let s = Array(e.text.decomposedStringWithCanonicalMapping.unicodeScalars)\n",
+   "new": "            let s = Array(e.text.unicodeScalars)\n",
+   "expect": "killed"
   }
  ]
 }
