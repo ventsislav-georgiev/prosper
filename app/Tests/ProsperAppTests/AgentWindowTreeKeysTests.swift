@@ -80,8 +80,8 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// Gate on: the tree keys and ⌃⌘S (step 4) map; everything else is nil (⌘1, ⌃Tab, ⌘J, ⇧⌘T); the rename field and
-    /// the New session form keep every chord on today's route; one pane routes only the splits and ⌃⌘S.
+    /// Gate on: the tree keys and ⌃⌘S (step 4) map; everything else is nil (⌘1, ⌃Tab, ⌘J, ⇧⌘T); the rename field keeps
+    /// every chord on today's route, the New session form every chord but ⌘W (#1658); one pane routes only the splits and ⌃⌘S.
     @MainActor
     func testTreeKeysPureRouteMapsOnlyTheTreeKeys() {
         let two = PaneKeys.Context(responder: .terminal, keyFocus: .pane, panes: 2, splitsEnabled: true)
@@ -94,7 +94,9 @@ extension AgentWindowD1Tests {
             let e = treeKey(c.code, c.mods, c.chars, c.ign)
             XCTAssertEqual(PaneKeys.treeAction(for: e, context: two, renaming: false, form: false), want[c.name], c.name)
             XCTAssertTrue(PaneKeys.treeAction(for: e, context: two, renaming: true, form: false) == nil, "renaming: \(c.name)")
-            XCTAssertTrue(PaneKeys.treeAction(for: e, context: two, renaming: false, form: true) == nil, "the form: \(c.name)")
+            // #1658: under the form ⌘W closes the pane (the form with it); every other chord keeps today's route.
+            XCTAssertTrue(PaneKeys.treeAction(for: e, context: two, renaming: false, form: true) == (c.name == "⌘W" ? .closePane : nil),
+                          "the form: \(c.name)")
             let one = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 1, splitsEnabled: true)
             let alone = PaneKeys.treeAction(for: e, context: one, renaming: false, form: false)
             XCTAssertTrue(alone == (c.name.hasSuffix("D") || c.name == "⌃⌘S" ? want[c.name] : nil), "one pane: \(c.name)")

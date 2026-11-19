@@ -445,7 +445,12 @@ final class AgentsNSWindow: NSWindow {
     @discardableResult func perform(pane a: PaneAction) -> Bool {
         lastPerformed = .pane(a)
         guard let model else { return false }
-        return a == .nextNeedsYou ? model.nextNeedsYou() : model.perform(a)
+        if a == .nextNeedsYou { return model.nextNeedsYou() }
+        let panes = model.layout.panes.count
+        let done = model.perform(a)
+        // #1658: ⌘W (or Close Pane) under the New session form: the form goes with its pane (Cancel's path), nothing starts
+        if a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }
+        return done
     }
 
     /// #1379: the Go menu's sidebar mode: saved and this window's sidebar redrawn at once (the model's call; no model: nothing).
@@ -2400,7 +2405,7 @@ struct AgentDetailView: View {
             // Another) still picks another session into it. Same slot as the empty pane's below.
             let pane = model.layout.focused
             titled(title) {
-                AgentPanePlaceholder(title: title, close: model.layout.panes.count > 1 ? { model.closePane(pane) } : nil,
+                AgentPanePlaceholder(title: title, close: AgentPanePlaceholder.close(model, pane: pane),
                                      pick: { model.pickAnother(pane) })
                     .overlay(alignment: .top) { paneRefusalLine }
             }
@@ -2423,15 +2428,18 @@ struct AgentDetailView: View {
         }
     }
 
-    /// No target: today's state (the hint and the New session pill, #847).
+    /// No target: today's state (the hint and the New session pill, #847); #1658: with several panes, Close Pane first.
     var emptyPane: some View {
             AgentEmptyState(icon: "sidebar.left", title: "Select a session",
                             detail: "Up and down move through the list; Return or a click moves into it.") {
-                AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
-                                enabled: model.store?.resumeGate.isOK == true) { model.openNewSession() }
-                    .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
-                    .accessibilityLabel("New session")
-                    .padding(.top, sz(4))
+                HStack(spacing: sz(8)) {
+                    AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: model.layout.focused))
+                    AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
+                                    enabled: model.store?.resumeGate.isOK == true) { model.openNewSession() }
+                        .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
+                        .accessibilityLabel("New session")
+                }
+                .padding(.top, sz(4))
             }
     }
 
@@ -3192,7 +3200,9 @@ struct AgentUnfocusedPane: View {
                     AgentPanePlaceholder(title: title, close: { model.closePane(runtime.pane) },
                                          pick: { model.pickAnother(runtime.pane) })
                 } else {
-                    AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail)
+                    AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail) {
+                        AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: runtime.pane)).padding(.top, sz(4))   // #1658
+                    }
                 }
             }
         }
@@ -3230,10 +3240,24 @@ struct AgentPanePlaceholder: View {
         }
     }
 
+    /// #1658: Close Pane for `pane`, captured now (never the pane focused at the press); nil with one pane (7.3).
+    @MainActor
+    static func close(_ model: AgentWindowModel, pane: UUID) -> (() -> Void)? {
+        model.layout.panes.count > 1 ? { model.closePane(pane) } : nil
+    }
+
+    /// The Close Pane pill (nil: none), the placeholder's and #1658's empty pane's alike.
+    @ViewBuilder static func closePill(_ close: (() -> Void)?) -> some View {
+        if let close {
+            AgentPillButton(title: "Close Pane", icon: "xmark", tint: Neon.textSecondary, action: close)
+                .help("Close this pane (⌘W)")
+        }
+    }
+
     var body: some View {
         AgentEmptyState(icon: "moon.zzz", title: title, detail: Self.detail) {
             HStack(spacing: sz(8)) {
-                if let close { AgentPillButton(title: "Close Pane", icon: "xmark", tint: Neon.textSecondary, action: close) }
+                Self.closePill(close)
                 AgentPillButton(title: "Pick Another", icon: "sidebar.left", tint: Neon.blue, action: pick)
             }
             .padding(.top, sz(4))

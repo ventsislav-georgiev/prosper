@@ -2083,6 +2083,8 @@ tag from the now-released section and put it on the new top draft.
 - Switching panes and scrolling stay snappy in long sessions with many X-ray references: the
   reference underlines on the terminal are worked out in the background instead of on the main
   thread. (#1655)
+- ⌘W now closes the focused pane in Agent Sessions splits even when it is empty or shows the New
+  session form, and an empty pane has a Close Pane button. (#1658)
 
 ## v2.174.0
 
