@@ -144,11 +144,57 @@ enum XrayRefSpans {
 
     /// Each `underline` ref's literal text, bounded by a non-word character (Unicode letters, digits, marks and "_" are
     /// word characters, so "#831\u{E9}" is no match), never inside a backtick code span; a longer ref wins an overlap.
-    static func find(_ text: String, _ refs: [XrayRefs.Entry]) -> [Span] {
+    static func find(_ text: String, _ refs: [XrayRefs.Entry]) -> [Span] { find(text, prepare(refs)) }
+
+    /// #1655: the refs find() scans, filtered (underline, a text) and sorted (a longer ref first, stable) once per refs
+    /// change, not once per line; each with its text's canonical (NFD) scalars as an ASCII bitmap for the pre-check.
+    struct Prepared: Sendable {
+        struct Ref: Sendable {
+            let text: String
+            let key: String
+            /// The NFD scalars: all ASCII, their count and their 128-bit bitmap (lo: 0-63, hi: 64-127).
+            let ascii: Bool
+            let n: Int
+            let lo: UInt64
+            let hi: UInt64
+        }
+        let refs: [Ref]
+    }
+
+    static func prepare(_ refs: [XrayRefs.Entry]) -> Prepared {
+        let kept = refs.filter { $0.underline && !$0.text.isEmpty }.map { ($0, $0.text.count) }.sorted { $0.1 > $1.1 }.map { $0.0 }
+        return Prepared(refs: kept.map { e in
+            let s = Array(e.text.decomposedStringWithCanonicalMapping.unicodeScalars)
+            let m = mask(s)
+            return .init(text: e.text, key: e.key, ascii: s.allSatisfy(\.isASCII), n: s.count, lo: m.lo, hi: m.hi)
+        })
+    }
+
+    /// The ASCII scalars of `s` as a 128-bit bitmap; other scalars set nothing.
+    static func mask<S: Sequence>(_ s: S) -> (lo: UInt64, hi: UInt64) where S.Element == Unicode.Scalar {
+        var (lo, hi) = (UInt64(0), UInt64(0))
+        for c in s where c.isASCII {
+            if c.value < 64 { lo |= 1 << UInt64(c.value) } else { hi |= 1 << UInt64(c.value - 64) }
+        }
+        return (lo, hi)
+    }
+
+    static func find(_ text: String, _ prepared: Prepared) -> [Span] {
+        var scans = 0
+        return find(text, prepared, scans: &scans)
+    }
+
+    /// `scans`: plus one per ref range(of:) looked for (#1655's rows count the pre-check's savings).
+    static func find(_ text: String, _ prepared: Prepared, scans: inout Int) -> [Span] {
         let code = codeSpans(text)
         var out: [Span] = []
-        // shortcut: one range(of:) scan per ref and clip; a memo per text if 2000-ref sessions draw slowly
-        for e in refs.filter(\.underline).sorted(by: { $0.text.count > $1.text.count }) where !e.text.isEmpty {
+        // #1655: an ASCII line is its own NFD, so a match there is the ref's NFD scalars: a ref with a non-ASCII one, a
+        // scalar the line lacks, or more scalars than the line cannot occur and skips range(of:). Other lines scan all.
+        let ascii = text.utf8.allSatisfy { $0 < 0x80 }
+        let (n, m) = ascii ? (text.utf8.count, mask(text.unicodeScalars)) : (0, (lo: UInt64(0), hi: UInt64(0)))
+        for e in prepared.refs {
+            if ascii, !e.ascii || e.n > n || e.lo & ~m.lo != 0 || e.hi & ~m.hi != 0 { continue }
+            scans += 1
             var from = text.startIndex
             while from < text.endIndex, let r = text.range(of: e.text, range: from..<text.endIndex), !r.isEmpty {
                 from = r.upperBound

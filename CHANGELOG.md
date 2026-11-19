@@ -2080,6 +2080,9 @@ tag from the now-released section and put it on the new top draft.
   badge the sessions use, at the right edge of the row. (#1654)
 - In a split, only the focused pane shows a solid blinking cursor; the other panes show a hollow
   box, like Ghostty. (#1656)
+- Switching panes and scrolling stay snappy in long sessions with many X-ray references: the
+  reference underlines on the terminal are worked out in the background instead of on the main
+  thread. (#1655)
 
 ## v2.174.0
 

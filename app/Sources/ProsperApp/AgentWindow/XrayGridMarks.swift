@@ -18,6 +18,9 @@ import SwiftUI
 // #1568 (X-R a, plan 905 phase G): a remote pane too, its follow keyed "host:name"; its hover runs nothing (K4.1).
 // #1569 (X7 c, 5.1 exception): a live extension rule with a handler marks its spans too when one key has 2 or more on the
 // grid; its card calls the handler on the extension's lane (XrayExtensionCalls), never dch.
+// #1655: place() only snapshots on main (lines, refs, rules); marks() and extMarks() run on a serial utility queue
+// through a per-line memo (XrayMarksMemo, the refs prepared once per refs change) and the result is applied on main only
+// if no output, refs change or newer place() came in meanwhile (`generation`). A focus switch costs the snapshot.
 
 @MainActor
 final class XrayGridMarksView: NSView {
@@ -56,6 +59,25 @@ final class XrayGridMarksView: NSView {
     var rules: @MainActor () -> [XrayExtensionRule] = { SettingsHooks.shared.extensionRegistry?.xrefRules ?? [] }
     /// #1569: each extension mark's match, by key.
     private(set) var extMatches: [String: XrayExtensionRefs.Match] = [:]
+
+    /// #1655: the compute's queue, and its memo (touched only inside `hop`'s work).
+    nonisolated static let queue = DispatchQueue(label: "eu.illegible.prosper.xray-marks", qos: .utility)
+    let memo = XrayMarksMemo()
+    /// #1655: bumped by output, a refs change and each place; a result of an older one is dropped.
+    private(set) var generation = 0
+    /// #1655: bumped by each refs change; the memo prepares the refs again and drops its lines when it moves.
+    private var refsVersion = 0
+    struct Placed: Sendable {
+        let dch: [Mark]
+        let ext: [(mark: Mark, match: XrayExtensionRefs.Match)]
+    }
+    /// #1655: runs `work` on `queue`, then `apply` with its result on main (rows run both inline, or keep them).
+    var hop: (@escaping @Sendable () -> Placed, @escaping @MainActor @Sendable (Placed) -> Void) -> Void = { work, apply in
+        XrayGridMarksView.queue.async {
+            let p = work()
+            DispatchQueue.main.async { MainActor.assumeIsolated { apply(p) } }
+        }
+    }
 
     /// #1565: the hover card's state; its items run through `after`, its gate is hoverReady, its panel hoverPanel.
     let hover = XrayHover()
@@ -105,6 +127,7 @@ final class XrayGridMarksView: NSView {
         }
         if kept != marks { marks = kept; needsDisplay = true }
         extMatches = extMatches.filter { k, _ in kept.contains { $0.key == k } }
+        generation += 1   // #1655: a compute in flight read the old text
         settle?.cancel()
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.place() } }
         settle = item
@@ -114,18 +137,33 @@ final class XrayGridMarksView: NSView {
     /// The follow's refs changed (a snapshot, a `ref` delta): placed now unless output is still settling.
     private func take(_ r: XrayRefs?) {
         refs = r
+        refsVersion += 1
+        generation += 1   // #1655: a compute in flight read the old refs
         if settle == nil { place() }
     }
 
     /// The marks for the viewport as it is now; none unless the pane shows them (`shown`).
+    /// #1655: on main only the snapshot; the spans are found on `queue` and applied if still the newest request.
     func place() {
         settle = nil
+        generation += 1
+        let g = generation
         let rows = host?.gridMetrics.map { Int($0.rows) } ?? 0
         let lines = shown() ? (host?.viewportText() ?? "").components(separatedBy: "\n") : []
-        let dch = Self.marks(lines, refs?.entries ?? [], rows: rows)
-        let ext = lines.isEmpty ? [] : Self.extMarks(lines, rules(), rows: rows, taken: dch)   // #1569
-        extMatches = Dictionary(ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })
-        let now = dch + ext.map(\.mark)
+        guard !lines.isEmpty else { return apply(Placed(dch: [], ext: []), lines) }   // not shown: none, at once
+        let (entries, version, rules, memo) = (refs?.entries ?? [], refsVersion, self.rules(), self.memo)
+        hop({
+            let dch = memo.marks(lines, entries, version: version, rows: rows)
+            return Placed(dch: dch, ext: XrayGridMarksView.extMarks(lines, rules, rows: rows, taken: dch))   // #1569
+        }, { [weak self] p in
+            guard let self, g == self.generation else { return }   // a newer output, refs change or place came in
+            self.apply(p, lines)
+        })
+    }
+
+    private func apply(_ p: Placed, _ lines: [String]) {
+        extMatches = Dictionary(p.ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })
+        let now = p.dch + p.ext.map(\.mark)
         placedOn = lines
         if now != marks { marks = now; needsDisplay = true }
     }
@@ -138,14 +176,9 @@ final class XrayGridMarksView: NSView {
     }
 
     /// Each underlined, non-url, non-file ref's spans in the first `rows` viewport lines, in cells. Pure.
-    static func marks(_ lines: [String], _ refs: [XrayRefs.Entry], rows: Int) -> [Mark] {
-        let linked = refs.filter { $0.underline && $0.shape != .url && $0.shape != .file }
-        guard !linked.isEmpty, rows > 0 else { return [] }
-        return lines.prefix(rows).enumerated().flatMap { row, line in
-            XrayRefSpans.find(line, linked).map {
-                Mark(row: row, col: XrayRefSpans.cells(line[..<$0.range.lowerBound]), cells: XrayRefSpans.cells(line[$0.range]), key: $0.key)
-            }
-        }
+    /// #1655: through a fresh XrayMarksMemo (place() keeps one).
+    nonisolated static func marks(_ lines: [String], _ refs: [XrayRefs.Entry], rows: Int) -> [Mark] {
+        XrayMarksMemo().marks(lines, refs, version: 0, rows: rows)
     }
 
     /// #1628: the text in cells `m.col ..< m.col + m.cells` of a line; nil when the line is shorter or a wide character
@@ -163,7 +196,7 @@ final class XrayGridMarksView: NSView {
 
     /// #1569 (5.1 exception): each handler rule's spans in the first `rows` lines, in rule order. A span over a dch mark
     /// or over a span an earlier rule kept is dropped (first rule wins); then a key with fewer than 2 spans is. Pure.
-    static func extMarks(_ lines: [String], _ rules: [XrayExtensionRule], rows: Int,
+    nonisolated static func extMarks(_ lines: [String], _ rules: [XrayExtensionRule], rows: Int,
                          taken: [Mark]) -> [(mark: Mark, match: XrayExtensionRefs.Match)] {
         guard rows > 0 else { return [] }
         var out: [(mark: Mark, match: XrayExtensionRefs.Match)] = []
@@ -254,6 +287,58 @@ final class XrayGridMarksView: NSView {
         path.setLineDash([1, 2], count: 2, phase: 0)
         Self.color.setStroke()
         path.stroke()
+    }
+}
+
+/// #1655: the grid marks' memo, touched only on XrayGridMarksView.queue (rows: inline on main): the refs prepared once
+/// for the refs version it was built for, and each line's spans in cells. Bounded: past twice the rows it starts over.
+final class XrayMarksMemo: @unchecked Sendable {
+    struct Cut {
+        let col: Int
+        let cells: Int
+        let key: String
+    }
+    private var version: Int?
+    private var linked: [XrayRefs.Entry] = []
+    private var prepared = XrayRefSpans.Prepared(refs: [])
+    private var lines: [String: [Cut]] = [:]
+    /// Rows count the work: refs prepared, lines found in the memo, lines scanned, and range(of:) scans.
+    private(set) var prepares = 0
+    private(set) var hits = 0
+    private(set) var misses = 0
+    private(set) var scans = 0
+
+    /// Each underlined, non-url, non-file ref's spans in the first `rows` lines, in cells; `version` moves when refs do.
+    func marks(_ lines: [String], _ refs: [XrayRefs.Entry], version v: Int, rows: Int) -> [XrayGridMarksView.Mark] {
+        if v != version {
+            (version, linked, self.lines) = (v, refs.filter { $0.shape != .url && $0.shape != .file }, [:])
+            prepare()
+        }
+        guard !prepared.refs.isEmpty, rows > 0 else { return [] }
+        return lines.prefix(rows).enumerated().flatMap { row, line in
+            cuts(line, cap: 2 * rows).map { XrayGridMarksView.Mark(row: row, col: $0.col, cells: $0.cells, key: $0.key) }
+        }
+    }
+
+    private func prepare() {
+        prepared = XrayRefSpans.prepare(linked)
+        prepares += 1
+    }
+
+    /// One line's spans, from the memo or found now and kept.
+    private func cuts(_ line: String, cap: Int) -> [Cut] {
+        if let c = lines[line] {
+            hits += 1
+            return c
+        }
+        misses += 1
+        let c = XrayRefSpans.find(line, prepared, scans: &scans).map {
+            Cut(col: XrayRefSpans.cells(line[..<$0.range.lowerBound]), cells: XrayRefSpans.cells(line[$0.range]), key: $0.key)
+        }
+        // shortcut: a full memo starts over rather than evicting the oldest; an LRU if scrolling long output thrashes it
+        if lines.count >= cap { lines = [:] }
+        lines[line] = c
+        return c
     }
 }
 

@@ -60,6 +60,7 @@ final class XrayGridMarksTests: XCTestCase {
         v.viewportText = { viewport }
         v.marks.windowShown = { _ in true }
         v.marks.after = { [weak r] _, item in r?.items.append(item) }
+        v.marks.hop = XrayGridMarksTests.inline   // #1655: the compute and its apply at once, on main
         t.attach(key)
         t.gridChanged(cols: 80, rows: 24)
         t.gridChanged(cols: 80, rows: 24, generation: t.generation)
