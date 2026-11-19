@@ -510,7 +510,7 @@ final class AgentTerminalController: ObservableObject {
         let bytes = box.take()
         guard !bytes.isEmpty else { return }
         screen.feed(bytes)
-        view?.marks.output()   // #1559: the grid moved: marks off now, placed again once output rests
+        view?.marks.output()   // #1559, #1628: marks whose text changed off now, all placed again once output rests
         fed = true
         revealed = true
     }
@@ -1123,7 +1123,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// on 2x: 46x16, then 101x26 ~25 ms later); the client starts once that report reaches this grid.
     func terminalDidResize(_ size: TerminalGridMetrics) {
         gridMetrics = size
-        marks.output()   // #1559: new cells: the marks settle again
+        marks.output(resized: true)   // #1559: new cells: the marks go and settle again
         owner?.gridChanged(cols: Int(size.columns), rows: Int(size.rows))
     }
 

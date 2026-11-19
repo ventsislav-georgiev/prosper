@@ -108,13 +108,15 @@ final class XrayGridMarksTests: XCTestCase {
         }
     }
 
-    /// Red if output leaves the marks drawn, uses a timer (more than one live item, or the old one not cancelled), or the
-    /// settle places them more than once or not at all. Output comes through the controller's real drain path.
+    /// Red if output that moved the text (a scroll) leaves the marks drawn, uses a timer (more than one live item, or the
+    /// old one not cancelled), or the settle places them more than once or not at all. Output comes through the
+    /// controller's real drain path.
     func testOutputClearsAndTheSettlePlacesOnce() throws {
         try withSeams { fake in
             let r = rig(local)
             r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
             XCTAssertEqual(Self.keys(r.v).count, 2)
+            r.v.viewportText = { "fix #12 now, API-7 too\nsee #1\n" }   // #1628: scrolled up one line
             let io = try XCTUnwrap(r.io)
             io.output(Array("x".utf8))
             let drained = expectation(description: "drain")
@@ -131,6 +133,7 @@ final class XrayGridMarksTests: XCTestCase {
             XCTAssertTrue(r.v.marks.marks.isEmpty)
             r.items.last?.perform()
             XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+            XCTAssertEqual(r.v.marks.marks.map(\.row), [0, 1], "placed on the scrolled rows")
             XCTAssertTrue(r.v.marks.settle == nil)
             XCTAssertEqual(r.items.count, 2, "the settle arms nothing after it")
         }
@@ -301,5 +304,81 @@ final class XrayGridMarksTests: XCTestCase {
                 b.t.attach(nil)
             }
         }
+    }
+
+    /// #1628: red if output that leaves the marked text as it was (a spinner or status line redrawn on another row, or a
+    /// chunk that rewrites the same text) takes any mark off, even for a moment. Through the real drain path each time.
+    func testUnchangedMarkedTextKeepsTheMarksThroughOutput() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            let placed = r.v.marks.marks
+            XCTAssertEqual(placed.count, 2)
+            var spinner = ""
+            let base = Self.viewport
+            r.v.viewportText = { base + spinner }   // the last row only
+            let io = try XCTUnwrap(r.io)
+            for frame in ["\u{280B} Working", "\u{2819} Working", "\u{2839} Working", "", "\u{2838} Working (esc to interrupt)"] {
+                spinner = frame
+                io.output(Array("x".utf8))
+                let drained = expectation(description: "drain")
+                DispatchQueue.main.async { drained.fulfill() }   // after the drain: main is FIFO
+                wait(for: [drained], timeout: 2)
+                XCTAssertEqual(r.v.marks.marks, placed, "frame \(frame): the marks never go")
+            }
+            r.v.marks.output()   // the same text rewritten
+            XCTAssertEqual(r.v.marks.marks, placed)
+            XCTAssertTrue(r.items.last?.isCancelled == false, "the settle is still armed")
+            r.items.last?.perform()
+            XCTAssertEqual(r.v.marks.marks, placed, "and stays after the settle")
+        }
+    }
+
+    /// #1628: red if output that changes one mark's text leaves that mark drawn, or takes the untouched one off with it.
+    func testChangedMarkedTextTakesThatMarkOff() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            XCTAssertEqual(Self.keys(r.v), ["issue:#12", "issue:#1"])
+            r.v.viewportText = { "$ git log\nfix #19 now, API-7 too\nsee #1\n" }
+            r.v.marks.output()
+            XCTAssertEqual(Self.keys(r.v), ["issue:#1"], "#12 rewritten: its mark goes now")
+            r.v.viewportText = { "$ git log\nfix #19 now, API-7 too\nsee  #1\n" }
+            r.v.marks.output()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "#1 moved a cell: its mark goes too")
+            r.items.last?.perform()
+            XCTAssertEqual(r.v.marks.marks, [.init(row: 2, col: 5, cells: 2, key: "issue:#1")], "the settle places it again")
+        }
+    }
+
+    /// #1628: red if a resize keeps the marks (new cells, the same text), if output on a pane that stopped showing keeps
+    /// them, or if either is not placed again by the settle.
+    func testResizeOrHiddenPaneStillClearsAndResettles() throws {
+        try withSeams { fake in
+            let r = rig(local)
+            r.t.after = { _, _ in }   // the pty resize debounce is not this row's
+            r.v.marks.follow = try follow(fake, 1, XrayTarget(name: "api", dir: local.dir))
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+            r.v.terminalDidResize(grid)
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "a resize: all off")
+            r.items.last?.perform()
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+            r.v.marks.windowShown = { _ in false }
+            r.v.marks.output()
+            XCTAssertTrue(r.v.marks.marks.isEmpty, "not shown: all off")
+            r.v.marks.windowShown = { _ in true }
+            r.items.last?.perform()
+            XCTAssertEqual(Self.keys(r.v).count, 2)
+        }
+    }
+
+    /// #1628: red if span() returns text across a wide character's edge, past the line, or not the cells asked for.
+    func testSpanReadsCellsNotCharacters() {
+        typealias M = XrayGridMarksView.Mark
+        XCTAssertEqual(XrayGridMarksView.span("fix #12 now", M(row: 0, col: 4, cells: 3, key: "k")), "#12")
+        XCTAssertEqual(XrayGridMarksView.span("\u{4E2D} #12", M(row: 0, col: 3, cells: 3, key: "k")), "#12", "a wide character is two cells")
+        XCTAssertTrue(XrayGridMarksView.span("\u{4E2D} #12", M(row: 0, col: 1, cells: 2, key: "k")) == nil, "starts inside a wide character")
+        XCTAssertTrue(XrayGridMarksView.span("see #1", M(row: 0, col: 4, cells: 3, key: "k")) == nil, "past the line")
+        XCTAssertEqual(XrayGridMarksView.span("see #1", M(row: 0, col: 4, cells: 2, key: "k")), "#1", "to the line's end")
     }
 }

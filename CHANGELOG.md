@@ -2026,6 +2026,9 @@ tag from the now-released section and put it on the new top draft.
   you were last here" strip at the top of its pane lists the chapters begun and the links mentioned
   since (needs dch 1.113.0); click a title to open that chapter, or click x or type to dismiss it.
   (#1625)
+- Agent terminal: the dotted underlines under refs no longer blink off and on while a spinner or
+  status line redraws; an underline now goes only when the text under it changes, scrolls or the
+  pane is resized. (#1628)
 
 ## v2.174.0
 

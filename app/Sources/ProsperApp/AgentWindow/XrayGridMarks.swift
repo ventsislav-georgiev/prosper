@@ -9,7 +9,9 @@ import SwiftUI
 // "--follow": `ref` deltas turn underline on and off, count 0 removes). A url or file ref gets none: libghostty already
 // links those (XrayRefSpans.key). The marks live in this overlay, a subview over the whole AgentTerminalHostView whose
 // hitTest is nil: the grid, the pty size and the frame never change, every click reaches the terminal.
-// Output clears the marks at once; a one-shot settle item, re-armed by each output, places them again. Never a timer.
+// Output takes off at once only the marks whose cells no longer hold their text (#1628: a spinner or status-line redraw
+// elsewhere used to flip every mark off and on); a one-shot settle item, re-armed by each output, places them again.
+// A resize takes them all off. Never a timer.
 // #1565 (X-T b, plan 905 phase B, spec 6.2): the overlay's own tracking area (no hitTest needed: AppKit sends a tracking
 // area's moves to its owner) feeds XrayHover, the hover card's dwell, settle and close items. Moves, entries and exits
 // stop here (never passed on: the terminal's own tracking area already has them).
@@ -29,6 +31,8 @@ final class XrayGridMarksView: NSView {
     /// The terminal under the overlay: its controller, grid and viewport text.
     weak var host: AgentTerminalHostView?
     private(set) var marks: [Mark] = []
+    /// #1628: the viewport lines the marks were placed on (each mark's text is its span here).
+    private var placedOn: [String] = []
     /// The pending settle; nil once it placed the marks.
     private(set) var settle: DispatchWorkItem?
     static let settleDelay: TimeInterval = 0.25
@@ -88,12 +92,19 @@ final class XrayGridMarksView: NSView {
     /// Clicks, drags and the wheel go to the terminal under it.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    /// The pty wrote: the text may have moved, so the marks go now and come back once output rests.
+    /// The pty wrote: a mark whose cells changed (or moved: a scroll) goes now, the rest stay; all are placed again once
+    /// output rests. `resized`: the grid's cells changed, every mark goes.
     /// #1565: output closes an unpinned hover card (a pinned one stays).
-    func output() {
+    func output(resized: Bool = false) {
         hover.close(all: false)
-        if !marks.isEmpty { marks = []; needsDisplay = true }
-        extMatches = [:]
+        // #1628: one viewport read per drain, only while marks are drawn (drains are coalesced, one per main-loop turn)
+        let lines = resized || marks.isEmpty || !shown() ? [] : (host?.viewportText() ?? "").components(separatedBy: "\n")
+        let kept = marks.filter { m in
+            guard m.row < lines.count, m.row < placedOn.count, let was = Self.span(placedOn[m.row], m) else { return false }
+            return Self.span(lines[m.row], m) == was
+        }
+        if kept != marks { marks = kept; needsDisplay = true }
+        extMatches = extMatches.filter { k, _ in kept.contains { $0.key == k } }
         settle?.cancel()
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.place() } }
         settle = item
@@ -115,6 +126,7 @@ final class XrayGridMarksView: NSView {
         let ext = lines.isEmpty ? [] : Self.extMarks(lines, rules(), rows: rows, taken: dch)   // #1569
         extMatches = Dictionary(ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })
         let now = dch + ext.map(\.mark)
+        placedOn = lines
         if now != marks { marks = now; needsDisplay = true }
     }
 
@@ -133,6 +145,19 @@ final class XrayGridMarksView: NSView {
             XrayRefSpans.find(line, linked).map {
                 Mark(row: row, col: XrayRefSpans.cells(line[..<$0.range.lowerBound]), cells: XrayRefSpans.cells(line[$0.range]), key: $0.key)
             }
+        }
+    }
+
+    /// #1628: the text in cells `m.col ..< m.col + m.cells` of a line; nil when the line is shorter or a wide character
+    /// straddles either edge. Pure.
+    static func span(_ line: String, _ m: Mark) -> Substring? {
+        var (n, i, lo) = (0, line.startIndex, String.Index?.none)
+        while true {
+            if n == m.col { lo = i }
+            if n == m.col + m.cells { return lo.map { line[$0..<i] } }
+            guard i < line.endIndex, n < m.col + m.cells else { return nil }
+            n += XrayRefSpans.cells(line[i...i])
+            i = line.index(after: i)
         }
     }
 
