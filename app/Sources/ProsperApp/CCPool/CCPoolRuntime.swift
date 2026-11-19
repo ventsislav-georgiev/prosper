@@ -36,7 +36,7 @@ final class CCPoolLifecycle: @unchecked Sendable {
         if case .running = service.status { return service.status }
         // A port another program holds is probed again on each event (an add, an enable, a click):
         // one GET of the health path, never a retry loop (the bind retry is for a free port only).
-        return service.start(bindRetry: 3)
+        return service.start(bindRetry: CCPoolService.timeWaitRetry)
     }
 
     /// Queue one settle and wait for it, off the caller's thread.

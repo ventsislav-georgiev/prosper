@@ -507,7 +507,7 @@ final class CCPoolPaneModel: ObservableObject {
             } else if restart {
                 service.restart()
             } else {
-                service.start(bindRetry: 3)
+                service.start(bindRetry: CCPoolService.timeWaitRetry)
             }
             await self?.finishProxy()
         }

@@ -242,6 +242,11 @@ final class CCPoolService: @unchecked Sendable {
         return finishStart(outcome.status, note: "proxy listening on loopback")
     }
 
+    /// #1665: how long a bind that loses to a free-probing port keeps retrying. A closed proxy's server-side
+    /// sockets sit in TIME_WAIT for 2 x MSL (net.inet.tcp.msl 15000 ms, so 30 s) and endpoint reuse stays off,
+    /// so bind() gets EADDRINUSE until they expire: 2 x 15 s plus slack. A live holder is never retried.
+    static let timeWaitRetry: TimeInterval = 35
+
     /// P2a (d): start, and while the bind itself loses to a port the probe found free (P1 note 5:
     /// stop() then start() can meet TIME_WAIT; endpoint reuse stays off), retry for up to
     /// `bindRetry` seconds. A port held by a live listener is never retried. Blocks: off main only.
@@ -295,7 +300,7 @@ final class CCPoolService: @unchecked Sendable {
     /// listens on the port (config.listensOn). #1665: its respawn loop (a shell parent running
     /// ccpool_proxy.py) gets SIGTERM first. Never SIGKILL, never by name. Blocks up to probe + ceiling +
     /// start: off main only.
-    func takeOver(pid wanted: Int?, bindRetry: TimeInterval = 3, stillWanted: @Sendable () -> Bool = { true }) -> TakeOver {
+    func takeOver(pid wanted: Int?, bindRetry: TimeInterval = timeWaitRetry, stillWanted: @Sendable () -> Bool = { true }) -> TakeOver {
         if case .running = status { return .started(status) }
         guard config.port != 0, Self.refusalUnderTest(config) == nil,
               case .ccpool(let pid?, _) = probeHolder(), wanted == nil || pid == wanted else {

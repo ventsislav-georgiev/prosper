@@ -405,6 +405,33 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(log.lines.filter { $0.contains("bind failed: EADDRINUSE") }.count, 1, "once per start: \(log.lines)")
     }
 
+    func testBindRetryOutlastsTimeWaitAndStartsOnceThePortFrees() throws {
+        XCTAssertGreaterThanOrEqual(CCPoolService.timeWaitRetry, 31, "TIME_WAIT is 2 x MSL = 2 x 15 s (net.inet.tcp.msl 15000 ms) = 30 s: the bind retry must outlast it")
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw XCTSkip("no socket") }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, len) == 0 && getsockname(fd, $0, &len) == 0 }
+        }
+        guard bound else { close(fd); throw XCTSkip("bind failed") }
+        var cfg = CCPoolServiceConfig()
+        cfg.port = UInt16(bigEndian: addr.sin_port)
+        cfg.upstream = dead
+        cfg.portProbe = { _, _ in .free }
+        let log = CCPoolCapturingLogger()
+        let svc = CCPoolService(config: cfg, store: CCPoolStore(directory: tempDir()), secrets: CCPoolMemorySecrets(), logger: log)
+        defer { svc.stop() }
+        // The port frees after a few failed ticks (stands in for TIME_WAIT expiring), well inside the retry window.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.7) { close(fd) }
+        XCTAssertEqual(svc.start(bindRetry: CCPoolService.timeWaitRetry), .running(port: cfg.port))
+        let ticks = log.lines.filter { $0.contains("listener did not start") }.count
+        XCTAssertGreaterThanOrEqual(ticks, 2, "EADDRINUSE for several ticks, then it bound: \(log.lines)")
+    }
+
     @MainActor
     func testTakeOverLinkRunsTheButtonPathOnlyWhileTheProxyShouldRun() async throws {
         let dir = tempDir()
