@@ -62,7 +62,7 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      # One of the account's 5 concurrent macOS jobs stays free, so a release or CI run never queues behind every shard.
+      # Leaves one of the account's 5 concurrent macOS jobs for a release or CI run (heavy.yml or push CI may still take it).
       max-parallel: 4
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: mutants (shard ${{ matrix.shard }})
