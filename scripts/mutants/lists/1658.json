@@ -1,0 +1,34 @@
+{
+ "entry": 1658,
+ "filter": "AgentWindowD1Tests/testEmptyPaneClose|AgentWindowD1Tests/testTreeKeysPureRouteMapsOnlyTheTreeKeys|AgentWindowD1Tests/testAPaneWhoseSessionIsGoneSaysSoByNameAndDiffersFromTheEmptyPane|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "form-guard-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentPaneLayout.swift",
+   "old": "        case .closePane?: return .closePane\n",
+   "new": "        case .closePane? where !form: return .closePane\n",
+   "expect": "killed"
+  },
+  {
+   "name": "pill-one-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "model.layout.panes.count > 1 ? { model.closePane(pane) } : nil",
+   "new": "model.layout.panes.count > 0 ? { model.closePane(pane) } : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "pill-closes-focused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "model.layout.panes.count > 1 ? { model.closePane(pane) } : nil",
+   "new": "model.layout.panes.count > 1 ? { model.closePane(model.layout.focused) } : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "form-not-dismissed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }",
+   "new": "if false, a == .closePane, model.layout.panes.count < panes, model.newSession != nil { model.cancelNewSession() }",
+   "expect": "killed"
+  }
+ ]
+}
