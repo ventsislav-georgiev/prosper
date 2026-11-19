@@ -180,8 +180,9 @@ extension XrayPanelModel {
     /// the Tasks target (a local name or remote "host:name"). The poller never runs it (XrayPoller.tick).
     /// #1611: on dch 1.110.0+ (XraySearch.scoped) the read asks `--scope project`, so other sessions' hits come grouped.
     /// A remote host answers by its own release (dch README "host answers by its own release"): an older host's dch
-    /// refuses `--scope` with exit 1, so a remote scoped read that exits 1 runs once more unscoped, and this panel stays
-    /// unscoped after (`unscopedHost`). Exit 1 for another cause (no corpus, no --search) answers 1 again: as before.
+    /// refuses `--scope` with exit 1, so a remote scoped read that exits 1 runs once more unscoped; only if that answers
+    /// (exit 0) does this panel stay unscoped after (`unscopedHost`). Exit 1 again (no session, no corpus, no --search) is
+    /// another cause: the panel stays scoped (R1611-a; Run carries no stderr, so the retry is the evidence).
     /// #1621: the one scope decision: the read and the field's accessibility label both use it.
     var searchScoped: Bool { XraySearch.scoped(XrayPanels.probed?.version) && !unscopedHost }
     var searchFieldLabel: String { searchScoped ? "Search this project" : "Search this session" }
@@ -197,8 +198,9 @@ extension XrayPanelModel {
         reading = Task { [weak self] in
             var r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             if scoped, remote, r.status == 1, !Task.isCancelled {
-                self?.unscopedHost = true
                 r = await run(dch, plain, env)   // remote: the text is in argv, no stdin
+                // R1611-a: the plain read answering is what shows the host refused --scope; exit 1 again is another cause
+                if r.status == 0 { self?.unscopedHost = true }
             }
             guard !Task.isCancelled, let self else { return }
             self.reading = nil

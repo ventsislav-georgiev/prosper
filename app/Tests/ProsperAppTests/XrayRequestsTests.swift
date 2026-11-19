@@ -215,6 +215,8 @@ final class XrayRequestsTests: XCTestCase {
         XCTAssertTrue(s(1, "busy") == nil)
         XCTAssertEqual(s(4, "refused"), 4)
         XCTAssertEqual(s(6, "refused"), 6)
+        XCTAssertTrue(s(2, "refused") == nil, "R1611-b: a local refusal runs cold; red without the refused-2 case (status 2)")
+        XCTAssertEqual(s(2, nil), 2, "a plain exit 2 stays a failed read")
         XCTAssertEqual(XrayRequestLine.status(exit: 0, why: nil, over: false, out: out)?.out, out)
     }
 

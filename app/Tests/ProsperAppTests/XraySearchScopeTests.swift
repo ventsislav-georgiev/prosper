@@ -104,6 +104,36 @@ final class XraySearchScopeTests: XCTestCase {
         XCTAssertEqual(calls.searches.count, 3)
     }
 
+    /// R1611-a: the host's exit 1 is another cause (no session, no corpus): the retry exits 1 too, so the panel stays
+    /// scoped and the next search asks --scope again. Red at TIP: unscopedHost set on any exit 1 (second read unscoped).
+    func testRemoteExitOneForAnotherCauseKeepsTheScope() async {
+        XrayPanels.probed = DchCommand.Binary(path: "/fake/dch", version: [1, 110, 0])
+        let calls = Calls()
+        let run: XrayPanels.Run = { _, args, _ in
+            calls.add(args)
+            return args.contains("--tasks") || args.contains("--memory") ? XraySearchTabTests.ok : (1, Data())
+        }
+        let p = await opened(XraySearchTabTests.remote, run)
+        p.query = "push retry"
+        p.runSearch()
+        await p.reading?.value
+        XCTAssertFalse(p.unscopedHost)
+        XCTAssertTrue(p.searchScoped)
+        p.runSearch()
+        await p.reading?.value
+        XCTAssertEqual(calls.searches.filter { $0.contains("--scope") }.count, 2, "scoped again on the next search")
+    }
+
+    /// R1611-c: the groups kept are 64 at most (XraySearch.maxGroups), dch's first 64 after the own one. Red under the
+    /// mutant max-groups-unbounded (prefix removed: 70 kept).
+    func testOtherGroupsAreCappedAt64() throws {
+        func g(_ i: Int) -> String { #"{"session":"s\#(i)","hits":[{"who":"user","snippet":"push retry"}]}"# }
+        let json = #"{"schema":1,"sessions":["# + (0...70).map(g).joined(separator: ",") + "]}"
+        let s = try XCTUnwrap(XraySearch.parse(Data(json.utf8)))
+        XCTAssertEqual(s.others.count, 64)
+        XCTAssertEqual(s.others.last?.session, "s64", "the first 64 after the own group, in dch's order")
+    }
+
     /// --search goes warm only with `search` (dch 1.110.0): bare or with --scope, --json last. Red at TIP: always nil.
     func testSearchIsARequestFormFrom1_110() {
         func f(_ a: [String], _ on: Bool = true) -> [String]? { XrayRequests.form(["--xray", "box:api"] + a, name: "box:api", search: on) }

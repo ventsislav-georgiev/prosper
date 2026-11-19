@@ -2013,6 +2013,9 @@ tag from the now-released section and put it on the new top draft.
   and marks the hit that answered it. (#1611)
 - The X-ray Search field is now announced as "Search this project" when the search covers the whole
   project. (#1621)
+- X-ray Search: a remote host whose dch cannot do project-wide search no longer makes the panel read
+  one session for good when the search failed for another reason; a refused search form now falls
+  back to a normal read. (#1622)
 
 ## v2.174.0
 

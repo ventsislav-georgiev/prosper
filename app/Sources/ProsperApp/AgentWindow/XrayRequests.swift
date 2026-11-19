@@ -175,13 +175,14 @@ actor XrayRequestLine {
 
     /// The end line to today's statuses: `cap` (or Prosper's own cap) -> XrayPanels.overCap; `cancel` and `timeout`
     /// -> -1 (a cancelled or timed-out read); `lost` -> 7 (host unreachable); `busy` -> nil (run cold); else the
-    /// host's exit (null 0..., `refused` 1, 2, 4, 6).
+    /// host's exit (null 0..., `refused` 1, 4, 6; `refused` 2 -> nil, cold).
     static func status(exit e: Int, why: String?, over: Bool, out: Data) -> (status: Int32, out: Data)? {
         if over || why == "cap" { return (XrayPanels.overCap, Data()) }
         switch why {
         case "busy": return nil
         case "cancel", "timeout": return (-1, Data())
         case "lost": return (7, Data())
+        case "refused" where e == 2: return nil   // R1611-b: dch's own refusal of this form (differs from the probed one): run cold
         default: return (Int32(clamping: e), out)
         }
     }
