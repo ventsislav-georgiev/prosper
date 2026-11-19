@@ -2,7 +2,9 @@
 """Mutation-check runner (#1578). Stdlib only; run with python3 -I.
 
   run.py [--dry-run] [--root DIR] [--logs DIR] [--timeout S] LIST.json...
-  run.py --plan --shards N [--lists GLOB]   (prints a GitHub matrix as JSON)
+  run.py --plan --shards N [--lists GLOB] [--since REV] [--root DIR]   (prints a GitHub matrix as JSON)
+
+--since REV keeps only the lists touched in REV..HEAD (see changed_lists); an unknown REV keeps all.
 
 Each list is {"entry", "filter", "mutants": [{"name", "file", "old", "new", "expect"}]}
 (see README.md). Per list the filter runs once unmutated (it must pass and run tests,
@@ -204,19 +206,66 @@ def failed(row):
     return res in ("BROKEN", "HANG", "NOT RUN") or (res == "SURVIVED" and expect == "killed")
 
 
-def plan(pattern, shards):
+def filter_classes(flt):
+    """Plain class names of a --filter regex (same split as filter_problems; regex alternatives are skipped)."""
+    out = set()
+    for alt in re.split(r"\|(?![^()]*\))", flt):
+        g = re.fullmatch(r"(\w+)/\(.*\)", alt)
+        cls = g.group(1) if g else alt.partition("/")[0]
+        if re.fullmatch(r"\w+", cls):
+            out.add(cls)
+    return out
+
+
+def changed_lists(files, root, since):
+    """Subset of the list files to run: all when `since` is unknown to git, else those whose list JSON,
+    mutant files or filter-class test files changed in since..HEAD."""
+    def git(*a):
+        return subprocess.run(["git", "-C", root] + list(a), capture_output=True, text=True)
+    if git("rev-parse", "--verify", "-q", since + "^{commit}").returncode != 0:
+        return files
+    d = git("diff", "--name-only", since + "..HEAD")
+    if d.returncode != 0:
+        return files
+    changed = set(d.stdout.split())
+    tests = {}  # test file -> source text, only those under app/Tests
+    for dp, _, fs in os.walk(os.path.join(root, "app", "Tests")):
+        for f in fs:
+            if f.endswith(".swift"):
+                with open(os.path.join(dp, f), encoding="utf-8", errors="replace") as fh:
+                    tests[os.path.relpath(os.path.join(dp, f), root)] = fh.read()
+    keep = []
+    for f in files:
+        with open(f, encoding="utf-8") as fh:
+            lst = json.load(fh)
+        hit = os.path.relpath(f, root) in changed or any(
+            isinstance(m, dict) and m.get("file") in changed for m in lst.get("mutants", []))
+        # shortcut: a class is matched by `class|extension|struct Name` prefix anywhere in a test file, like the filter.
+        for c in filter_classes(str(lst.get("filter", ""))) if not hit else ():
+            rx = re.compile(r"\b(class|extension|struct)\s+" + c)
+            hit = any(t in changed and rx.search(src) for t, src in tests.items())
+            if hit:
+                break
+        if hit:
+            keep.append(f)
+    return keep
+
+
+def plan(pattern, shards, root=REPO, since=None):
     """Greedy split of the lists by mutant count into at most `shards` jobs."""
-    files = sorted(glob.glob(os.path.join(LISTS, pattern)))
+    files = sorted(glob.glob(os.path.join(root, "scripts", "mutants", "lists", pattern)))
+    files = [f for f in files if f.endswith(".json")]
+    if since:
+        files = changed_lists(files, root, since)
     sizes = {}
     for f in files:
-        if f.endswith(".json"):
-            with open(f, encoding="utf-8") as fh:
-                sizes[f] = len(json.load(fh).get("mutants", []))
+        with open(f, encoding="utf-8") as fh:
+            sizes[f] = len(json.load(fh).get("mutants", []))
     jobs = [[0, []] for _ in range(min(shards, len(sizes)))]
     for f in sorted(sizes, key=lambda f: (-sizes[f], f)):
         j = min(jobs, key=lambda j: j[0])
         j[0] += sizes[f]
-        j[1].append(os.path.relpath(f, REPO))
+        j[1].append(os.path.relpath(f, root))
     return {"include": [{"shard": i, "lists": " ".join(j[1])} for i, j in enumerate(jobs)]}
 
 
@@ -235,9 +284,10 @@ def main(argv):
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--shards", type=int, default=5)
     ap.add_argument("--lists", dest="pattern", default="*.json")
+    ap.add_argument("--since", help="--plan: keep only lists whose files changed in REV..HEAD (unknown REV: all)")
     a = ap.parse_args(argv)
     if a.plan:
-        print(json.dumps(plan(a.pattern, max(1, a.shards))))
+        print(json.dumps(plan(a.pattern, max(1, a.shards), os.path.abspath(a.root), a.since or None)))
         return 0
     if not a.lists:
         ap.error("no list given")

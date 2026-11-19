@@ -1,5 +1,7 @@
-# Daily mutation checks (#1578): scripts/mutants/run.py runs every list in
-# scripts/mutants/lists/ (format in scripts/mutants/README.md). Per list the filter
+# Mutation checks (#1578): scripts/mutants/run.py runs the lists in
+# scripts/mutants/lists/ (format in scripts/mutants/README.md). Nightly: only the
+# lists whose files changed in the last 25 h, 2 shards, max 2 macOS jobs (#1652;
+# operator 2026-11-19: the full run was too slow). Sundays and workflow_dispatch: every list. Per list the filter
 # runs once unmutated, then each mutant is applied, built, tested and restored.
 # A "killed" mutant that survives, or a broken or hung one, turns the job red;
 # red runs are fixed later (operator 2026-11-18: "we fix them retroactively").
@@ -12,7 +14,8 @@ name: mutants
 
 on:
   schedule:
-    - cron: "30 3 * * *" # daily 03:30 UTC, off-peak, after heavy.yml
+    - cron: "30 3 * * 1-6" # nightly 03:30 UTC, off-peak, after heavy.yml: changed lists only
+    - cron: "30 3 * * 0" # Sunday 03:30 UTC: every list
   workflow_dispatch:
     inputs:
       ref:
@@ -42,14 +45,25 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ inputs.ref || 'main' }}
+          fetch-depth: 0 # the nightly diff needs history
 
       - name: Shard the lists
         id: plan
         env:
           LISTS: ${{ inputs.lists || '*.json' }}
+          # Only the Sunday cron and workflow_dispatch run in full.
+          FULL: ${{ github.event.schedule == '30 3 * * 0' || github.event_name == 'workflow_dispatch' }}
         run: |
-          # Up to 5 macOS jobs, balanced by mutant count.
-          m=$(python3 -I scripts/mutants/run.py --plan --shards 5 --lists "$LISTS")
+          if [[ "$FULL" == true ]]; then
+            # Up to 5 macOS jobs, balanced by mutant count.
+            m=$(python3 -I scripts/mutants/run.py --plan --shards 5 --lists "$LISTS")
+          else
+            # Last commit older than 25 h (the nightly period plus slack): simpler than asking the API
+            # for the last green run, and a failed night is caught by the Sunday run. No such commit
+            # (empty) or an unknown rev: run.py keeps every list.
+            since=$(git rev-list -1 --before="25 hours ago" HEAD)
+            m=$(python3 -I scripts/mutants/run.py --plan --shards 2 --lists "$LISTS" --since "${since:-none}")
+          fi
           echo "$m"
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
           echo "count=$(python3 -I -c 'import json,sys; print(len(json.loads(sys.argv[1])["include"]))' "$m")" >> "$GITHUB_OUTPUT"
@@ -63,7 +77,8 @@ jobs:
     strategy:
       fail-fast: false
       # Leaves one of the account's 5 concurrent macOS jobs for a release or CI run (heavy.yml or push CI may still take it).
-      max-parallel: 4
+      # Nightly has 2 shards (plan), so 2 jobs at most; the Sunday full run and dispatch use 4.
+      max-parallel: ${{ github.event.schedule == '30 3 * * 1-6' && 2 || 4 }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: mutants (shard ${{ matrix.shard }})
     steps:

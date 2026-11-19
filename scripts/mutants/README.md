@@ -1,8 +1,10 @@
 # Mutation checks
 
 A mutant is a one-line change to app code that a test must catch. The lists here
-run daily in `.github/workflows/mutants.yml` (03:30 UTC, or by hand with a `ref` and
-a `lists` glob). A red run is fixed later, by a test or by updating the list.
+run in `.github/workflows/mutants.yml`: Monday to Saturday 03:30 UTC only the lists
+whose files changed in the last 25 h (2 shards, max 2 macOS jobs); Sunday 03:30 UTC
+every list (5 shards, max 4 jobs); by hand with a `ref` and a `lists` glob, always in
+full (max 4 jobs). A red run is fixed later, by a test or by updating the list.
 
 ## List format
 
@@ -46,6 +48,18 @@ table goes to stdout and `$GITHUB_STEP_SUMMARY`.
 python3 -I scripts/mutants/run.py --dry-run scripts/mutants/lists/*.json  # anchors only, no swift
 python3 -I scripts/mutants/run.py scripts/mutants/lists/1572.json         # the real run
 ```
+
+## Changed lists only (`--plan --since`)
+
+```sh
+python3 -I scripts/mutants/run.py --plan --shards 2 --since <rev> [--root DIR] [--lists GLOB]
+```
+
+Keeps a list when `<rev>..HEAD` changed its JSON, a file named in its mutants, or a test
+file under `app/Tests` that declares a class (or extension or struct) named in its
+`filter` (regex-only filter parts are not matched). An unknown `<rev>` (shallow clone,
+force-push, no commit that old) keeps every list; zero kept lists give an empty matrix,
+and the mutants job is skipped. Self-check: `python3 -I scripts/mutants/test_plan.py`.
 
 ## Adding a list
 
