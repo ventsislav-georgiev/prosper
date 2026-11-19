@@ -1,6 +1,6 @@
 {
  "entry": 1661,
- "filter": "AgentWindowD1Tests/testAgentWindowLayout(RowIsWorking|MarkAligns|MarkRedraws)|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowD1Tests/testAgentWindowLayout(RowIsWorking|MarkAligns|MarkRedraws|RowStaysIdle|RenameRowHides)|MarkAligns|MarkRedraws)|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "aggregate-all",
@@ -21,6 +21,20 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "        var working = false\n    }",
    "new": "        var working = false\n        static func == (a: Self, b: Self) -> Bool {\n            a.id == b.id && a.number == b.number && a.name == b.name && a.active == b.active && a.blocked == b.blocked\n        }\n    }",
+   "expect": "killed"
+  },
+  {
+   "name": "mark-not-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                .accessibilityHidden(true)   // the rename branch is no Button: VoiceOver would read the glyph (the state is the row's value)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "history-lights-mark",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if case let .session(d, n)? = p.target { busy.contains(AgentSessionKey(dir: d, name: n)) } else { false }",
+   "new": "if case let .session(d, n)? = p.target { busy.contains(AgentSessionKey(dir: d, name: n)) } else if case let .history(d, n, _)? = p.target { busy.contains(AgentSessionKey(dir: d, name: n)) } else { false }",
    "expect": "killed"
   }
  ]
