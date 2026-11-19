@@ -1,0 +1,27 @@
+{
+ "entry": 1654,
+ "filter": "AgentWindowD1Tests/testAgentWindowLayout|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "chip-leading",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        .overlay(alignment: .trailing) {\n            trailing(count: Group {",
+   "new": "        .overlay(alignment: .leading) {\n            trailing(count: Group {",
+   "expect": "killed"
+  },
+  {
+   "name": "chip-plain-text",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "AgentDigitChip(number: row.number, active: row.active, glyph: \"\\u{2303}\")",
+   "new": "Text(\"\\u{2303}\\(row.number)\").font(Neon.font(10.5, weight: .medium).monospacedDigit()).fixedSize()",
+   "expect": "killed"
+  },
+  {
+   "name": "edit-over-chip",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }",
+   "new": "HStack(spacing: sz(8)) { editButton }",
+   "expect": "killed"
+  }
+ ]
+}
