@@ -1,0 +1,69 @@
+{
+ "entry": 1660,
+ "filter": "CCPoolTakeOverTests|CCPoolPaneTests/testCCPoolPaneMountedStatesFit|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "no-reprobe",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {",
+   "new": "true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "signal-on-heldByOther",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {",
+   "new": "config.portProbe(config.port, config.probeTimeout) != .free else {",
+   "expect": "killed"
+  },
+  {
+   "name": "sigkill-escalation",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "_ = finishStart(.heldByCCPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
+   "new": "_ = config.signal(p, SIGKILL); _ = finishStart(.heldByCCPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
+   "expect": "killed"
+  },
+  {
+   "name": "no-ceiling",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "guard Date() < deadline else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "pid-guard-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid)",
+   "new": "guard let p = pid_t(exactly: pid)",
+   "expect": "killed"
+  },
+  {
+   "name": "owner-check-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "config.ownedByUser(p),\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "model-offers-own-pid",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "pid > 1, pid != Int(getpid()), pid != stuckPid else { return nil }",
+   "new": "pid != stuckPid else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "stuck-not-recorded",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "case .didNotStop(let pid), .refused(let pid): stuckPid = pid",
+   "new": "case .didNotStop(let pid), .refused(let pid): _ = pid",
+   "expect": "killed"
+  },
+  {
+   "name": "pane-button-plain",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPane.swift",
+   "old": "Button(model.proxyButtonTitle) { model.proxyButtonAction() }",
+   "new": "Button(model.proxyRunning ? \"Restart proxy\" : \"Start proxy\") { model.proxyButtonAction() }",
+   "expect": "killed"
+  }
+ ]
+}
