@@ -571,12 +571,15 @@ final class XrayPollTests: XCTestCase {
 
     /// #1639: the compare keeps a hash and the byte count, not the bytes: an answer of the same length and a different
     /// content, even past byte 80, is still a change. Red when note() compares the count alone or Data.hashValue.
+    /// A real Tasks answer: one that does not parse removes the Tasks tab (take, tasksTab) and its poll with it.
     func testSameLengthDifferentBytesIsAChange() async {
         let clock = Clock(), run = PollRun(), p = panel(clock)
         await open(p, run)
-        run.tasks = (0, Data((String(repeating: "x", count: 150) + "aa").utf8))
         for s in [5.0, 10] { await tick(p, clock, at: s) }   // spacing now 10 s
-        run.tasks = (0, Data((String(repeating: "x", count: 150) + "bb").utf8))
+        let body = String(decoding: XrayPanelTasksTests.tasksOut, as: UTF8.self)
+        let at = body.range(of: "Write the parser").map { body.utf8.distance(from: body.startIndex, to: $0.lowerBound) }
+        XCTAssertTrue((at ?? 0) > 80, "the changed byte lies past byte 80")
+        run.tasks = (0, Data(body.replacingOccurrences(of: "Write the parser", with: "Write the parses").utf8))
         await tick(p, clock, at: 20)
         XCTAssertEqual(run.tasksReads, 4)
         await tick(p, clock, at: 24)

@@ -153,7 +153,8 @@ final class XrayPanelMemoryTests: XCTestCase {
         XCTAssertEqual(parsed.map(longestRun), OutsideText.maxMarks, "and in the parse")
     }
 
-    /// Design 3.4: Memory is read on open, again on a switch to its tab and (#1381) every 30 s while it shows.
+    /// Design 3.4: Memory is read on open, again on a switch to its tab and (#1381) every 30 s while it shows; the fake's
+    /// answer never changes, so (#1636) the spacing doubles after one identical answer, 30 then 60 s (XrayQuiet).
     func testMemoryIsReadOnOpenOnTabSwitchAndEveryThirtySeconds() async throws {
         let fake = XrayPanelTasksTests.FakeRun(memory: (0, Self.memoryOut))
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
@@ -168,8 +169,8 @@ final class XrayPanelMemoryTests: XCTestCase {
         await p.reading?.value
         XCTAssertEqual(memoryReads(), 2, "the switch to Memory")
         XCTAssertEqual(fake.calls.last, ["/fake/dch", "--xray", "api", "--memory", "--json"])
-        for s in [30.0, 60, 600] { t = Self.now + s; p.tick(); await p.reading?.value }
-        XCTAssertEqual(memoryReads(), 5, "polled at +30, +60 and +600 while Memory is shown")
+        for s in [30.0, 90, 600] { t = Self.now + s; p.tick(); await p.reading?.value }
+        XCTAssertEqual(memoryReads(), 5, "polled at +30, +90 (60 s: identical) and +600 while Memory is shown")
         XCTAssertEqual(fake.calls.count, 6, "and no Tasks read")
         p.select(.tasks)
         await p.reading?.value
