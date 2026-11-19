@@ -1,6 +1,6 @@
 {
  "entry": 1657,
- "filter": "AgentWindowD1Tests/testAgentWindowLayoutChipFollowsTheRowDetailsShortcutToggle|AgentWindowD1Tests/testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowD1Tests/testAgentWindowLayoutRenameRowFollowsTheRowDetailsShortcutToggle|AgentWindowD1Tests/testAgentWindowLayoutChipFollowsTheRowDetailsShortcutToggle|AgentWindowD1Tests/testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "chip-still-drawn",
@@ -28,6 +28,13 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "AgentLayoutsSection(model: model, rows: rows, show: details)",
    "new": "AgentLayoutsSection(model: model, rows: rows)",
+   "expect": "killed"
+  },
+  {
+   "name": "rename-no-showShortcut",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                }, showShortcut: show.shortcut)\n",
+   "new": "                })\n",
    "expect": "killed"
   }
  ]
