@@ -14,6 +14,7 @@ name: mutants
 
 on:
   schedule:
+    # Both cron strings are compared verbatim in FULL (plan) and max-parallel (mutants): edit all three together.
     - cron: "30 3 * * 1-6" # nightly 03:30 UTC, off-peak, after heavy.yml: changed lists only
     - cron: "30 3 * * 0" # Sunday 03:30 UTC: every list
   workflow_dispatch:
