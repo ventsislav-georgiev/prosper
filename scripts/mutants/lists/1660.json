@@ -24,13 +24,6 @@
    "expect": "killed"
   },
   {
-   "name": "no-ceiling",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "guard Date() < deadline else {",
-   "new": "guard true else {",
-   "expect": "killed"
-  },
-  {
    "name": "pid-guard-dropped",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
    "old": "guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid)",
@@ -63,6 +56,41 @@
    "file": "app/Sources/ProsperApp/CCPool/CCPoolPane.swift",
    "old": "Button(model.proxyButtonTitle) { model.proxyButtonAction() }",
    "new": "Button(model.proxyRunning ? \"Restart proxy\" : \"Start proxy\") { model.proxyButtonAction() }",
+   "expect": "killed"
+  },
+  {
+   "name": "listen-check-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "config.listensOn(p, config.port), config.signal(p, SIGTERM)",
+   "new": "config.signal(p, SIGTERM)",
+   "expect": "killed"
+  },
+  {
+   "name": "listen-check-wrong-port",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "config.listensOn(p, config.port), config.signal",
+   "new": "config.listensOn(p, config.port &+ 1), config.signal",
+   "expect": "killed"
+  },
+  {
+   "name": "n2-reprobe-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "case .ccpool(let holder?, _) where holder == pid:",
+   "new": "case _ where true:",
+   "expect": "killed"
+  },
+  {
+   "name": "libproc-port-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "UInt16(bigEndian: UInt16(truncatingIfNeeded: ini.insi_lport)) == port else",
+   "new": "true else",
+   "expect": "killed"
+  },
+  {
+   "name": "libproc-state-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "guard tcp.tcpsi_state == TSI_S_LISTEN,",
+   "new": "guard true,",
    "expect": "killed"
   }
  ]
