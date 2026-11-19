@@ -1,0 +1,27 @@
+{
+ "entry": 1639,
+ "filter": "XrayPollTests|XrayChaptersTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "nonzero-backs-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if r.status == 0, let l = last[key], l.status == 0,",
+   "new": "if let l = last[key], l.status == r.status,",
+   "expect": "killed"
+  },
+  {
+   "name": "hash-prefix-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "var h = Hasher(); r.out.withUnsafeBytes { h.combine(bytes: $0) }",
+   "new": "var h = Hasher(); h.combine(r.out.hashValue)",
+   "expect": "killed"
+  },
+  {
+   "name": "count-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "l.hash == now.hash, l.count == now.count",
+   "new": "l.count == now.count",
+   "expect": "killed"
+  }
+ ]
+}
