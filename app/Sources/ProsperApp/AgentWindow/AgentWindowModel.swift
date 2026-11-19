@@ -1770,6 +1770,8 @@ final class AgentWindowModel: ObservableObject {
         // #1324 (a): History in the same job, at dch's own History spacing.
         let history = remoteHistoryAt.map { t - $0 >= Self.remoteHistoryEvery } ?? true
         guard list || history else { return }
+        // #1634: a list run at once (remoteAt nil: a remote action's, the first) never doubles: what it waits for may come next.
+        let counts = list && remoteAt != nil
         if list { remoteAt = t }
         if history { remoteHistoryAt = t }
         remoteInFlight = true
@@ -1779,10 +1781,10 @@ final class AgentWindowModel: ObservableObject {
         let job: @Sendable () -> (Data?, Data?) = {
             (list ? run(["--ls-json", "--remote"], env) : nil, history ? runHistory(historyArgs, env) : nil)
         }
-        guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1, listed: list) }
+        guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1, listed: counts) }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let r = job()
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(r.0, history: r.1, listed: list) } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(r.0, history: r.1, listed: counts) } }
         }
     }
 
@@ -1792,7 +1794,8 @@ final class AgentWindowModel: ObservableObject {
     /// not "no hosts").
     /// #1324 (a): the History answer the same way: replaced whole when it is an array, kept otherwise; an offline
     /// host's records stay, "stale", for dch's two minutes, then go with the next good answer.
-    /// #1634: `listed` (a list call ran): a change starts the spacing over, none doubles it up to remoteIdleMax.
+    /// #1634: `listed` (a list call ran on its spacing): a change starts the spacing over, none doubles it up to
+    /// remoteIdleMax, except while a remote Start waits for its row (the person is waiting for it).
     func remoteListed(_ data: Data?, history: Data? = nil, listed: Bool = false) {
         remoteInFlight = false
         guard !closed else { return }
@@ -1802,7 +1805,10 @@ final class AgentWindowModel: ObservableObject {
             remoteHistory = recs
             changed = true
         }
-        if changed { remoteGap = Self.remoteEvery } else if listed { remoteGap = min(remoteGap * 2, Self.remoteIdleMax) }
+        let awaited = pendingSpawn.map { AgentTerminalSpawn.remoteHost($0.key) != nil } ?? false
+        if changed || awaited { remoteGap = Self.remoteEvery } else if listed {
+            remoteGap = min(remoteGap * 2, Self.remoteIdleMax)
+        }
         guard changed, let s = store else { return }
         refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
                 actions: s.actions)

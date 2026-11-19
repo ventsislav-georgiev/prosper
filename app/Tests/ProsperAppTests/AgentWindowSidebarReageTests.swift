@@ -73,6 +73,9 @@ final class AgentWindowSidebarReageTests: XCTestCase {
             store.sessions = list
             XCTAssertEqual(m.sectionBuilds, builds + 1, why)
             builds = m.sectionBuilds
+            let full = AgentSidebar.sections(sessions: list, history: [Self.record], sort: store.sort,
+                                             sidekickPattern: store.sidekickPattern, details: store.details, now: Self.now)
+            XCTAssertTrue(m.sections == full, "a full build's rows: \(why)")
         }
         var l = Self.list()
         l[0] = Self.session("api", .idle, ago: 70, alias: "Example task")
@@ -80,11 +83,14 @@ final class AgentWindowSidebarReageTests: XCTestCase {
         XCTAssertEqual(m.row(Self.key("api"))?.title, "Example task")
         l.append(Self.session("docs", .idle, ago: 80))
         step(l, "an added session")
-        XCTAssertEqual(m.sections.first { $0.title == "Sessions" }?.rows.map(\.id), [Self.key("api"), Self.key("docs")])
+        // build (working) sorts ahead of the idle api and docs (state first, then activity).
+        XCTAssertEqual(m.sections.first { $0.title == "Sessions" }?.rows.map(\.id),
+                       [Self.key("build"), Self.key("api"), Self.key("docs")])
         // docs' activity now newer than api's: under the activity sort the two swap places.
         l[3] = Self.session("docs", .idle, ago: 10)
         step(l, "an order")
-        XCTAssertEqual(m.sections.first { $0.title == "Sessions" }?.rows.map(\.id), [Self.key("docs"), Self.key("api")])
+        XCTAssertEqual(m.sections.first { $0.title == "Sessions" }?.rows.map(\.id),
+                       [Self.key("build"), Self.key("docs"), Self.key("api")])
         l.removeLast()
         step(l, "a removed session")
         store.history = []
@@ -164,5 +170,62 @@ final class AgentWindowSidebarReageTests: XCTestCase {
         XCTAssertEqual(lister.calls, [], "dch >= 1.62 follows: no list call, as before")
         XCTAssertEqual(m.remoteFollowStarts, 1)
         XCTAssertEqual(m.remoteGap, AgentWindowModel.remoteEvery, "untouched while following")
+    }
+
+    /// A remote Start waiting for its row: the list at once, then every 2 s while it is awaited however often the answer
+    /// is the same (the person is waiting for it); once the row lands and is selected, a quiet answer doubles again.
+    @MainActor
+    func testARemoteStartWaitingForItsRowListsAtDchsPaceUntilItLands() throws {
+        let spawn = AgentWindowRemoteSpawnTests()
+        try spawn.withPrefs {
+            let lister = AgentWindowRemoteRowsTests.Lister(AgentWindowRemoteRowsTests.fixture)
+            let (m, log, calls) = spawn.model(lister)
+            defer { m.close() }
+            m.setNewSessionHost("host-a")
+            m.setNewSessionFolder("/Users/example/site")
+            XCTAssertTrue(m.startNewSession())
+            let before = m.remoteCalls
+            calls.done?(DchActionResult(status: 0))
+            spawn.rows.spin { m.pendingSpawn != nil }
+            XCTAssertEqual(m.remoteCalls, before + 1, "the list at once")
+            XCTAssertEqual(m.remoteGap, AgentWindowModel.remoteEvery)
+            for i in 1...3 {
+                log.clock += AgentWindowModel.remoteEvery
+                m.refresh()
+                XCTAssertEqual(m.remoteCalls, before + 1 + i, "awaited: listed at dch's 2 s (\(i))")
+                XCTAssertEqual(m.remoteGap, AgentWindowModel.remoteEvery, "awaited: the spacing never grows (\(i))")
+            }
+            let site = #"{"name":"site","alias":"","host":"host-a","state":"idle","stale":false,"cwd":"/Users/example/site"}"#
+            lister.answer("[" + site + "," + AgentWindowRemoteRowsTests.fixture.dropFirst())
+            log.clock += AgentWindowModel.remoteEvery
+            m.refresh()
+            XCTAssertEqual(m.selection, .remote(host: "host-a", name: "site"))
+            XCTAssertTrue(m.pendingSpawn == nil, "landed")
+            log.clock += AgentWindowModel.remoteEvery
+            m.refresh()
+            XCTAssertEqual(m.remoteCalls, before + 6)
+            XCTAssertEqual(m.remoteGap, 2 * AgentWindowModel.remoteEvery, "landed: a quiet answer doubles again")
+        }
+    }
+
+    /// A remote Resume's answer: the list at once, and that call, the same answer as before, does not double the
+    /// spacing, so the resumed session is looked for again 2 s later.
+    @MainActor
+    func testAListRunAtOnceAfterARemoteResumeKeepsDchsPace() throws {
+        let history = AgentWindowRemoteHistoryTests()
+        let verbs = AgentWindowRemoteHistoryTests.Verbs()
+        let (m, _, log) = history.model(AgentWindowRemoteRowsTests.Lister(AgentWindowRemoteHistoryTests.fixture), verbs: verbs)
+        defer { m.close() }
+        let docs = try XCTUnwrap(m.row(.history(AgentWindowRemoteHistoryTests.key("host-a", "docs")))?.record)
+        m.resumeRemote(docs)
+        XCTAssertEqual(verbs.calls.count, 1)
+        let before = m.remoteCalls
+        verbs.done?(DchActionResult(status: 0))
+        history.spin { m.remoteCalls > before }
+        XCTAssertEqual(m.remoteCalls, before + 1, "the list at once")
+        XCTAssertEqual(m.remoteGap, AgentWindowModel.remoteEvery, "the list at once never doubles")
+        log.clock += AgentWindowModel.remoteEvery
+        m.refresh()
+        XCTAssertEqual(m.remoteCalls, before + 2, "looked for again at dch's 2 s")
     }
 }
