@@ -36,6 +36,13 @@
    "old": "                }, showShortcut: show.shortcut)\n",
    "new": "                })\n",
    "expect": "killed"
+  },
+  {
+   "name": "details-seed-all",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        _details = State(initialValue: model.store?.details ?? .all)\n",
+   "new": "        _details = State(initialValue: .all)\n",
+   "expect": "killed"
   }
  ]
 }
