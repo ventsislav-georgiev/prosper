@@ -12,8 +12,8 @@
   {
    "name": "m3-marks-urlfile",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "$0.underline && $0.shape != .url && $0.shape != .file",
-   "new": "$0.underline",
+   "old": "(v, refs.filter { $0.shape != .url && $0.shape != .file }, [:])",
+   "new": "(v, refs, [:])",
    "expect": "killed"
   },
   {

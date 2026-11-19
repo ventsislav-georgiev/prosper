@@ -33,8 +33,8 @@
   {
    "name": "m5_arg_takes_the_screen_line",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "extMatches = Dictionary(ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })",
-   "new": "extMatches = Dictionary(ext.map { ($0.mark.key, XrayExtensionRefs.Match(rule: $0.match.rule, range: $0.match.range, text: lines[$0.mark.row], parts: $0.match.parts)) }, uniquingKeysWith: { a, _ in a })",
+   "old": "extMatches = Dictionary(p.ext.map { ($0.mark.key, $0.match) }, uniquingKeysWith: { a, _ in a })",
+   "new": "extMatches = Dictionary(p.ext.map { ($0.mark.key, XrayExtensionRefs.Match(rule: $0.match.rule, range: $0.match.range, text: lines[$0.mark.row], parts: $0.match.parts)) }, uniquingKeysWith: { a, _ in a })",
    "expect": "killed"
   },
   {

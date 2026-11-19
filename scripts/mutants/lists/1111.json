@@ -54,7 +54,7 @@
   {
    "name": "chip-own-glyph",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "active: active, glyph: Self.glyphs(number), accent: Neon.blue,",
+   "old": "active: active, glyph: glyph ?? Self.glyphs(number), accent: Neon.blue,",
    "new": "active: active, glyph: \"\\u{2303}\", accent: Neon.blue,",
    "expect": "killed"
   }

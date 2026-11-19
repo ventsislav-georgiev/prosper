@@ -19,7 +19,7 @@
   {
    "name": "edit-over-chip",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }",
+   "old": "HStack(spacing: sz(8)) { editButton; if show.shortcut { AgentSidebarRowView.digitColumn } }",
    "new": "HStack(spacing: sz(8)) { editButton }",
    "expect": "killed"
   },

@@ -19,8 +19,8 @@
   {
    "name": "edit-on-every-row",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "if r.active { editButton }",
-   "new": "editButton",
+   "old": "if r.active {\n                            HStack(spacing: sz(8)) { editButton;",
+   "new": "if true {\n                            HStack(spacing: sz(8)) { editButton;",
    "expect": "killed"
   },
   {

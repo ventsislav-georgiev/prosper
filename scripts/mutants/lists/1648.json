@@ -5,15 +5,15 @@
   {
    "name": "edit-hidden-at-small-scale",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": ".lineLimit(1).fixedSize()\n            .foregroundStyle(model.layoutEditing ? Neon.blue",
-   "new": ".lineLimit(1)\n            .foregroundStyle(model.layoutEditing ? Neon.blue",
+   "old": "Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()",
+   "new": "Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1)",
    "expect": "killed"
   },
   {
    "name": "press-noop",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "\"Edit\") { model.toggleLayoutEditing() }",
-   "new": "\"Edit\") { }",
+   "old": "Button { model.toggleLayoutEditing() } label: { AgentLayoutRowView.editText(editLabel) }",
+   "new": "Button { } label: { AgentLayoutRowView.editText(editLabel) }",
    "expect": "killed"
   }
  ]
