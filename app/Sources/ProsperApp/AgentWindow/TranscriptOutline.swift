@@ -73,7 +73,7 @@ enum TranscriptOutline {
         var cuts = [0], seen = false, images: Int?
         for (i, b) in t.enumerated() {
             if b.body == .image { images = images ?? i; continue }
-            guard isPrompt(b) else { break }
+            guard TranscriptVerbosity.isPrompt(b) else { break }
             if seen { cuts.append(images ?? i) }
             (seen, images) = (true, nil)
         }
@@ -108,13 +108,6 @@ enum TranscriptOutline {
         case .diff(let tool, _, _, _, _), .search(let tool, _, _, _, _): tool
         case .card(let title, _, _, let raw, _): raw == nil ? title : nil   // raw: an unrecognized entry
         default: nil
-        }
-    }
-
-    private static func isPrompt(_ b: TranscriptBlock) -> Bool {
-        switch b.body {
-        case .user, .command, .compaction: true
-        default: false
         }
     }
 
@@ -211,7 +204,7 @@ enum TranscriptOutline {
             guard closed, !turns.isEmpty else {
                 return refold(max(turns.count - 1, 0), at: turns.last?.id ?? f, blocks, asides)
             }
-            let p = new.firstIndex(where: TranscriptOutline.isPrompt) ?? new.endIndex
+            let p = new.firstIndex(where: TranscriptVerbosity.isPrompt) ?? new.endIndex
             for b in new[..<p] { tally.add(b) }
             examined += p
             seen = max(seen, new[..<p].last?.id ?? seen)
@@ -233,7 +226,7 @@ enum TranscriptOutline {
             }
             seen = max(seen, seg.last?.id ?? seen)
             guard !last.isEmpty else { return }
-            closed = last.contains { !TranscriptOutline.isPrompt($0) && $0.body != .image }
+            closed = last.contains(where: TranscriptVerbosity.isStep)
             tally = Tally()
             let part = TranscriptOutline.prompts(last).last ?? last[...]
             lastPart = part.first?.id ?? Int.min
@@ -276,7 +269,7 @@ enum TranscriptOutline {
                 seg = Self.merged(blocks, asides, from: f, below: turns[j].id)
                 examined += seg.count
                 // the cut turn's rest is only prompts and images: `turns` joins it to the next turn (that one has a step)
-                if !seg.contains(where: { !TranscriptOutline.isPrompt($0) && $0.body != .image }) {
+                if !seg.contains(where: TranscriptVerbosity.isStep) {
                     j += 1
                     if j < turns.count {
                         seg = Self.merged(blocks, asides, from: f, below: turns[j].id)

@@ -203,7 +203,7 @@ enum TranscriptVerbosity {
         var out: [[TranscriptBlock]] = [], cur: [TranscriptBlock] = [], lead = true
         for b in blocks {
             if isPrompt(b) && !lead { out.append(cur); cur = []; lead = true }
-            if !isPrompt(b) && !isImage(b) { lead = false }
+            if isStep(b) { lead = false }
             cur.append(b)
         }
         if !cur.isEmpty { out.append(cur) }
@@ -227,11 +227,12 @@ enum TranscriptVerbosity {
         (isError(b) ? [b] : []) + b.children.flatMap(errorBlocks)
     }
 
-    private static func isPrompt(_ b: TranscriptBlock) -> Bool {
+    static func isPrompt(_ b: TranscriptBlock) -> Bool {
         switch b.body {
         case .user, .command, .compaction: true
         default: false
         }
     }
-    private static func isImage(_ b: TranscriptBlock) -> Bool { b.body == .image }
+    /// A step is anything but a prompt or an image; turns() and the outline's drop share this.
+    static func isStep(_ b: TranscriptBlock) -> Bool { !isPrompt(b) && b.body != .image }
 }
