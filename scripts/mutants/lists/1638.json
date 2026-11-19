@@ -1,0 +1,83 @@
+{
+ "entry": 1638,
+ "filter": "XrayFollowTests|XrayFollowTasksTests|XrayRefsParseTests|XrayRefResultsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "decode-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard offMain else { return MainActor.assumeIsolated",
+   "new": "guard false else { return MainActor.assumeIsolated",
+   "expect": "killed"
+  },
+  {
+   "name": "no-pending-wait",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "{ XrayFollow.onQueue(b, b.pending.drain(), nil, f) }",
+   "new": "{ XrayFollow.onQueue(b, ls, nil, f) }",
+   "expect": "killed"
+  },
+  {
+   "name": "ended-skips-drain",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "Self.after(builder, drain: true, self)",
+   "new": "Self.after(builder, drain: false, self)",
+   "expect": "killed"
+  },
+  {
+   "name": "ended-no-hop",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard offMain else { return finish(status) }",
+   "new": "guard false else { return finish(status) }",
+   "expect": "killed"
+  },
+  {
+   "name": "swap-every-landing",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard t.take == builder.sent.withLock({ $0 }), let s = held else { return }",
+   "new": "guard let s = held else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "evict-frees-nothing",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "else { kept -= n }",
+   "new": "else { kept -= 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-removal-frees-nothing",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if let k { kept -= refBytes[k] }",
+   "new": "if let k { kept -= 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "chapter-replace-frees-nothing",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "                    kept -= chapterBytes[k]\n",
+   "new": "                    kept -= 0\n",
+   "expect": "killed"
+  },
+  {
+   "name": "capped-reads-on",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "        guard !capped else { return t }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-has-snapshot",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "        hasSnapshot = t.snapshot\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-followed-replay",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "        for o in t.followed { XrayRefResults.followed(target, o) }",
+   "new": "        _ = t.followed",
+   "expect": "killed"
+  }
+ ]
+}
