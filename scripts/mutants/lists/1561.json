@@ -12,7 +12,7 @@
   {
    "name": "m2-every-form-warm",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
-   "old": "let argv = XrayRequests.form(args, name: name),",
+   "old": "let argv = XrayRequests.form(args, name: name, search: search, since: since),",
    "new": "let argv = Optional(Array(args.dropFirst(2))),",
    "expect": "killed"
   },

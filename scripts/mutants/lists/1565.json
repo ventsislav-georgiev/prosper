@@ -68,15 +68,15 @@
   {
    "name": "output-closes-pinned",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "    func output() {\n        hover.close(all: false)",
-   "new": "    func output() {\n        hover.close(all: true)",
+   "old": "    func output(resized: Bool = false) {\n        hover.close(all: false)",
+   "new": "    func output(resized: Bool = false) {\n        hover.close(all: true)",
    "expect": "killed"
   },
   {
    "name": "output-keeps-unpinned",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "    func output() {\n        hover.close(all: false)\n",
-   "new": "    func output() {\n",
+   "old": "    func output(resized: Bool = false) {\n        hover.close(all: false)\n",
+   "new": "    func output(resized: Bool = false) {\n",
    "expect": "killed"
   },
   {

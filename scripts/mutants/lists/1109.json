@@ -54,7 +54,7 @@
   {
    "name": "M8-close-keeps-session",
    "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
-   "old": "        editor.end(t.spawn)\n",
+   "old": "        editor.end(t.spawn, done)\n",
    "new": "",
    "expect": "killed"
   },

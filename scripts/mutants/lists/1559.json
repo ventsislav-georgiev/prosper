@@ -19,7 +19,7 @@
   {
    "name": "m4-output-clear",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "if !marks.isEmpty { marks = []; needsDisplay = true }",
+   "old": "if kept != marks { marks = kept; needsDisplay = true }",
    "new": "",
    "expect": "killed"
   },

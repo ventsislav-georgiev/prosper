@@ -117,8 +117,8 @@
   {
    "name": "M-followhook",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "            XrayRefResults.followed(target, o)",
-   "new": "            _ = o",
+   "old": "        for o in t.followed { XrayRefResults.followed(target, o) }",
+   "new": "        for o in t.followed { _ = o }",
    "expect": "killed"
   },
   {

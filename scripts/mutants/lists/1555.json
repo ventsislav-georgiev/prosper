@@ -89,8 +89,8 @@
   {
    "name": "follow-still-calls",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "(following ? nil : run([\"--ls-json\", \"--remote\"], env),",
-   "new": "(run([\"--ls-json\", \"--remote\"], env),",
+   "old": "let list = !following && (remoteAt",
+   "new": "let list = (remoteAt",
    "expect": "killed"
   }
  ]
