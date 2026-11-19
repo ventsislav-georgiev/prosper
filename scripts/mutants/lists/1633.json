@@ -1,0 +1,90 @@
+{
+ "entry": 1633,
+ "filter": "TranscriptOutlineTests|TranscriptOutlineBuilderTests|TranscriptIdleWorkTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "fast-path-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            guard closed, !turns.isEmpty else {",
+   "new": "            guard false, !turns.isEmpty else {",
+   "expect": "killed"
+  },
+  {
+   "name": "retally-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "} else if !(closed && id >= lastPart && retally(id, blocks)) {",
+   "new": "} else if true {",
+   "expect": "killed"
+  },
+  {
+   "name": "retally-name",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            guard TranscriptOutline.toolName(b.body) == tally.nameOf[id] else { return false }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "retally-answer",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            if case .assistant = b.body { return false }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "splice-skip",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "if spliced.insert(k).inserted, !splice(k, blocks, asides) {",
+   "new": "if spliced.insert(k).inserted, false {",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            if f > old { drop(to: f, blocks, asides) }",
+   "new": "            if false { drop(to: f, blocks, asides) }",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-no-renumber",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "var c = $0; c.ordinal += shift; return c",
+   "new": "var c = $0; c.ordinal += 0; return c",
+   "expect": "killed"
+  },
+  {
+   "name": "restart-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            if let old = floor, f < old { restart() }",
+   "new": "            if let old = floor, false, f < old { restart() }",
+   "expect": "killed"
+  },
+  {
+   "name": "lead-open-fast",
+   "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
+   "old": "            guard closed, !turns.isEmpty else {",
+   "new": "            guard !turns.isEmpty else {",
+   "expect": "killed"
+  },
+  {
+   "name": "result-not-touched",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "                    touch(p.thread ?? p.block)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "refresh-not-called",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "        r.assembler.refreshOutline()   // #1633: off main, and only what this read changed\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "idle-else-empty",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "{ publish() } else { syncAsk(); evaluate() }",
+   "new": "{ publish() } else { }",
+   "expect": "killed"
+  }
+ ]
+}
