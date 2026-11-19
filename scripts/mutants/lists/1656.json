@@ -10,6 +10,13 @@
    "expect": "killed"
   },
   {
+   "name": "attach-not-wired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        surfaceStarted()\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
    "name": "focus-true-every-pane",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
    "old": "        if !libghosttyFocus(responder: window?.firstResponder === self) { unfocusSurface() }\n",

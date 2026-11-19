@@ -10,7 +10,9 @@ import XCTest
 /// a surface's first focus is in the log too. The window is never shown, ordered in or made key: its key state is a
 /// stored flag (`CaretWindow.key`), and a key change is the window's own notification posted for that offscreen window
 /// object only. Sessions are fakes (splitTerminals); layouts save to a private suite; the split gate is restored
-/// (withPaneMenu). Every row runs on the main actor.
+/// (withPaneMenu). Every row runs on the main actor. The window rows' panes run on fake clients, which get no libghostty
+/// surface, so the rig calls the view's surfaceStarted() where the wrapper's attach would; one row on a real offscreen
+/// surface proves the wrapper's attach makes that call.
 extension AgentWindowD1Tests {
     /// A window whose key state a row sets (AppKit never makes it key).
     final class CaretWindow: NSWindow {
@@ -65,12 +67,33 @@ extension AgentWindowD1Tests {
         let rig = CaretRig(m: m, win: win, host: host, log: log, panes: m.layout.order)
         let live = rig.panes.filter { m.runtimes[$0]?.terminal != nil }
         paneFocusSettle(host) { live.allSatisfy { rig.view($0)?.window === win } }
+        // Fake clients get no libghostty surface (the screen is not a ghostty one): stand in for the wrapper's attach,
+        // which runs as the view enters the window (testPaneCaretANewRealSurfaceIsToldItIsUnfocused covers that call)
+        live.forEach { rig.view($0)?.surfaceStarted() }
         endRests(rests)
         paneFocusSettle(host) { live.allSatisfy { m.runtimes[$0]?.terminal?.phase == .live } }
         XCTAssertTrue(m.focusSelection())
         paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
         XCTAssertTrue(win.firstResponder === rig.view(m.layout.focused), "the keys in the focused pane's terminal")
         return rig
+    }
+
+    /// A real libghostty surface, offscreen (the window is never shown and is not key): the surface the view builds as it
+    /// enters the window is handed false at once (libghostty starts a surface focused), through the wrapper's attach.
+    /// Red without surfaceStarted() in terminalDidAttachSurface: the log stays empty.
+    @MainActor
+    func testPaneCaretANewRealSurfaceIsToldItIsUnfocused() throws {
+        let v = AgentTerminalTests.ViewRig()
+        defer { v.tearDown() }
+        let log = CaretLog()
+        let id = ObjectIdentifier(v.rig.c)
+        v.rig.c.focusSent = { log.sent[id, default: []].append($0) }
+        v.rig.c.attach(AgentTerminalTests.key)
+        v.host.show(v.rig.c.screen as? AgentGhosttyScreen)
+        v.window.contentView = v.host
+        XCTAssertTrue(v.host.surface != nil, "the view built its surface on entering the window")
+        XCTAssertEqual(log.sent[id], [false], "the new surface told it is unfocused, once")
+        XCTAssertFalse(v.window.isVisible, "never shown")
     }
 
     /// A key window, two live panes: only the focused pane's surface holds libghostty focus; the other's new surface was

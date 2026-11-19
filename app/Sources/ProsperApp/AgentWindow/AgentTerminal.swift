@@ -1119,7 +1119,12 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         self.surface = surface
-        // #1656: a new surface starts focused (beta.31's never-focused split pane drew the solid cursor): off unless the rule holds
+        surfaceStarted()
+    }
+
+    /// #1656: a new surface starts focused (beta.31's never-focused split pane drew the solid cursor): off unless the rule
+    /// holds. Window rows on fake clients get no surface, so they call this where the wrapper's attach would.
+    func surfaceStarted() {
         if !libghosttyFocus(responder: window?.firstResponder === self) { unfocusSurface() }
     }
     func terminalDidDetachSurface() { surface = nil }
