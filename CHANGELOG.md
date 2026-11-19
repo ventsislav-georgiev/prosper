@@ -2040,9 +2040,9 @@ tag from the now-released section and put it on the new top draft.
 - The Agents window's sidebar no longer rebuilds itself every second while sessions stream output:
   it only refreshes the ages that changed, and the check for sessions on other machines slows down
   to every 10 seconds while nothing changes (older dch clients), saving battery. (#1634)
-- The X-ray Tasks, Prompts and Memory drawer now checks dch less often while nothing changes (every
-  5 s at first, slowing to once a minute), saving battery, and goes back to 5 s as soon as something
-  changes or you switch tab. (#1636)
+- The X-ray Tasks, Prompts and Memory drawer now checks dch less often while nothing changes, slowing
+  to at most once a minute to save battery, and goes back to its usual pace (every 5 s for a session on
+  this Mac) as soon as something changes or you switch tab. (#1636)
 
 ## v2.174.0
 
