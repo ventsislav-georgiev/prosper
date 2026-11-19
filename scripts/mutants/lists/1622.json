@@ -1,0 +1,34 @@
+{
+ "entry": 1622,
+ "filter": "XraySearchScopeTests|XraySearchTabTests|XrayRequestsTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "unscoped-on-any-exit1",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "if r.status == 0 { self?.unscopedHost = true }",
+   "new": "self?.unscopedHost = true",
+   "expect": "killed"
+  },
+  {
+   "name": "refused2-status",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRequests.swift",
+   "old": "        case \"refused\" where e == 2: return nil",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "max-groups-unbounded",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": ".dropFirst().prefix(maxGroups)",
+   "new": ".dropFirst()",
+   "expect": "killed"
+  },
+  {
+   "name": "max-groups-off-by-one",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "maxGroups = 64",
+   "new": "maxGroups = 65",
+   "expect": "killed"
+  }
+ ]
+}
