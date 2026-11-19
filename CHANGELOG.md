@@ -2054,6 +2054,8 @@ tag from the now-released section and put it on the new top draft.
   a tenth of its delay later. (#1640)
 - The Agents window no longer reads a whole transcript a second time when a new Claude Code version
   first appears, so opening a long session costs less disk and battery. (#1635)
+- Repeated "host unreachable" polls no longer slow down, so the notice clears right after the host
+  is back. (#1639)
 
 ## v2.174.0
 

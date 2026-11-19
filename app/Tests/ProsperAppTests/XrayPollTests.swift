@@ -230,7 +230,7 @@ final class XrayPollTests: XCTestCase {
             await tick(p, clock, at: 30)
             XCTAssertEqual(run.tasksReads, 3, "unreachable is not a failure: the poll goes on")
             run.tasks = Self.ok
-            await tick(p, clock, at: 60)   // #1636: the identical 4/7 backed the spacing off to 30 s
+            await tick(p, clock, at: 45)   // #1636: a repeated non-zero status keeps the base spacing: due at 45
             XCTAssertFalse(p.footer.contains("host unreachable"), "the host answered")
         }
     }
@@ -242,7 +242,7 @@ final class XrayPollTests: XCTestCase {
         await tick(p, clock, at: 15)
         XCTAssertEqual(p.tasks?.tasks.count, 4, "remote -1 (timed out dialling): the rows are kept")
         XCTAssertTrue(p.footer.contains("host unreachable"), "\(p.footer)")
-        for s in [30.0, 45, 60] { await tick(p, clock, at: s) }   // #1636: the identical -1 backed off: 45 is not due
+        for s in [30.0, 45] { await tick(p, clock, at: s) }   // #1636: a repeated -1 keeps the 15 s base
         XCTAssertEqual(run.tasksReads, 4, "the poll goes on")
     }
 
@@ -555,6 +555,34 @@ final class XrayPollTests: XCTestCase {
         XCTAssertEqual(run.tasksReads, 6)
         await tick(p, clock, at: 85)
         XCTAssertEqual(run.tasksReads, 7, "5 s after the change")
+    }
+
+    /// #1639: only a status 0 answer backs off: a repeated failure (4, 7, -1) stays at the base spacing, so the poll
+    /// right after the host is back is not up to 60 s away. Red when note() counts a non-zero status as identical.
+    func testRepeatedFailureStaysAtBaseSpacing() async {
+        for code in [Int32(4), 7, -1] {
+            let clock = Clock(), run = PollRun(), p = panel(remote: true, clock)
+            await open(p, run)
+            run.tasks = (code, Data())
+            for s in [15.0, 30, 45, 60] { await tick(p, clock, at: s) }
+            XCTAssertEqual(run.tasksReads, 5, "exit \(code): a read every 15 s")
+        }
+    }
+
+    /// #1639: the compare keeps a hash and the byte count, not the bytes: an answer of the same length and a different
+    /// content, even past byte 80, is still a change. Red when note() compares the count alone or Data.hashValue.
+    func testSameLengthDifferentBytesIsAChange() async {
+        let clock = Clock(), run = PollRun(), p = panel(clock)
+        await open(p, run)
+        run.tasks = (0, Data((String(repeating: "x", count: 150) + "aa").utf8))
+        for s in [5.0, 10] { await tick(p, clock, at: s) }   // spacing now 10 s
+        run.tasks = (0, Data((String(repeating: "x", count: 150) + "bb").utf8))
+        await tick(p, clock, at: 20)
+        XCTAssertEqual(run.tasksReads, 4)
+        await tick(p, clock, at: 24)
+        XCTAssertEqual(run.tasksReads, 4)
+        await tick(p, clock, at: 25)
+        XCTAssertEqual(run.tasksReads, 5, "the changed bytes: 5 s again")
     }
 
     /// Hidden (window or selection) and shown again, or a tab switch: the base spacing. Red when the reset at the

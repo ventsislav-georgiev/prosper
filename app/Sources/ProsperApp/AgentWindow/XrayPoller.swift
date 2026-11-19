@@ -10,17 +10,20 @@ import AppKit
 // Transcript pane keeps only its refs (its chapters are its own), a dch-chapters pane takes both.
 // #1475 c: a follow that carries Tasks and Memory (dch 1.91.0) stops their polls while it runs.
 // #1636: while a form's answer is byte-identical the spacing doubles (5, 10, 20, 40, 60 s; remote 15, 30, 60; Memory 30,
-// 60): a changed answer, a tab switch, or the drawer hidden and shown again goes back to the base.
+// 60): a changed answer, a tab switch, or the drawer hidden and shown again goes back to the base. Only a status 0
+// answer backs off: any other status (a repeated unreachable) keeps the base spacing, so a host that is back shows at once.
 
-/// #1636: per poll form ("t" Tasks, "m" Memory, "r" Refs, "c" chapters): the last answer and how many identical ones followed.
+/// #1636: per poll form ("t" Tasks, "m" Memory, "r" Refs, "c" chapters): the last answer (status, hash, byte count) and how many identical ones followed.
 struct XrayQuiet {
     private var runs: [String: Int] = [:]
-    private var last: [String: (status: Int32, out: Data)] = [:]
+    private var last: [String: (status: Int32, hash: Int, count: Int)] = [:]   // a hash, not the bytes (Tasks is up to ~1.3 MB)
     static let cap: TimeInterval = 60
 
     mutating func note(_ key: String, _ r: (status: Int32, out: Data)) {
-        if let l = last[key], l.status == r.status, l.out == r.out { runs[key] = min((runs[key] ?? 0) + 1, 4) } else { runs[key] = 0 }
-        last[key] = r
+        var h = Hasher(); r.out.withUnsafeBytes { h.combine(bytes: $0) }   // every byte: Data.hashValue stops at byte 80
+        let now = (status: r.status, hash: h.finalize(), count: r.out.count)
+        if r.status == 0, let l = last[key], l.status == 0, l.hash == now.hash, l.count == now.count { runs[key] = min((runs[key] ?? 0) + 1, 4) } else { runs[key] = 0 }
+        last[key] = now
     }
     func spacing(_ key: String, base: TimeInterval) -> TimeInterval { min(base * Double(1 << (runs[key] ?? 0)), max(base, Self.cap)) }
     mutating func reset() { runs = [:]; last = [:] }
