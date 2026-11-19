@@ -2067,6 +2067,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions splits: the mouse wheel now scrolls the pane under the pointer, focused or not,
   without moving focus, and scrolling works right after a focus switch with no mouse move first.
   (#1644)
+- Agent Sessions: Edit layout moved from the bar above the panes to the active layout row in the
+  sidebar ("Edit" / "Done"); the single-session view no longer shows it or an empty bar, and it
+  never switches you to another layout. (#1646)
 
 ## v2.174.0
 
