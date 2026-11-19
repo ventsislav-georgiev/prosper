@@ -152,7 +152,8 @@ final class XrayFollow: ObservableObject {
     }
 
     /// One batch of lines, in order; the state is built once per batch. #1638: the batch goes to the queue whole (no
-    /// line is decoded on main) unless buildOffMain is off.
+    /// line is decoded on main) unless buildOffMain is off. Rows only (QA r-df387acf n1): it numbers its take on main while
+    /// the reader sink numbers its drains on the queue; never feed one follow from both, or the newer build may stay held.
     func take(_ lines: [Data]) {
         guard Self.buildOffMain() else { return land(builder.take(lines, builder.next())) }
         Self.takeOnQueue(builder, lines, builder.next(), self)   // numbered now: a take sent after it is newer
