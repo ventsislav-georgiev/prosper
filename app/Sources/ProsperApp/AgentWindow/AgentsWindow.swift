@@ -1285,9 +1285,10 @@ struct AgentSidebarTitleRow: View {
 
 /// #901 B3 step 4a (8.1 :625-631): the Layouts section, built only from `model.layoutRows` (gate on and the show rule).
 /// Header: the section label and count, then "+" (New layout); at 9 layouts the "+" is disabled and the fixed words
-/// "(9 layouts max)" show. Rows: "⌃N", the name (one line, middle-truncated), the fixed empty attention slot (step 5);
-/// the active row in accent text, ending in Edit / Done (#1646). Height: the header plus one fixed-height row per layout (text height at the scale +
-/// sz paddings); the "⌃N" label and the words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
+/// "(9 layouts max)" show. Rows: the name (one line, middle-truncated), the fixed attention slot (step 5), the active
+/// row's Edit / Done (#1646), the ⌃N keycap chip in the session rows' chip column (#1654); the active row in accent text.
+/// Height: the header plus one fixed-height row per layout (text height at the scale + sz paddings); the chip and the
+/// words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
 /// up/down walk and the ⌘1…9 jump. Closures run on the main actor (Buttons, the field's handlers).
 /// Step 4b: the header folds through agentWindowCollapsedSections ("Layouts"; folded: rows left out, the active layout
 /// unchanged); each row's context menu draws AgentWindowControls.layoutMenu (Rename opens the inline field in place of
@@ -1333,36 +1334,43 @@ struct AgentLayoutsSection: View {
                     model.endLayoutRename(r.id, $0)
                 }
             } else {
-                HStack(spacing: 0) {
-                    Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r) }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(Self.label(r))
-                        .accessibilityValue(Self.value(r))
-                        .accessibilityAddTraits(r.active ? .isSelected : [])
-                        .contextMenu {
-                            ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
-                                Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
-                                    Label(e.title, systemImage: e.symbol)   // #1358
-                                }.disabled(!e.enabled)
-                            }
+                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, editLabel: r.active ? editLabel : nil) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Self.label(r))
+                    .accessibilityValue(Self.value(r))
+                    .accessibilityAddTraits(r.active ? .isSelected : [])
+                    .contextMenu {
+                        ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
+                            Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
+                                Label(e.title, systemImage: e.symbol)   // #1358
+                            }.disabled(!e.enabled)
                         }
-                    // #1646: only the layout on screen (the single-pane view has no active row, so none there)
-                    if r.active { editButton }
-                }
+                    }
+                    // #1646: only the layout on screen (the single-pane view has no active row, so none there).
+                    // #1654: over the room the row keeps for it, left of the chip column (outside the row's
+                    // Button: its own element, read after the row).
+                    .overlay(alignment: .trailing) {
+                        if r.active {
+                            HStack(spacing: sz(8)) { editButton; AgentSidebarRowView.digitColumn }
+                                .padding(.trailing, sz(10))
+                        }
+                    }
             }
         }
     }
 
+    var editLabel: String { model.layoutEditing ? "Done" : "Edit" }
+
     /// #1646 (operator 2026-11-19: "the edit ... and done buttons directly on the sidebar, right aligned"): the active
-    /// row's Edit / Done (the band's Edit layout before), its right edge under the header's "+"; its own element after
-    /// the row's name.
+    /// row's Edit / Done (the band's Edit layout before); its own element after the row's name. #1654: just left of the
+    /// row's ⌃N chip, over the room the row keeps for it (`AgentLayoutRowView.editText`, the same text and width).
     var editButton: some View {
-        Button(model.layoutEditing ? "Done" : "Edit") { model.toggleLayoutEditing() }   // main actor
-            .buttonStyle(.plain).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
+        Button { model.toggleLayoutEditing() } label: { AgentLayoutRowView.editText(editLabel) }   // main actor
+            .buttonStyle(.plain)
             .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
             .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
             .accessibilityLabel(model.layoutEditing ? "Done editing layout" : "Edit layout")
-            .padding(.trailing, sz(8))
+            .modifier(AgentSidebarRowProbe(kind: "layoutEdit", title: editLabel, global: true))
     }
 
     /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
@@ -1403,7 +1411,9 @@ struct AgentLayoutNameField: View {
     }
 }
 
-/// #901 B3 step 4a: one Layouts row ("⌃N  name" and the attention slot).
+/// #901 B3 step 4a: one Layouts row (the name and the attention slot). #1654 (operator 2026-11-19: "the layout shortcut
+/// ... to the right and with border etc like cmd + 1"): its ⌃N is a session row's keycap chip (AgentDigitChip, glyph ⌃)
+/// in the session rows' chip column, the attention slot and the active row's Edit / Done room to its left.
 struct AgentLayoutRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentWindowModel.LayoutRow
@@ -1411,37 +1421,69 @@ struct AgentLayoutRowView: View {
     var edit: String?
     /// The field's end, once: Return's text, or nil (Escape, the focus left, the field gone). Main actor.
     var end: (String?) -> Void = { _ in }
+    /// #1654: the active row's Edit / Done words: their room is kept before the chip (the section draws the button there).
+    var editLabel: String? = nil
+
+    /// #1654: the Edit / Done words, the button's label and the row's room for it alike.
+    static func editText(_ s: String) -> some View {
+        Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
+    }
+
+    /// #1654: the trailing parts after the name, in order: the attention slot (`count`), the Edit room, the chip column.
+    /// The row lays them out hidden; the overlay draws them over the same places (no frame moves).
+    private func trailing(count: some View, chip: some View) -> some View {
+        HStack(alignment: .center, spacing: sz(8)) {
+            count.frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
+            if let editLabel { Self.editText(editLabel).hidden() }
+            ZStack { AgentSidebarRowView.digitColumn; chip }
+        }
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(8)) {
-            Text("⌃\(row.number)").font(Neon.font(10.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(Neon.textSecondary).fixedSize()
             Text(row.name).font(Neon.font(12.5, weight: .medium))
                 .foregroundStyle(row.active ? Neon.blue : Neon.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 // Step 4b: the field lies over the name's slot, the name goes transparent: no frame moves.
                 .opacity(edit == nil ? 1 : 0).accessibilityHidden(edit != nil)
                 .overlay(alignment: .leading) { if let edit { AgentLayoutNameField(placeholder: row.name, text: edit, end: end) } }
+                .modifier(AgentSidebarRowProbe(kind: "layoutName", title: "\(row.number)", global: true))
             Spacer(minLength: 0)
-            Color.clear.frame(width: AgentLayoutsSection.attentionWidth, height: 1)   // the attention slot
+            trailing(count: Color.clear, chip: EmptyView()).hidden().frame(height: 0)   // the slots' widths, no height
         }
         .padding(.horizontal, sz(10)).padding(.vertical, sz(5))
         .frame(maxWidth: .infinity, alignment: .leading)
         // #901 B3 step 5 (section 10): an inactive layout's blocked count, a dot and the number over the slot (an
         // overlay: no frame moves; 0 builds nothing). The sidebar's blocked colour; read aloud through the row's value.
+        // #1654: the ⌃N chip over the session rows' chip column, the row's line centred like theirs; read through the
+        // row's label ("Control N"), so no element of its own.
         .overlay(alignment: .trailing) {
-            if row.blocked > 0 {
-                HStack(spacing: sz(2)) {
-                    Circle().fill(agentStateColor(.blocked)).frame(width: sz(5), height: sz(5))
-                    Text("\(row.blocked)").font(Neon.font(9.5, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(AgentSidebarRowView.amberInk).fixedSize()
+            trailing(count: Group {
+                if row.blocked > 0 {
+                    HStack(spacing: sz(2)) {
+                        Circle().fill(agentStateColor(.blocked)).frame(width: sz(5), height: sz(5))
+                        Text("\(row.blocked)").font(Neon.font(9.5, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(AgentSidebarRowView.amberInk).fixedSize()
+                    }
                 }
-                .frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
-                .padding(.trailing, sz(10))
-                .allowsHitTesting(false).accessibilityHidden(true)
-            }
+            }, chip: chip)
+            .padding(.trailing, sz(10))
+            .allowsHitTesting(false).accessibilityHidden(true)
         }
         .contentShape(Rectangle())
+    }
+}
+
+extension AgentLayoutRowView {
+    /// #1654: the layout's Control-number chip, drawn by AgentDigitChip with the ⌃ glyph; laid on an unseen Command chip
+    /// of the same digit, trailing edges together, so its right edge is a session row's ⌘N chip's whatever the glyphs'
+    /// widths. Brighter on the active layout, as on the selected session row.
+    var chip: some View {
+        AgentDigitChip(number: row.number).hidden()
+            .overlay(alignment: .trailing) {
+                AgentDigitChip(number: row.number, active: row.active, glyph: "\u{2303}")
+                    .modifier(AgentSidebarRowProbe(kind: "layoutChip", title: "\(row.number)", global: true))
+            }
     }
 }
 
@@ -1603,6 +1645,7 @@ struct AgentSidebarRowView: View {
             if let column = slot.column, let block = slot.block, let number = shownNumber {
                 GeometryReader { proxy in
                     AgentDigitChip(number: number, active: selected)
+                        .modifier(AgentSidebarRowProbe(kind: "digitChip", title: "\(number)", global: true))   // #1654 tests, by number
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(AgentDigitChip.words(number))
                         .help("Select this session (\(AgentDigitChip.glyphs(number))\(AgentDigitChip.digit(number)))")
@@ -1744,6 +1787,8 @@ struct AgentDigitChip: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let number: Int
     var active = false
+    /// #1654: the glyphs before the digit; nil: this chord's (`glyphs`). A Layouts row passes ⌃.
+    var glyph: String? = nil
 
     /// #1470: rows 10...18 are Option-Command-1...9.
     static func glyphs(_ n: Int) -> String { n > 9 ? "\u{2325}\u{2318}" : "\u{2318}" }
@@ -1751,7 +1796,7 @@ struct AgentDigitChip: View {
     static func words(_ n: Int) -> String { (n > 9 ? "Option-Command-" : "Command-") + "\(digit(n))" }
 
     var body: some View {
-        PositionKeyCap(digit: "\(Self.digit(number))", active: active, glyph: Self.glyphs(number), accent: Neon.blue,
+        PositionKeyCap(digit: "\(Self.digit(number))", active: active, glyph: glyph ?? Self.glyphs(number), accent: Neon.blue,
                        edge: Neon.faded(Neon.blue, active ? 0.9 : 0.6))
             .fixedSize()
     }

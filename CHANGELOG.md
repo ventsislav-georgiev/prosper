@@ -2076,6 +2076,8 @@ tag from the now-released section and put it on the new top draft.
 - Pressing Escape (or Command-C, or the shortcut again) in clipboard history or the runner now
   returns you to the app you were using, instead of bringing up a Prosper window such as Agent
   Sessions. (#1653)
+- Agent Sessions: the Layouts list now shows each layout's Control-number shortcut as the same key
+  badge the sessions use, at the right edge of the row. (#1654)
 
 ## v2.174.0
 

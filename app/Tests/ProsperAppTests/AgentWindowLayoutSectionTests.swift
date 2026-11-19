@@ -458,17 +458,19 @@ extension AgentWindowD1Tests {
 
     /// #1646 (operator 2026-11-19: "the edit (without the layout suffix) and done buttons directly on the sidebar, right
     /// aligned"): the active Layouts row ends in a button "Edit" (VoiceOver "Edit layout"), "Done" while editing, its own
-    /// element after the row's name, its right edge under the header's "+"; the other rows have none. The single-pane
-    /// view (no active row) shows it nowhere. GUARD edit-only-on-the-active-row.
+    /// element after the row's name; the other rows have none. #1654: on the row's line, its right edge one sz(8) gap
+    /// before the ⌃N chip's column (the column's width measured, the row's sz(10) padding after it), so both rows keep one
+    /// width. The single-pane view (no active row) shows it nowhere. GUARD edit-only-on-the-active-row.
     @MainActor
     func testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly() throws {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let pixel = AXTreeSupport.devicePixel
-        var ratio1: CGFloat?   // #1648: the active row's width over the other row's at 1.0: the floor at 0.85 and 0.7
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
+            let column = NSHostingView(rootView: AgentSidebarRowView.digitColumn).fittingSize.width   // at this scale
+            XCTAssertGreaterThan(column, 0, "\(scale)")
             gate(true)
             let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
             let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
@@ -482,14 +484,13 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(rows.map(\.label), ["Review, Control 1", "api + docs, Control 2"], "the rows keep their labels (\(scale))")
             let other = try XCTUnwrap(rows.first), active = try XCTUnwrap(rows.last), button = try XCTUnwrap(edit.first)
             XCTAssertEqual(button.frame.midY, active.frame.midY, accuracy: 2 * pixel, "on the active row's line (\(scale))")
-            XCTAssertTrue(button.frame.minX >= active.frame.maxX - pixel, "after the row's name (\(scale)): \(active.frame) \(button.frame)")
-            let plus = try XCTUnwrap(unique(tree) { $0.label == "New layout" }.first)
-            XCTAssertEqual(button.frame.maxX, plus.frame.maxX, accuracy: 2 * pixel, "right-aligned under the + (\(scale))")
-            // the name keeps all the room the button leaves: row + button + its trailing sz(8) fill the other row's width
-            XCTAssertGreaterThanOrEqual(active.frame.width, other.frame.width - button.frame.width - sz(8) - 2 * pixel,
-                                        "the name is not pushed out (\(scale)): \(other.frame) \(active.frame) \(button.frame)")
-            let ratio = active.frame.width / max(other.frame.width, 1)
-            if let r1 = ratio1 { XCTAssertGreaterThanOrEqual(ratio, r1 - 0.02, "name width in proportion to 1.0 (\(scale))") } else { ratio1 = ratio }
+            XCTAssertTrue(button.frame.minX >= active.frame.minX + sz(10) - pixel, "inside the row (\(scale)): \(active.frame) \(button.frame)")
+            XCTAssertEqual(button.frame.maxX, active.frame.maxX - sz(10) - column - sz(8), accuracy: 2 * pixel,
+                           "right-aligned before the chip column (\(scale)): \(active.frame) \(button.frame) column \(column)")
+            // the button lies over the row's own room for it: the active row keeps the other row's width (the name's
+            // room is guarded in testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales)
+            XCTAssertEqual(active.frame.width, other.frame.width, accuracy: pixel, "one row width (\(scale)): \(other.frame) \(active.frame)")
+            XCTAssertEqual(active.frame.minX, other.frame.minX, accuracy: pixel, "\(scale)")
             let order = tree.filter { !$0.ignored }.map(\.label)
             let rowAt = try XCTUnwrap(order.firstIndex(of: "api + docs, Control 2")), editAt = try XCTUnwrap(order.firstIndex(of: "Edit layout"))
             XCTAssertLessThan(rowAt, editAt, "VoiceOver: the row, then its Edit (\(scale))")
@@ -502,6 +503,76 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, the section still built (\(scale))")
             let single = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
             XCTAssertFalse(single.contains { $0.label == "Edit layout" || $0.label == "Done editing layout" }, "no Edit in the view (\(scale))")
+        }
+    }
+
+    /// #1654: every probed part's frame in the never-shown sidebar window, by "<kind> <title>" (layout parts by the
+    /// layout's number), laid out until each of `want` reports (5 s ceiling), then twice more so the last frames stand.
+    @MainActor
+    private func sidebarProbes(_ m: AgentWindowModel, _ want: [String]) -> [String: CGRect] {
+        let box = PaneProbeBox()
+        AgentSidebarRowView.probe = { kind, title, r in box.seen["\(kind) \(title)"] = r }
+        defer { AgentSidebarRowView.probe = nil }
+        let (win, host) = AXTreeSupport.hosted(AgentSidebarView(model: m), CGSize(width: AgentWindowModel.fullSidebarWidth - sz(16), height: 900))
+        defer { win.close() }
+        func pass() { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        let deadline = Date().addingTimeInterval(5)
+        repeat { pass() } while want.contains { box.seen[$0] == nil } && Date() < deadline
+        pass(); pass()
+        XCTAssertFalse(win.isVisible, "never on screen")
+        return box.seen
+    }
+
+    /// #1654 (operator 2026-11-19: "why is the layout shortcut not in the same style like the other shortcut buttons? to
+    /// the right and with border etc like cmd + 1"), at 1.0, 0.85 and 0.7: each Layouts row's ⌃N is a keycap chip of a
+    /// session chip's height (the border and padding, not plain text) whose right edge is the session row's ⌘N chip's
+    /// of the same digit, to the pixel; the active row's Edit ends one sz(8) before its chip and after its name; an
+    /// inactive row's name ends before its chip; the long names keep their room (the active one loses only the Edit and
+    /// its gap, and in proportion to 1.0 at the smaller scales). VoiceOver: the rows read the name and "Control N", and no
+    /// element reads the chip. GUARD layout-chip-in-the-session-chip-column.
+    @MainActor
+    func testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales() throws {
+        _ = ThemeStore.shared   // seeds ThemeRuntime.scale from the prefs before it is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let pixel = AXTreeSupport.devicePixel
+        var ratio1: CGFloat?   // the active name's width over the other name's at 1.0: the floor at 0.85 and 0.7
+        for scale: CGFloat in [1.0, 0.85, 0.7] {
+            ThemeRuntime.scale = scale
+            gate(true)
+            let a = named(paneLayout([paneTarget("api")]), String(repeating: "review ", count: 12))
+            let b = named(paneLayout([paneTarget("api"), paneTarget("docs")]), String(repeating: "layout ", count: 12))
+            let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+            defer { m.close() }
+            m.setLayoutEditing(false)
+            XCTAssertGreaterThanOrEqual(m.numberedIDs.count, 2, "two numbered session rows (\(scale))")
+            let want = ["layoutChip 1", "layoutChip 2", "layoutName 1", "layoutName 2", "layoutEdit Edit", "digitChip 1", "digitChip 2"]
+            let f = sidebarProbes(m, want)
+            XCTAssertTrue(want.allSatisfy { f[$0] != nil }, "every part drawn (\(scale)): \(f.keys.sorted())")
+            for n in 1...2 {
+                let chip = try XCTUnwrap(f["layoutChip \(n)"]), session = try XCTUnwrap(f["digitChip \(n)"])
+                XCTAssertEqual(chip.maxX, session.maxX, accuracy: pixel,
+                               "⌃\(n)'s right edge is ⌘\(n)'s (\(scale)): \(chip) \(session)")
+                XCTAssertEqual(chip.height, session.height, accuracy: pixel, "a keycap chip, not plain text (\(scale)): \(chip) \(session)")
+                XCTAssertGreaterThan(chip.width, session.width / 2, "\(scale): \(chip) \(session)")
+            }
+            let chip1 = try XCTUnwrap(f["layoutChip 1"]), chip2 = try XCTUnwrap(f["layoutChip 2"])
+            let other = try XCTUnwrap(f["layoutName 1"]), active = try XCTUnwrap(f["layoutName 2"]), edit = try XCTUnwrap(f["layoutEdit Edit"])
+            XCTAssertEqual(edit.midY, chip2.midY, accuracy: 2 * pixel, "Edit on the chip's line (\(scale))")
+            XCTAssertLessThanOrEqual(edit.maxX, chip2.minX - sz(8) + pixel, "Edit before the chip, never over it (\(scale)): \(edit) \(chip2)")
+            XCTAssertLessThanOrEqual(active.maxX, edit.minX + pixel, "the name before the Edit (\(scale)): \(active) \(edit)")
+            XCTAssertLessThanOrEqual(other.maxX, chip1.minX + pixel, "the name before the chip (\(scale)): \(other) \(chip1)")
+            XCTAssertEqual(active.minX, other.minX, accuracy: pixel, "the names start at one x (\(scale))")
+            // the name keeps all the room the button leaves: the active name + the Edit + its sz(8) gap fill the other's
+            XCTAssertGreaterThanOrEqual(active.width, other.width - edit.width - sz(8) - 2 * pixel,
+                                        "the name is not pushed out (\(scale)): \(other) \(active) \(edit)")
+            let ratio = active.width / max(other.width, 1)
+            if let r1 = ratio1 { XCTAssertGreaterThanOrEqual(ratio, r1 - 0.02, "name width in proportion to 1.0 (\(scale))") } else { ratio1 = ratio }
+            let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
+            let labels = unique(tree) { $0.label.contains("Control ") && $0.role == "AXButton" }.map(\.label)
+            XCTAssertEqual(labels.count, 2, "the two rows read their name and key (\(scale)): \(labels)")
+            XCTAssertTrue(labels.last?.hasSuffix(", Control 2") == true, "\(scale): \(labels)")
+            XCTAssertFalse(tree.contains { !$0.ignored && ($0.reads("\u{2303}1") || $0.reads("\u{2303}2")) }, "no element reads the chip (\(scale))")
         }
     }
 
