@@ -1,0 +1,34 @@
+{
+ "entry": 1632,
+ "filter": "TranscriptIdleWorkTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "idle-publish",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "if r.grew || r.reopened || r.readStore { publish() } else { syncAsk(); evaluate() }",
+   "new": "publish()",
+   "expect": "killed"
+  },
+  {
+   "name": "idle-publish-grew",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "if r.grew || r.reopened || r.readStore { publish() }",
+   "new": "if r.reopened || r.readStore { publish() }",
+   "expect": "killed"
+  },
+  {
+   "name": "tick-tolerance",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "        timer?.tolerance = tickInterval / 2\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "age-tolerance",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        t.tolerance = every / 10\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
