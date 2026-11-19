@@ -2100,6 +2100,8 @@ tag from the now-released section and put it on the new top draft.
   proxy even when it does not answer, and can be triggered without the window via
   prosper://ccpool/takeover. (#1665)
 - ccpool keeps its usage record 35 days (was 14). (#1668)
+- ccpool writes its rotation events (bench, rotate, retire, throttle move, pin back, all benched)
+  per account to events-YYYY-MM-DD.jsonl beside its usage record. (#1667)
 
 ## v2.174.0
 

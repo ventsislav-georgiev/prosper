@@ -384,7 +384,7 @@ final class CCPoolUsageRecordTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let foreign = ["usage-2020-01-01.jsonl.bak", "usage-2020-01-01.json", "Usage-2020-01-01.jsonl", "usage-2020-1-1.jsonl",
                        "xusage-2020-01-01.jsonl", "notes.txt"]
-        for n in foreign + ["usage-2026-12-10.jsonl", "usage-2026-12-11.jsonl", "usage-2027-01-02.jsonl"] {
+        for n in foreign + ["usage-2026-12-10.jsonl", "usage-2026-12-11.jsonl", "usage-2026-12-12.jsonl", "usage-2027-01-02.jsonl"] {
             try Data("x\n".utf8).write(to: dir.appendingPathComponent(n))
         }
         // A folder that carries an own name is never removed.
@@ -392,7 +392,7 @@ final class CCPoolUsageRecordTests: XCTestCase {
         let w = CCPoolUsageRecord(directory: dir, logger: ThrottleLog())
         w.add(writerRow())
         w.stop()
-        XCTAssertEqual(names(dir), (foreign + ["usage-2020-01-03.jsonl", "usage-2027-01-02.jsonl", "usage-\(recDay).jsonl"]).sorted())
+        XCTAssertEqual(names(dir), (foreign + ["usage-2020-01-03.jsonl", "usage-2026-12-12.jsonl", "usage-2027-01-02.jsonl", "usage-\(recDay).jsonl"]).sorted())
     }
 
     func testRowOverTwoKiBIsNotWritten() throws {

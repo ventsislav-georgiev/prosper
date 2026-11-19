@@ -1,7 +1,9 @@
 import XCTest
 @testable import ProsperApp
 
-// #1666 (#1664 F4a): the event record writer alone (no proxy, no emit sites: those are #1667). Fake labels and tokens.
+// #1666 (#1664 F4a): the event record writer alone. Fake labels and tokens.
+// #1667 (F4b): the six emit sites through the proxy (CCPoolEventWireTests below): a fake upstream on an ephemeral
+// loopback port, fake secrets, a fixed store clock, the wait recorder installed FIRST, the store under the row's tempDir().
 
 private let evNow = 1_800_000_000.25
 /// evNow's UTC day.
@@ -127,7 +129,7 @@ final class CCPoolEventRecordTests: XCTestCase {
         let dir = tempDir().appendingPathComponent("events")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let foreign = ["events-2020-01-01.jsonl.bak", "Events-2020-01-01.jsonl", "events-2020-1-1.jsonl", "usage-2020-01-01.jsonl", "notes.txt"]
-        for n in foreign + ["events-2026-12-10.jsonl", "events-2026-12-11.jsonl", "events-2027-01-02.jsonl"] {
+        for n in foreign + ["events-2026-12-10.jsonl", "events-2026-12-11.jsonl", "events-2026-12-12.jsonl", "events-2027-01-02.jsonl"] {
             try Data("x\n".utf8).write(to: dir.appendingPathComponent(n))
         }
         // A folder that carries an own name is never removed.
@@ -135,7 +137,7 @@ final class CCPoolEventRecordTests: XCTestCase {
         let w = CCPoolEventRecord(directory: dir, logger: ThrottleLog())
         w.add(row())
         w.stop()
-        XCTAssertEqual(names(dir), (foreign + ["events-2020-01-03.jsonl", "events-2027-01-02.jsonl", "events-\(evDay).jsonl"]).sorted())
+        XCTAssertEqual(names(dir), (foreign + ["events-2020-01-03.jsonl", "events-2026-12-12.jsonl", "events-2027-01-02.jsonl", "events-\(evDay).jsonl"]).sorted())
     }
 
     func testKeepDaysIsTheUsageConstant() {
@@ -184,5 +186,139 @@ final class CCPoolEventRecordTests: XCTestCase {
         w.stop()
         let t = try String(contentsOf: dir.appendingPathComponent("events-\(evDay).jsonl"), encoding: .utf8)
         XCTAssertEqual(t, try text(fits) + "\n")
+    }
+}
+
+/// #1667: one fake upstream reply per token, in order; a token with nothing left answers a plain 200 without rate-limit headers.
+final class EventUpstream: @unchecked Sendable {
+    enum Step { case spent, full, throttle }
+    static let reset = 1_800_003_600
+    private let lock = NSLock()
+    private var script: [String: [Step]] = [:]
+    func set(_ token: String, _ steps: [Step]) { lock.withLock { script[token] = steps } }
+
+    func reply(_ head: CCPoolRequestHead) -> CCPoolFakeServer.Reply {
+        let token = String((head.header("authorization") ?? "").dropFirst("Bearer ".count))
+        let step = lock.withLock { () -> Step? in script[token]?.isEmpty == false ? script[token]?.removeFirst() : nil }
+        let body = Data(#"{"type":"message","content":[{"type":"text","text":"body-byte-example"}]}"#.utf8)
+        func limit(_ status: String, _ util: String) -> [(String, String)] {
+            [("5h-status", status), ("5h-utilization", util), ("5h-reset", String(Self.reset))]
+                .map { ("anthropic-ratelimit-unified-\($0.0)", $0.1) } + [("content-type", "application/json")]
+        }
+        switch step {
+        case .spent?: return .respond(429, limit("rejected", "1.0"), body)
+        case .full?: return .respond(200, limit("allowed", "1.0"), body)
+        case .throttle?: return .respond(429, [("content-type", "application/json")], body)
+        case nil: return .respond(200, [("content-type", "application/json")], body)
+        }
+    }
+}
+
+final class CCPoolEventWireTests: XCTestCase {
+    let orgA = "Example Org A", orgB = "Example Org B"
+    let sid = "sess-example-1"
+    /// What must never reach an event line: the fake tokens, the client's credential and the upstream body.
+    let never = ["tok-example", "client-token", "Bearer", "body-byte-example", "content"]
+
+    struct Rig {
+        let up: EventUpstream
+        let store: CCPoolStore
+        let service: CCPoolService
+        let port: UInt16
+        func post(_ sid: String? = nil) -> CCPoolClientResponse? {
+            var h = [("content-type", "application/json"), ("authorization", "Bearer client-token-should-be-replaced")]
+            if let sid { h.append(("X-Claude-Code-Session-Id", sid)) }
+            return CCPoolTestClient.request(port: port, headers: h, body: throttleWork)
+        }
+        var file: URL { service.eventRecord.directory.appendingPathComponent("events-\(evDay).jsonl") }
+        /// Flushes the writer, then the day file's lines.
+        func rows() -> [String] {
+            service.eventRecord.flush()
+            return ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        }
+    }
+
+    private func rig(_ labels: [String]) throws -> Rig {
+        let rec = ThrottleWaitRecorder()
+        let saved = CCPoolConnection.throttleWait
+        CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
+        addTeardownBlock { CCPoolConnection.throttleWait = saved }
+        let up = EventUpstream()
+        let server = try CCPoolFakeServer { h, _ in up.reply(h) }
+        XCTAssertNotEqual(server.port, 0)
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"), clock: { evNow }, logger: ThrottleLog())
+        let secrets = CCPoolMemorySecrets()
+        for (i, l) in labels.enumerated() { _ = try store.addAccount(label: l, token: "tok-example-\(i)", secrets: secrets) }
+        store.mutate { $0.current = labels.first }
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:\(server.port)")!
+        cfg.timeout = 10
+        let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: ThrottleLog())
+        guard case .running(let p) = service.start(), p != 0 else {
+            XCTFail("proxy did not start: \(service.status)")
+            throw XCTSkip("no listener")
+        }
+        addTeardownBlock { service.stop(); server.stop() }
+        return Rig(up: up, store: store, service: service, port: p)
+    }
+
+    private func assertClean(_ rows: [String], file: StaticString = #filePath, line: UInt = #line) {
+        for r in rows { for n in never { XCTAssertFalse(r.contains(n), "\(n) in \(r)", file: file, line: line) } }
+    }
+
+    private let lead = #"{"v":1,"t":1800000000.250,"ev":"#
+
+    func testBenchThenRotateWritesExactlyTheseRows() throws {
+        let r = try rig([orgA, orgB])
+        XCTAssertEqual(r.service.eventRecord.directory, r.store.directory.appendingPathComponent("events", isDirectory: true),
+                       "the events folder sits beside usage/ under the test's own store folder")
+        r.up.set("tok-example-0", [.spent])
+        XCTAssertEqual(r.post()?.status, 200)
+        let rows = r.rows()
+        XCTAssertEqual(rows, [
+            lead + #""bench","acct":"Example Org A","claim":"five_hour","reset":1800003600}"#,
+            lead + #""rotate","from":"Example Org A","to":"Example Org B"}"#,
+        ])
+        assertClean(rows)
+        let d = try FileManager.default.attributesOfItem(atPath: r.service.eventRecord.directory.path)
+        let f = try FileManager.default.attributesOfItem(atPath: r.file.path)
+        XCTAssertEqual((d[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+        XCTAssertEqual((f[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testFullReplyWritesRetire() throws {
+        let r = try rig([orgA, orgB])
+        r.up.set("tok-example-0", [.full])
+        XCTAssertEqual(r.post()?.status, 200)
+        XCTAssertEqual(r.rows(), [lead + #""retire","acct":"Example Org A","claim":"five_hour","reset":1800003600}"#])
+    }
+
+    func testEveryAccountBenchedWritesAllBenched() throws {
+        let r = try rig([orgA])
+        r.up.set("tok-example-0", [.spent])
+        XCTAssertEqual(r.post()?.status, 429)
+        let rows = r.rows()
+        XCTAssertEqual(rows, [
+            lead + #""bench","acct":"Example Org A","claim":"five_hour","reset":1800003600}"#,
+            lead + #""rotate","from":"Example Org A"}"#,
+            lead + #""all-benched","reset":1800003600}"#,
+        ])
+        assertClean(rows)
+    }
+
+    func testThrottleMoveThenPinBackWritesBothWithTheSession() throws {
+        let r = try rig([orgA, orgB])
+        XCTAssertEqual(r.post(sid)?.status, 200, "pins the session on A")
+        XCTAssertEqual(r.rows(), [], "a plain reply writes no event")
+        r.up.set("tok-example-0", [.throttle, .throttle, .throttle, .throttle])
+        r.up.set("tok-example-1", [.throttle])
+        XCTAssertEqual(r.post(sid)?.status, 429)
+        let rows = r.rows()
+        XCTAssertEqual(rows, [
+            lead + #""throttle-move","from":"Example Org A","to":"Example Org B","sess":"sess-example-1/"}"#,
+            lead + #""pin-back","acct":"Example Org A","sess":"sess-example-1/"}"#,
+        ])
+        assertClean(rows)
     }
 }

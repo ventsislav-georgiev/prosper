@@ -77,6 +77,8 @@ final class CCPoolService: @unchecked Sendable {
     let upstream = CCPoolUpstream()
     /// #1482: the usage record writer, owned here and stopped (flushed) with the service.
     let usageRecord: CCPoolUsageRecord
+    /// #1667: the event record writer, in its own "events" folder beside usage/, stopped (flushed) with the service.
+    let eventRecord: CCPoolEventRecord
     private let queue = DispatchQueue(label: "com.prosper.ccpool.listener")
     private let lock = NSLock()
     private var listener: NWListener?
@@ -101,6 +103,7 @@ final class CCPoolService: @unchecked Sendable {
         self.secrets = secrets
         self.logger = logger
         usageRecord = CCPoolUsageRecord(directory: store.usageDirectory, logger: logger)
+        eventRecord = CCPoolEventRecord(directory: store.directory.appendingPathComponent("events", isDirectory: true), logger: logger)
     }
 
     var status: Status { lock.withLock { _status } }
@@ -501,13 +504,15 @@ final class CCPoolService: @unchecked Sendable {
         conns.forEach { c in c.queue.async { c.close() } }
         upstream.invalidateAll()
         usageRecord.stop()
+        eventRecord.stop()
     }
 
     private func accept(_ nw: NWConnection) {
         let port: UInt16
         if case .running(let p) = status { port = p } else { port = 0 }
         let c = CCPoolConnection(conn: nw, config: config, store: store, secrets: secrets, logger: logger,
-                                 upstream: upstream, boundPort: port, record: usageRecord) { [weak self] id in
+                                 upstream: upstream, boundPort: port, record: usageRecord,
+                                 events: eventRecord) { [weak self] id in
             self?.lock.withLock { _ = self?.connections.removeValue(forKey: id) }
         }
         lock.withLock { connections[ObjectIdentifier(c)] = c }

@@ -170,6 +170,8 @@ final class CCPoolConnection: @unchecked Sendable {
     private let boundPort: UInt16
     private let onClose: @Sendable (ObjectIdentifier) -> Void
     private let record: CCPoolUsageRecord?
+    /// #1667: the event record (bench, rotate, retire, throttle-move, pin-back, all-benched), by account label.
+    private let events: CCPoolEventRecord?
     private var closed = false
 
     private var buffer = Data()
@@ -211,7 +213,7 @@ final class CCPoolConnection: @unchecked Sendable {
     private var routed = "pick"
 
     init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
-         upstream: CCPoolUpstream, boundPort: UInt16, record: CCPoolUsageRecord? = nil,
+         upstream: CCPoolUpstream, boundPort: UInt16, record: CCPoolUsageRecord? = nil, events: CCPoolEventRecord? = nil,
          onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
         self.conn = conn
         self.config = config
@@ -221,6 +223,7 @@ final class CCPoolConnection: @unchecked Sendable {
         self.upstream = upstream
         self.boundPort = boundPort
         self.record = record
+        self.events = events
         self.onClose = onClose
     }
 
@@ -407,9 +410,15 @@ final class CCPoolConnection: @unchecked Sendable {
     }
 
     /// #1262: `last` is set only for the one move: nowhere to go then ends the request with that 429, never a walk.
-    private func attempt(moving last: CCPoolExchange? = nil) {
+    /// #1667: `rotatingFrom` is the benched account a rotation left; its rotate row (and a move's row) is written here,
+    /// where the destination is known (`to` nil: nowhere to go, the all-benched or pin-back row follows).
+    private func attempt(moving last: CCPoolExchange? = nil, rotatingFrom: String? = nil) {
         guard !closed else { return }
-        guard attempts < maxAttempts else { return noAccounts() }
+        func went(_ to: String?) {
+            if let rotatingFrom { event(.rotate, from: rotatingFrom, to: to) }
+            if let last { event(.throttleMove, from: last.label, to: to) }
+        }
+        guard attempts < maxAttempts else { went(nil); return noAccounts() }
         attempts += 1
         let now = store.now
         // #1259: a keyed request follows (and pins) its session; no usable key = `pick` as before, nothing changed.
@@ -449,6 +458,7 @@ final class CCPoolConnection: @unchecked Sendable {
             followedPin = followed || last != nil
             routed = followed ? "pin" : "place"
         }
+        went(picked)
         guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
         if anyway { log.note(label, "no other account is routable; trying a rejected token") }
         tried.insert(label)
@@ -566,16 +576,18 @@ final class CCPoolConnection: @unchecked Sendable {
                 return decide(.allow)
             }
             log.note(label, line, private: privateDetail)
-            store.mutate { st in
-                guard let owner = st.label(ofID: id) else { return }
+            let benched = store.mutate { st -> String? in
+                guard let owner = st.label(ofID: id) else { return nil }
                 for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
+                return owner
             }
+            if let benched { for (claim, until) in spent.sorted(by: { $0.key < $1.key }) { event(.bench, acct: benched, claim: claim, reset: until) } }
             let claims = spent.keys.sorted().joined(separator: ",")
             if replayable {
                 log.note(label, "out on \(claims); rotating to another account and retrying request")
                 exchange = nil
                 decide(.cancel)
-                return attempt()
+                return attempt(rotatingFrom: label)
             }
             // Errata C1: the body went upstream as a stream and cannot be sent again.
             log.note(label, "out on \(claims); request body above the replay cap, passing the 429 through")
@@ -590,13 +602,15 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             // Retire before streaming: the body can take a minute to drain (B15).
             let spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
-            store.mutate { st in
-                guard let owner = st.label(ofID: id) else { return }
+            let retired = store.mutate { st -> String? in
+                guard let owner = st.label(ofID: id) else { return nil }
                 st.recordResets(owner, limits: limits, now: now)
                 for (claim, until) in spent { st.bench(owner, claim: claim, until: until, now: now) }
+                return owner
             }
             if !spent.isEmpty {
                 log.note(label, "now full on \(spent.keys.sorted().joined(separator: ",")); retired before it could reject anything")
+                if let retired { for (claim, until) in spent.sorted(by: { $0.key < $1.key }) { event(.retire, acct: retired, claim: claim, reset: until) } }
             }
         }
         writeHead(response.statusCode, headers)
@@ -709,6 +723,13 @@ final class CCPoolConnection: @unchecked Sendable {
         addRow(acct: acct, st: st, done: true, usage: nil, lim: [:])
     }
 
+    /// #1667: one event row, handed to the writer's own queue. Labels only; `sess` is the pin key, written only when valid.
+    private func event(_ ev: CCPoolEventRow.Kind, acct: String? = nil, from: String? = nil, to: String? = nil,
+                       claim: String? = nil, reset: Int? = nil) {
+        events?.add(CCPoolEventRow(t: store.now, ev: ev, acct: acct, from: from, to: to, claim: claim, reset: reset,
+                                   sess: head.flatMap(Self.pinKey)))
+    }
+
     private func addRow(acct: String, st: Int, done: Bool, usage: CCPoolTokenUsage?, lim: [String: CCPoolLimit]) {
         guard let record else { return }
         let end = store.now
@@ -784,6 +805,7 @@ final class CCPoolConnection: @unchecked Sendable {
             store.mutate { st in if let owner = st.label(ofID: id) { st.pin(key, to: owner, now: now) } }
         }
         log.note(first.label, "conversation pinned back after its one move")
+        event(.pinBack, acct: first.label)
         if let answer { answerThrottle(answer) }
     }
 
@@ -803,6 +825,7 @@ final class CCPoolConnection: @unchecked Sendable {
             hint = " Earliest reset \(f.string(from: Date(timeIntervalSince1970: Double(when))))."
         }
         log.note(nil, "every account is benched.\(hint)")
+        event(.allBenched, reset: when)
         recordAnswer(429, acct: "")
         fail(429, "all pooled accounts are rate limited.\(hint)", type: "rate_limit_error")
     }
