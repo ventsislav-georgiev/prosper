@@ -2049,6 +2049,9 @@ tag from the now-released section and put it on the new top draft.
   coalesce their wakeups, which saves a little battery. (#1637)
 - X-ray's live follow no longer reads and decodes its stream on the main thread, so a busy session's
   X-ray updates no longer make the app stutter. (#1638)
+- Prosper's idle timers (chat model release, helper keep-awake expiry and idle exit, a few one-
+  second UI settles) now let macOS batch their wakeups, saving a little battery; each fires at most
+  a tenth of its delay later. (#1640)
 
 ## v2.174.0
 

@@ -9,6 +9,7 @@
 
 import AppKit
 import os
+import ProsperHelperProtocol
 import SwiftUI
 
 /// Key only while expanded (Escape needs it); collapsed it never takes focus.
@@ -1103,7 +1104,7 @@ final class AgentIslandController {
             id = refusalSeq
             refusalChain[key] = id
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        SlackTimer.onMain(after: 1) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.refusalChain[key] == id else { return }
                 guard let store = self.store, store.actions[key] == text else {
@@ -1214,7 +1215,7 @@ final class AgentIslandController {
     /// all, which writes no dir line here) ended, checked each second; jobs are bounded, so is this.
     /// `over`: the dir line then; a line written since (the island's own job's summary) stays.
     private func killTallyAfter(_ dirKey: AgentSessionKey, _ line: String, over: String?) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        SlackTimer.onMain(after: 1) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, let store = self.store, store.actions[dirKey] == over else { return }
                 if self.runner.hasJob(dirKey) { return self.killTallyAfter(dirKey, line, over: over) }

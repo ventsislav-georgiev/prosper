@@ -6,6 +6,7 @@ import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
 import notify
+import ProsperHelperProtocol
 import SystemConfiguration
 import os
 
@@ -915,7 +916,7 @@ final class SystemEventWatchers {
     /// second chance (nothing else fires). The re-check is a no-op on the common path.
     private func checkLidNowAndSettled() {
         checkLid()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+        SlackTimer.onMain(after: 1) { [weak self] in
             MainActor.assumeIsolated { self?.checkLid() }
         }
     }

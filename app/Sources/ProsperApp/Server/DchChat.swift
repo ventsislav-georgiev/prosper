@@ -38,10 +38,12 @@ final class DchChat: @unchecked Sendable {
     var macAgentBusy: @MainActor @Sendable () -> Bool = { AgentController.shared.isActive }
     var macChatOpen: @MainActor @Sendable () -> Bool = { ChatWindow.shared.isOpen }
     var idleDelay: TimeInterval = 300
+    /// #1640: 10 % slack on the idle release (minutes away; nobody sees the moment). Never changes the delay.
+    static func idleTolerance(_ delay: TimeInterval) -> Duration { .seconds(delay.isFinite && delay > 0 ? delay / 10 : 0) }
     /// Runs `fire` after `delay` seconds; tests capture it and fire by hand.
     var schedule: @Sendable (_ delay: TimeInterval, _ fire: @escaping @Sendable () async -> Void) -> Void = { delay, fire in
         Task {
-            try? await Task.sleep(for: .seconds(delay))
+            try? await Task.sleep(for: .seconds(delay), tolerance: DchChat.idleTolerance(delay))
             await fire()
         }
     }

@@ -1,6 +1,7 @@
 import Combine
 import XCTest
 @testable import ProsperApp
+import ProsperHelperProtocol
 
 /// #1632 (perf audit): an open transcript pane whose file is quiet does no SwiftUI work per tick, and the Agents window's
 /// timers carry a tolerance so macOS can coalesce their wakeups. Rows count publishes and sends, never time.
@@ -116,5 +117,41 @@ final class OneShotTimerToleranceTests: XCTestCase {
     func testTheRehideTimerHasATolerance() {
         let t = MenuBarManager.makeRehideTimer(10) {}
         XCTAssertEqual(t.tolerance, 1, accuracy: 0.001)
+    }
+}
+
+/// #1640: the remaining slack-OK one-shots carry 10 % slack. Builders are read unarmed; per-site rows read the site's source.
+final class SlackTimerToleranceTests: XCTestCase {
+    private func source(_ rel: String) throws -> String {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: app.appendingPathComponent(rel), encoding: .utf8)
+    }
+
+    func testTheBuilderLeewayIsATenthOfTheDelay() {
+        XCTAssertEqual(SlackTimer.leeway(1), .nanoseconds(100_000_000))
+        XCTAssertEqual(SlackTimer.leeway(120), .seconds(12))
+        XCTAssertEqual(SlackTimer.leeway(.infinity), .nanoseconds(0))
+        XCTAssertEqual(SlackTimer.make(queue: .main, delay: 10) {}.leeway, .seconds(1))
+    }
+
+    func testTheHelperHoldAndIdleExitTimersUseTheSlackBuilder() throws {
+        let s = try source("Sources/ProsperHelper/main.swift")
+        XCTAssertTrue(s.contains("SlackTimer.make(queue: q, delay: TimeInterval(remoteHoldTTLSeconds))"))
+        XCTAssertTrue(s.contains("SlackTimer.make(queue: q, delay: TimeInterval(idleExitSeconds))"))
+        XCTAssertFalse(s.contains("t.schedule(deadline: .now() + .seconds("))
+    }
+
+    func testTheChatIdleSleepHasATolerance() throws {
+        XCTAssertEqual(DchChat.idleTolerance(300), .seconds(30))
+        XCTAssertTrue(try source("Sources/ProsperApp/Server/DchChat.swift").contains("tolerance: DchChat.idleTolerance(delay)"))
+    }
+
+    func testTheOneSecondAsyncAftersUseTheSlackTimer() throws {
+        for f in ["Extensions/ExtensionSystemServices.swift", "AgentIsland/AgentIslandController.swift", "AudioMixer/AudioInputDeviceManager.swift"] {
+            let s = try source("Sources/ProsperApp/" + f)
+            XCTAssertTrue(s.contains("SlackTimer.onMain(after:"), f)
+            XCTAssertFalse(s.contains("DispatchQueue.main.asyncAfter(deadline: .now() + 1)"), f)
+        }
+        XCTAssertFalse(try source("Sources/ProsperApp/AudioMixer/AudioInputDeviceManager.swift").contains("asyncAfter(deadline: .now() + (Self.listenerRefreshInterval"))
     }
 }

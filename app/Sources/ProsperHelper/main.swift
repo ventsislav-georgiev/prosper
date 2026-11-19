@@ -354,16 +354,14 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
         // live timer does not retract one — a stale expiry sneaking in right after a
         // refresh would flap the hold. One timer alloc per beat is nothing.
         cancelRemoteHoldExpiry_locked()
-        let t = DispatchSource.makeTimerSource(queue: q)
-        t.schedule(deadline: .now() + .seconds(remoteHoldTTLSeconds))
-        t.setEventHandler { [weak self] in
+        let t = SlackTimer.make(queue: q, delay: TimeInterval(remoteHoldTTLSeconds)) { [weak self] in
             guard let self else { return }
             _ = self.core.setRemoteHold(false)
             dtrace("remoteHold EXPIRED: \(remoteHoldTTLSeconds)s with no heartbeat → sleep re-enabled (app gone / network dropped?)")
             self.remoteHoldTimer = nil
         }
-        t.resume()
-        remoteHoldTimer = t
+        t.source.resume()
+        remoteHoldTimer = t.source
     }
 
     private func cancelRemoteHoldExpiry_locked() {
@@ -424,9 +422,7 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
     // override is already off). Must run on `q`.
     private func armIdleExit_locked(stayingSince: ContinuousClock.Instant? = nil) {
         cancelIdleExit_locked()
-        let t = DispatchSource.makeTimerSource(queue: q)
-        t.schedule(deadline: .now() + .seconds(idleExitSeconds))
-        t.setEventHandler { [weak self] in
+        let t = SlackTimer.make(queue: q, delay: TimeInterval(idleExitSeconds)) { [weak self] in
             guard let self else { exit(0) }
             // Remote-wake keeps the daemon resident with zero clients; never exit
             // while it's armed. Otherwise defer to the lid core's idle rule.
@@ -440,8 +436,8 @@ final class Helper: NSObject, ProsperHelperProtocol, NSXPCListenerDelegate, @unc
             }
             self.core.idleFired()
         }
-        t.resume()
-        idleTimer = t
+        t.source.resume()
+        idleTimer = t.source
     }
 
     private func cancelIdleExit_locked() {

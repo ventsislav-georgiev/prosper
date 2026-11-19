@@ -9,6 +9,7 @@ import AppKit
 import AudioToolbox
 import CoreAudio
 import Darwin
+import ProsperHelperProtocol
 
 struct MixerInputDevice: Identifiable, Equatable {
     let id: String
@@ -180,7 +181,7 @@ final class AudioInputDeviceManager: ObservableObject {
         }
         guard !refreshPending else { return }
         refreshPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + (Self.listenerRefreshInterval - elapsed)) { [weak self] in
+        SlackTimer.onMain(after: Self.listenerRefreshInterval - elapsed) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.refreshPending = false
