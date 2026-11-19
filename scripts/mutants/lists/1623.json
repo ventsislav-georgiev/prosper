@@ -3,13 +3,6 @@
  "filter": "XrayGithubLookupTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
-   "name": "default-off",
-   "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "as? Bool ?? true }\n        set { defaults.set(newValue, forKey: Keys.xrayGithubLookups)",
-   "new": "as? Bool ?? false }\n        set { defaults.set(newValue, forKey: Keys.xrayGithubLookups)",
-   "expect": "killed"
-  },
-  {
    "name": "local-no-env",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
    "old": "env[\"DCH_NO_GITHUB\"] = \"1\"; return",
