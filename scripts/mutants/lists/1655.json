@@ -1,0 +1,55 @@
+{
+ "entry": 1655,
+ "filter": "XrayGridMarksMemoTests|XrayGridMarksTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "M1-per-line-prepare",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        misses += 1\n",
+   "new": "        misses += 1\n        prepare()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-memo-ignores-refs",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        if v != version {\n",
+   "new": "        if version == nil {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-stale-applied",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard let self, g == self.generation else { return }",
+   "new": "guard let self else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-compute-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        XrayGridMarksView.queue.async {\n",
+   "new": "        DispatchQueue.main.async {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-precheck-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "            if ascii, !e.ascii ||",
+   "new": "            if false, ascii, !e.ascii ||",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-memo-unbounded",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        if lines.count >= cap { lines = [:] }\n",
+   "new": "        if false { lines = [:] }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-output-no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        generation += 1   // #1655: a compute in flight read the old text\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
