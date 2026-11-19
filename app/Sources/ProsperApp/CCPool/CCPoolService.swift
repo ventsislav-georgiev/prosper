@@ -30,8 +30,9 @@ struct CCPoolServiceConfig: Sendable {
     /// ties it to the socket. The default only reads (libproc).
     var listensOn: @Sendable (_ pid: pid_t, _ port: UInt16) -> Bool = CCPoolService.listensOnLoopback
     /// #1660/#1665: how long a signalled ccpool gets to close its listening socket (a Python proxy drains its open
-    /// streams first), and how often listensOn is asked meanwhile.
-    var takeOverCeiling: TimeInterval = 30
+    /// streams first), and how often listensOn is asked meanwhile. 600 s because a draining
+    /// proxy finishes long streams (minutes); giving up early leaves the port empty (an outage).
+    var takeOverCeiling: TimeInterval = 600
     var takeOverPoll: TimeInterval = 0.25
     /// #1665: this user's pids, scanned for the port's listener when the health answer names none. Empty under
     /// XCTest, so no test reads a real process's argv.
@@ -284,7 +285,7 @@ final class CCPoolService: @unchecked Sendable {
     /// listens on the port (config.listensOn). #1665: its respawn loop (a shell parent running
     /// ccpool_proxy.py) gets SIGTERM first. Never SIGKILL, never by name. Blocks up to probe + ceiling +
     /// start: off main only.
-    func takeOver(pid wanted: Int?, bindRetry: TimeInterval = 3) -> TakeOver {
+    func takeOver(pid wanted: Int?, bindRetry: TimeInterval = 3, stillWanted: @Sendable () -> Bool = { true }) -> TakeOver {
         if case .running = status { return .started(status) }
         guard config.port != 0, Self.refusalUnderTest(config) == nil,
               case .ccpool(let pid?, _) = probeHolder(), wanted == nil || pid == wanted else {
@@ -307,14 +308,22 @@ final class CCPoolService: @unchecked Sendable {
         // #1665: wait on the socket, not the health answer: a draining proxy stops answering but keeps its LISTEN socket.
         let deadline = Date().addingTimeInterval(config.takeOverCeiling)
         while config.listensOn(p, config.port) {
+            // The wait holds the life cycle's queue: a toggle-off or Restart behind it must not end in a bind.
+            guard stillWanted() else { return abandoned() }
             guard Date() < deadline else {
                 _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
                 return .didNotStop(pid: pid)
             }
             Thread.sleep(forTimeInterval: config.takeOverPoll)
         }
+        guard stillWanted() else { return abandoned() }
         // A new holder (another ccpool, another program) is reported by start()'s own probe.
         return .started(start(bindRetry: bindRetry))
+    }
+
+    private func abandoned() -> TakeOver {
+        logger.note(nil, "takeover abandoned: the proxy should no longer run")
+        return .started(status)
     }
 
     /// #1665: the health probe, and when it names no ccpool pid (no answer while draining, an answer without a pid),

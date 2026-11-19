@@ -54,7 +54,7 @@ final class CCPoolLifecycle: @unchecked Sendable {
     func takeOver(pid: Int?) async -> CCPoolService.TakeOver {
         await withCheckedContinuation { (done: CheckedContinuation<CCPoolService.TakeOver, Never>) in
             queue.async { [self] in
-                done.resume(returning: shouldRun ? service.takeOver(pid: pid) : .started(settleNow(restart: false)))
+                done.resume(returning: shouldRun ? service.takeOver(pid: pid, stillWanted: { [self] in shouldRun }) : .started(settleNow(restart: false)))
             }
         }
     }

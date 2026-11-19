@@ -100,6 +100,25 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(listens.calls, 3, "pre-signal check, one tick still listening, one tick closed")
     }
 
+    func testTakeOverStopsWaitingAndStartsNothingWhenTheProxyIsNoLongerWanted() {
+        let port = freePort()
+        let probe = CCPoolProbeScript([.ccpool(pid: 4242, impl: "python"), .free])
+        let signals = CCPoolSignalRecorder()
+        let polls = CCPoolListenScript(listening: 1000)  // never closes its socket
+        let svc = service(port: port, probe: probe, signals: signals, listens: { _, _ in polls.next() }, ceiling: 30)
+        let wanted = CCPoolListenScript(listening: 3)  // wanted at three checks, then a toggle-off
+        let began = Date()
+        XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0, stillWanted: { wanted.next() }), .started(svc.status))
+        XCTAssertLessThan(Date().timeIntervalSince(began), 5, "the loop exits within a tick, not at the ceiling")
+        XCTAssertEqual(probe.calls, 1, "no start: start's own probe never ran")
+        XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"])
+        if case .running = svc.status { XCTFail("nothing bound") }
+    }
+
+    func testProcessArgvOfThisProcessIsItsCommandLine() {
+        XCTAssertEqual(CCPoolService.processArgv(getpid()), CommandLine.arguments)
+    }
+
     func testTakeOverNeverSignalsAHolderTheReprobeDidNotName() {
         let port = freePort()
         let rows: [(String, CCPoolPortProbe.Result, CCPoolService.TakeOver)] = [
@@ -322,7 +341,7 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.running(port: port)))
         XCTAssertEqual(listens.calls, 6, "no start until listensOn flips; one call per tick, not a busy loop")
         XCTAssertEqual(probe.calls, 2, "re-probe and start's own probe only: the wait never asks the health path")
-        XCTAssertEqual(CCPoolServiceConfig().takeOverCeiling, 30, "a draining proxy gets 30 s by default")
+        XCTAssertEqual(CCPoolServiceConfig().takeOverCeiling, 600, "a draining proxy gets 600 s by default")
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"])
     }
 
