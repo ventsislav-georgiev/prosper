@@ -1,0 +1,41 @@
+{
+ "entry": 1656,
+ "filter": "AgentWindowD1Tests/testPaneCaret|AgentWindowD1Tests/testPaneFocusSwitch|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "attach-no-false",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if !libghosttyFocus(responder: window?.firstResponder === self) { unfocusSurface() }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-true-every-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if !libghosttyFocus(responder: window?.firstResponder === self) { unfocusSurface() }\n",
+   "new": "        _ = super.becomeFirstResponder()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "key-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "responder && window?.isKeyWindow == true && owner?.paneFocused() != false",
+   "new": "responder && owner?.paneFocused() != false",
+   "expect": "killed"
+  },
+  {
+   "name": "become-unkeyed-keeps-true",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if !libghosttyFocus(responder: ok) { unfocusSurface() }",
+   "new": "        _ = ok",
+   "expect": "killed"
+  },
+  {
+   "name": "no-false-on-switch",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "                w.makeFirstResponder(nil)\n",
+   "new": "                _ = w\n",
+   "expect": "killed"
+  }
+ ]
+}
