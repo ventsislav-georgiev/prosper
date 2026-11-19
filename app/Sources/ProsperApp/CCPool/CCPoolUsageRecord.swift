@@ -44,7 +44,7 @@ struct CCPoolUsageRow: Equatable, Sendable {
         }
     }
 
-    private static func quote(_ s: String) -> String {
+    static func quote(_ s: String) -> String {
         let d = (try? JSONSerialization.data(withJSONObject: s, options: [.fragmentsAllowed, .withoutEscapingSlashes])) ?? Data("\"\"".utf8)
         return String(decoding: d, as: UTF8.self)
     }
