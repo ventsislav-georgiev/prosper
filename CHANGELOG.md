@@ -2095,8 +2095,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: each Layouts row now shows the same working or idle mark as the session rows
   (working when any of its sessions is working), so layout names line up with the session names.
   (#1661)
-- ccpool: "Stop ccpool and start" now also stops the Python ccpool's restart loop, waits (up to 30
-  s) for it to finish its open requests and release the port before starting, recognizes the Python
+- ccpool: "Stop ccpool and start" now also stops the Python ccpool's restart loop, waits (up to 10
+  minutes) for it to finish its open requests and release the port before starting, recognizes the Python
   proxy even when it does not answer, and can be triggered without the window via
   prosper://ccpool/takeover. (#1665)
 - ccpool keeps its usage record 35 days (was 14). (#1668)
