@@ -131,6 +131,10 @@ def filter_problems(flt, root):
                 with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
                     src += fh.read()
     errs = []
+    try:
+        re.compile(flt)
+    except re.error as e:
+        errs.append(f"filter is not a valid regex: {e}")
     alts = []
     for alt in re.split(r"\|(?![^()]*\))", flt):  # split on | outside parentheses
         g = re.fullmatch(r"(\w+)/\((.*)\)", alt)

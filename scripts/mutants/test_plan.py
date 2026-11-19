@@ -73,5 +73,21 @@ class SincePlan(unittest.TestCase):
         self.assertEqual(self.kept(None), ["1.json", "2.json", "3.json"])
 
 
+class FilterRegex(unittest.TestCase):
+    def problems(self, flt):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "app", "Tests"))
+            with open(os.path.join(d, "app", "Tests", "A.swift"), "w") as fh:
+                fh.write("final class FooTests {}\n")
+            return run.filter_problems(flt, d)
+
+    def test_unbalanced_filter_is_a_problem(self):
+        p = self.problems("FooTests|(FooTests|FooTests)|FooTests)")
+        self.assertEqual(len([e for e in p if e.startswith("filter is not a valid regex: ")]), 1)
+
+    def test_valid_filter_has_no_problem(self):
+        self.assertEqual(self.problems("FooTests|(FooTests)"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
