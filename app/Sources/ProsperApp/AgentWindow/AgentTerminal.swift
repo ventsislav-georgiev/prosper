@@ -992,10 +992,10 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// #1568: a plain Esc while a card is up closes it (XrayGridMarksView.escape) and goes no further; with no card it
     /// goes on to libghostty and the pty as before.
     override func keyDown(with event: NSEvent) {
+        XrayRecaps.shared.dismiss()   // #1625/#1630: any keystroke into the terminal ends the recap strip, an Esc that closes a card too
         if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {
             return
         }
-        XrayRecaps.shared.dismiss()   // #1625: a keystroke into the terminal ends the recap strip
         passedKey?(event)
         super.keyDown(with: event)
     }

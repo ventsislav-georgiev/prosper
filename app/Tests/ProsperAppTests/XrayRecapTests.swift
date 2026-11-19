@@ -70,6 +70,17 @@ final class XrayRecapTests: XCTestCase {
         XCTAssertEqual(r.headline, "Since you were last here: 20+ chapters")
     }
 
+    /// #1630: a valid recap one byte over XrayChapters.maxBytes is refused; the same at the cap parses. Red without the
+    /// `data.count <= XrayChapters.maxBytes` gate in parse.
+    func testParseRefusesOverMaxBytes() {
+        func padded(_ n: Int) -> Data {
+            let head = Data(#"{"schema":1,"chapters":[],"refs":[],"pad":""#.utf8), tail = Data(#""}"#.utf8)
+            return head + Data(repeating: 0x61, count: n - head.count - tail.count) + tail
+        }
+        XCTAssertTrue(XrayRecap.parse(padded(XrayChapters.maxBytes)) != nil, "at the cap")
+        XCTAssertTrue(XrayRecap.parse(padded(XrayChapters.maxBytes + 1)) == nil, "one over")
+    }
+
     // MARK: gap
 
     /// First focus: none; back under 30 min: none; back at 30 min or more: since = when it left; the same target

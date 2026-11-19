@@ -304,4 +304,25 @@ final class XrayRemoteMarksTests: XCTestCase {
             XCTAssertEqual(r.passed.count, 1, "and reached the pty")
         }
     }
+
+    /// #1630: an Esc that closes a card also ends the recap strip, and still never reaches the pty. Red with the dismiss
+    /// below the marks.escape() early return in keyDown.
+    func testEscThatClosesACardAlsoDismissesTheRecap() async throws {
+        try await withSeams { fake in
+            let r = try hoverRig(fake)
+            let recaps = XrayRecaps.shared, t = XrayTarget(name: "api", dir: "/Users/example/.dch")
+            recaps.focus(t)
+            defer { recaps.leave(t) }
+            r.v.marks.hover.point("issue:#12")
+            r.item(0.5)?.perform()
+            XCTAssertTrue(r.cards.shown != nil)
+            recaps.take((0, Data(#"{"schema":1,"chapters":[{"chapter":"a:1","turn_title":"Fix the login test"}],"refs":[]}"#.utf8)), for: t)
+            XCTAssertEqual(recaps.shown?.target, t)
+            r.v.keyDown(with: try Self.esc())
+            XCTAssertTrue(r.cards.shown == nil, "Esc closed the card")
+            XCTAssertTrue(recaps.shown == nil, "and the strip")
+            XCTAssertEqual(r.passed.count, 0, "the closing Esc never reaches the pty")
+            await r.panels.refReading?.value
+        }
+    }
 }
