@@ -40,49 +40,34 @@ extension AgentWindowD1Tests {
         m.runtimes.values.compactMap(\.terminal).filter { $0.key != nil }.count + (m.windowTerminal.key != nil ? 1 : 0)
     }
 
-    /// R6.10 (7.6): the wheel over an UNFOCUSED terminal pane becomes scroll_page_lines on that pane's surface and never
-    /// reaches the mouse path; its fake pty gets 0 bytes, no size, and the pane does not take focus. The focused pane's
-    /// wheel still goes to the mouse path (libghostty), with no scrollback action.
+    /// #1644 (operator 2026-11-19, was R6.10 7.6's scrollback-only rule): each wheel goes to the mouse path (libghostty)
+    /// of the pane it was handed to, the pane under the pointer, focused or not: an event each, none to the other pane.
+    /// The pane does not take focus; its fake pty gets no size.
     @MainActor
-    func testAgentWindowSplitTerminalWheelOnAnUnfocusedPaneScrollsItsScrollbackOnly() throws {
+    func testAgentWindowSplitTerminalWheelScrollsThePaneUnderThePointerFocusedOrNot() throws {
         splitsOn()
         try withModePref {
             let (m, log) = try twoAttached()
             defer { m.close() }
             let ta = try XCTUnwrap(try runtime(m, "a").terminal), tb = try XCTUnwrap(try runtime(m, "b").terminal)
-            let cb = try XCTUnwrap(log.children["b"]), ca = try XCTUnwrap(log.children["a"])
-            var actions: [String] = []
-            ta.scrollAction = { _, a in actions.append("a " + a) }
-            tb.scrollAction = { _, a in actions.append("b " + a) }
-            var mouse = 0
-            let view = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-            view.mouseWheel = { _ in mouse += 1 }
-            view.owner = tb
+            let cb = try XCTUnwrap(log.children["b"])
+            var wheels: [String] = []
+            let va = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            let vb = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            va.mouseWheel = { _ in wheels.append("a") }
+            vb.mouseWheel = { _ in wheels.append("b") }
+            va.owner = ta
+            vb.owner = tb
             let focused = m.layout.focused
-            view.scrollWheel(with: try wheelEvent(1))
-            view.scrollWheel(with: try wheelEvent(-1))
-            tb.writer.flush()
-            XCTAssertEqual(mouse, 0, "the unfocused pane's wheel never reaches the mouse path")
-            XCTAssertEqual(actions.count, 2, "\(actions)")
-            XCTAssertTrue(actions.first?.hasPrefix("b scroll_page_lines:-") == true, "up: back into the scrollback: \(actions)")
-            XCTAssertTrue(actions.last?.hasPrefix("b scroll_page_lines:") == true && actions.last?.contains(":-") == false, "\(actions)")
-            XCTAssertEqual(cb.written, [], "0 bytes to the unfocused pane's pty")
+            XCTAssertTrue(ta.paneFocused() && !tb.paneFocused(), "a is the focused pane, b is not")
+            vb.scrollWheel(with: try wheelEvent(1))
+            vb.scrollWheel(with: try wheelEvent(-1))
+            XCTAssertEqual(wheels, ["b", "b"], "the unfocused pane under the pointer takes both wheels, the focused one none")
             XCTAssertEqual(cb.resizes, [], "no setSize")
             XCTAssertEqual(m.layout.focused, focused, "the pane does not take focus")
-            // The conversion: a notch is 3 lines; precise points accumulate; garbage is dropped.
-            actions = []
-            tb.scrollUnfocused(1, precise: false)
-            tb.scrollUnfocused(.nan, precise: true)
-            tb.scrollUnfocused(.infinity, precise: false)
-            XCTAssertEqual(actions, ["b scroll_page_lines:-3"])
-            // The focused pane: the mouse path as before (libghostty decides), no scrollback action.
-            view.owner = ta
-            actions = []
-            view.scrollWheel(with: try wheelEvent(1))
-            XCTAssertEqual(mouse, 1)
-            XCTAssertEqual(actions, [])
-            ta.writer.flush()
-            XCTAssertEqual(ca.written, [])
+            va.scrollWheel(with: try wheelEvent(1))
+            XCTAssertEqual(wheels, ["b", "b", "a"], "the focused pane's wheel: its own mouse path, as before")
+            XCTAssertEqual(m.layout.focused, focused)
         }
     }
 
@@ -350,5 +335,65 @@ extension AgentTerminalTests {
         v.host.mouseMoved(with: try splitMouse(.mouseMoved, NSPoint(x: 360, y: 160), v))
         let moved = String(decoding: v.take(self, until: { !$0.isEmpty }), as: UTF8.self)
         XCTAssertTrue(moved.contains("\u{1b}[<"), "focused move: a motion report (\(moved.debugDescription))")
+    }
+
+    /// #1644: a one-notch wheel up at `p` (the view's own coordinates), built from a CGEvent and never posted. A
+    /// windowless event's location is the screen's, so the point is placed where the view reads it back (its window
+    /// point, flipped to CoreGraphics' top-left origin on the primary screen).
+    @MainActor
+    func splitWheel(_ p: NSPoint, _ v: ViewRig) throws -> NSEvent {
+        let w = v.host.convert(p, to: nil)
+        let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 1, wheel2: 0, wheel3: 0))
+        cg.location = CGPoint(x: w.x, y: (NSScreen.screens.first?.frame.height ?? 0) - w.y)
+        return try XCTUnwrap(NSEvent(cgEvent: cg))
+    }
+
+    /// #1644: the first SGR mouse report in `bytes` ("ESC [ < button ; col ; row M"), nil for none.
+    func firstReport(_ bytes: [UInt8]) -> String? {
+        let s = String(decoding: bytes, as: UTF8.self)
+        guard let start = s.range(of: "\u{1b}[<"), let end = s[start.upperBound...].firstIndex(where: { $0 == "M" || $0 == "m" })
+        else { return nil }
+        return String(s[start.lowerBound...end])
+    }
+
+    /// #1644 (operator 2026-11-19), the real view (libghostty, offscreen; the fake program asks for ?1000 button reports
+    /// in SGR form, so a wheel writes "ESC [ < 64 ; col ; row M" at libghostty's pointer and a move writes nothing): the
+    /// wheel reports at the event's own point, focused or not, with no move first. Unfocused, the pane takes the wheel
+    /// (was: scroll_page_lines, 0 bytes) and not the keys. Focused right after a focus switch, the first wheel reports
+    /// where it happened, not where libghostty last saw the pointer (was: the unfocused pane's moves never reached it, so
+    /// the wheel went to a stale point until the mouse moved). Events are built and handed to the view's own methods.
+    @MainActor
+    func testSplitPaneWheelReportsAtItsOwnPointFocusedOrNotWithNoMoveFirst() throws {
+        let v = startedView()
+        defer { v.tearDown() }
+        v.output("\u{1b}[?1000h\u{1b}[?1006h", self)
+        _ = v.take(self)
+        var focused = true
+        v.rig.c.paneFocused = { focused }
+        let here = try splitWheel(NSPoint(x: 100, y: 300), v), there = try splitWheel(NSPoint(x: 500, y: 80), v)
+        // The references: the focused pane with the pointer moved there first (the path that always worked).
+        v.host.mouseMoved(with: here)
+        v.host.scrollWheel(with: here)
+        let atHere = try XCTUnwrap(firstReport(v.take(self, until: { !$0.isEmpty })), "a wheel report at here")
+        v.host.mouseMoved(with: there)
+        v.host.scrollWheel(with: there)
+        let atThere = try XCTUnwrap(firstReport(v.take(self, until: { !$0.isEmpty })), "a wheel report at there")
+        XCTAssertTrue(atHere.hasPrefix("\u{1b}[<64;"), "a wheel-up report: \(atHere.debugDescription)")
+        XCTAssertNotEqual(atHere, atThere, "the two points are different cells")
+        // A focus switch: the pointer last reached libghostty at `here`, moved to `there` while the pane was unfocused
+        // (dropped), the pane takes focus, and the first wheel at `there` reports at `there`.
+        v.host.mouseMoved(with: here)
+        focused = false
+        v.host.mouseMoved(with: there)
+        focused = true
+        v.host.scrollWheel(with: there)
+        XCTAssertEqual(firstReport(v.take(self, until: { !$0.isEmpty })), atThere, "the first wheel after a focus switch")
+        // Unfocused: the wheel at `here` reports at `here`; the keys stay where they were.
+        focused = false
+        XCTAssertTrue(v.window.makeFirstResponder(nil))
+        v.host.scrollWheel(with: here)
+        XCTAssertEqual(firstReport(v.take(self, until: { !$0.isEmpty })), atHere, "the unfocused pane under the pointer scrolls")
+        XCTAssertTrue(v.window.firstResponder === v.window, "the wheel moves no keys")
+        XCTAssertFalse(v.window.isVisible, "never shown")
     }
 }

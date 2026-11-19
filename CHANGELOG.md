@@ -2067,6 +2067,9 @@ tag from the now-released section and put it on the new top draft.
   First mention shows the whole sentence when the line was cut short. (#1641)
 - Agent Sessions layouts: switching the focused pane no longer flickers or redraws both terminals;
   only the focus ring and cursor change. (#1645)
+- Agent Sessions splits: the mouse wheel now scrolls the pane under the pointer, focused or not,
+  without moving focus, and scrolling works right after a focus switch with no mouse move first.
+  (#1644)
 
 ## v2.174.0
 
