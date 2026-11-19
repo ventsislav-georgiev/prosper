@@ -695,6 +695,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let u = URL(string: urlString), u.scheme == "prosper" {
             switch u.host {
             case "sleep": SleepControl.sleepNow()
+            // #1665: prosper://ccpool/takeover, the pane's "Stop ccpool and start" without a window.
+            case "ccpool": CCPoolRuntime.openLink(u)
             default: break
             }
             return

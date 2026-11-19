@@ -516,9 +516,10 @@ final class CCPoolPaneModel: ObservableObject {
     private func finishProxy() { proxyJobs -= 1 }
 
     /// #1660 "Stop ccpool and start": the service re-probes, signals `pid` only if it still holds the
-    /// port, waits for the port off main, then starts. With a life cycle, on its serial queue.
+    /// port, waits for the port off main, then starts. With a life cycle, on its serial queue. `pid` nil
+    /// (#1665, prosper://ccpool/takeover): whichever ccpool the service finds on the port.
     @discardableResult
-    func takeOverProxy(pid: Int) -> Task<Void, Never> {
+    func takeOverProxy(pid: Int?) -> Task<Void, Never> {
         proxyJobs += 1
         stuckPid = nil
         let service = service, lifecycle = lifecycle

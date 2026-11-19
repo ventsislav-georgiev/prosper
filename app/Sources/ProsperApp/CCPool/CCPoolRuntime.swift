@@ -50,8 +50,8 @@ final class CCPoolLifecycle: @unchecked Sendable {
     }
 
     /// #1660: "Stop ccpool and start" on the same queue as every start and stop; only while the proxy
-    /// should run (otherwise a settle, which never signals).
-    func takeOver(pid: Int) async -> CCPoolService.TakeOver {
+    /// should run (otherwise a settle, which never signals). `pid` nil: whichever ccpool holds the port (#1665).
+    func takeOver(pid: Int?) async -> CCPoolService.TakeOver {
         await withCheckedContinuation { (done: CheckedContinuation<CCPoolService.TakeOver, Never>) in
             queue.async { [self] in
                 done.resume(returning: shouldRun ? service.takeOver(pid: pid) : .started(settleNow(restart: false)))
@@ -135,6 +135,28 @@ final class CCPoolRuntime {
     /// published listener is stopped here as before and the queued stop catches a late one.
     func quit(timeout: TimeInterval = 2) {
         if !lifecycle.quit(timeout: timeout) { service.stop() }
+    }
+
+    /// #1665: prosper://ccpool/takeover (AppDelegate's prosper switch), for a person away from the pane. The pane
+    /// button's own path (model.takeOverProxy, on the life cycle's queue): a free port starts, a recognized ccpool
+    /// holder is taken over, another program's port is left alone (start logs it), a running proxy stays as it is.
+    /// Only while the proxy should run (the extension live, an account in the pool). No window, no activation.
+    @discardableResult
+    static func openLink(_ url: URL, runtime: CCPoolRuntime? = shared) -> Task<Void, Never>? {
+        guard url.path == "/takeover" else {
+            CCPoolOSLog().note(nil, "prosper://ccpool: unknown path; nothing done")
+            return nil
+        }
+        guard let runtime else {
+            CCPoolOSLog().note(nil, "prosper://ccpool/takeover: the ccpool extension is off; nothing done")
+            return nil
+        }
+        guard runtime.lifecycle.shouldRun else {
+            runtime.service.logger.note(nil, "prosper://ccpool/takeover: the extension is off or the pool has no account; nothing done")
+            return nil
+        }
+        runtime.service.logger.note(nil, "prosper://ccpool/takeover")
+        return runtime.model.takeOverProxy(pid: nil)
     }
 
     // MARK: The app's instance

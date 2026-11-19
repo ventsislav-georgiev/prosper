@@ -29,9 +29,17 @@ struct CCPoolServiceConfig: Sendable {
     /// name fake pids). The pid the probe reports comes from the holder's own health answer; this
     /// ties it to the socket. The default only reads (libproc).
     var listensOn: @Sendable (_ pid: pid_t, _ port: UInt16) -> Bool = CCPoolService.listensOnLoopback
-    /// #1660: how long a signalled ccpool gets to free the port, and how often the port is probed meanwhile.
-    var takeOverCeiling: TimeInterval = 4
+    /// #1660/#1665: how long a signalled ccpool gets to close its listening socket (a Python proxy drains its open
+    /// streams first), and how often listensOn is asked meanwhile.
+    var takeOverCeiling: TimeInterval = 30
     var takeOverPoll: TimeInterval = 0.25
+    /// #1665: this user's pids, scanned for the port's listener when the health answer names none. Empty under
+    /// XCTest, so no test reads a real process's argv.
+    var userPids: @Sendable () -> [pid_t] = { NSClassFromString("XCTestCase") == nil ? CCPoolService.currentUserPids() : [] }
+    /// #1665: a pid's argv (never its environment), its executable path and its parent (seams: tests name fake pids).
+    var argv: @Sendable (_ pid: pid_t) -> [String] = CCPoolService.processArgv
+    var executable: @Sendable (_ pid: pid_t) -> String? = CCPoolService.executablePath
+    var parentPid: @Sendable (_ pid: pid_t) -> pid_t? = CCPoolService.parentOf
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on Network.framework, loopback only. Clients point
@@ -77,6 +85,8 @@ final class CCPoolService: @unchecked Sendable {
     /// The last start() failed at bind time after the probe found the port free (TIME_WAIT, a
     /// socket bound but not listening): the case a brief retry can win.
     private var bindRaced = false
+    /// #1665: the last start()'s bind error word (EADDRINUSE ...), logged once per start(bindRetry:).
+    private var bindError: String?
 
     /// Fixed reasons a `.failed` status carries (QA #739 INFO-11): never a raw system error text.
     static let reasonCreate = "the listener could not be created"
@@ -152,7 +162,7 @@ final class CCPoolService: @unchecked Sendable {
         if case .running = status { return status }
         if let why = Self.refusalUnderTest(config) { return finishStart(.failed(why), note: why) }
         if config.port != 0 {
-            switch config.portProbe(config.port, config.probeTimeout) {
+            switch probeHolder() {
             case .free: break
             case .ccpool(let pid, _):
                 return finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not binding")
@@ -167,6 +177,7 @@ final class CCPoolService: @unchecked Sendable {
         final class Outcome: @unchecked Sendable {
             var status: Status = .failed(CCPoolService.reasonTimeout)
             var inUse = false, settled = false
+            var error: NWError?
             /// A6 (b): a state change after .ready that came before start() published the listener.
             var lost = false
         }
@@ -198,6 +209,7 @@ final class CCPoolService: @unchecked Sendable {
                 outcome.settled = true
                 sem.signal()
             case .failed(let e), .waiting(let e):
+                outcome.error = e
                 if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther; outcome.inUse = true } else { outcome.status = .failed(CCPoolService.reasonBind) }
                 outcome.settled = true
                 sem.signal()
@@ -220,7 +232,7 @@ final class CCPoolService: @unchecked Sendable {
         guard published else {
             l.stateUpdateHandler = nil
             l.cancel()
-            lock.withLock { bindRaced = outcome.inUse }
+            lock.withLock { bindRaced = outcome.inUse; bindError = outcome.error.map(Self.errorWord) }
             return finishStart(outcome.status, note: "listener did not start")
         }
         return finishStart(outcome.status, note: "proxy listening on loopback")
@@ -233,10 +245,24 @@ final class CCPoolService: @unchecked Sendable {
     func start(bindRetry: TimeInterval) -> Status {
         let deadline = Date().addingTimeInterval(bindRetry)
         while true {
-            lock.withLock { bindRaced = false }
+            lock.withLock { bindRaced = false; bindError = nil }
             let s = start()
-            guard case .heldByOther = s, lock.withLock({ bindRaced }), Date() < deadline else { return s }
+            guard case .heldByOther = s, lock.withLock({ bindRaced }), Date() < deadline else {
+                // #1665: the reason, once per start, not once per retry tick.
+                if let why = lock.withLock({ bindError }) { logger.note(nil, "bind failed: \(why)") }
+                return s
+            }
             Thread.sleep(forTimeInterval: 0.2)
+        }
+    }
+
+    /// #1665: the NWError's code word for the log (EADDRINUSE, dns -65554), never a system message text.
+    static func errorWord(_ e: NWError) -> String {
+        switch e {
+        case .posix(let c): return "\(c)"
+        case .dns(let c): return "dns \(c)"
+        case .tls(let c): return "tls \(c)"
+        @unknown default: return "unknown"
         }
     }
 
@@ -251,41 +277,75 @@ final class CCPoolService: @unchecked Sendable {
         case refused(pid: Int)
     }
 
-    /// #1660 "Stop ccpool and start": SIGTERM to the ccpool proxy the probe names at `pid`, wait for the
-    /// port to free, then the normal start. The port is re-probed first: a holder that changed (free,
-    /// another pid, not ccpool) is never signalled and the normal start reports it. Signalled only when
-    /// `pid` itself listens on the port (config.listensOn). Never SIGKILL, never by name. Blocks up to probe + ceiling + start: off main only.
-    func takeOver(pid: Int, bindRetry: TimeInterval = 3) -> TakeOver {
+    /// #1660 "Stop ccpool and start": SIGTERM to the ccpool proxy the probe names at `pid` (nil: whichever
+    /// ccpool holds the port now, prosper://ccpool/takeover), wait until it no longer listens on the port,
+    /// then the normal start. The port is re-probed first: a holder that changed (free, another pid, not
+    /// ccpool) is never signalled and the normal start reports it. Signalled only when the holder itself
+    /// listens on the port (config.listensOn). #1665: its respawn loop (a shell parent running
+    /// ccpool_proxy.py) gets SIGTERM first. Never SIGKILL, never by name. Blocks up to probe + ceiling +
+    /// start: off main only.
+    func takeOver(pid wanted: Int?, bindRetry: TimeInterval = 3) -> TakeOver {
         if case .running = status { return .started(status) }
         guard config.port != 0, Self.refusalUnderTest(config) == nil,
-              case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {
+              case .ccpool(let pid?, _) = probeHolder(), wanted == nil || pid == wanted else {
             return .started(start(bindRetry: bindRetry))
         }
         guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid), config.ownedByUser(p),
-              config.listensOn(p, config.port), config.signal(p, SIGTERM) else {
+              config.listensOn(p, config.port) else {
+            _ = finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not signalled")
+            return .refused(pid: pid)
+        }
+        // #1665: the loop first, or it respawns the proxy within seconds and the new one takes the port.
+        if let loop = respawnLoop(of: p), config.signal(loop, SIGTERM) {
+            logger.note(nil, "sent SIGTERM to the ccpool proxy's restart loop")
+        }
+        guard config.signal(p, SIGTERM) else {
             _ = finishStart(.heldByCCPool(pid: pid), note: "port held by another ccpool proxy; not signalled")
             return .refused(pid: pid)
         }
         logger.note(nil, "sent SIGTERM to the ccpool proxy holding the port")
+        // #1665: wait on the socket, not the health answer: a draining proxy stops answering but keeps its LISTEN socket.
         let deadline = Date().addingTimeInterval(config.takeOverCeiling)
-        while true {
-            let now = config.portProbe(config.port, config.probeTimeout)
-            if now == .free { break }
+        while config.listensOn(p, config.port) {
             guard Date() < deadline else {
-                // The last probe ran at or after the deadline: report who holds the port now.
-                switch now {
-                case .ccpool(let holder?, _) where holder == pid:
-                    _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
-                    return .didNotStop(pid: pid)
-                case .ccpool(let holder, _):
-                    return .started(finishStart(.heldByCCPool(pid: holder), note: "the signalled ccpool proxy is gone; another ccpool proxy holds the port"))
-                default:
-                    return .started(finishStart(.heldByOther, note: "the signalled ccpool proxy is gone; another program holds the port"))
-                }
+                _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
+                return .didNotStop(pid: pid)
             }
             Thread.sleep(forTimeInterval: config.takeOverPoll)
         }
+        // A new holder (another ccpool, another program) is reported by start()'s own probe.
         return .started(start(bindRetry: bindRetry))
+    }
+
+    /// #1665: the health probe, and when it names no ccpool pid (no answer while draining, an answer without a pid),
+    /// the port's listener among this user's pids, recognized as ccpool by its argv. Reads only.
+    func probeHolder() -> CCPoolPortProbe.Result {
+        let r = config.portProbe(config.port, config.probeTimeout)
+        switch r {
+        case .free, .ccpool(_?, _): return r
+        case .ccpool(nil, _), .other:
+            guard let p = config.userPids().first(where: { $0 > 1 && $0 != getpid() && config.listensOn($0, config.port) })
+            else { return r }
+            if case .ccpool(_, let impl) = r { return .ccpool(pid: Int(p), impl: impl) }
+            return Self.isCCPoolArgv(config.argv(p)) ? .ccpool(pid: Int(p), impl: nil) : r
+        }
+    }
+
+    /// #1665: the Python proxy (`python3 .../ccpool_proxy.py 8790`) or the program ccpool (`ccpool ...`, a path
+    /// ending in /ccpool, also under an interpreter). A bare "ccpool" word after argv[0] (`grep ccpool`) is not.
+    static func isCCPoolArgv(_ argv: [String]) -> Bool {
+        argv.first == "ccpool" || argv.contains { $0.hasSuffix("ccpool_proxy.py") || $0.hasSuffix("/ccpool") }
+    }
+
+    static let loopShells: Set<String> = ["zsh", "bash", "sh", "dash"]
+
+    /// #1665: `p`'s parent when it is this user's shell running a ccpool_proxy.py loop
+    /// (`zsh -c 'while true; do python3 .../ccpool_proxy.py ...'`); never launchd, this process or its parent.
+    func respawnLoop(of p: pid_t) -> pid_t? {
+        guard let pp = config.parentPid(p), pp > 1, pp != getpid(), pp != getppid(), config.ownedByUser(pp),
+              let exe = config.executable(pp), Self.loopShells.contains((exe as NSString).lastPathComponent),
+              config.argv(pp).contains(where: { $0.contains("ccpool_proxy.py") }) else { return nil }
+        return pp
     }
 
     /// True when `pid` has a TCP socket in LISTEN on `port` whose local address accepts 127.0.0.1
@@ -319,11 +379,61 @@ final class CCPoolService: @unchecked Sendable {
 
     /// The process's real uid is this user's (sysctl; false when the pid is gone).
     static func runsAsCurrentUser(_ pid: pid_t) -> Bool {
+        kinfo(pid)?.kp_eproc.e_pcred.p_ruid == getuid()
+    }
+
+    /// #1665: the parent pid (sysctl; nil when the pid is gone).
+    static func parentOf(_ pid: pid_t) -> pid_t? { kinfo(pid)?.kp_eproc.e_ppid }
+
+    private static func kinfo(_ pid: pid_t) -> kinfo_proc? {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
-        return info.kp_eproc.e_pcred.p_ruid == getuid()
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        return info
+    }
+
+    /// #1665: this user's pids (proc_listpids PROC_UID_ONLY). Reads only.
+    static func currentUserPids() -> [pid_t] {
+        let need = proc_listpids(UInt32(PROC_UID_ONLY), getuid(), nil, 0)
+        guard need > 0 else { return [] }
+        let stride = MemoryLayout<pid_t>.stride
+        var pids = [pid_t](repeating: 0, count: Int(need) / stride + 32)
+        let got = pids.withUnsafeMutableBytes { proc_listpids(UInt32(PROC_UID_ONLY), getuid(), $0.baseAddress, Int32($0.count)) }
+        guard got > 0 else { return [] }
+        return pids.prefix(min(Int(got) / stride, pids.count)).filter { $0 > 0 }
+    }
+
+    /// #1665: the executable's path (proc_pidpath; nil when the pid is gone or unreadable).
+    static func executablePath(_ pid: pid_t) -> String? {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
+        guard n > 0, Int(n) <= buf.count else { return nil }
+        return String(decoding: buf.prefix(Int(n)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// #1665: a process's argv from KERN_PROCARGS2 (argc, the exec path, then argc strings). Only the argc
+    /// strings are decoded: the environment that follows them in the buffer is never read. [] when unreadable.
+    static func processArgv(_ pid: pid_t) -> [String] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        let head = MemoryLayout<Int32>.size
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > head, size <= 16 << 20 else { return [] }
+        var buf = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0, size > head, size <= buf.count else { return [] }
+        let argc = buf.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) }
+        guard argc > 0, argc <= 4096 else { return [] }
+        var i = head
+        while i < size, buf[i] != 0 { i += 1 }   // the exec path
+        while i < size, buf[i] == 0 { i += 1 }   // its padding
+        var args: [String] = []
+        while args.count < Int(argc), i < size {
+            let from = i
+            while i < size, buf[i] != 0 { i += 1 }
+            args.append(String(decoding: buf[from..<i], as: UTF8.self))
+            i += 1
+        }
+        return args
     }
 
     /// The Settings "Restart proxy": a listener restart (B25). Blocks: off main only.
