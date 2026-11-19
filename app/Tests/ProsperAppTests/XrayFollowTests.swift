@@ -471,6 +471,64 @@ final class XrayFollowTests: XCTestCase {
         XCTAssertEqual(t.take(Data("1234".utf8)), [])
         XCTAssertTrue(t.take(Data("5".utf8)) == nil, "a line past the cap ends the stream")
     }
+
+    /// #1629 (sample2: 90% of main in take's whole-state rebuild, 48% in XrayRefs.parse): a big snapshot (2000 refs),
+    /// then a burst of 100 ref lines read as 100 batches. The reader's hand-off schedules one main hop for the burst,
+    /// so the follow builds its state once for it; a ref line parses refs only; the same lines again build nothing.
+    /// Red at base: every batch was its own main hop and take (XrayFollow.swift:323) and every take parsed every part
+    /// (XrayFollow.swift:172).
+    func testABurstOfRefLinesIsOneBuildAndARepeatIsNone() {
+        let refs = (0..<XrayRefs.maxRows).map { ##"{"key":"issue:#\##($0)","shape":"issue","text":"#\##($0)","count":1}"## }
+        let f = XrayFollow(target: Self.target("api"))
+        f.take([Data(Self.snapshot(#"{"schema":1,"chapters":[{"anchor":"s:10","offset":10,"i":1,"title":"one","kind":"prompt"}],"refs":["#
+                                   + refs.joined(separator: ",") + "]}").utf8)])
+        XCTAssertEqual(f.applies, 1)
+        XCTAssertEqual(f.state?.refs?.entries.count, XrayRefs.maxRows)
+        let burst = (0..<100).map { Data(##"{"schema":1,"ref":{"key":"issue:#\##($0)","shape":"issue","text":"#\##($0)","count":2}}"##.utf8) }
+        let pending = XrayPendingLines()
+        let hops = burst.filter { pending.add([$0]) }.count
+        XCTAssertEqual(hops, 1, "one main hop for the burst")
+        let drained = pending.drain()
+        XCTAssertEqual(drained, burst, "every line, in order")
+        f.take(drained)
+        XCTAssertEqual(f.applies, 2, "one build for 100 lines")
+        XCTAssertEqual(f.parsed.refs, 2)
+        XCTAssertEqual(f.parsed.chapters, 1, "a ref line parses no chapters")
+        XCTAssertEqual(f.state?.refs?.entries.filter { $0.count == 2 }.count, 100)
+        XCTAssertEqual(f.state?.chapters?.map(\.title), ["one"], "the parts not parsed are kept")
+        XCTAssertEqual(f.state?.anchors, ["s:10": 1])
+        f.take(burst)
+        XCTAssertEqual(f.applies, 2, "the same refs again: no build, no $state")
+        f.take([Data(Self.chapter7.utf8)])
+        XCTAssertEqual(f.applies, 3)
+        XCTAssertEqual(f.parsed.refs, 2, "a chapter line parses no refs")
+        XCTAssertEqual(f.state?.chapters?.count, 2)
+        XCTAssertEqual(f.state?.refs?.entries.count, XrayRefs.maxRows)
+        f.take([Data(Self.snapshot(#"{"schema":1,"chapters":[],"refs":[],"dropped_keys":3}"#).utf8)])
+        XCTAssertEqual(f.state?.refs?.entries.count, 0, "a later snapshot replaces every part")
+        XCTAssertEqual(f.state?.refs?.droppedKeys, 3)
+        XCTAssertEqual(f.state?.chapters?.count, 0)
+        XCTAssertEqual(f.state?.anchors, [:])
+        XCTAssertTrue(pending.add([Data("x".utf8)]), "after a drain the next lines get their own hop")
+        XCTAssertFalse(pending.add([]), "no hop for nothing")
+    }
+
+    /// #1629 (sample2: XrayLineSplit.take 1895 samples in Data.firstIndex): a 1 MiB line in 1 KiB reads, then 2000
+    /// short lines in one read. Each byte is searched or copied about once. Red at base: the kept tail was searched
+    /// again from its start on every read (XrayFollow.swift:376) and copied again after every line (XrayFollow.swift:379).
+    func testLineSplitTouchesEachByteAboutOnce() {
+        var s = XrayLineSplit()
+        let kib = Data(repeating: 0x61, count: 1024)
+        for _ in 0..<1023 { XCTAssertEqual(s.take(kib), []) }
+        XCTAssertEqual(s.take(kib + Data("\nb".utf8))?.map(\.count), [1 << 20])
+        let short = Data((0..<2000).map { "line \($0)\n" }.joined().utf8)
+        let out = s.take(short)
+        XCTAssertEqual(out?.count, 2000)
+        XCTAssertEqual(out?.first, Data("bline 0".utf8))
+        XCTAssertEqual(out?.last, Data("line 1999".utf8))
+        let total = (1 << 20) + 2 + short.count
+        XCTAssertLessThanOrEqual(s.touched, 2 * total, "touched \(s.touched) for \(total) bytes")
+    }
 }
 
 /// streamLines' batches, from its reading thread.

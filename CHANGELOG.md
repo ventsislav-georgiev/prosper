@@ -2029,6 +2029,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent terminal: the dotted underlines under refs no longer blink off and on while a spinner or
   status line redraws; an underline now goes only when the text under it changes, scrolls or the
   pane is resized. (#1628)
+- Prosper no longer runs a full core and stalls the UI while a live session's refs stream in: the
+  follow batches its updates, skips unchanged refs and splits lines without rescanning. (#1629)
 
 ## v2.174.0
 

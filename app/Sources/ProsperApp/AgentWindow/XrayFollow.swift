@@ -104,28 +104,26 @@ final class XrayFollow: ObservableObject {
 
     /// One batch of lines, in order; the state is built once per batch.
     func take(_ lines: [Data]) {
-        var changed = false
         for d in lines {
             guard let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
             // #1475 c: a block's rows and done line carry no schema (the one-shot lines); a delta may
             if takeBlockLine(o, d) {
-                changed = true
                 if pastCap() { return }
                 continue
             }
             guard o["schema"] as? Int == 1 else { continue }
             XrayRefResults.followed(target, o)   // #1567: a ref, evict or reset drops the windows' cached --ref answers
             // d.count is at most XrayLineSplit's cap and kept at most maxKept after each line: the sum cannot overflow
-            if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; changed = true; continue }
+            if let s = o["snapshot"] as? [String: Any] { object = s; kept = d.count; dirty.formUnion(Self.whole); continue }
             if o["reset"] != nil {
-                object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; changed = true
-                (blocks, openBlock) = ([:], nil); dirty = ["task", "memory"]   // #1475 c: the blocks come again after it
+                object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0
+                (blocks, openBlock) = ([:], nil); dirty = Self.whole.union(["task", "memory"])   // #1475 c: the blocks come again after it
                 continue
             }
             if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
                 let k = o["session"] != nil ? "task" : "memory"
                 if let cut = openBlock, cut != k { dirty.insert(cut) }   // a block with no done line ends here (partial)
-                blocks[k] = Block(d); openBlock = k; changed = true   // shown at its done line, not row by row
+                blocks[k] = Block(d); openBlock = k   // shown at its done line, not row by row
                 if pastCap() { return }
                 continue
             }
@@ -144,9 +142,13 @@ final class XrayFollow: ObservableObject {
                     }
                 }
                 obj["chapters"] = list
+                dirty.insert("chapters")
             } else if let r = o["ref"] as? [String: Any], let key = r["key"] as? String {
                 var list = obj["refs"] as? [Any] ?? []
                 let k = list.firstIndex { ($0 as? [String: Any])?["key"] as? String == key }
+                // #1629: a ref line equal to the kept ref changes nothing: no parse, no $state, no redraw
+                if let k, (r["count"] as? Int).map({ $0 <= 0 }) != true, (list[k] as? NSDictionary)?.isEqual(to: r) == true { continue }
+                dirty.insert("refs")
                 if let k { kept -= Self.bytes(list[k]) }
                 if (r["count"] as? Int).map({ $0 <= 0 }) == true { if let k { list.remove(at: k) } }
                 else if let k { list[k] = r }
@@ -158,20 +160,35 @@ final class XrayFollow: ObservableObject {
                 let keep = all.filter { (($0 as? [String: Any])?["offset"] as? Int).map { $0 >= seq } ?? true }
                 kept -= all.reduce(0) { $0 + Self.bytes($1) } - keep.reduce(0) { $0 + Self.bytes($1) }
                 obj["chapters"] = keep
+                dirty.insert("chapters")
             } else { continue }
             kept += d.count   // a removal (count 0, evict) adds its own small line too
             object = obj
-            changed = true
             if pastCap() { return }
         }
-        guard changed, let object else { return }
-        // #1475 c: a block is parsed again only when it changed (up to 50000 rows)
+        guard !dirty.isEmpty, let object else { return }
+        // #1475 c: a block is parsed again only when it changed (up to 50000 rows); #1629: so are refs and chapters (a
+        // delta changes only its own part; the top-level fields and the corpus change only with a snapshot or reset)
+        let all = state == nil || dirty.contains("snapshot")
         let tasks = dirty.contains("task") ? blocks["task"].map { XrayTasks.parse($0.data) } : state?.tasks
         let memory = dirty.contains("memory") ? blocks["memory"].map { XrayMemory.parse($0.data) } : state?.memory
+        let chapters = all || dirty.contains("chapters"), refs = all || dirty.contains("refs")
         dirty = []
-        state = State(chapters: XrayChapters.parse(object), refs: XrayRefs.parse(object), anchors: XrayPanelModel.anchors(object),
-                      tasks: tasks, memory: memory, corpus: XrayChapters.corpus(object))
+        applies += 1
+        if chapters { parsed.chapters += 1 }
+        if refs { parsed.refs += 1 }
+        state = State(chapters: chapters ? XrayChapters.parse(object) : state?.chapters,
+                      refs: refs ? XrayRefs.parse(object) : state?.refs,
+                      anchors: chapters ? XrayPanelModel.anchors(object) : state?.anchors ?? [:],
+                      tasks: tasks, memory: memory, corpus: all ? XrayChapters.corpus(object) : state?.corpus)
     }
+
+    /// #1629: what a snapshot or reset makes stale (every part of the object); a delta marks only its own part.
+    private static let whole: Set<String> = ["snapshot", "chapters", "refs"]
+    /// #1629: state builds so far and the parts parsed in them (the cost rows count them: a burst of lines is one
+    /// build, a repeated line none, a ref line parses no chapters). Counters only: they never reach Int.max.
+    private(set) var applies = 0
+    private(set) var parsed = (refs: 0, chapters: 0)
 
     /// #1475 a2 (QA r1436 s1): past the whole-object cap the follow ends and the panels read as today (giveUpFollow);
     /// #1475 c: the blocks' bytes count too (each sum at most maxKept plus one line after the check per line: no overflow).
@@ -317,12 +334,18 @@ extension XrayPanels {
     /// The product's: a dch child whose stdout is read line by line. Never under XCTest (rows put a fake here).
     static var follow: Follow = { path, args, env, lines, ended in
         guard NSClassFromString("XCTestCase") == nil else { return {} }
-        let child = XrayChild()
+        let child = XrayChild(), pending = XrayPendingLines()
         DispatchQueue.global(qos: .utility).async {
             let status = streamLines(child, path, args, env) { batch in
-                DispatchQueue.main.async { MainActor.assumeIsolated { lines(batch) } }
+                // #1629: one main hop per wait, not per read: a burst of batches is one take (one state build)
+                guard pending.add(batch) else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + XrayPendingLines.wait) {
+                    MainActor.assumeIsolated { let ls = pending.drain(); if !ls.isEmpty { lines(ls) } }
+                }
             }
-            DispatchQueue.main.async { MainActor.assumeIsolated { ended(status) } }   // after every batch: main is FIFO
+            DispatchQueue.main.async {   // after every batch: what still waits goes first
+                MainActor.assumeIsolated { let ls = pending.drain(); if !ls.isEmpty { lines(ls) }; ended(status) }
+            }
         }
         return { child.cancel() }
     }
@@ -369,15 +392,41 @@ extension XrayPanels {
 struct XrayLineSplit {
     var cap = XrayChapters.maxBytes
     private var tail = Data()
+    /// #1629: bytes searched for a newline or copied to keep the tail, so far (the cost row: each byte about once,
+    /// not once per chunk or per line).
+    private(set) var touched = 0
 
     mutating func take(_ chunk: Data) -> [Data]? {
+        // #1629: only the new bytes are searched (the kept tail has no newline); the rest is copied once per chunk
+        var from = tail.endIndex, start = tail.startIndex
         tail.append(chunk)
         var out: [Data] = []
-        while let nl = tail.firstIndex(of: 0x0A) {
-            let line = tail[tail.startIndex..<nl]
-            if !line.isEmpty { out.append(Data(line)) }
-            tail = Data(tail[tail.index(after: nl)...])
+        while let nl = tail[from...].firstIndex(of: 0x0A) {
+            touched &+= nl + 1 - from   // a counter only: wrapping is harmless
+            if nl > start { out.append(Data(tail[start..<nl])) }
+            (start, from) = (nl + 1, nl + 1)
         }
+        touched &+= tail.endIndex - from
+        if start > tail.startIndex { tail = Data(tail[start...]); touched &+= tail.count }
         return tail.count > cap ? nil : out
     }
+}
+
+/// #1629: a follow's lines read but not yet taken on main. `add` is true for the first lines since the last drain:
+/// the reader schedules one drain for them and the lines after join it. Bounded as the main queue's blocks were: by
+/// what dch writes while main is busy (each line at most XrayLineSplit's cap).
+final class XrayPendingLines: Sendable {
+    /// At most one take per follow per 100 ms (dch batches its deltas every 250 ms).
+    static let wait = 0.1
+    private let lines = OSAllocatedUnfairLock(initialState: [Data]())
+
+    func add(_ ls: [Data]) -> Bool {
+        lines.withLock { held in
+            let first = held.isEmpty
+            held += ls
+            return first && !ls.isEmpty
+        }
+    }
+
+    func drain() -> [Data] { lines.withLock { held in defer { held = [] }; return held } }
 }
