@@ -1,0 +1,27 @@
+{
+ "entry": 1627,
+ "filter": "AgentSessionsToggleLabelTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "clipboard",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": ".accessibilityLabel(Self.clipboardLabel) }",
+   "new": " }",
+   "expect": "killed"
+  },
+  {
+   "name": "rounded",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": ".accessibilityLabel(Self.roundedLabel).disabled",
+   "new": ".disabled",
+   "expect": "killed"
+  },
+  {
+   "name": "github",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": ".accessibilityLabel(Self.githubLabel) }",
+   "new": " }",
+   "expect": "killed"
+  }
+ ]
+}
