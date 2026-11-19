@@ -1432,7 +1432,7 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
-- Ships dch 1.118.0 (was 1.74.0). The X-ray card names what a reference points to: a commit's
+- Ships dch 1.120.0 (was 1.74.0). The X-ray card names what a reference points to: a commit's
   subject, author, age and whether it is on HEAD, a file's path and when it was modified, and an
   issue's or pull request's title and state (through a read-only `gh` call; dch's xray_github
   setting turns it off; a lookup holds the card for at most 1.2 s and uses the proxy settings).
@@ -1455,6 +1455,9 @@ tag from the now-released section and put it on the new top draft.
   list is re-read every 30 s instead of every 5 s, so a long session costs much less CPU and data; a
   light commit reference gives up after 300 ms when git is stuck, a fetched page's title comes only
   from the page itself, and a mention counts as read only when the agent printed the file. (#1642)
+  A line that names one reference and ends in a colon, such as "Decision for you (OQ-185):", now
+  defines it with the lines that follow, so the X-ray card shows a definition, and `dch -l` ends
+  with a count of active sessions and agents and lists each session's shells. (#1650)
 - Renaming an account in the account pool now renames its Keychain item too, so Keychain Access
   shows the new name. (#1326)
 - Agent Island: Kill all during a Stop all or Restart all started from the phone now still writes
