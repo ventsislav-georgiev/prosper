@@ -105,8 +105,8 @@ enum AgentSidebar {
         let state: AgentState?
         /// "Needs input", "Working", "Stopping…"; "Ended · exit 1" on a History row. #1115: the counts are fields.
         let detail: String
-        /// "4m", "now" under a minute; "" for an unknown time and on a working row (#1114).
-        let age: String
+        /// "4m", "now" under a minute; "" for an unknown time and on a working row (#1114). #1634: `reaged` rewrites it.
+        var age: String
         /// Open PR labels the island shows ("repo#12"), and "+N" past two.
         let prs: [String]
         /// Every open PR shown (the chips' fallback when they do not fit).
@@ -267,11 +267,7 @@ enum AgentSidebar {
                          sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval,
                          actions: [AgentSessionKey: String] = [:], remote: [Remote] = [],
                          remoteHistory: [RemoteRecord] = []) -> [Section] {
-        let needs = sessions.filter(needsYou).sorted {
-            if $0.state != $1.state { return $0.state < $1.state }
-            if $0.activity != $1.activity { return $0.activity > $1.activity }
-            return ($0.key.name, $0.key.dir) < ($1.key.name, $1.key.dir)
-        }
+        let needs = sessions.filter(needsYou).sorted(by: before)
         let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), pattern: sidekickPattern)
         var out: [Section] = []
         func add(_ title: String, _ rows: [Row]) { if !rows.isEmpty { out.append(Section(title: title, rows: rows)) } }
@@ -289,6 +285,40 @@ enum AgentSidebar {
             .flatMap { AgentIsland.cappedHistory($0.value.map(\.record), live: liveFar) }
             .map { row($0, now: now, stale: stale.contains($0.id), action: actions[$0.id]) }
         add("History", AgentIsland.cappedHistory(history, live: Set(sessions.map(\.key))).map { row($0, now: now) } + far)
+        return out
+    }
+
+    /// Needs you's order, and AgentIsland.sorted's `.activity` one: state, newest activity, then name and dir.
+    static func before(_ a: AgentSession, _ b: AgentSession) -> Bool {
+        if a.state != b.state { return a.state < b.state }
+        if a.activity != b.activity { return a.activity > b.activity }
+        return (a.key.name, a.key.dir) < (b.key.name, b.key.dir)
+    }
+
+    /// #1634: `sections` again for a list where only activity (or the clock) moved: each live row takes its session and
+    /// age from `sessions`, a History row its age at `now`; nothing else is rebuilt. nil (build afresh): a live row's
+    /// session is not in `sessions`, or the new activity orders two neighbouring live rows the other way (Needs you, and
+    /// Sessions / Sidekicks under `.activity`; `.name` never reads activity).
+    static func reaged(_ sections: [Section], sessions: [AgentSession], sort: AgentIslandSort,
+                       now: TimeInterval) -> [Section]? {
+        let live = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        var out: [Section] = []
+        for section in sections {
+            let ordered = section.title == needsYouTitle || sort == .activity
+            var rows: [Row] = []
+            for var r in section.rows {
+                if let k = r.session?.key {
+                    guard let s = live[k] else { return nil }
+                    if ordered, let p = rows.last?.session, !before(p, s) { return nil }
+                    r.session = s
+                    r.age = AgentIsland.age(of: s, now: now)
+                } else if let rec = r.record {
+                    r.age = rec.lastSeen > 0 ? AgentIsland.age(now - rec.lastSeen) : ""
+                }
+                rows.append(r)
+            }
+            out.append(Section(title: section.title, rows: rows))
+        }
         return out
     }
 
@@ -1136,6 +1166,11 @@ final class AgentWindowModel: ObservableObject {
     var remoteClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     /// dch's own remote probe tick (README "Following the list": every 2 s): no more often than this.
     static let remoteEvery: TimeInterval = 2
+    /// #1634: the spacing grows (doubling) while the remote answers change nothing, up to this; any change, a show or a
+    /// remote action starts it over at `remoteEvery`. Never past remoteHistoryEvery, so History keeps its own spacing.
+    static let remoteIdleMax: TimeInterval = 10
+    /// #1634: the spacing now, `remoteEvery` up to `remoteIdleMax`.
+    private(set) var remoteGap: TimeInterval = remoteEvery
     /// #836: the last good `--ls-json --remote` rows; a call that failed or timed out keeps them.
     private(set) var remoteSessions: [AgentSidebar.Remote] = []
     private var remoteInFlight = false
@@ -1235,6 +1270,14 @@ final class AgentWindowModel: ObservableObject {
     private(set) var removing: AgentSessionKey?
     /// Counts sidebar rebuilds (tests: nothing rebuilds after close).
     private(set) var refreshes = 0
+    /// #1634: counts full `AgentSidebar.sections` builds (an activity-only list re-ages the rows instead).
+    private(set) var sectionBuilds = 0
+    /// #1634: what the last refresh read, the sessions apart (only their activity may move without a build).
+    private struct SidebarInputs: Equatable {
+        let history: [DchHistoryRecord], sort: AgentIslandSort, pattern: String, details: AgentIslandRowDetails
+        let actions: [AgentSessionKey: String], remote: [AgentSidebar.Remote], remoteHistory: [AgentSidebar.RemoteRecord]
+    }
+    private var built: (sessions: [AgentSession], inputs: SidebarInputs)?
 
     private var askSubscription: AnyCancellable?
     private var planSubscription: AnyCancellable?
@@ -1722,23 +1765,24 @@ final class AgentWindowModel: ObservableObject {
         if following { startFollow() }
         guard !remoteInFlight else { return }
         let t = remoteClock()
-        if !following, let at = remoteAt, t - at < Self.remoteEvery { return }
+        // #1634: the list at `remoteGap`; History, due on its own spacing, no longer waits for the list's turn.
+        let list = !following && (remoteAt.map { t - $0 >= remoteGap } ?? true)
         // #1324 (a): History in the same job, at dch's own History spacing.
         let history = remoteHistoryAt.map { t - $0 >= Self.remoteHistoryEvery } ?? true
-        if following, !history { return }
-        if !following { remoteAt = t }
+        guard list || history else { return }
+        if list { remoteAt = t }
         if history { remoteHistoryAt = t }
         remoteInFlight = true
-        if !following { remoteCalls += 1 }
+        if list { remoteCalls += 1 }
         let run = remoteRun, runHistory = remoteHistoryRun, env = AgentIsland.listEnv(dir: DchCommand.defaultSocketDir)
         let historyArgs = Self.remoteHistoryArgs
         let job: @Sendable () -> (Data?, Data?) = {
-            (following ? nil : run(["--ls-json", "--remote"], env), history ? runHistory(historyArgs, env) : nil)
+            (list ? run(["--ls-json", "--remote"], env) : nil, history ? runHistory(historyArgs, env) : nil)
         }
-        guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1) }
+        guard remoteOffMain else { let r = job(); return remoteListed(r.0, history: r.1, listed: list) }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let r = job()
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(r.0, history: r.1) } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteListed(r.0, history: r.1, listed: list) } }
         }
     }
 
@@ -1748,7 +1792,8 @@ final class AgentWindowModel: ObservableObject {
     /// not "no hosts").
     /// #1324 (a): the History answer the same way: replaced whole when it is an array, kept otherwise; an offline
     /// host's records stay, "stale", for dch's two minutes, then go with the next good answer.
-    func remoteListed(_ data: Data?, history: Data? = nil) {
+    /// #1634: `listed` (a list call ran): a change starts the spacing over, none doubles it up to remoteIdleMax.
+    func remoteListed(_ data: Data?, history: Data? = nil, listed: Bool = false) {
         remoteInFlight = false
         guard !closed else { return }
         var changed = false
@@ -1757,6 +1802,7 @@ final class AgentWindowModel: ObservableObject {
             remoteHistory = recs
             changed = true
         }
+        if changed { remoteGap = Self.remoteEvery } else if listed { remoteGap = min(remoteGap * 2, Self.remoteIdleMax) }
         guard changed, let s = store else { return }
         refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
                 actions: s.actions)
@@ -1857,9 +1903,24 @@ final class AgentWindowModel: ObservableObject {
         let n = AgentPaneLayout.splitsEnabled ? Self.needing(sessions) : nil
         if n != needs { needs = n }
         // #1324: a remote Resume's text by its record id ("@" + host: never a local key).
-        let new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
-                                        details: details, now: now(), actions: actions.merging(remoteResumeText) { a, _ in a },
-                                        remote: remoteSessions, remoteHistory: remoteHistory)
+        let inputs = SidebarInputs(history: history, sort: sort, pattern: pattern, details: details,
+                                   actions: actions.merging(remoteResumeText) { a, _ in a }, remote: remoteSessions,
+                                   remoteHistory: remoteHistory)
+        let t = now()
+        let new: [AgentSidebar.Section]
+        // #1634: the same sessions, titles and order, only activity or the clock moved: the ages are read again, no build;
+        // and when no age changed either, nothing publishes (the rows keep their sessions of the last publish: nothing
+        // drawn reads a row's activity, only its age and its place). Empty sections: bind(nil) cleared them, so build.
+        if let b = built, b.inputs == inputs, !sections.isEmpty, AgentIsland.onlyActivityMoved(sessions, b.sessions),
+           let aged = AgentSidebar.reaged(sections, sessions: sessions, sort: sort, now: t) {
+            new = aged.map(\.rows).map { $0.map(\.age) } == sections.map(\.rows).map { $0.map(\.age) } ? sections : aged
+        } else {
+            sectionBuilds += 1
+            new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
+                                        details: details, now: t, actions: inputs.actions, remote: remoteSessions,
+                                        remoteHistory: remoteHistory)
+        }
+        built = (sessions, inputs)
         let old = sections
         publishing = (sessions, history)
         defer { publishing = nil }
@@ -2676,6 +2737,7 @@ final class AgentWindowModel: ObservableObject {
         }
         pendingSpawn = (key, now(), now())
         remoteAt = nil   // the list again at once
+        remoteGap = Self.remoteEvery
         refresh()
     }
 
@@ -3096,6 +3158,7 @@ final class AgentWindowModel: ObservableObject {
             : OutsideText.shown(AgentIsland.rowText(DchControlOps.renamed(res, arg, to: name), name: name, .resume))   // R1330-s1: the other machine's text
         remoteAt = nil
         remoteHistoryAt = nil
+        remoteGap = Self.remoteEvery
         refresh()
     }
 
@@ -3161,6 +3224,7 @@ final class AgentWindowModel: ObservableObject {
         clock?.invalidate()
         clock = nil
         if v {
+            remoteGap = Self.remoteEvery   // #1634: a showing lists at dch's own pace again
             let t = Self.makeAgeClock(ageInterval) { [weak self] in self?.refresh() }
             // R1115-1: common modes, so the ages keep ticking while a scroll or a drag is tracking.
             RunLoop.main.add(t, forMode: .common)

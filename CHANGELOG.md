@@ -2037,6 +2037,9 @@ tag from the now-released section and put it on the new top draft.
 - X-ray follow uses far less CPU on busy sessions: a changed ref, task or memory row no longer re-
   reads the whole list, repeated updates are ignored, and the work runs off the main thread so the
   app stays responsive. (#1631)
+- The Agents window's sidebar no longer rebuilds itself every second while sessions stream output:
+  it only refreshes the ages that changed, and the check for sessions on other machines slows down
+  to every 10 seconds while nothing changes (older dch clients), saving battery. (#1634)
 
 ## v2.174.0
 
