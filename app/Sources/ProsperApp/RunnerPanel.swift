@@ -70,7 +70,7 @@ final class RunnerPanel {
             model: model,
             onCommit: { [weak self] text in self?.commit(text) },
             onMeta: { [weak self] cmd in self?.performMeta(cmd) },
-            onCancel: { [weak self] in self?.dismiss() },
+            onCancel: { [weak self] in self?.dismissHandingBack() },
             onResize: { [weak self] height in self?.scheduleResize(toHeight: height) },
             onLaunch: { [weak self] url in self?.launchApp(url) },
             onOpenLink: { [weak self] hit in self?.openQuicklink(hit) },
@@ -231,7 +231,7 @@ final class RunnerPanel {
     /// toggle(prefix: "l "): any other runner, in front or behind another app, is switched to Translate there.
     func toggle(mode: RunnerMode = .universal, prefill: String = "", closing: Bool = true) {
         WindowToggle.apply(panel, open: { present(mode: mode, prefill: prefill) }, focus: { focus() },
-                           close: { closing ? dismiss() : focus() })
+                           close: { closing ? dismissHandingBack() : focus() })
     }
 
     /// #1113: a custom shortcut's press (its activation prefix, e.g. "o ", ":" or Translate's "l "). On
@@ -291,6 +291,12 @@ final class RunnerPanel {
 
     func dismiss() {
         offScreen(panel)
+    }
+
+    /// #1653: Esc or the hotkey closing the runner gives the keyboard back to the app it opened over. Every
+    /// other close (a launch, an open, a paste, a meta command, a file action, a click away) does not.
+    func dismissHandingBack() {
+        WindowToggle.close(handingBackTo: previousApp) { dismiss() }
     }
 
     /// Seam (#1102): a test sees the dismiss.

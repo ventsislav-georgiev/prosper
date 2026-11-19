@@ -2073,6 +2073,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Edit layout moved from the bar above the panes to the active layout row in the
   sidebar ("Edit" / "Done"); the single-session view no longer shows it or an empty bar, and it
   never switches you to another layout. (#1646)
+- Pressing Escape (or Command-C, or the shortcut again) in clipboard history or the runner now
+  returns you to the app you were using, instead of bringing up a Prosper window such as Agent
+  Sessions. (#1653)
 
 ## v2.174.0
 

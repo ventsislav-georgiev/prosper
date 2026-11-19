@@ -119,7 +119,7 @@ final class ClipboardPanel {
     /// with its search and selection kept (the operator's report: it used to close), key closes.
     /// The status menu (`closing` false) opens or focuses and never closes.
     func toggle(closing: Bool = true) {
-        WindowToggle.apply(panel, open: { present() }, focus: { focus() }, close: { closing ? dismiss() : focus() })
+        WindowToggle.apply(panel, open: { present() }, focus: { focus() }, close: { closing ? dismissHandingBack() : focus() })
     }
 
     /// #1102: back in front and key, the search kept. The paste target follows the app or Prosper
@@ -181,9 +181,14 @@ final class ClipboardPanel {
         if let origin { panel.setFrameOrigin(origin) } else { panel.centerOnScreen() }
     }
 
-    /// Esc: while a paste waits on an upload (#632) it cancels that upload and the panel stays.
-    private func escape() {
-        if !wait.escape() { dismiss() }
+    /// Esc: while a paste waits on an upload (#632) it cancels that upload and the panel stays. Internal for #1653's rows.
+    func escape() {
+        if !wait.escape() { dismissHandingBack() }
+    }
+
+    /// #1653: a close without a paste (Esc, Command-C, the hotkey) gives the keyboard back to the app it opened over.
+    private func dismissHandingBack() {
+        WindowToggle.close(handingBackTo: previousApp) { dismiss() }
     }
 
     func dismiss() {
@@ -193,10 +198,10 @@ final class ClipboardPanel {
 
     /// ⌘C: copy the selected entry to the system pasteboard and close, WITHOUT
     /// pasting into the previous app (that's Enter's job). Raycast-parity.
-    private func copyOnly(_ item: ClipboardItem) {
+    func copyOnly(_ item: ClipboardItem) {   // internal for #1653's rows
         guard store.receiving[item.id] == nil else { return }   // #632: nothing to copy yet
         store.copyToPasteboard(item)
-        dismiss()
+        dismissHandingBack()
     }
 
     /// #632: a row still arriving pastes once its item lands; any other row at once. Internal for PasteGuardTests.

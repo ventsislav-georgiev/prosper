@@ -130,6 +130,23 @@ enum WindowToggle {
         }
     }
 
+    // MARK: - #1653 the hand-back on a close without a paste
+
+    /// #1653: Esc, Command-C or the hotkey closing the runner or Clipboard History gives the keyboard back to
+    /// `target`, the app the panel opened over. The panel activated Prosper, so ordering it out alone lets AppKit
+    /// make Prosper's next window (Agent Sessions) key. Only while Prosper is still the frontmost app (the user
+    /// did not go to another app), no Prosper window of its own is key (one the user went to keeps it) and the
+    /// target is another live app (opened over Agent Sessions or Settings, that window keeps the keyboard).
+    /// Decided before `close`, which may let AppKit make a Prosper window key; activated after it.
+    @MainActor static func close(handingBackTo target: NSRunningApplication?, _ close: () -> Void) {
+        let back = target.flatMap { t in
+            !t.isTerminated && t.processIdentifier != getpid()
+                && frontmost()?.processIdentifier == getpid() && !ownWindowKey() ? t : nil
+        }
+        close()
+        if let back { _ = activate?(back) }
+    }
+
     /// Synthesizes a Cmd+V keystroke via CGEvent. Reached only through sendCommandV, never under XCTest.
     private static func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
