@@ -1,0 +1,27 @@
+{
+ "entry": 1640,
+ "filter": "SlackTimerToleranceTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "zero-leeway",
+   "file": "app/Sources/ProsperHelperProtocol/SlackTimer.swift",
+   "old": ".nanoseconds(Int(delay * 1e8))",
+   "new": ".nanoseconds(0)",
+   "expect": "killed"
+  },
+  {
+   "name": "chat-no-tolerance",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "delay / 10 : 0)",
+   "new": "0 : 0)",
+   "expect": "killed"
+  },
+  {
+   "name": "lid-asyncafter",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "SlackTimer.onMain(after: 1)",
+   "new": "DispatchQueue.main.asyncAfter(deadline: .now() + 1)",
+   "expect": "killed"
+  }
+ ]
+}
