@@ -631,6 +631,29 @@ extension AgentWindowD1Tests {
         XCTAssertLessThanOrEqual(slot.maxX, edit.minX + pixel, "off: the name before the Edit: \(slot) \(edit)")
     }
 
+    /// #1657 rider: with Shortcut off, the layout row under inline rename draws no chip either (its field's slot does not
+    /// narrow by the chip column). GUARD layout-rename-row-follows-row-details-shortcut.
+    @MainActor
+    func testAgentWindowLayoutRenameRowFollowsTheRowDetailsShortcutToggle() throws {
+        gate(true)
+        let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
+        let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
+        defer { m.close() }
+        m.setLayoutEditing(false)
+        let saveDetails = m.store?.details
+        defer { if let saveDetails { m.store?.details = saveDetails } }
+        m.beginLayoutRename(a.id)
+        XCTAssertTrue(m.layoutRenaming == a.id, "the rename row is up")
+        let on = sidebarProbes(m, ["layoutChip 1", "layoutChip 2"])
+        XCTAssertNotNil(on["layoutChip 1"], "on: the renamed row draws its chip: \(on.keys.sorted())")
+        var off = AgentIslandRowDetails.all
+        off.shortcut = false
+        m.store?.details = off
+        let f = sidebarProbes(m, ["layoutChip 1", "layoutChip 2"])
+        XCTAssertTrue(f["layoutChip 1"] == nil, "off: the renamed row's chip is gone: \(f.keys.sorted())")
+        XCTAssertTrue(f.keys.allSatisfy { !$0.hasPrefix("layoutChip ") }, "off: no layout chip, renamed row included: \(f.keys.sorted())")
+    }
+
     /// #1648: the button itself is pressed (the hosted tree's accessibilityPerformPress, what VoiceOver does; never a posted
     /// event): the label flips Edit layout -> Done editing layout and `layoutEditing` with it, then back.
     @MainActor

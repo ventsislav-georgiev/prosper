@@ -1333,9 +1333,9 @@ struct AgentLayoutsSection: View {
             }
         ForEach(folded ? [] : rows) { r in
             if model.layoutRenaming == r.id {
-                AgentLayoutRowView(row: r, edit: model.layouts?.layouts.first { $0.id == r.id }?.name ?? "") {
+                AgentLayoutRowView(row: r, edit: model.layouts?.layouts.first { $0.id == r.id }?.name ?? "", end: {
                     model.endLayoutRename(r.id, $0)
-                }
+                }, showShortcut: show.shortcut)
             } else {
                 Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, editLabel: r.active ? editLabel : nil, showShortcut: show.shortcut) }
                     .buttonStyle(.plain)
