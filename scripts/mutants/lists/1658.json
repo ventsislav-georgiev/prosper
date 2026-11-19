@@ -43,6 +43,13 @@
    "old": "            closing.map { cancelFormOfClosed($0, shown: shown) }\n",
    "new": "\n",
    "expect": "killed"
+  },
+  {
+   "name": "perform-pane-counts-as-shown",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "closing.map { cancelFormOfClosed($0, shown: shown) }",
+   "new": "closing.map { cancelFormOfClosed($0, shown: $0) }",
+   "expect": "killed"
   }
  ]
 }
