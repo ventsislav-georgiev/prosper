@@ -2289,28 +2289,8 @@ struct AgentDetailView: View {
             // QA #668 F1: an ended session's held row is display-only.
             let ended = model.focusedEnded
             VStack(spacing: 0) {
-                // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
                 let id = model.layout.focused
-                let panes = [.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
-                    + AgentWindowControls.paneMenu(model, pane: id)
-                Group {
-                    if compact {
-                        AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
-                                              ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
-                                              pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                              switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
-                    } else {
-                        AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
-                                           todos: transcript.todos,
-                                           todosOpen: todosChip(floatingTodos),
-                                           store: model.store, ask: { model.ask($0, s) }, ended: ended,
-                                           rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
-                                           endRename: { model.endRename($0, $1) }, panes: panes,
-                                           pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                           switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
-                    }
-                }
-                .modifier(AgentPaneProbe(kind: "header"))
+                header(row, s)
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 VStack(spacing: 0) {
                     // #1477: gate on, an Ended pane's terminal keeps its last frame under the Ended chip and card
@@ -2394,21 +2374,52 @@ struct AgentDetailView: View {
         AgentTerminalPane(controller: model.terminal, open: { model.openSelected() })
             .frame(minHeight: 0, maxHeight: .infinity)
             .modifier(AgentPaneProbe(kind: "terminal"))   // tests only: the terminal's own frame, before the overlay (nil probe: nothing)
-            .overlay(alignment: .top) {
-                VStack(spacing: 0) {
-                    overTop(row, s)
-                    XrayRecapStrip(pane: model.layout.focused, target: XrayTarget.of(row))   // #1625
-                    if let u = model.unsentFirst, u.key == s.key, !model.focusedEnded {
-                        AgentUnsentFirstHost(model: model, terminal: model.terminal)
-                    }
-                    if transcript.todosOpen, let todos = transcript.todos {
-                        AgentTodosList(todos: todos)
-                            .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
-                            .background(Neon.card)
-                            .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
-                    }
-                }
+            .overlay(alignment: .top) { terminalOverTop(row, s) }
+    }
+
+    /// The focused session's header: one-line with several panes, else the full one. #1645: AgentPaneTerminalColumn
+    /// draws it too.
+    @ViewBuilder func header(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
+        // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
+        let id = model.layout.focused, ended = model.focusedEnded
+        let panes = [.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
+            + AgentWindowControls.paneMenu(model, pane: id)
+        Group {
+            if compact {
+                AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
+                                      ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
+                                      pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
+                                      switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
+            } else {
+                AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
+                                   todos: transcript.todos,
+                                   todosOpen: todosChip(floatingTodos),
+                                   store: model.store, ask: { model.ask($0, s) }, ended: ended,
+                                   rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
+                                   endRename: { model.endRename($0, $1) }, panes: panes,
+                                   pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
+                                   switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
             }
+        }
+        .modifier(AgentPaneProbe(kind: "header"))
+    }
+
+    /// What floats over the focused session's terminal top: the notice, the question, the recap strip, the unsent
+    /// first message, the todo list. #1645: AgentPaneTerminalColumn draws it too.
+    func terminalOverTop(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
+        VStack(spacing: 0) {
+            overTop(row, s)
+            XrayRecapStrip(pane: model.layout.focused, target: XrayTarget.of(row))   // #1625
+            if let u = model.unsentFirst, u.key == s.key, !model.focusedEnded {
+                AgentUnsentFirstHost(model: model, terminal: model.terminal)
+            }
+            if transcript.todosOpen, let todos = transcript.todos {
+                AgentTodosList(todos: todos)
+                    .padding(.horizontal, sz(16)).padding(.bottom, sz(8))
+                    .background(Neon.card)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Neon.stroke).frame(height: 1) }
+            }
+        }
     }
 
     /// #900 B2 step 6b2c (R900-6b1-4, 3.3, 224): a refused split's notice (a fixed product string) belongs to the focused
@@ -2770,8 +2781,15 @@ struct AgentPaneArea: View {
         if model.paneArea != area { model.paneArea = area }
     }
 
+    /// #1645: gate on, a terminal pane is one AgentPaneTerminalColumn focused or not, so a focus switch keeps both panes'
+    /// terminal views (was: the branch below swapped for both, a new view, surface and dch attach each, #1615's remount).
     @ViewBuilder func pane(_ id: UUID, compact: Bool) -> some View {
-        if id == model.layout.focused {
+        let focused = id == model.layout.focused
+        if AgentPaneLayout.splitsEnabled, let r = model.runtimes[id],
+           let shown = AgentPaneTerminalColumn.shown(model, r, focused: focused) {
+            AgentPaneTerminalColumn(model: model, runtime: r, transcript: r.transcript, shown: shown, focused: focused,
+                                    scrolls: scrolls, compact: compact)
+        } else if focused {
             AgentDetailView(model: model, transcript: model.transcript, scrolls: scrolls, compact: compact)
         } else if let r = model.runtimes[id] {
             AgentUnfocusedPane(model: model, runtime: r, transcript: r.transcript, interaction: model.interaction,
@@ -2928,6 +2946,130 @@ struct AgentPaneContainer: ViewModifier {
             content.accessibilityElement(children: .contain).accessibilityLabel(label ?? "")
         } else {
             content
+        }
+    }
+}
+
+/// #1645: gate on, a pane that draws a terminal (a local session's, its Ended pane's kept frame or card, a listed remote's),
+/// focused or not: the focused pane's header and overlays by AgentDetailView's rule, an unfocused pane's by
+/// AgentUnfocusedPane's, the terminal at the same place in both. A focus switch changes only the header and the
+/// overlays: the pane's AgentTerminalHostView, its libghostty surface and its dch client stay (no new view, no #1615
+/// remount, no resize), and libghostty's own focus state moves the cursor (the window's first responder).
+struct AgentPaneTerminalColumn: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
+    @ObservedObject var model: AgentWindowModel
+    @ObservedObject var runtime: AgentPaneRuntime
+    @ObservedObject var transcript: AgentTranscriptModel
+    let shown: Shown
+    let focused: Bool
+    var scrolls = true
+    var compact = false
+
+    enum Shown {
+        case local(AgentSidebar.Row, AgentSession, ended: Bool)
+        case remote(AgentSidebar.Row, AgentSidebar.Remote)
+    }
+
+    /// What pane `r` draws here; nil: no terminal pane (the New session form, History, a placeholder, empty), drawn by
+    /// AgentDetailView or AgentUnfocusedPane as before. Focused: AgentDetailView's rule (the selected row); unfocused:
+    /// AgentUnfocusedPane's (Ended's kept row, the live session's row, then a listed remote).
+    @MainActor static func shown(_ m: AgentWindowModel, _ r: AgentPaneRuntime, focused: Bool) -> Shown? {
+        if focused {
+            guard m.newSession == nil, let row = m.selectedRow else { return nil }
+            if let s = row.session { return .local(row, s, ended: m.focusedEnded) }
+            return row.remote.map { .remote(row, $0) }
+        }
+        if let e = r.ended, let s = e.row.session { return .local(e.row, s, ended: true) }
+        if case .live(let s)? = r.content, let row = m.row(.live(s.key)) { return .local(row, s, ended: false) }
+        if let x = m.paneRemote(r.pane), let row = m.row(.remote(host: x.host, name: x.name)) { return .remote(row, x) }
+        return nil
+    }
+
+    /// The focused pane's parts (its header and overlays), AgentDetailView's own.
+    var detail: AgentDetailView { AgentDetailView(model: model, transcript: transcript, scrolls: scrolls, compact: compact) }
+
+    var row: AgentSidebar.Row {
+        switch shown { case let .local(row, _, _), let .remote(row, _): row }
+    }
+
+    /// An Ended pane without its kept frame draws the ended card instead.
+    var terminalShown: Bool {
+        if case .local(_, _, true) = shown { return model.keptFrame(runtime.pane) != nil }
+        return true
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Neon.stroke).frame(height: 1)
+            VStack(spacing: 0) {
+                if terminalShown {
+                    // The one terminal of this pane, focused or not: model.terminal is this runtime's with the gate on.
+                    AgentTerminalPane(controller: model.paneTerminal(runtime), open: open)
+                        .frame(minHeight: 0, maxHeight: .infinity)
+                        .modifier(AgentPaneProbe(kind: "terminal"))
+                        .overlay(alignment: .top) { if focused { overTop } }
+                        .overlay { connect }
+                } else {
+                    AgentTerminalCard(icon: "stop.circle", text: "Session ended")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Neon.bgBottom)
+                        .overlay(alignment: .top) { if focused, case let .local(row, s, _) = shown { detail.overTop(row, s) } }
+                }
+            }
+            // #1351: over, never resizing. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
+            .overlay(alignment: .trailing) {
+                if focused && !compact { XrayDrawer(pane: runtime.pane, target: XrayTarget.of(row)) }
+            }
+        }
+    }
+
+    @ViewBuilder var header: some View {
+        switch shown {
+        case let .local(row, s, ended):
+            if focused {
+                detail.header(row, s)
+            } else {
+                AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
+                                      ask: { model.ask($0, s) }, open: { model.openSession(s) },
+                                      // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
+                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
+                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
+                                      xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
+                    .modifier(AgentPaneProbe(kind: "header"))
+            }
+        case let .remote(row, x):
+            AgentRemoteHeader(row: row, remote: x, pane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))
+                .modifier(AgentPaneProbe(kind: "header"))
+        }
+    }
+
+    var open: () -> Void {
+        guard case let .local(_, s, _) = shown else { return {} }
+        return focused ? { model.openSelected() } : { model.openSession(s) }
+    }
+
+    @ViewBuilder var overTop: some View {
+        switch shown {
+        case let .local(row, s, _): detail.terminalOverTop(row, s)
+        case let .remote(row, _): XrayRecapStrip(pane: runtime.pane, target: XrayTarget.of(row))   // #1625
+        }
+    }
+
+    /// #1477 (11.3): an unfocused pane over the cap or the session's second pane: its last frame and Connect.
+    @ViewBuilder var connect: some View {
+        if !focused, model.connectPanes.contains(runtime.pane) {
+            switch shown {
+            case .local(_, _, false):
+                AgentTerminalCard(icon: "pause.circle", text: "Not connected") {
+                    AgentPillButton(title: "Connect", icon: "arrow.right.circle", tint: Neon.blue) { model.focusPane(runtime.pane) }
+                }
+            case .remote:
+                AgentTerminalCard(icon: "pause.circle", text: "Not connected") {
+                    AgentPillButton(title: "Connect", icon: "arrow.right.circle", tint: Neon.blue) { model.connectPane(runtime.pane) }
+                }
+            case .local:
+                EmptyView()
+            }
         }
     }
 }

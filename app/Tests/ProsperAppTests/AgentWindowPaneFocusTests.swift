@@ -189,6 +189,93 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1645: gate on, two live terminal panes (fake clients) hosted in a never-shown window, the keys in the focused
+    /// pane: a focus switch, there and back, does NO terminal work. Counted per switch, each pinned at 0: host views made
+    /// (each pane keeps its AgentTerminalHostView, the object libghostty's surface lives in; the window holds only those
+    /// two), clients started or ended, screens replaced (attach generation, screen object), pty resizes, redraw requests,
+    /// view size changes. Only the keys move: the focused pane's view is the first responder, the other's is not.
+    /// Red at base: AgentPaneArea.pane swapped AgentDetailView / AgentUnfocusedPane for both panes, so both got a new
+    /// host view (a new surface, then #1615's remount: a new dch client and a replay, the visible flicker).
+    @MainActor
+    func testPaneFocusSwitchKeepsBothTerminalViewsAndDoesNoTerminalWork() throws {
+        try withPaneMenu(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            let log = splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            let first = m.layout.focused, second = try XCTUnwrap(m.layout.order.last)
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            endRests(log)
+            let panes = [first, second]
+            let terminals = { panes.compactMap { m.runtimes[$0]?.terminal } }
+            let views = { terminals().compactMap(\.view) }
+            paneFocusSettle(host) { views().count == 2 && views().allSatisfy { $0.window === win } && terminals().allSatisfy { $0.phase == .live } }
+            XCTAssertTrue(m.focusSelection())
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
+            let before = views(), made = terminals()
+            XCTAssertEqual(before.count, 2, "both panes draw a terminal view")
+            XCTAssertFalse(before.first === before.last, "one view per pane")
+            XCTAssertEqual(log.spawned.count, 2, "both panes attached")
+            let children = ["api", "web"].compactMap { log.children[$0] }
+            XCTAssertEqual(children.count, 2)
+            let generations = made.map(\.generation), screens = made.map(\.screen), sizes = before.map(\.frame.size)
+            let resizes = children.map(\.resizes.count), redraws = children.map(\.redraws)
+            for (to, why) in [(second, "focus to web"), (first, "focus back to api")] {
+                m.focusPane(to)
+                XCTAssertEqual(m.layout.focused, to, why)
+                paneFocusSettle(host) { false }   // every pass of the settle: the flip has drawn
+                let after = views()
+                XCTAssertEqual(after.count, 2, why)
+                XCTAssertTrue(after.first === before.first, "\(why): api's host view kept (no new surface)")
+                XCTAssertTrue(after.last === before.last, "\(why): web's host view kept (no new surface)")
+                let shown = focusViews(host, AgentTerminalHostView.self)
+                XCTAssertEqual(shown.count, 2, "\(why): no second view for a pane")
+                XCTAssertTrue(shown.allSatisfy { v in before.contains { $0 === v } }, "\(why): the views in the window are the kept ones")
+                XCTAssertEqual(log.spawned.count, 2, "\(why): 0 clients started")
+                XCTAssertEqual(children.map(\.terminated).reduce(0, +), 0, "\(why): 0 clients ended")
+                XCTAssertEqual(terminals().map(\.generation), generations, "\(why): 0 attaches")
+                XCTAssertTrue(zip(terminals().map(\.screen), screens).allSatisfy { $0 === $1 }, "\(why): 0 screens replaced")
+                XCTAssertEqual(children.map(\.resizes.count), resizes, "\(why): 0 pty resizes")
+                XCTAssertEqual(children.map(\.redraws), redraws, "\(why): 0 redraw requests")
+                XCTAssertEqual(after.map(\.frame.size), sizes, "\(why): 0 view resizes")
+                let focusedView = try XCTUnwrap(m.runtimes[to]?.terminal?.view, why)
+                XCTAssertTrue(win.firstResponder === focusedView, "\(why): the keys followed the focused pane")
+                XCTAssertEqual(after.filter { win.firstResponder === $0 }.count, 1, "\(why): one pane holds the keys")
+            }
+            XCTAssertFalse(win.isVisible, "never shown")
+            XCTAssertFalse(win.isKeyWindow, "never key")
+        }
+    }
+
+    /// #1645: the old focused pane's kept terminal view gives the keys up when focus moves to a pane that takes none (an
+    /// empty pane: focusSelection refuses), as it did at base by leaving the window. Its view stays (no remake).
+    @MainActor
+    func testPaneFocusSwitchToAPaneWithoutInputTakesTheKeysFromTheKeptView() throws {
+        try withPaneMenu(true) {
+            let m = windowModel(store([session("api", .idle)]), layouts: layoutSuite())
+            _ = splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), nil]))
+            let first = m.layout.focused, empty = try XCTUnwrap(m.layout.order.last)
+            let (win, host) = focusWindow(m)
+            defer { win.close() }
+            XCTAssertTrue(m.focusSelection())
+            paneFocusSettle(host) { paneFocusBox(m).map { win.firstResponder === $0 } ?? false }
+            let api = try XCTUnwrap(paneFocusBox(m))
+            XCTAssertTrue(win.firstResponder === api, "the keys in api's terminal")
+            m.focusPane(empty)
+            XCTAssertEqual(m.layout.focused, empty)
+            XCTAssertFalse(win.firstResponder === api, "api is unfocused: its terminal gave up the keys at once")
+            paneFocusSettle(host) { false }
+            XCTAssertTrue(m.runtimes[first]?.terminal?.view === api, "api's view kept across the switch")
+            XCTAssertFalse(win.firstResponder === api, "and it never takes them back")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
     /// Gate on (R900-6b1-1): open to the side and a plain click follow the same rule: the focused pane AFTER the action
     /// has the keys. Open to the side focuses the NEW pane: its box takes them, not the old pane's (which goes inert).
     @MainActor

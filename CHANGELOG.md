@@ -2062,6 +2062,8 @@ tag from the now-released section and put it on the new top draft.
   is back. (#1639)
 - The X-ray ref card footer now reads "This session ≥9" instead of "≥9 session", and the card's
   First mention shows the whole sentence when the line was cut short. (#1641)
+- Agent Sessions layouts: switching the focused pane no longer flickers or redraws both terminals;
+  only the focus ring and cursor change. (#1645)
 
 ## v2.174.0
 
