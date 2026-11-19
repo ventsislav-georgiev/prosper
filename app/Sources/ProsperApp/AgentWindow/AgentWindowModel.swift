@@ -466,6 +466,13 @@ final class AgentWindowModel: ObservableObject {
         // pick, a nudge) ends a drag first: its live ratio is saved once, then this change by the didSet's rule.
         willSet { if dividerDrag != nil, !dragMoving { dragEnded() } }
         didSet {
+            // #1645: the old focused pane's terminal view outlives a focus switch now (AgentPaneTerminalColumn), so it no
+            // longer drops the keys by leaving the window: it gives them up here, before adopt's focusSelection asks the
+            // new pane's (pending until that one is live). Read before syncRuntimes can drop a closed pane's runtime.
+            if AgentPaneLayout.splitsEnabled, layout.focused != oldValue.focused,
+               let v = runtimes[oldValue.focused]?.terminal?.view, let w = v.window, w.firstResponder === v {
+                w.makeFirstResponder(nil)
+            }
             // 4.1a: a retarget or a closed pane loses its sight; a layout switch (another id) keeps every layout's.
             if oldValue.id == layout.id { lastLive = AgentPaneLayout.retargeted(lastLive, from: oldValue, to: layout) }
             syncRuntimes(switched: oldValue.id != layout.id)

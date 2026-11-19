@@ -74,15 +74,24 @@ extension AgentWindowD1Tests {
                 return Self.viewWords(AgentUnfocusedPane(model: m, runtime: r, transcript: r.transcript,
                                                          interaction: m.interaction, scrolls: false).body)
             }
-            let live = try words("a")
-            XCTAssertTrue(live.contains { $0.hasPrefix("AgentTerminalPane") }, "control: a live pane draws its terminal")
-            XCTAssertFalse(live.contains("Session ended"), "control: no ended card on a live pane")
+            // #1645: gate on, AgentPaneArea.pane draws a terminal pane as AgentPaneTerminalColumn (focused or not): same rule.
+            @MainActor func column(_ n: String) throws -> [String] {
+                let r = try runtime(m, n)
+                let shown = try XCTUnwrap(AgentPaneTerminalColumn.shown(m, r, focused: false), "\(n): a terminal pane")
+                return Self.viewWords(AgentPaneTerminalColumn(model: m, runtime: r, transcript: r.transcript, shown: shown,
+                                                              focused: false, scrolls: false, compact: true).body)
+            }
+            for live in [try words("a"), try column("a")] {
+                XCTAssertTrue(live.contains { $0.hasPrefix("AgentTerminalPane") }, "control: a live pane draws its terminal")
+                XCTAssertFalse(live.contains("Session ended"), "control: no ended card on a live pane")
+            }
             st.sessions = [sa]
             XCTAssertTrue(try runtime(m, "b").ended != nil, "b is Ended")
             XCTAssertTrue(m.keptFrame(try paneID(m, "b")) == nil, "it never attached: no kept frame")
-            let ended = try words("b")
-            XCTAssertTrue(ended.contains("Session ended"), "the ended card")
-            XCTAssertFalse(ended.contains { $0.hasPrefix("AgentTerminalPane") }, "no terminal under it")
+            for ended in [try words("b"), try column("b")] {
+                XCTAssertTrue(ended.contains("Session ended"), "the ended card")
+                XCTAssertFalse(ended.contains { $0.hasPrefix("AgentTerminalPane") }, "no terminal under it")
+            }
             endRests(log)
             XCTAssertFalse(log.spawned.contains("b"), "nothing attaches to the ended session")
         }
