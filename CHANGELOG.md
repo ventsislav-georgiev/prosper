@@ -2016,8 +2016,10 @@ tag from the now-released section and put it on the new top draft.
 - X-ray Search: a remote host whose dch cannot do project-wide search no longer makes the panel read
   one session for good when the search failed for another reason; a refused search form now falls
   back to a normal read. (#1622)
-- X-ray: the issue and pull request lookups through your gh login can be turned off in Settings >
-  Agent Sessions ("Look up issues and pull requests on GitHub"); they stay on by default. (#1623)
+- X-ray: the issue and pull request lookups through gh can be turned off in Settings > Agent
+  Sessions ("Look up issues and pull requests on GitHub"); off covers this Mac and remote hosts
+  running dch 1.113.0 or later (an older host still looks them up, with its own gh login). They stay
+  on by default. (#1623)
 
 ## v2.174.0
 
