@@ -206,23 +206,61 @@ final class XrayRefResultsTests: XCTestCase {
         return XrayRefPopover.footer(c, onScreen: onScreen)
     }
 
-    /// Red at base (no footer). Each slot at partial and at done: "N on screen", "≥12 session", "9 in 3 others",
+    /// Red at base (no footer). Each slot at partial and at done: "N on screen", "This session ≥12" (#1641), "9 in 3 others",
     /// "searching more…" until done (M-searching), a light read that ended partial "≥21 · click for all" (M-click: a
     /// full one too); no others slot at 0 sessions (M-zero).
     func testEachFooterSlotAtPartialAndDone() {
         let ge = "\u{2265}"
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: false), onScreen: 2),
-                       ["2 on screen", "\(ge)12 session", "\(ge)9 in 3 others", "searching more\u{2026}"], "partial: no done yet")
+                       ["2 on screen", "This session \(ge)12", "\(ge)9 in 3 others", "searching more\u{2026}"], "partial: no done yet")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true), onScreen: 2),
-                       ["2 on screen", "12 session", "9 in 3 others"], "done, complete")
+                       ["2 on screen", "This session 12", "9 in 3 others"], "done, complete")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true, partial: true), light: true),
-                       ["\(ge)12 session", "\(ge)9 in 3 others", "\(ge)21 \u{00B7} click for all"], "a light read ended partial")
+                       ["This session \(ge)12", "\(ge)9 in 3 others", "\(ge)21 \u{00B7} click for all"], "a light read ended partial")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true, partial: true)),
-                       ["\(ge)12 session", "\(ge)9 in 3 others"], "a full read partial: no click for all")
+                       ["This session \(ge)12", "\(ge)9 in 3 others"], "a full read partial: no click for all")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true), light: true),
-                       ["12 session", "9 in 3 others"], "a light read that read all: nothing more to click for")
+                       ["This session 12", "9 in 3 others"], "a light read that read all: nothing more to click for")
         XCTAssertEqual(Self.footer(Self.stream(session: 4, project: 0, sessions: 0, done: false), light: true),
-                       ["\(ge)4 session", "searching more\u{2026}"], "never 0 in 0 others")
+                       ["This session \(ge)4", "searching more\u{2026}"], "never 0 in 0 others")
+    }
+
+    /// #1641: the operator's card: footer "≥9 session" read as a broken label. Red at TIP: "\u{2265}9 session".
+    func testFooterSessionSlotIsALabelledPhrase() {
+        let slots = Self.footer(Self.stream(session: 9, project: 0, sessions: 0, done: false))
+        XCTAssertEqual(slots.first, "This session \u{2265}9")
+        XCTAssertFalse(slots.contains { $0.hasSuffix(" session") }, "no count-then-session fragment")
+    }
+
+    static func mention(line: String, sentence: String?) -> XrayRefStream {
+        let sent = sentence.map { #","sentence":"\#($0)","span":null"# } ?? ""
+        let m = #"{"schema":1,"mention":{"session":"api","chapter":"f12:0","at":1794304801,"line":"\#(line)","offset":0,"live":false,"project":"-Users-example-acme","turn":1,"who":"assistant","tool":null\#(sent)}}"#
+        return XrayRefStreamTests.parse([XrayRefStreamTests.first, m, XrayRefStreamTests.done])
+    }
+
+    /// #1641 (1): the First mention field shows dch's sentence when it holds more than the line (the line is cut at
+    /// lineCap 200). Red at TIP: the field drew m.line, the cut 200 characters.
+    func testFirstMentionShowsTheSentenceWhenLongerThanTheLine() {
+        let long = "Decision for you (#12): " + String(repeating: "pick a or b ", count: 25) + "now"   // 327 characters, under 400 bytes
+        let c = XrayRefContext(Self.mention(line: long, sentence: long), ref: "#12", tasks: nil, memory: nil)
+        let m = c.firstMention
+        XCTAssertEqual(m?.line.count, XrayRefStream.lineCap, "the parse cut the line")
+        XCTAssertEqual(m.map(XrayRefPopover.firstMentionText), long)
+    }
+
+    /// #1641 (1), (3): a heading line ("Label (KEY):") and dch's sentence of it are the same text: dch bounds the sentence
+    /// at the line's ends, so the card shows the line and nothing more (never made-up text); and no definition is
+    /// made of it on Prosper's side (a ticket's definitions are dch's define rule). Pins today's behaviour.
+    func testHeadingMentionShowsItsLineAndMakesNoDefinition() {
+        let head = "Decision for you (#12):"
+        for s in [head, nil] {
+            let c = XrayRefContext(Self.mention(line: head, sentence: s), ref: "#12", tasks: nil, memory: nil)
+            XCTAssertTrue(c.definitions.isEmpty, "no Prosper-side definition from a heading mention")
+            XCTAssertEqual(c.heading, "First mention")
+            XCTAssertEqual(c.firstMention.map(XrayRefPopover.firstMentionText), head)
+        }
+        let short = XrayRefContext(Self.mention(line: "Work on #12 please", sentence: "#12 please"), ref: "#12", tasks: nil, memory: nil)
+        XCTAssertEqual(short.firstMention.map(XrayRefPopover.firstMentionText), "Work on #12 please", "a shorter sentence keeps the line")
     }
 
     /// Red at base (no hook): the card had no on-screen count. Red with M-onscreen (every mark counted): "issue:#12"

@@ -2060,6 +2060,8 @@ tag from the now-released section and put it on the new top draft.
   first appears, so opening a long session costs less disk and battery. (#1635)
 - Repeated "host unreachable" polls no longer slow down, so the notice clears right after the host
   is back. (#1639)
+- The X-ray ref card footer now reads "This session ≥9" instead of "≥9 session", and the card's
+  First mention shows the whole sentence when the line was cut short. (#1641)
 
 ## v2.174.0
 

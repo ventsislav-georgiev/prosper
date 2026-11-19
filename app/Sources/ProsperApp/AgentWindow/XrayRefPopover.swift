@@ -139,7 +139,7 @@ struct XrayRefPopover: View {
         let ge = c.partial ? "\u{2265}" : ""
         var out = onScreen > 0 ? ["\(onScreen) on screen"] : []
         if let n = c.rawCounts {
-            out.append("\(ge)\(n.session) session")
+            out.append("This session \(ge)\(n.session)")   // #1641: a label, not "≥9 session"
             if n.projectSessions > 0 { out.append("\(ge)\(n.project) in \(n.projectSessions) others") }
         }
         if !c.done {
@@ -221,7 +221,7 @@ struct XrayRefPopover: View {
             field(Self.label(d) + (d.mark.map { " \u{00B7} " + $0 } ?? ""),
                   ([d.passage] + [d.url, d.status].compactMap { $0 }).filter { !$0.isEmpty }.joined(separator: "\n"))
         }
-        if let m = c.firstMention { field("First mention", m.line) }
+        if let m = c.firstMention { field("First mention", Self.firstMentionText(m)) }
     }
 
     /// #1560: the resolver block: `ok`'s title, subtitle and lines as before; any other state its one plain line alone
@@ -326,6 +326,14 @@ struct XrayRefPopover: View {
         guard let s = m.sentence else { return lead + Text(verbatim: m.line) }
         return lead + Text(verbatim: s.before) + Text(verbatim: s.hit).fontWeight(.semibold).foregroundColor(Neon.blue)
             + Text(verbatim: s.after)
+    }
+
+    /// #1641: the first mention's text: dch's sentence when it holds more than the line (the line is cut at lineCap,
+    /// the sentence at 400 bytes), else the line. dch bounds the sentence at the line's ends, so a heading line
+    /// ("Decision for you (OQ-185):") shows only itself: nothing past it is sent, and nothing is made up here.
+    static func firstMentionText(_ m: XrayRefStream.Mention) -> String {
+        let said = m.sentence.map { $0.before + $0.hit + $0.after } ?? ""
+        return said.count > m.line.count ? said : m.line
     }
 
     static func spokenRow(_ m: XrayRefStream.Mention) -> String {
