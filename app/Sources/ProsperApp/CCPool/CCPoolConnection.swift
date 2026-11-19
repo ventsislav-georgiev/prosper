@@ -158,7 +158,8 @@ final class CCPoolConnection: @unchecked Sendable {
     }
 
     let queue = DispatchQueue(label: "com.prosper.ccpool.conn")
-    private let conn: NWConnection
+    /// #1675: the client socket (CCPoolFDTransport in production; NWConnection before).
+    private let conn: CCPoolTransport
     // X16: the dependencies are held strongly, never the service: a callback that outlives the
     // service (released without stop()) must find what it needs, not trap on a dead reference.
     private let config: CCPoolServiceConfig
@@ -212,7 +213,7 @@ final class CCPoolConnection: @unchecked Sendable {
     private var startedAt = 0.0
     private var routed = "pick"
 
-    init(conn: NWConnection, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
+    init(conn: CCPoolTransport, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
          upstream: CCPoolUpstream, boundPort: UInt16, record: CCPoolUsageRecord? = nil, events: CCPoolEventRecord? = nil,
          onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
         self.conn = conn
@@ -245,13 +246,7 @@ final class CCPoolConnection: @unchecked Sendable {
     }
 
     func start() {
-        conn.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .failed, .cancelled: self?.close()
-            default: break
-            }
-        }
-        conn.start(queue: queue)
+        conn.start(queue: queue) { [weak self] in self?.close() }
         receive()
     }
 
@@ -274,7 +269,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func receive() {
         guard !closed else { return }
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { [weak self] data, _, done, error in
+        conn.receive { [weak self] data, done, error in
             guard let self else { return }
             var again = true
             if let data, !data.isEmpty { again = self.ingest(data) }
@@ -317,7 +312,7 @@ final class CCPoolConnection: @unchecked Sendable {
                 return true
             }
             if h.header("expect")?.lowercased() == "100-continue", length > 0 {
-                conn.send(content: Data("HTTP/1.1 100 Continue\r\n\r\n".utf8), completion: .idempotent)
+                conn.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8), completion: nil)
             }
             streamed = length > config.replayCap
             return takeBody(rest)
@@ -641,12 +636,12 @@ final class CCPoolConnection: @unchecked Sendable {
             outstanding += frame.count
             if outstanding > Self.highWater, !ex.suspended { ex.suspended = true; ex.task?.suspend() }
             let n = frame.count
-            conn.send(content: frame, completion: .contentProcessed { [weak self] error in
+            conn.send(frame) { [weak self] error in
                 guard let self else { return }
                 self.outstanding -= n
                 if error != nil { return self.close() }
                 if ex.suspended, self.outstanding < Self.lowWater { ex.suspended = false; ex.task?.resume() }
-            })
+            }
             // #1260: the tap reads its own copy after the frame is handed to the client; it cannot fail the relay.
             ex.tap?.feed(data)
         }
@@ -685,10 +680,9 @@ final class CCPoolConnection: @unchecked Sendable {
             // #1594: a cut upstream still hands the client every frame already queued: sends complete in order, so the
             // hang-up (FIN, no terminating chunk) and the cancel come after them. A bare close() could drop them.
             guard error == nil else {
-                return conn.send(content: nil, contentContext: .finalMessage, isComplete: true,
-                                 completion: .contentProcessed { [weak self] _ in self?.close() })
+                return conn.finish { [weak self] in self?.close() }
             }
-            conn.send(content: Data("0\r\n\r\n".utf8), completion: .contentProcessed { [weak self] _ in self?.close() })
+            conn.send(Data("0\r\n\r\n".utf8)) { [weak self] _ in self?.close() }
             learn(ex)
         }
     }
@@ -839,9 +833,9 @@ final class CCPoolConnection: @unchecked Sendable {
             h += "\(k): \(v)\r\n"
         }
         h += "Connection: close\r\nTransfer-Encoding: chunked\r\n\r\n"
-        conn.send(content: Data(h.utf8), completion: .contentProcessed { [weak self] error in
+        conn.send(Data(h.utf8)) { [weak self] error in
             if error != nil { self?.close() }
-        })
+        }
     }
 
     private func sendHealth() {
@@ -860,7 +854,7 @@ final class CCPoolConnection: @unchecked Sendable {
         var out = Data(("HTTP/1.1 \(status) \(Self.reason(status))\r\nServer: \(CCPoolService.serverHeader)\r\n"
             + "Content-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n\(extra)Connection: close\r\n\r\n").utf8)
         out.append(body)
-        conn.send(content: out, completion: .contentProcessed { [weak self] _ in self?.close() })
+        conn.send(out) { [weak self] _ in self?.close() }
     }
 
     static func reason(_ status: Int) -> String {

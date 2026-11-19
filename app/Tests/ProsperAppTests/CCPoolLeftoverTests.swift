@@ -9,7 +9,7 @@ private final class LeftoverCounter: @unchecked Sendable {
     var count: Int { lock.withLock { n } }
 }
 
-private final class LeftoverListenerBox: @unchecked Sendable { var l: NWListener? }
+private final class LeftoverListenerBox: @unchecked Sendable { var l: CCPoolListener? }
 
 private final class LeftoverSwitch: @unchecked Sendable {
     private let lock = NSLock()

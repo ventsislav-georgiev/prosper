@@ -416,7 +416,8 @@ final class CCPoolFollowUpTests: XCTestCase {
         let r = try ccpoolPaneRig()
         guard case .running = r.service.start() else { return XCTFail("\(r.service.status)") }
         XCTAssertTrue(r.model.proxyRunning)
-        let stale = try NWListener(using: .tcp)
+        let stale = try CCPoolListener.open(port: 0).get()
+        defer { stale.cancel() }
         r.service.listenerLost(.posix(.ENETDOWN), from: stale)
         XCTAssertTrue(r.model.proxyRunning, "a listener that is not the live one changes nothing")
         r.service.listenerLost(.posix(.ENETDOWN))

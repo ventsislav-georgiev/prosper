@@ -162,13 +162,29 @@ final class CCPoolGuardTests: XCTestCase {
         XCTAssertEqual(hits, [])
     }
 
-    // Loopback only: 127.0.0.1 and the loopback interface, no address sharing.
-    func testCCPoolListenerIsLoopbackOnly() {
-        let p = CCPoolService.listenerParameters(port: 0)
-        XCTAssertEqual(p.requiredInterfaceType, .loopback)
-        XCTAssertFalse(p.allowLocalEndpointReuse)
-        guard case .hostPort(let host, let port)? = p.requiredLocalEndpoint else { return XCTFail("no local endpoint") }
-        XCTAssertEqual(host, .ipv4(.loopback))
-        XCTAssertEqual(port, .any)
+    // Loopback only: 127.0.0.1, no port sharing. #1675: SO_REUSEADDR (past TIME_WAIT), never SO_REUSEPORT (beside a live listener).
+    func testCCPoolListenerIsLoopbackOnly() throws {
+        let l = try CCPoolListener.open(port: 0).get()
+        defer { l.cancel() }
+        var a = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(l.fd, $0, &len) } }
+        XCTAssertEqual(named, 0)
+        XCTAssertEqual(Int32(a.sin_family), AF_INET)
+        XCTAssertEqual(a.sin_addr.s_addr, UInt32(0x7f00_0001).bigEndian, "127.0.0.1 only")
+        XCTAssertNotEqual(a.sin_port, 0)
+        func opt(_ name: Int32) -> Int32 {
+            var v: Int32 = -1
+            var n = socklen_t(MemoryLayout<Int32>.size)
+            return getsockopt(l.fd, SOL_SOCKET, name, &v, &n) == 0 ? v : -1
+        }
+        XCTAssertNotEqual(opt(SO_REUSEADDR), 0)
+        XCTAssertEqual(opt(SO_REUSEPORT), 0, "never SO_REUSEPORT")
+        XCTAssertNotEqual(opt(SO_NOSIGPIPE), 0)
+        XCTAssertNotEqual(opt(SO_ACCEPTCONN), 0, "listening")
+        XCTAssertNotEqual(fcntl(l.fd, F_GETFL) & O_NONBLOCK, 0)
+        XCTAssertNotEqual(fcntl(l.fd, F_GETFD) & FD_CLOEXEC, 0)
+        let all = try swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")).map { try String(contentsOf: $0, encoding: .utf8) }.joined()
+        XCTAssertFalse(all.contains("SO_REUSE" + "PORT,"), "no CCPool source sets SO_REUSEPORT")
     }
 }

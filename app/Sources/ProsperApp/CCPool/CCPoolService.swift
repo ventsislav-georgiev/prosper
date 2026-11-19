@@ -17,7 +17,7 @@ struct CCPoolServiceConfig: Sendable {
     var portProbe: @Sendable (_ port: UInt16, _ timeout: TimeInterval) -> CCPoolPortProbe.Result = CCPoolPortProbe.probe
     /// Test seam (QA follow-up A6): runs on start()'s thread after the listener said .ready and
     /// before it is published, so a test can deliver a state change into that window. nil in production.
-    var afterReady: (@Sendable (NWListener) -> Void)? = nil
+    var afterReady: (@Sendable (CCPoolListener) -> Void)? = nil
     /// #1660: the one place a signal is sent ("Stop ccpool and start"); tests inject a recorder. The
     /// default refuses under XCTest, so no test signals a real process even without a fake.
     var signal: @Sendable (_ pid: pid_t, _ sig: Int32) -> Bool = { pid, sig in
@@ -43,7 +43,7 @@ struct CCPoolServiceConfig: Sendable {
     var parentPid: @Sendable (_ pid: pid_t) -> pid_t? = CCPoolService.parentOf
 }
 
-/// #871: the in-process ccpool proxy. HTTP/1.1 on Network.framework, loopback only. Clients point
+/// #871: the in-process ccpool proxy. HTTP/1.1 on a BSD loopback socket (#1675; Network.framework before), loopback only. Clients point
 /// `ANTHROPIC_BASE_URL` at it; every request is relayed upstream under the pool's current account,
 /// and a quota 429 benches that account and replays the request on the next one before any byte
 /// reaches the client. Nothing in the app starts it in P1.
@@ -81,7 +81,7 @@ final class CCPoolService: @unchecked Sendable {
     let eventRecord: CCPoolEventRecord
     private let queue = DispatchQueue(label: "com.prosper.ccpool.listener")
     private let lock = NSLock()
-    private var listener: NWListener?
+    private var listener: CCPoolListener?
     private var connections: [ObjectIdentifier: CCPoolConnection] = [:]
     private var _status: Status = .stopped
     private var _onStatusChange: (@Sendable () -> Void)?
@@ -117,7 +117,7 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     /// The published listener (tests deliver its state changes through its own handler, A6).
-    var currentListener: NWListener? { lock.withLock { listener } }
+    var currentListener: CCPoolListener? { lock.withLock { listener } }
 
     /// QA #739 F1: new sessions route only while the listener runs AND the pool lists an account.
     var routable: Bool {
@@ -150,16 +150,6 @@ final class CCPoolService: @unchecked Sendable {
         NSClassFromString("XCTestCase") != nil && url.host?.lowercased() == productionUpstream.host
     }
 
-    /// TCP on 127.0.0.1 only, loopback interface only. No address reuse: binding beside a live
-    /// listener on the same port must fail, never share it.
-    static func listenerParameters(port: UInt16) -> NWParameters {
-        let p = NWParameters.tcp
-        p.requiredInterfaceType = .loopback
-        p.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port) ?? .any)
-        p.allowLocalEndpointReuse = false
-        return p
-    }
-
     /// Bind and serve. Blocks up to a few seconds (port probe + bind): call it off the main thread.
     @discardableResult
     func start() -> Status {
@@ -174,77 +164,78 @@ final class CCPoolService: @unchecked Sendable {
                 return finishStart(.heldByOther, note: "port held by another program; not binding")
             }
         }
-        let l: NWListener
-        do { l = try NWListener(using: Self.listenerParameters(port: config.port)) } catch {
-            return finishStart(.failed(Self.reasonCreate), note: "listener could not be created", detail: " \(error)")
+        // #1675: a BSD socket on 127.0.0.1 with SO_REUSEADDR (CCPoolListener.open): past TIME_WAIT at once, never beside a live listener.
+        switch CCPoolListener.open(port: config.port) {
+        case .success(let l): return serve(l)
+        case .failure(.create(let c)):
+            return finishStart(.failed(Self.reasonCreate), note: "listener could not be created", detail: " \(Self.errorWord(.posix(c)))")
+        case .failure(.bind(let c)):
+            lock.withLock { bindRaced = c == .EADDRINUSE; bindError = Self.errorWord(.posix(c)) }
+            return finishStart(c == .EADDRINUSE ? .heldByOther : .failed(Self.reasonBind), note: "listener did not start")
         }
+    }
+
+    /// #1675 (for #1676): serve a listening socket made elsewhere (the port keeper's), with no probe and no bind. Fails
+    /// with reasonCreate, the fd left to its owner, unless it is an IPv4 socket bound to 127.0.0.1 and listening.
+    @discardableResult
+    func start(listening fd: Int32) -> Status {
+        if case .running = status { return status }
+        guard let l = CCPoolListener(adopting: fd) else {
+            return finishStart(.failed(Self.reasonCreate), note: "listener could not be adopted")
+        }
+        var bound = config
+        bound.port = l.port?.rawValue ?? 0
+        // The fd stays its owner's: a listener that was never started or cancelled does not close it.
+        if let why = Self.refusalUnderTest(bound) { return finishStart(.failed(why), note: why) }
+        return serve(l)
+    }
+
+    /// Publish a bound, listening socket and accept on `queue`.
+    private func serve(_ l: CCPoolListener) -> Status {
         final class Outcome: @unchecked Sendable {
-            var status: Status = .failed(CCPoolService.reasonTimeout)
-            var inUse = false, settled = false
-            var error: NWError?
-            /// A6 (b): a state change after .ready that came before start() published the listener.
+            /// A6 (b): a state change after the bind that came before start() published the listener.
             var lost = false
         }
         let outcome = Outcome()
-        let sem = DispatchSemaphore(value: 0)
-        // Runs on `queue` (Network's callbacks); formed in a nonisolated method, never @MainActor.
+        let port = l.port?.rawValue ?? 0
+        // After the bind every state but .ready/.setup means the listener no longer serves (A6): .waiting, .failed,
+        // .cancelled. Before start() published it, `lost` tells start(); after, listenerLost() finds it by identity.
         l.stateUpdateHandler = { [weak self, weak l] state in
-            // After .ready, every state but .ready/.setup means the listener no longer serves (A6):
-            // .waiting (a), .failed, .cancelled. Before start() published it, `lost` tells start();
-            // after, listenerLost() finds it by identity.
-            if outcome.settled {
-                // A freed listener is never the published one (the service holds that); and a nil
-                // `from` would mean "the current listener" to listenerLost.
-                guard let l else { return }
-                switch state {
-                case .waiting(let e), .failed(let e):
-                    outcome.lost = true
-                    self?.listenerLost(e, from: l)
-                case .cancelled:
-                    outcome.lost = true
-                    self?.listenerLost(nil, from: l)
-                default: break
-                }
-                return
-            }
+            // A freed listener is never the published one (the service holds that); and a nil `from` would mean
+            // "the current listener" to listenerLost.
+            guard let l else { return }
             switch state {
-            case .ready:
-                outcome.status = .running(port: l?.port?.rawValue ?? 0)
-                outcome.settled = true
-                sem.signal()
-            case .failed(let e), .waiting(let e):
-                outcome.error = e
-                if case .posix(.EADDRINUSE) = e { outcome.status = .heldByOther; outcome.inUse = true } else { outcome.status = .failed(CCPoolService.reasonBind) }
-                outcome.settled = true
-                sem.signal()
+            case .waiting(let e), .failed(let e):
+                outcome.lost = true
+                self?.listenerLost(e, from: l)
+            case .cancelled:
+                outcome.lost = true
+                self?.listenerLost(nil, from: l)
             default: break
             }
         }
-        l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
-        l.start(queue: queue)
-        _ = sem.wait(timeout: .now() + 5)
-        if case .running = outcome.status { config.afterReady?(l) }
-        // A6 (b): decided on the listener's own queue, so a state change after .ready was either
-        // seen above (`lost`) or runs after `listener = l` and is matched by identity.
+        config.afterReady?(l)
+        // A6 (b): decided on the listener's own queue, so a state change after the bind was either seen above
+        // (`lost`) or runs after `listener = l` and is matched by identity.
         let published: Bool = queue.sync {
-            outcome.settled = true   // a late .ready after the 5 s timeout changes nothing
-            guard case .running = outcome.status else { return false }
-            if outcome.lost { outcome.status = .failed(CCPoolService.reasonLost); return false }
+            guard !outcome.lost else { return false }
             lock.withLock { listener = l }
+            // Accepted connections carry the bound port for the Host check.
+            l.start(queue: queue, accept: { [weak self] fd in self?.accept(fd, port: port) },
+                    exhausted: { [logger] in logger.note(nil, "accept paused: out of file descriptors") })
             return true
         }
         guard published else {
             l.stateUpdateHandler = nil
             l.cancel()
-            lock.withLock { bindRaced = outcome.inUse; bindError = outcome.error.map(Self.errorWord) }
-            return finishStart(outcome.status, note: "listener did not start")
+            lock.withLock { bindRaced = false; bindError = nil }
+            return finishStart(.failed(Self.reasonLost), note: "listener did not start")
         }
-        return finishStart(outcome.status, note: "proxy listening on loopback")
+        return finishStart(.running(port: port), note: "proxy listening on loopback")
     }
 
-    /// #1665: how long a bind that loses to a free-probing port keeps retrying. A closed proxy's server-side
-    /// sockets sit in TIME_WAIT for 2 x MSL (net.inet.tcp.msl 15000 ms, so 30 s) and endpoint reuse stays off,
-    /// so bind() gets EADDRINUSE until they expire: 2 x 15 s plus slack. A live holder is never retried.
+    /// #1665: how long a bind that loses to a free-probing port keeps retrying. #1675: SO_REUSEADDR binds past
+    /// TIME_WAIT at once, so this is a backstop (a socket bound but not yet listening); a live holder is never retried.
     static let timeWaitRetry: TimeInterval = 35
 
     /// P2a (d): start, and while the bind itself loses to a port the probe found free (P1 note 5:
@@ -485,8 +476,8 @@ final class CCPoolService: @unchecked Sendable {
     /// QA #734 / A6: the running listener stopped serving (`from` nil means the current one; `error`
     /// nil for a cancel nobody asked for). The status says so and the listener is dropped, so the
     /// pane offers Start again and no session routes to it.
-    func listenerLost(_ error: NWError?, from failed: NWListener? = nil) {
-        let (lost, hook) = lock.withLock { () -> (NWListener?, (@Sendable () -> Void)?) in
+    func listenerLost(_ error: NWError?, from failed: CCPoolListener? = nil) {
+        let (lost, hook) = lock.withLock { () -> (CCPoolListener?, (@Sendable () -> Void)?) in
             guard let l = listener, failed == nil || failed === l else { return (nil, nil) }
             listener = nil
             _status = .failed(Self.reasonLost)
@@ -508,7 +499,7 @@ final class CCPoolService: @unchecked Sendable {
     deinit { listener?.cancel() }
 
     func stop() {
-        let (l, conns) = lock.withLock { () -> (NWListener?, [CCPoolConnection]) in
+        let (l, conns) = lock.withLock { () -> (CCPoolListener?, [CCPoolConnection]) in
             defer { listener = nil; connections.removeAll(); _status = .stopped }
             return (listener, Array(connections.values))
         }
@@ -519,10 +510,8 @@ final class CCPoolService: @unchecked Sendable {
         eventRecord.stop()
     }
 
-    private func accept(_ nw: NWConnection) {
-        let port: UInt16
-        if case .running(let p) = status { port = p } else { port = 0 }
-        let c = CCPoolConnection(conn: nw, config: config, store: store, secrets: secrets, logger: logger,
+    private func accept(_ fd: Int32, port: UInt16) {
+        let c = CCPoolConnection(conn: CCPoolFDTransport(fd: fd), config: config, store: store, secrets: secrets, logger: logger,
                                  upstream: upstream, boundPort: port, record: usageRecord,
                                  events: eventRecord) { [weak self] id in
             self?.lock.withLock { _ = self?.connections.removeValue(forKey: id) }

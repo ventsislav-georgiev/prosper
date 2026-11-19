@@ -2102,6 +2102,7 @@ tag from the now-released section and put it on the new top draft.
 - ccpool keeps its usage record 35 days (was 14). (#1668)
 - ccpool writes its rotation events (bench, rotate, retire, throttle move, pin back, all benched)
   per account to events-YYYY-MM-DD.jsonl beside its usage record. (#1667)
+- ccpool's proxy rebinds its port at once after a restart or a takeover (no 30 s wait). (#1675)
 
 ## v2.174.0
 
