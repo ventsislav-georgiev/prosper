@@ -82,10 +82,14 @@ extension AgentWindowD1Tests {
                 m.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
                 m.home = "/Users/example"
                 m.spawnSession = { _, _, _, _ in XCTFail("no spawn"); return nil }
+                // ⌘D then ⇧⌘D: a 1000x600 area holds 500 | 500/2x300; a second ⌘D (250 wide) is refused for room, and a
+                // refused split still answers true (the refusal goes to the notice line), so every split checks its count.
                 let a = m.layout.focused
                 XCTAssertTrue(press(win, "⌘D"))
+                XCTAssertEqual(m.layout.panes.count, 2, "⌘D split a")
                 let b = m.layout.focused
-                XCTAssertTrue(press(win, "⌘D"))
+                XCTAssertTrue(press(win, "⇧⌘D"))
+                XCTAssertEqual(m.layout.panes.count, 3, "⇧⌘D split b")
                 let c = m.layout.focused
                 m.openNewSession()
                 XCTAssertTrue(m.newSession != nil, "the form is open in the focused pane c")
@@ -96,26 +100,36 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(m.perform(.closePane, pane: b))
                 XCTAssertEqual(m.layout.order, [c])
                 XCTAssertTrue(m.newSession != nil, "perform on an unfocused pane leaves the form")
-                // (a) the focused pane closes through perform
-                XCTAssertTrue(press(win, "⌘D"))
-                let d = m.layout.focused
+                // (a) the focused pane closes through perform (⌘D under the form is not a split, #1658: cancel it first)
                 m.cancelNewSession()
+                XCTAssertTrue(press(win, "⌘D"))
+                XCTAssertEqual(m.layout.panes.count, 2, "⌘D split c")
+                let d = m.layout.focused
                 m.openNewSession()
+                XCTAssertTrue(m.newSession != nil, "the form is open in d")
                 XCTAssertTrue(m.perform(.closePane, pane: d))
+                XCTAssertEqual(m.layout.order, [c])
                 XCTAssertTrue(m.newSession == nil, "perform(.closePane, pane: focused): the form went")
                 // (a) through closePane
                 XCTAssertTrue(press(win, "⌘D"))
+                XCTAssertEqual(m.layout.panes.count, 2, "⌘D split c again")
                 let e = m.layout.focused
                 m.openNewSession()
+                XCTAssertTrue(m.newSession != nil, "the form is open in e")
                 m.closePane(e)
+                XCTAssertEqual(m.layout.order, [c])
                 XCTAssertTrue(m.newSession == nil, "closePane(focused): the form went")
                 // (c) opened with c focused, focus moves to f: the form is drawn in f and goes with it
                 XCTAssertTrue(press(win, "⌘D"))
+                XCTAssertEqual(m.layout.panes.count, 2, "⌘D split c for f")
                 let f = m.layout.focused
                 m.focusPane(c)
                 m.openNewSession()
+                XCTAssertTrue(m.newSession != nil, "the form is open, c focused")
                 m.focusPane(f)
+                XCTAssertEqual(m.layout.focused, f)
                 m.closePane(f)
+                XCTAssertEqual(m.layout.order, [c])
                 XCTAssertTrue(m.newSession == nil, "the form follows focus: closing the pane it is drawn in cancels it")
             }
         }
