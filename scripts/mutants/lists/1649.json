@@ -1,0 +1,20 @@
+{
+  "entry": 1649,
+  "filter": "TranscriptOutlineTests|TranscriptOutlineBuilderTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+  "mutants": [
+    {
+      "name": "step-prompts-as-steps",
+      "file": "app/Sources/ProsperApp/AgentWindow/TranscriptVerbosity.swift",
+      "old": "    static func isStep(_ b: TranscriptBlock) -> Bool { !isPrompt(b) && b.body != .image }",
+      "new": "    static func isStep(_ b: TranscriptBlock) -> Bool { b.body != .image }",
+      "expect": "killed"
+    },
+    {
+      "name": "step-images-as-steps",
+      "file": "app/Sources/ProsperApp/AgentWindow/TranscriptVerbosity.swift",
+      "old": "    static func isStep(_ b: TranscriptBlock) -> Bool { !isPrompt(b) && b.body != .image }",
+      "new": "    static func isStep(_ b: TranscriptBlock) -> Bool { !isPrompt(b) }",
+      "expect": "killed"
+    }
+  ]
+}

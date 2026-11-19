@@ -89,15 +89,8 @@
     {
       "name": "drop-no-join",
       "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
-      "old": "                if !seg.contains(where: { !TranscriptOutline.isPrompt($0) && $0.body != .image }) {",
-      "new": "                if false, !seg.contains(where: { !TranscriptOutline.isPrompt($0) && $0.body != .image }) {",
-      "expect": "killed"
-    },
-    {
-      "name": "drop-join-images-as-steps",
-      "file": "app/Sources/ProsperApp/AgentWindow/TranscriptOutline.swift",
-      "old": "                if !seg.contains(where: { !TranscriptOutline.isPrompt($0) && $0.body != .image }) {",
-      "new": "                if !seg.contains(where: { !TranscriptOutline.isPrompt($0) }) {",
+      "old": "                if !seg.contains(where: TranscriptVerbosity.isStep) {",
+      "new": "                if false, !seg.contains(where: TranscriptVerbosity.isStep) {",
       "expect": "killed"
     }
   ]
