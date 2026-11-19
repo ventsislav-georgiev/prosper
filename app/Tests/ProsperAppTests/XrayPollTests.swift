@@ -230,7 +230,7 @@ final class XrayPollTests: XCTestCase {
             await tick(p, clock, at: 30)
             XCTAssertEqual(run.tasksReads, 3, "unreachable is not a failure: the poll goes on")
             run.tasks = Self.ok
-            await tick(p, clock, at: 45)
+            await tick(p, clock, at: 60)   // #1636: the identical 4/7 backed the spacing off to 30 s
             XCTAssertFalse(p.footer.contains("host unreachable"), "the host answered")
         }
     }
@@ -242,8 +242,8 @@ final class XrayPollTests: XCTestCase {
         await tick(p, clock, at: 15)
         XCTAssertEqual(p.tasks?.tasks.count, 4, "remote -1 (timed out dialling): the rows are kept")
         XCTAssertTrue(p.footer.contains("host unreachable"), "\(p.footer)")
-        for s in [30.0, 45] { await tick(p, clock, at: s) }
-        XCTAssertEqual(run.tasksReads, 4, "the poll goes on at 15 s")
+        for s in [30.0, 45, 60] { await tick(p, clock, at: s) }   // #1636: the identical -1 backed off: 45 is not due
+        XCTAssertEqual(run.tasksReads, 4, "the poll goes on")
     }
 
     /// #1407: an over-cap Tasks answer, local or remote, is a refusal: no Tasks tab, never "host unreachable", and no
@@ -443,9 +443,9 @@ final class XrayPollTests: XCTestCase {
             XCTAssertEqual(run.memoryReads, 2, "remote \(remote): not before 30 s")
             await tick(p, clock, at: 30)
             XCTAssertEqual(run.memoryReads, 3, "remote \(remote): at 30 s")
-            await tick(p, clock, at: 59)
+            await tick(p, clock, at: 89)   // #1636: the identical answer at +30 doubled the spacing
             XCTAssertEqual(run.memoryReads, 3)
-            await tick(p, clock, at: 60)
+            await tick(p, clock, at: 90)
             XCTAssertEqual(run.memoryReads, 4)
             XCTAssertEqual(run.tasksReads, 1, "Memory shown: no Tasks poll")
             XCTAssertEqual(run.calls.last, ["--xray", remote ? "example-host:api" : "api", "--memory", "--json"])
@@ -523,5 +523,60 @@ final class XrayPollTests: XCTestCase {
         XCTAssertEqual(run.memoryReads, 3)
         XCTAssertEqual(run.tasksReads, 2)
         XCTAssertEqual(run.cancels, 0)
+    }
+
+    // MARK: #1636 idle backoff
+
+    /// #1636: ten quiet minutes (every answer byte-identical, a tick each second) are 14 Tasks reads, not 121: the open
+    /// read, then polls at 5, 10, 20, 40, 80 and every 60 s. A remote pane: 15, 30, 60, then every 60 s.
+    /// Red at TIP: interval was a flat 5 / 15 s.
+    func testQuietStretchBacksOffToSixtySeconds() async {
+        for (remote, quiet, reads) in [(false, 600.0, 14), (true, 300.0, 8)] {
+            let clock = Clock(), run = PollRun(), p = panel(remote: remote, clock)
+            await open(p, run)
+            for s in 1...Int(quiet) { await tick(p, clock, at: TimeInterval(s)) }
+            XCTAssertEqual(run.tasksReads, reads, "remote \(remote)")
+        }
+    }
+
+    /// A changed answer puts the spacing back to the base (the next poll is 5 s on, not 60). Red when note() keeps the
+    /// count on a changed answer.
+    func testChangedAnswerResetsTheSpacing() async {
+        let clock = Clock(), run = PollRun(), p = panel(clock)
+        await open(p, run)
+        for s in [5.0, 10, 20, 40] { await tick(p, clock, at: s) }   // spacing now 40 s
+        XCTAssertEqual(run.tasksReads, 5)
+        run.tasks = (7, Data())
+        await tick(p, clock, at: 79)
+        XCTAssertEqual(run.tasksReads, 5, "not due at 79")
+        await tick(p, clock, at: 80)
+        XCTAssertEqual(run.tasksReads, 6, "the changed answer")
+        await tick(p, clock, at: 84)
+        XCTAssertEqual(run.tasksReads, 6)
+        await tick(p, clock, at: 85)
+        XCTAssertEqual(run.tasksReads, 7, "5 s after the change")
+    }
+
+    /// Hidden (window or selection) and shown again, or a tab switch: the base spacing. Red when the reset at the
+    /// hidden guard, at the isCurrent guard, or in select is gone (the next read waits 10 s, at 20).
+    func testHideShowAndTabSwitchResetTheSpacing() async {
+        for how in ["window", "selection", "tab"] {
+            let clock = Clock(), run = PollRun(), p = panel(clock)
+            var (visible, current) = (true, true)
+            p.paneState = { (visible, true) }
+            p.isCurrent = { current }
+            await open(p, run)
+            for s in [5.0, 10] { await tick(p, clock, at: s) }   // spacing now 10 s
+            XCTAssertEqual(run.tasksReads, 3, how)
+            switch how {
+            case "window": visible = false; await tick(p, clock, at: 11); visible = true
+            case "selection": current = false; await tick(p, clock, at: 11); current = true
+            default: p.select(.memory); await p.reading?.value; p.select(.tasks)
+            }
+            await tick(p, clock, at: 14)
+            XCTAssertEqual(run.tasksReads, 3, "\(how): 4 s after the last read")
+            await tick(p, clock, at: 15)
+            XCTAssertEqual(run.tasksReads, 4, "\(how): 5 s, not 10")
+        }
     }
 }

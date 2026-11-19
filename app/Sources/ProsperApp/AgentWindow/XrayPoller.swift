@@ -9,23 +9,45 @@ import AppKit
 // #1415 (gate A): the Refs tab reads that same `--json` every 30 s (Memory's cadence) while it is shown and live; a
 // Transcript pane keeps only its refs (its chapters are its own), a dch-chapters pane takes both.
 // #1475 c: a follow that carries Tasks and Memory (dch 1.91.0) stops their polls while it runs.
+// #1636: while a form's answer is byte-identical the spacing doubles (5, 10, 20, 40, 60 s; remote 15, 30, 60; Memory 30,
+// 60): a changed answer, a tab switch, or the drawer hidden and shown again goes back to the base.
+
+/// #1636: per poll form ("t" Tasks, "m" Memory, "r" Refs, "c" chapters): the last answer and how many identical ones followed.
+struct XrayQuiet {
+    private var runs: [String: Int] = [:]
+    private var last: [String: (status: Int32, out: Data)] = [:]
+    static let cap: TimeInterval = 60
+
+    mutating func note(_ key: String, _ r: (status: Int32, out: Data)) {
+        if let l = last[key], l.status == r.status, l.out == r.out { runs[key] = min((runs[key] ?? 0) + 1, 4) } else { runs[key] = 0 }
+        last[key] = r
+    }
+    func spacing(_ key: String, base: TimeInterval) -> TimeInterval { min(base * Double(1 << (runs[key] ?? 0)), max(base, Self.cap)) }
+    mutating func reset() { runs = [:]; last = [:] }
+}
 
 extension XrayPanelModel {
     /// Design 3.4 / 3.5: Tasks (#1389: and dch's chapters) 5 s for a local session, 15 s for a remote one; Memory 30 s
     /// (#1381, design 2.2).
-    var interval: TimeInterval { loaded && (tab == .memory || tab == .refs) ? 30 : target.dir == nil ? 15 : 5 }
+    var interval: TimeInterval {
+        quiet.spacing(quietKey, base: loaded && (tab == .memory || tab == .refs) ? 30 : target.dir == nil ? 15 : 5)
+    }
+    var quietKey: String {
+        loaded && tab == .memory ? "m" : loaded && tab == .refs ? "r" : tab == .prompts || tab == .responses ? "c" : "t"
+    }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
     func tick() {
         guard !stopped else { return }
         // #1475: a follow goes on (hidden keeps it)
-        guard isCurrent() else { return cancel() }   // hidden by a selection change: SIGTERM; read again on return
+        guard isCurrent() else { quiet.reset(); return cancel() }   // hidden by a selection change: SIGTERM; read again on return
         // #1475: a follow with no snapshot past the bound: today's reads instead
         if let f = follow, f.state == nil, let t = followSince, now().timeIntervalSince(t) >= DchCommand.remoteTimeout { return giveUpFollow() }
         // #1475 a2 (QA r1436 s2): a follow that ended after its snapshot (a dropped link, a serve restart or eviction):
         // the rows stay and the polls resume (the next open follows again)
         if let f = follow, f.state != nil, !f.running { detachFollow() }
         let s = paneState()
+        if !s.visible { quiet.reset() }   // #1636: shown again: the base spacing
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
         // #1389: Prompts/Responses poll dch only on a dch-chapters pane whose read answered (a Transcript pane never)
@@ -49,6 +71,7 @@ extension XrayPanelModel {
             let r = await run(dch, a, env)
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
+            self.quiet.note("t", r)
             self.take(r)
             self.landed()
         }
@@ -58,11 +81,12 @@ extension XrayPanelModel {
     /// keeps the refs alone (takeRefs).
     func readChapters(_ dch: String, _ run: @escaping XrayPanels.Run) {
         lastRead = now()
-        let env = target.env, a = target.chaptersArgs, refsOnly = !fromDch()
+        let env = target.env, a = target.chaptersArgs, refsOnly = !fromDch(), key = quietKey
         reading = Task { [weak self] in
             let r = await run(dch, a, env)
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
+            self.quiet.note(key, r)
             if refsOnly { self.takeRefs(r) } else { self.takeChapters(r) }
             self.landed()
         }
@@ -99,6 +123,7 @@ extension XrayPanelModel {
             let r = await run(dch, a, env)
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
+            self.quiet.note("m", r)
             self.unreachable = self.unreached(r.status)
             if !self.unreachable { self.takeMemory(r) }
             self.pendingMemory = false   // this read answered the switch

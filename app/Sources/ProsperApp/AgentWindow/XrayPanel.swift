@@ -261,6 +261,7 @@ final class XrayPanelModel: ObservableObject {
     var dch: String?
     var run: XrayPanels.Run?
     var lastRead = Date.distantPast
+    var quiet = XrayQuiet()   // #1636: the poller's idle backoff (XrayPoller.swift)
     var failed = false
     var failedMtime: Date?
     /// #1407: the Tasks read went past the byte limit (XrayPanels.overCap): not read again while this panel is open.
@@ -412,6 +413,7 @@ final class XrayPanelModel: ObservableObject {
     /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
         tab = t
+        quiet.reset()   // #1636
         if XrayPanels.rememberTab() { Preferences.xrayLastTab = t }   // #1463: only the person's choice, never a jump
         // #1415: a Transcript pane reads its refs again on a switch to Refs: at once, or at the next tick after the read
         if t == .refs, loaded, !fromDch(), follow == nil {   // #1475: a follow keeps the refs live

@@ -352,4 +352,22 @@ final class XrayChaptersTests: XCTestCase {
         p.select(.responses)
         XCTAssertTrue(Preferences.defaults.object(forKey: Self.lastTabKey) == nil)
     }
+
+    /// #1636: the chapters poll backs off too while its answer is identical (5, 10, 20, 40, 60 s) and a changed answer
+    /// resets it. Red at TIP: a flat 5 s (24 reads in 120 s).
+    func testChaptersPollBacksOffWhileIdenticalAndResetsOnAChange() async {
+        let clock = Clock(), run = Run(), p = panel(Self.local, clock)
+        await open(p, run)
+        for s in 1...120 { await tick(p, clock, at: TimeInterval(s)) }
+        XCTAssertEqual(run.chapterReads, 6, "the open read, then 5, 10, 20, 40, 80")
+        run.chapters = (4, Data())
+        await tick(p, clock, at: 139)
+        XCTAssertEqual(run.chapterReads, 6)
+        await tick(p, clock, at: 140)
+        XCTAssertEqual(run.chapterReads, 7, "60 s after the 80")
+        await tick(p, clock, at: 144)
+        XCTAssertEqual(run.chapterReads, 7)
+        await tick(p, clock, at: 145)
+        XCTAssertEqual(run.chapterReads, 8, "the changed answer: 5 s again")
+    }
 }
