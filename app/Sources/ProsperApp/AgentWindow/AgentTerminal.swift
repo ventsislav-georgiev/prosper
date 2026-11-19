@@ -936,6 +936,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 
     /// #1656: focus false through the wrapper's own call (its resign hook runs core.setFocus(false); NSView's answers yes
     /// and changes nothing): the responder chain, the grid and the pty stay as they are.
+    /// Hosted through the wrapper's TerminalViewRepresentable instead, this would also flip its FocusState (QA R1656 n3).
     private func unfocusSurface() { _ = super.resignFirstResponder() }
 
     func terminalDidChangeFocus(_ focused: Bool) { owner?.focusSent?(focused) }
