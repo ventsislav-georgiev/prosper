@@ -976,7 +976,13 @@ struct AgentSidebarView: View {
     @ObservedObject var model: AgentWindowModel
     /// #1455: the store's Row details; a toggle the Rows do not carry (model, effort, state, age, shortcut) leaves the
     /// sections equal (no publish), so the rows read the store's own value to redraw at once.
-    @State private var details = AgentIslandRowDetails.all
+    @State private var details: AgentIslandRowDetails
+
+    /// #1657: seeded from the store, so the first frame already hides what Row details turned off (no flash of every detail).
+    init(model: AgentWindowModel) {
+        _model = ObservedObject(wrappedValue: model)
+        _details = State(initialValue: model.store?.details ?? .all)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

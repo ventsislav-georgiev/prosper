@@ -2090,6 +2090,8 @@ tag from the now-released section and put it on the new top draft.
 - When another ccpool proxy holds the port, the ccpool pane's button now reads "Stop ccpool and
   start": one click stops that proxy and starts Prosper's on the same port, and the pane says so if
   it did not stop. (#1660)
+- Agent Sessions window: with a Row details item turned off (for example Shortcut), the sidebar no
+  longer flashes every detail for a moment when the window opens. (#1657)
 
 ## v2.174.0
 
