@@ -1,0 +1,55 @@
+{
+ "entry": 1636,
+ "filter": "XrayPollTests|XrayChaptersTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "noBackoff",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "min(base * Double(1 << (runs[key] ?? 0)), max(base, Self.cap))",
+   "new": "base",
+   "expect": "killed"
+  },
+  {
+   "name": "noResetOnChange",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "} else { runs[key] = 0 }",
+   "new": "} else { }",
+   "expect": "killed"
+  },
+  {
+   "name": "noCap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "static let cap: TimeInterval = 60",
+   "new": "static let cap: TimeInterval = 6000",
+   "expect": "killed"
+  },
+  {
+   "name": "noResetWhenHidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if !s.visible { quiet.reset() }",
+   "new": "if !s.visible { }",
+   "expect": "killed"
+  },
+  {
+   "name": "noResetOnSelectionChange",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "guard isCurrent() else { quiet.reset(); return cancel() }",
+   "new": "guard isCurrent() else { return cancel() }",
+   "expect": "killed"
+  },
+  {
+   "name": "noResetOnTabSwitch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        quiet.reset()   // #1636\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "chaptersNotedUnderTasks",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "self.quiet.note(key, r)",
+   "new": "self.quiet.note(\"t\", r)",
+   "expect": "killed"
+  }
+ ]
+}
