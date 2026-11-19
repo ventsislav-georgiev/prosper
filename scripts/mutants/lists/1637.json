@@ -1,0 +1,27 @@
+{
+ "entry": 1637,
+ "filter": "OneShotTimerToleranceTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "idle",
+   "file": "app/Sources/ProsperApp/ModelIdleUnloader.swift",
+   "old": "t.tolerance = interval / 10",
+   "new": "t.tolerance = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "spawn",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "Timer(timeInterval: every, repeats: false, block: fire)\n        t.tolerance = every / 10",
+   "new": "Timer(timeInterval: every, repeats: false, block: fire)\n        t.tolerance = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "rehide",
+   "file": "app/Sources/ProsperApp/MenuBarManager.swift",
+   "old": "t.tolerance = secs / 10",
+   "new": "t.tolerance = 0",
+   "expect": "killed"
+  }
+ ]
+}
