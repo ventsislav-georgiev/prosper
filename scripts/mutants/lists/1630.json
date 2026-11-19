@@ -1,0 +1,27 @@
+{
+ "entry": 1630,
+ "filter": "XrayRecapTests|XrayRemoteMarksTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [
+  {
+   "name": "dismiss-after-esc",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        XrayRecaps.shared.dismiss()   // #1625/#1630: any keystroke into the terminal ends the recap strip, an Esc that closes a card too\n        if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {\n            return\n        }\n        passedKey?(event)\n        super.keyDown(with: event)",
+   "new": "        if event.keyCode == 53, event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty, marks.escape() {\n            return\n        }\n        XrayRecaps.shared.dismiss()\n        passedKey?(event)\n        super.keyDown(with: event)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-refs-cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "refRows.prefix(maxRefs).compactMap",
+   "new": "refRows.compactMap",
+   "expect": "killed"
+  },
+  {
+   "name": "no-maxbytes-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "guard data.count <= XrayChapters.maxBytes, let o",
+   "new": "guard let o",
+   "expect": "killed"
+  }
+ ]
+}
