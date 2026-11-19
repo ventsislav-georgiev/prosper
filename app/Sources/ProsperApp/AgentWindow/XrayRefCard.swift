@@ -412,6 +412,22 @@ extension XrayTarget {
     }
 }
 
+extension XrayTarget {
+    /// #1623: dch 1.113.0 (#518) takes `--no-github` with --ref; DCH_NO_GITHUB=1 turns the lookup off for one local call (1.111.0+).
+    static let noGithubMinimum = [1, 113, 0]
+
+    /// #1623: a ref read's argv and env with the GitHub lookup setting applied; `lookups` on changes nothing. Off: a local
+    /// read (dir set) gets the env var; a remote or --requests read gets `--no-github` before the closing --json, only when
+    /// the local dch (it forwards the flag) is 1.113.0+, and `flagged` says a refusing host may need the plain argv again.
+    func refCall(_ args: [String], version: [Int]?, lookups: Bool) -> (args: [String], env: [String: String], flagged: Bool) {
+        var env = self.env
+        guard !lookups else { return (args, env, false) }
+        guard dir == nil else { env["DCH_NO_GITHUB"] = "1"; return (args, env, false) }
+        guard let version, DchCommand.isAtLeast(version, Self.noGithubMinimum), args.last == "--json" else { return (args, env, false) }
+        return (args.dropLast() + ["--no-github", "--json"], env, true)
+    }
+}
+
 extension XrayPanels {
     /// #1416: one --ref read (`shown`: the text the card names, when it differs from what is sent). A text DchCtl.refOK refuses, or one starting with "-" (dch would read it as a flag), runs
     /// nothing and returns false. A new read cancels the one in flight (the product runner SIGTERMs its dch). #1410: a
@@ -437,9 +453,12 @@ extension XrayPanels {
             m.takeRef((0, hit.out), text: shown ?? text, scope: scope, light: hit.light, cached: true)
             return true
         }
-        let a = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope), env = m.target.env
+        let plain = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope)
+        let (a, env, flagged) = m.target.refCall(plain, version: XrayPanels.probed?.version, lookups: Preferences.xrayGithubLookups)   // #1623
         refReading = Task { [weak m, weak cache] in
-            let r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
+            var r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
+            // #1623: a host older than 1.113.0 refuses --no-github (exit 1; so does no corpus, so the retry is the evidence): once more without it
+            if flagged, r.status == 1, !Task.isCancelled { r = await run(dch, plain, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
             if r.status == 0 { cache?.put(key, r.out) }   // #1567: only an answer the card shows as a context
             m.takeRef(r, text: shown ?? text, scope: scope, light: budget != nil)

@@ -488,6 +488,8 @@ enum Preferences {
         static let xrayLastTab = "xrayLastTab"
         // #1473: the X-ray drawer's width in points at UI scale 1.0, shared by every pane; per Mac, not in SyncedKeys.
         static let xrayDrawerWidth = "xrayDrawerWidth"
+        // #1623: whether an X-ray ref read may look an issue or PR up through the user's gh login (dch 1.111.0+); on unless set off; per Mac, not in SyncedKeys.
+        static let xrayGithubLookups = "xrayGithubLookups"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1411,6 +1413,12 @@ enum Preferences {
     static var xrayLastTab: XrayTab {
         get { XrayTab(rawValue: defaults.string(forKey: Keys.xrayLastTab) ?? "") ?? .prompts }
         set { defaults.set(newValue.rawValue, forKey: Keys.xrayLastTab) }
+    }
+
+    /// #1623: X-ray ref reads may look issues and pull requests up through gh; on unless set off.
+    static var xrayGithubLookups: Bool {
+        get { defaults.object(forKey: Keys.xrayGithubLookups) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.xrayGithubLookups) }
     }
 
     /// #1473: the X-ray drawer's width in points at UI scale 1.0, nil when unset (the default). Outside data (another build

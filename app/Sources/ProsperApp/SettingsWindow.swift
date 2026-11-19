@@ -1085,6 +1085,9 @@ struct AgentSessionsSection: View {
     @State private var rounded = Preferences.agentWindowRoundedCorners
     @State private var sidebar = Preferences.agentSidebarMode
     @State private var colours = Preferences.agentTerminalColours
+    @State private var github = Preferences.xrayGithubLookups
+    static let githubLabel = "Look up issues and pull requests on GitHub"   // #1623
+    static let githubHint = "X-ray cards read them through your gh login, read-only."
     /// #1456 (OQ-153): the "Terminal colours" choices, stored value first.
     static let colourChoices = [("prosper", "Prosper"), ("ghostty", "My Ghostty theme")]
     static let coloursFooter = "Colours only; Prosper keeps its own keys and clipboard rules."
@@ -1126,7 +1129,10 @@ struct AgentSessionsSection: View {
                 }
                 .labelsHidden().pickerStyle(.menu).fixedSize()
             }
+            NeonDivider()
+            NeonRow(Self.githubLabel, subtitle: Self.githubHint) { Toggle("", isOn: $github).labelsHidden() }
         }
+        .onChange(of: github) { _, v in Preferences.xrayGithubLookups = v }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
         .onChange(of: colours) { _, v in Preferences.agentTerminalColours = v; AgentTerminalLook.refresh(AgentTerminalLook.controller) }
         .onChange(of: style) { _, v in Preferences.agentWindowStyle = v; AgentsWindow.shared.restyle() }
