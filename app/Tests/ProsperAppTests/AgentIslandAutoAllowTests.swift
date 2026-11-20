@@ -687,6 +687,7 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         let old = waits.last
         c.store?.actions[key] = nil
         tick(c, .working)
+        f.set(Self.otherBash)   // another prompt: the same one back inside loopWindow is the human's (#1315 loop guard)
         tick(c, .blocked)
         drain(c)
         XCTAssertEqual(waits.count, 2, "each set arms its own clear")
