@@ -976,7 +976,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func otherMouseUp(with event: NSEvent) { if !unfocused { super.otherMouseUp(with: event) } }
     override func otherMouseDragged(with event: NSEvent) { if !unfocused { super.otherMouseDragged(with: event) } }
     override func mouseMoved(with event: NSEvent) { if !unfocused { super.mouseMoved(with: event) } }
-    override func mouseDragged(with event: NSEvent) { if !unfocused { super.mouseDragged(with: event) } }
+    override func mouseDragged(with event: NSEvent) { if !unfocused, !pinnedDown { super.mouseDragged(with: event) } }
     override func mouseExited(with event: NSEvent) { if !unfocused { super.mouseExited(with: event) } }
 
     /// #1566 (spec 5.7): Command-K in the focused pane (the window's first responder: a key equivalent visits every
@@ -1041,24 +1041,53 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 
     /// A Cmd-click on the focused pane: the ref under it opens its card. The click still goes on to libghostty and the
     /// program (operator 2026-11-10, spec X-T mutant 10: Prosper takes no click); an unfocused pane's down never gets here.
+    /// #1701 (operator 2026-11-20: "when i use cmd, you know it is intentional, so clicking will keep the xray window
+    /// open, instead of opening me a link"): a Cmd-down on a mark pins its card and goes no further, nor does its up or
+    /// drag, so libghostty opens no link (it opens on the up) and the program gets no click. Elsewhere as before.
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command), !unfocused {
             let p = convert(event.locationInWindow, from: nil)
-            refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))
+            let q = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
+            if let k = marks.mark(at: q)?.key, marks.hover.click(k) {
+                pinnedDown = true
+                return
+            }
+            refClick(at: q)
         }
+        passedClick?(event)
         super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if pinnedDown { pinnedDown = false; return }
+        passedClick?(event)
+        super.mouseUp(with: event)
+    }
+
+    /// #1701: the down pinned a card; its up and drags stop here.
+    private(set) var pinnedDown = false
+    /// Tests: each left down and up handed on to libghostty; nil in the product.
+    var passedClick: ((NSEvent) -> Void)?
+
+    /// #1701: Command pressed or released over the focused pane (the first responder gets flagsChanged): the hover
+    /// follows it. Then libghostty as before.
+    override func flagsChanged(with event: NSEvent) {
+        marks.command(event.modifierFlags.contains(.command))
+        super.flagsChanged(with: event)
+    }
+
+    /// The grid cell under a top-left point: the rows' seam, else libghostty's surface (#1682), else the config padding.
+    func gridCell(at p: CGPoint) -> (col: Int, row: Int)? {
+        guard let g = gridMetrics else { return nil }
+        if let cellAt { return cellAt(p) }
+        return surfaceCell(at: p) ?? Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2)
     }
 
     /// The ref under top-left point `p` of the session's grid opens its card (#1568: a remote row's too). False: gate B
     /// off, no grid yet, off the grid, or no ref there.
     @discardableResult
     func refClick(at p: CGPoint) -> Bool {
-        guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics else { return false }
-        let c: (col: Int, row: Int)?
-        if let cellAt { c = cellAt(p) } else {
-            c = surfaceCell(at: p) ?? Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2)
-        }
-        guard let c else { return false }
+        guard XrayRefLink.decorate(), let owner, let key = owner.key, let c = gridCell(at: p) else { return false }
         let lines = (viewportText() ?? "").components(separatedBy: "\n")
         guard c.row < lines.count else { return false }
         return openRef(window, key, lines[c.row], c.col)

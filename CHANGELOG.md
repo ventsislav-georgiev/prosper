@@ -2142,6 +2142,10 @@ tag from the now-released section and put it on the new top draft.
   refused, and the phone no longer shows the cold-start hint while a model is loaded. (#1703)
 - Agent Kit: agents now install into a symlinked ~/.claude/agents folder when the link points inside
   your home folder; links that lead anywhere else, or nowhere, are still refused. (#1705)
+- X-ray: in Terminal mode every underlined ref (pull requests and issues like #24065, OQ-…, wt-… and
+  the rest) now opens its X-ray card the same way, only while you hold Command over it; letting go
+  of Command closes it. Command-clicking a ref pins its card instead of opening the link, and bare
+  numbers that continue a ref list ("OQ-1977, 1978 and 1980") are refs too. (#1701)
 
 ## v2.174.0
 

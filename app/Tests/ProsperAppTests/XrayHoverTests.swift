@@ -102,9 +102,10 @@ final class XrayHoverTests: XCTestCase {
     }
 
     /// The pointer over a mark's cell through the overlay's own mouseMoved (a built event, never posted).
-    func move(_ r: Rig, col: Int, row: Int) throws {
+    /// #1701: with Command held unless `flags` says otherwise (the hover opens only then).
+    func move(_ r: Rig, col: Int, row: Int, _ flags: NSEvent.ModifierFlags = .command) throws {
         let p = CGPoint(x: 4 + 8 * CGFloat(col) + 1, y: 2 + 17 * CGFloat(row) + 1)   // no window: scale 2, cells 8 x 17 pt
-        let e = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: r.v.marks.convert(p, to: nil), modifierFlags: [],
+        let e = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: r.v.marks.convert(p, to: nil), modifierFlags: flags,
                                                  timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
         r.v.marks.mouseMoved(with: e)
     }
@@ -331,6 +332,144 @@ final class XrayHoverTests: XCTestCase {
             XCTAssertTrue(r.cards.shown != nil)
             r.v.marks.follow = nil
             XCTAssertTrue(r.cards.shown == nil, "blur")
+        }
+    }
+
+    // MARK: #1701 (operator 2026-11-20): one hover rule for every ref kind, Command only, list numbers, Cmd-click pins
+
+    /// The screenshot's shapes: a PR ref, a wt- ref, an OQ- ref with a list after it, and a plain number in prose.
+    static let shot = "$ git log\nafter the #24065 build, wt-2554 parked\nOQ-1977, 1978, 1980, 1981, 1991 and 1994.\nby 2558.\n"
+
+    static func ref(_ key: String, _ shape: String, _ text: String) -> String {
+        #"{"schema":1,"ref":{"key":"\#(key)","shape":"\#(shape)","text":"\#(text)","count":1,"underline":true}}"#
+    }
+
+    /// The rig on `shot` with its three refs sent as deltas.
+    func shotRig(_ fake: XrayFollowTests.Fake) throws -> Rig {
+        let r = try rig(fake)
+        r.v.viewportText = { Self.shot }
+        fake.send(1, Self.ref("pull:#24065", "pull", "#24065"))
+        fake.send(1, Self.ref("ticket:wt-2554", "ticket", "wt-2554"))
+        fake.send(1, Self.ref("ticket:OQ-1977", "ticket", "OQ-1977"))
+        r.v.marks.place()
+        return r
+    }
+
+    /// Red if the list numbers are not refs keyed as their seed (OQ-1978 ...), a plain "2558" in prose or "entry 2554"
+    /// is, or the list walks past a word, a date, a decimal, a code span or another separator.
+    func testListNumbersContinueTheirPrefixAndProseNumbersDoNot() throws {
+        func keys(_ line: String, _ seeds: [(String, String)]) -> [String] {
+            let refs = seeds.enumerated().map { i, s in
+                XrayRefs.Entry(key: s.0, shape: .ticket, text: s.1, full: nil, count: 1, lastOffset: nil, defined: false,
+                               definitions: 0, title: "", underline: true, index: i)
+            }
+            let found = XrayRefSpans.find(line, refs)
+            return XrayRefSpans.continued(line, after: found).map(\.key)
+        }
+        let oq = [("ticket:OQ-1977", "OQ-1977")]
+        XCTAssertEqual(keys("from cdv2: OQ-1977, 1978, 1980, 1981, 1991 and 1994.", oq),
+                       ["ticket:OQ-1978", "ticket:OQ-1980", "ticket:OQ-1981", "ticket:OQ-1991", "ticket:OQ-1994"])
+        XCTAssertEqual(keys("OQ-1977, 1978, and 1980 or 1981", oq), ["ticket:OQ-1978", "ticket:OQ-1980", "ticket:OQ-1981"])
+        XCTAssertEqual(keys("by 2558. OQ-1977 is open; entry 2554 is parked", oq), [], "prose numbers are not refs")
+        XCTAssertEqual(keys("OQ-1977, due 1978", oq), [], "a word between ends the list")
+        XCTAssertEqual(keys("OQ-1977, 2026-11-21", oq), [], "a date is no list number")
+        XCTAssertEqual(keys("OQ-1977, 1.5 points", oq), [], "a decimal is none")
+        XCTAssertEqual(keys("OQ-1977, 12ms", oq), [], "nor a number with a unit")
+        XCTAssertEqual(keys("OQ-1977, `1978`", oq), [], "nor one in code")
+        XCTAssertEqual(keys("OQ-1977; 1978", oq), [], "only , and or")
+        XCTAssertEqual(keys("OQ-1977, 1978, 1980", oq + [("issue:1978", "1978")]), [], "a number that is a ref of its own ends the list")
+        XCTAssertEqual(keys("#24065 and 24066", [("pull:#24065", "#24065")]), ["pull:#24066"])
+        XCTAssertEqual(keys("abc123, 456", [("commit:abc123", "abc123")]), [], "a hex has no list prefix")
+        XCTAssertTrue(XrayRefSpans.listPrefix("OQ-") == nil && XrayRefSpans.listPrefix("-12") == nil && XrayRefSpans.listPrefix("#") == nil)
+        let e = try XCTUnwrap(XrayRefSpans.listed("ticket:OQ-1978", in: [XrayRefs.Entry(
+            key: "ticket:OQ-1977", shape: .ticket, text: "OQ-1977", full: nil, count: 3, lastOffset: nil, defined: false,
+            definitions: 0, title: "t", underline: true, index: 0)]))
+        XCTAssertEqual([e.text, e.title], ["OQ-1978", ""])
+        XCTAssertEqual(e.shape, .ticket)
+        XCTAssertTrue(XrayRefSpans.listed("ticket:OQ-19x8", in: [e]) == nil)
+    }
+
+    /// Red if a PR ref (or any kind) hovers without Command, misses the hover with it, a list number gets no mark or
+    /// no card (its read sends "OQ-1978"), or "2558" in prose is marked.
+    func testEveryRefKindHoversWithCommandOnly() async throws {
+        try await withSeams { fake in
+            let r = try shotRig(fake)
+            XCTAssertEqual(r.v.marks.marks.map(\.key), ["pull:#24065", "ticket:wt-2554", "ticket:OQ-1977", "ticket:OQ-1978",
+                                                       "ticket:OQ-1980", "ticket:OQ-1981", "ticket:OQ-1991", "ticket:OQ-1994"])
+            XCTAssertFalse(r.v.marks.marks.contains { $0.row == 3 }, "2558 in prose")
+            for (col, row, key) in [(10, 1, "pull:#24065"), (24, 1, "ticket:wt-2554"), (0, 2, "ticket:OQ-1977"), (9, 2, "ticket:OQ-1978"),
+                                    (36, 2, "ticket:OQ-1994")] {
+                let armed = r.items.count
+                try move(r, col: col, row: row, [])
+                XCTAssertTrue(r.v.marks.hover.over == nil, "\(key): no hover without Command")
+                XCTAssertEqual(r.items.count, armed, "\(key): no dwell armed")
+                try move(r, col: col, row: row)
+                XCTAssertEqual(r.v.marks.hover.over, key)
+                r.item(0.5)?.perform()
+                XCTAssertEqual(r.v.marks.hover.card?.key, key, "the same card for every kind")
+                await r.panels.refReading?.value
+                r.v.marks.hover.close(all: true)
+                try move(r, col: 30, row: 5)
+            }
+            XCTAssertEqual(r.run.stdins.last, "OQ-1994\n", "a list number's read is its prefixed text")
+            XCTAssertTrue(r.run.stdins.contains("OQ-1978\n"))
+        }
+    }
+
+    func flags(_ f: NSEvent.ModifierFlags) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: f, timestamp: 0, windowNumber: 0,
+                                       context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 55))
+    }
+
+    /// Red if pressing Command over a mark does not hover it, or releasing it is not a hover-out (the 250 ms close).
+    func testCommandDownHoversAndCommandUpClosesAsHoverOut() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            try move(r, col: 5, row: 1, [])
+            XCTAssertTrue(r.v.marks.hover.over == nil)
+            r.v.flagsChanged(with: try flags(.command))   // the host is the first responder; a built event, never posted
+            XCTAssertEqual(r.v.marks.hover.over, "issue:#12")
+            r.item(0.5)?.perform()
+            XCTAssertTrue(r.cards.shown != nil)
+            await r.panels.refReading?.value
+            r.v.flagsChanged(with: try flags([]))
+            XCTAssertTrue(r.v.marks.hover.over == nil)
+            XCTAssertTrue(r.cards.shown != nil, "not before 250 ms")
+            try XCTUnwrap(r.items.last { $0.delay == 0.25 && !$0.item.isCancelled }?.item).perform()
+            XCTAssertTrue(r.cards.shown == nil, "released: closed as a hover-out")
+        }
+    }
+
+    /// Red if a Command-click on a mark opens no pinned card, hands the down or its up to libghostty (which opens an
+    /// OSC 8 link on the up), or a plain click is no longer the program's.
+    func testCommandClickPinsTheCardAndOpensNoLink() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            var passed: [NSEvent.EventType] = []
+            r.v.passedClick = { passed.append($0.type) }
+            func click(_ type: NSEvent.EventType, _ f: NSEvent.ModifierFlags) throws -> NSEvent {
+                // no window: the view's own unflipped space; row 1, column 4 ("#12") from the top
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 4 + 8 * 4 + 2, y: 410 - (2 + 17 + 3)),
+                                                 modifierFlags: f, timestamp: 0, windowNumber: 0, context: nil,
+                                                 eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            r.v.mouseDown(with: try click(.leftMouseDown, []))
+            r.v.mouseUp(with: try click(.leftMouseUp, []))
+            XCTAssertEqual(passed, [.leftMouseDown, .leftMouseUp], "a plain click is the program's, as before")
+            XCTAssertTrue(r.cards.shown == nil)
+            r.v.mouseDown(with: try click(.leftMouseDown, .command))
+            r.v.mouseUp(with: try click(.leftMouseUp, .command))
+            XCTAssertEqual(passed.count, 2, "the Command-click stops here: no link opens")
+            XCTAssertTrue(r.cards.shown != nil)
+            XCTAssertEqual(r.panel.refCard?.key, "issue:#12", "pinned: today's full card")
+            XCTAssertTrue(r.v.marks.hover.card == nil, "no unpinned card left")
+            await r.panels.refReading?.value
+            XCTAssertEqual(r.run.calls.last?.contains("--full"), true)
+            try move(r, col: 30, row: 5, [])
+            for i in r.items where !i.item.isCancelled { i.item.perform() }
+            XCTAssertTrue(r.cards.shown != nil, "Command up and the pointer gone: the pinned card stays")
+            r.v.mouseUp(with: try click(.leftMouseUp, []))
+            XCTAssertEqual(passed.count, 3, "the next up goes on")
         }
     }
 }

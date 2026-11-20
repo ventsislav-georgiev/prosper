@@ -220,7 +220,7 @@ final class XrayGridMarksView: NSView {
 
     /// #1565: the mark under a top-left point of this view, nil off the grid or off every mark.
     func mark(at p: CGPoint) -> Mark? {
-        guard let g = host?.gridMetrics, let c = AgentTerminalHostView.cell(at: p, g, scale: window?.backingScaleFactor ?? 2) else { return nil }
+        guard let c = host?.gridCell(at: p) else { return nil }   // #1701: the cell rule Cmd-click uses (#1682)
         return marks.first { $0.row == c.row && c.col >= $0.col && c.col < $0.col + $0.cells }
     }
 
@@ -231,9 +231,25 @@ final class XrayGridMarksView: NSView {
     }
 
     // #1565: the pointer, from this view's tracking area only; never passed on (a plain click is never taken: hitTest nil)
-    override func mouseMoved(with event: NSEvent) { hover.point(mark(at: convert(event.locationInWindow, from: nil))?.key) }
+    // #1701 (operator 2026-11-20): only while Command is held, the same for every mark; without it a move is a hover-out
+    override func mouseMoved(with event: NSEvent) {
+        pointer = convert(event.locationInWindow, from: nil)
+        command(event.modifierFlags.contains(.command))
+    }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
-    override func mouseExited(with event: NSEvent) { hover.point(nil) }
+    override func mouseExited(with event: NSEvent) {
+        pointer = nil
+        hover.point(nil)
+    }
+
+    /// #1701: the pointer's last point over this view (top-left); nil once it left.
+    private(set) var pointer: CGPoint?
+
+    /// #1701: Command is down (the move's flags, or the host's flagsChanged): the mark under the pointer, if any, is
+    /// hovered; Command up is a hover-out (the 250 ms close, a pinned card stays).
+    func command(_ down: Bool) {
+        hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)
+    }
 
     /// #1565: Esc in the terminal closes any card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
     /// (no hover card, and no card of the hover's panel up) leaves the Esc to the pty.
@@ -332,7 +348,9 @@ final class XrayMarksMemo: @unchecked Sendable {
             return c
         }
         misses += 1
-        let c = XrayRefSpans.find(line, prepared, scans: &scans).map {
+        let found = XrayRefSpans.find(line, prepared, scans: &scans)
+        // #1701: a list's bare numbers after a prefixed ref (walked from each found span only, once per new line)
+        let c = (found + XrayRefSpans.continued(line, after: found)).sorted { $0.range.lowerBound < $1.range.lowerBound }.map {
             Cut(col: XrayRefSpans.cells(line[..<$0.range.lowerBound]), cells: XrayRefSpans.cells(line[$0.range]), key: $0.key)
         }
         // shortcut: a full memo starts over rather than evicting the oldest; an LRU if scrolling long output thrashes it
@@ -420,6 +438,16 @@ final class XrayHover {
         }
     }
 
+    /// #1701: a Command-click on mark `key`: its card (the one up, or a new one) pinned, no dwell. False: no card for it.
+    func click(_ key: String) -> Bool {
+        dwell?.cancel()
+        dwell = nil
+        if card?.key != key { show(key) }
+        guard card != nil else { return false }
+        pin()
+        return true
+    }
+
     /// The card's light read; #1569: none for an extension card (its card asked the handler when it was made).
     private func startRead(_ e: XrayRefs.Entry) {
         if extCard == nil { read = model?.hoverRead(e) }
@@ -463,7 +491,8 @@ final class XrayHover {
 
     private func show(_ key: String) {
         let x = ext(key)   // #1569
-        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key }) else {
+        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key })
+                ?? XrayRefSpans.listed(key, in: p.refs.entries) else {   // #1701: a list number's
             return close(all: false)
         }
         model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now

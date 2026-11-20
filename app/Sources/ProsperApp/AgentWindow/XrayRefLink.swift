@@ -206,6 +206,62 @@ enum XrayRefSpans {
         return out.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
+    /// #1701: a ref text a bare number can continue: "OQ-1977" ("OQ-"), "wt-2554" ("wt-"), "#24065" ("#"); the prefix
+    /// ends in "-" or is "#", so a commit's hex ("abc123") never continues. Nil: no such prefix or no trailing digits.
+    static func listPrefix(_ text: String) -> Substring? {
+        var p = Substring(text)
+        while let c = p.last, c.isASCII, c.isNumber { p = p.dropLast() }
+        guard p.count < text.count, p == "#" || p.count > 1 && p.hasSuffix("-") else { return nil }
+        return p
+    }
+
+    /// #1701 (operator 2026-11-20): bare numbers that continue a prefixed ref on the same line ("OQ-1977, 1978, 1980 and
+    /// 1994") are refs too, keyed as the seed's key with the number in place ("ticket:OQ-1978"). Tight: each number
+    /// follows the seed or the previous number through ", ", " and ", " or ", ", and " or ", or " only, is ASCII digits
+    /// ending at a space, a comma, a semicolon, a ")" or a "." not before a digit (so "2026-11-21", "1.5" and "12ms"
+    /// stop the list), and lies in no other span. A plain "2558" in prose is never one. No code-span check: a backtick
+    /// between the seed and a number already ends the list (no separator holds one, nor does a number).
+    static func continued(_ text: String, after spans: [Span]) -> [Span] {
+        var out: [Span] = []
+        let seps = [", and ", ", or ", " and ", " or ", ", "]
+        for sp in spans {
+            let seed = text[sp.range]
+            guard let prefix = listPrefix(String(seed)), sp.key.hasSuffix(seed) else { continue }
+            let head = sp.key.dropLast(seed.count) + prefix
+            var at = sp.range.upperBound
+            while let sep = seps.first(where: { text[at...].hasPrefix($0) }) {
+                let lo = text.index(at, offsetBy: sep.count)
+                let hi = text[lo...].firstIndex { !($0.isASCII && $0.isNumber) } ?? text.endIndex
+                guard hi > lo else { break }
+                if hi < text.endIndex {
+                    let c = text[hi]
+                    let next = text.index(after: hi)
+                    let dotEnd = c == "." && (next == text.endIndex || !(text[next].isASCII && text[next].isNumber))
+                    guard " ,;)".contains(c) || dotEnd else { break }
+                }
+                let r = lo..<hi
+                guard !(spans + out).contains(where: { $0.range.overlaps(r) }) else { break }
+                out.append(Span(range: r, key: String(head) + text[r]))
+                at = hi
+            }
+        }
+        return out
+    }
+
+    /// #1701: the entry of a list number's key (continued): the seed entry's shape, its prefix and the number, nothing
+    /// cached (count 0, no title). Nil: no underlined entry's key and prefix lead to `key` with digits after.
+    static func listed(_ key: String, in entries: [XrayRefs.Entry]) -> XrayRefs.Entry? {
+        for e in entries where e.underline && e.key.hasSuffix(e.text) {
+            guard let p = listPrefix(e.text) else { continue }
+            let head = e.key.dropLast(e.text.count) + p
+            let n = key.dropFirst(head.count)
+            guard key.hasPrefix(head), !n.isEmpty, n.allSatisfy({ $0.isASCII && $0.isNumber }) else { continue }
+            return XrayRefs.Entry(key: key, shape: e.shape, text: String(p + n), full: nil, count: 0, lastOffset: nil, defined: false,
+                                  definitions: 0, title: "", underline: true, index: e.index)
+        }
+        return nil
+    }
+
     /// #1357 (P9): the key of the underlined ref covering grid column `col` of one viewport line, or nil. Columns are cells:
     /// a wide character takes two. A url or file ref is skipped: libghostty already makes those Cmd-click links, which go to
     /// the browser or the Text Viewer as before (no second action on one click).
