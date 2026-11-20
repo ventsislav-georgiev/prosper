@@ -1,0 +1,41 @@
+{
+ "entry": "1731",
+ "filter": "AgentWindowD1Tests/testAgentWindowNewSessionForm(IsCentredInTheRealScrollingHost|NameIsRequiredAndEmptyInTheRealHost)|AgentWindowD1Tests/testAgentWindowNewSessionNameField|AgentWindowD1Tests/testAgentWindowNewSessionFormNonClaude",
+ "mutants": [
+  {
+   "name": "start-allows-empty-name",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return !newSessionName.isEmpty && e.folder == nil",
+   "new": "return e.folder == nil",
+   "expect": "killed"
+  },
+  {
+   "name": "form-not-centred-in-scroll-host",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".frame(minHeight: geo.size.height, alignment: .center)",
+   "new": ".frame(minHeight: 0, alignment: .center)",
+   "expect": "killed"
+  },
+  {
+   "name": "name-placeholder-back",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "TextField(\"\", text: Binding(get: { form.nameFieldText }",
+   "new": "TextField(\"x\", text: Binding(get: { form.nameFieldText }",
+   "expect": "killed"
+  },
+  {
+   "name": "sidekick-line-no-article",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "\"Also start a \\(suffix) sidekick\"",
+   "new": "\"Also start \\(suffix)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "name-untrimmed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "(newSession?.name ?? \"\").trimmingCharacters(in: .whitespacesAndNewlines)",
+   "new": "(newSession?.name ?? \"\")",
+   "expect": "killed"
+  }
+ ]
+}
