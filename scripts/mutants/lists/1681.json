@@ -1,0 +1,48 @@
+{
+ "entry": 1681,
+ "filter": "DchShellsTests",
+ "mutants": [
+  {
+   "name": "edit-session-keeps-shells",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "shells: edit ? [] : row.shells ?? [])",
+   "new": "shells: row.shells ?? [])",
+   "expect": "killed"
+  },
+  {
+   "name": "sidebar-ignores-shells-switch",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "shells: details.shells ? s.shells : [], session: s,",
+   "new": "shells: s.shells, session: s,",
+   "expect": "killed"
+  },
+  {
+   "name": "shells-count-after-merged",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "[(Count.agents, agents), (Count.shells, shells.count), (Count.merged, merged)]",
+   "new": "[(Count.agents, agents), (Count.merged, merged), (Count.shells, shells.count)]",
+   "expect": "killed"
+  },
+  {
+   "name": "answering-drops-shells",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "shells: s.shells)   // #1583",
+   "new": "shells: [])   // #1583",
+   "expect": "killed"
+  },
+  {
+   "name": "voiceover-ignores-shells-switch",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "let shells: String? = d.shells && !s.shells.isEmpty",
+   "new": "let shells: String? = !s.shells.isEmpty",
+   "expect": "killed"
+  },
+  {
+   "name": "shells-chip-no-pill",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "g.0 == .agents || g.0 == .shells ? fill : nil",
+   "new": "g.0 == .agents ? fill : nil",
+   "expect": "killed"
+  }
+ ]
+}
