@@ -1,0 +1,27 @@
+{
+ "entry": 1698,
+ "filter": "AgentWindowD1Tests",
+ "mutants": [
+  {
+   "name": "tier-counts-own-band",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if paneTooSmall && !AgentWindowBand.showsBesidesTier(self) { area.size.height += AgentWindowBand.height }",
+   "new": "if false { area.size.height += AgentWindowBand.height }",
+   "expect": "killed"
+  },
+  {
+   "name": "lift-ignores-other-reasons",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if paneTooSmall && !AgentWindowBand.showsBesidesTier(self) {",
+   "new": "if paneTooSmall {",
+   "expect": "survives"
+  },
+  {
+   "name": "tier-reads-raw-area",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "else if case .tooSmall = layout.frames(in: area, minimum:",
+   "new": "else if case .tooSmall = layout.frames(in: paneArea, minimum:",
+   "expect": "killed"
+  }
+ ]
+}
