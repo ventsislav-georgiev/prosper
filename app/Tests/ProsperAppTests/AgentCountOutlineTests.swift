@@ -226,4 +226,70 @@ extension AgentRowSelectedTextTests {
         XCTAssertEqual(side["shells"], "\(rgba(AgentSidebarRowView.shellsInk))", "sidebar shells unchanged")
         XCTAssertEqual(side["agents"], "\(rgba(AgentSidebarRowView.agentsInk))", "sidebar agents unchanged")
     }
+
+    /// #1795 helper: the digits' ink each group of the row's real detailLine draws, on the current palette.
+    @MainActor
+    func digitsDrawn1795(selected: Bool) throws -> [String: String] {
+        var s = AgentSidebar.Row(id: .live(AgentSessionKey(dir: "/Users/example/work", name: "api")), title: "sec-1", state: .working,
+                                 detail: "Working", age: "", prs: [], prCount: 0, agents: 3, merged: 0)
+        s.shells = [DchShell(id: "1", pid: 1, started: 0, command: "make")]
+        var got: [String: String] = [:]
+        AgentCountGroups.digitProbe = { [self] c, col in got["\(c)"] = col.map { "\(self.rgba($0))" } ?? "none" }
+        defer { AgentCountGroups.digitProbe = nil }
+        _ = try XCTUnwrap(ImageRenderer(content: AgentSidebarRowView(row: s, selected: selected).detailLine([])).cgImage)
+        return got
+    }
+
+    /// #1795 (#1789 review, mutant wiring-dropped): the row passes `selected` to its count groups. On a theme whose digits keep the glyph's
+    /// ink on the sidebar and fall back to textPrimary only on the selected wash, the real detailLine draws the glyph's ink unselected and
+    /// textPrimary selected. `selected: selected` -> `selected: false` in detailLine turns the selected half red.
+    @MainActor
+    func testCountDigitsFallBackOnlyWhenSelectedThroughDetailLine() throws {
+        var checked = 0
+        try onEveryTheme { d, p in
+            for (name, glyph) in [("agents", AgentSidebarRowView.agentsInk), ("shells", AgentSidebarRowView.shellsInk)] {
+                let off = rgba(AgentCountGroups.digitInk(glyph, selected: false, ownCard: false) ?? .clear)
+                let on = rgba(AgentCountGroups.digitInk(glyph, selected: true, ownCard: false) ?? .clear)
+                guard off != on else { continue }   // the digits differ by selection on this theme and group
+                let drawnOff = try digitsDrawn1795(selected: false), drawnOn = try digitsDrawn1795(selected: true)
+                XCTAssertEqual(drawnOff[name], "\(off)", "\(d.title): \(name) digits unselected")
+                XCTAssertEqual(drawnOn[name], "\(on)", "\(d.title): \(name) digits selected draw the fallback")
+                XCTAssertEqual(drawnOn[name], "\(rgba(p.textPrimary))", "\(d.title): \(name) the fallback is textPrimary")
+                checked += 1
+            }
+        }
+        XCTAssertGreaterThan(checked, 0, "at least one theme and group falls back only when selected (11 of 88 pairs)")
+    }
+
+    /// #1795 (performance, operator): the digits' ink is computed once per (group, selected) per theme, not per row body. Ten bodies of the
+    /// same row on one palette compute at most two inks (agents, shells) and none after the first body; the other selection computes its own;
+    /// a palette change recomputes. Counts computations, not time. Mutants: cache-bypassed (every body computes), cache-key-drops-selected
+    /// (the selected body draws the unselected ink), cache-never-cleared-on-theme-change (the new palette draws the old ink, no recompute).
+    @MainActor
+    func testCountDigitsInkIsComputedOncePerThemeNotPerRowBody() throws {
+        let saved = ThemeRuntime.palette
+        defer { ThemeRuntime.palette = saved }
+        var fallsOnlySelected: ThemePalette?
+        try onEveryTheme { _, p in
+            ThemeRuntime.palette = p
+            let g = AgentSidebarRowView.agentsInk
+            if rgba(AgentCountGroups.digitInk(g, selected: false, ownCard: false) ?? .clear) != rgba(AgentCountGroups.digitInk(g, selected: true, ownCard: false) ?? .clear), fallsOnlySelected == nil { fallsOnlySelected = p }
+        }
+        let p = try XCTUnwrap(fallsOnlySelected, "a theme whose digits differ by selection")
+        ThemeRuntime.palette = p   // empties the cache
+        let before = AgentCountGroups.digitInkComputations
+        let first = try digitsDrawn1795(selected: true)
+        let afterFirst = AgentCountGroups.digitInkComputations
+        XCTAssertGreaterThan(afterFirst, before, "the first body computes")
+        XCTAssertLessThanOrEqual(afterFirst - before, 2, "at most one per group (agents, shells)")
+        for _ in 0..<9 { XCTAssertEqual(try digitsDrawn1795(selected: true), first) }
+        XCTAssertEqual(AgentCountGroups.digitInkComputations, afterFirst, "nine more bodies compute nothing")
+        let unselected = try digitsDrawn1795(selected: false)
+        XCTAssertGreaterThan(AgentCountGroups.digitInkComputations, afterFirst, "the other selection is its own key")
+        XCTAssertNotEqual(unselected["agents"] ?? unselected["shells"], first["agents"] ?? first["shells"], "selected and unselected digits differ on this theme")
+        let afterBoth = AgentCountGroups.digitInkComputations
+        ThemeRuntime.palette = .default
+        _ = try digitsDrawn1795(selected: true)
+        XCTAssertGreaterThan(AgentCountGroups.digitInkComputations, afterBoth, "a theme change recomputes")
+    }
 }

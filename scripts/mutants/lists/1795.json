@@ -1,0 +1,34 @@
+{
+ "entry": "1795",
+ "filter": "AgentRowSelectedTextTests/(testCountDigitsFallBackOnlyWhenSelectedThroughDetailLine|testCountDigitsInkIsComputedOncePerThemeNotPerRowBody)",
+ "mutants": [
+  {
+   "name": "wiring-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "ownCard: inks != nil, selected: selected,\n                             help: row.countHelp)",
+   "new": "ownCard: inks != nil, selected: false,\n                             help: row.countHelp)",
+   "expect": "killed"
+  },
+  {
+   "name": "cache-key-drops-selected",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "let key = \"\\(c)-\\(selected)\"",
+   "new": "let key = \"\\(c)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "cache-never-cleared-on-theme-change",
+   "file": "app/Sources/ProsperApp/Theme/Theme.swift",
+   "old": "        AgentCountGroups.digitInkCache.removeAll()   // #1795: the count digits' ink is per theme\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "cache-bypassed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Self.cachedDigitInk(g.0, tint: tint, selected: selected, ownCard: ownCard) ?? quiet",
+   "new": "Self.digitInk(tint, selected: selected, ownCard: ownCard) ?? quiet",
+   "expect": "killed"
+  }
+ ]
+}

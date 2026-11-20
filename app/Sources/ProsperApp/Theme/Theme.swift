@@ -172,6 +172,7 @@ enum ThemeRuntime {
     nonisolated(unsafe) private(set) static var contrastLines = resolveContrastLines(.default)
 
     private static func refreshContrastTokens() {
+        AgentCountGroups.digitInkCache.removeAll()   // #1795: the count digits' ink is per theme
         if increaseContrast { contrastLines = resolveContrastLines(palette) }
     }
 

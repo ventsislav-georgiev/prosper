@@ -2419,6 +2419,7 @@ struct AgentCountGroups: View {
     /// at 0.14 over it); where the glyph's `tint` misses it they draw the theme's textPrimary, as the merges count does. The glyph keeps `tint` (3:1).
     static func digitInk(_ tint: Color?, selected: Bool, ownCard: Bool) -> Color? {
         guard let tint, !ownCard else { return tint }
+        digitInkComputations += 1
         func rgb(_ c: Color) -> [Double] {
             let n = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(c)
             return [Double(n.redComponent), Double(n.greenComponent), Double(n.blueComponent)]
@@ -2429,6 +2430,24 @@ struct AgentCountGroups: View {
         return ThemeRuntime.contrastRatio(tint, row) >= 4.5 ? tint : Neon.textPrimary
     }
 
+    /// #1795: (group, selected) -> digits ink, filled by `cachedDigitInk` and emptied on every palette or Increase Contrast change
+    /// (`ThemeRuntime.refreshContrastTokens`), so the two NSColor conversions and the contrast run once per theme, not per row body.
+    /// Only the sidebar (ownCard false) reaches it: the card's ink is the tint itself, no work.
+    nonisolated(unsafe) static var digitInkCache: [String: Color] = [:]
+    /// #1795: test-only counter of real `digitInk` computations (a plain increment in the product).
+    nonisolated(unsafe) static var digitInkComputations = 0
+    static func cachedDigitInk(_ c: AgentSidebar.Count, tint: Color?, selected: Bool, ownCard: Bool) -> Color? {
+        guard let tint, !ownCard else { return tint }
+        let key = "\(c)-\(selected)"
+        if let hit = digitInkCache[key] { return hit }
+        let ink = digitInk(tint, selected: selected, ownCard: ownCard)
+        digitInkCache[key] = ink
+        return ink
+    }
+
+    /// #1795: test-only hook, nil in the product: reports the digits' ink each group draws (the wiring of `selected` from the row).
+    @MainActor static var digitProbe: ((AgentSidebar.Count, Color?) -> Void)?
+
     /// #1745: test-only hook, nil in the product (one nil check per group): reports the tint each group draws, so a row proves the wiring from the caller's `ownCard`.
     @MainActor static var tintProbe: ((AgentSidebar.Count, Color?) -> Void)?
 
@@ -2438,11 +2457,13 @@ struct AgentCountGroups: View {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
                     let tint = tinted ? Self.tint(g.0, ownCard: ownCard) : nil
                     let _ = Self.tintProbe?(g.0, tint)
+                    let digits = g.0 == .open ? open : Self.cachedDigitInk(g.0, tint: tint, selected: selected, ownCard: ownCard) ?? quiet
+                    let _ = Self.digitProbe?(g.0, digits)
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
-                            .foregroundStyle(g.0 == .open ? open : Self.digitInk(tint, selected: selected, ownCard: ownCard) ?? quiet)
+                            .foregroundStyle(digits)
                     }
                     .modifier(AgentSidebarRowProbe(kind: "count.\(g.0)", title: g.0.words(g.1)))
                     .foregroundStyle(g.0 == .open ? open : tint ?? quiet)

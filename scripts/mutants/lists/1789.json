@@ -26,8 +26,8 @@
   {
    "name": "card-not-exempt",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "guard let tint, !ownCard else",
-   "new": "guard let tint else",
+   "old": "guard let tint, !ownCard else { return tint }\n        digitInkComputations += 1",
+   "new": "guard let tint else { return tint }\n        digitInkComputations += 1",
    "expect": "killed"
   }
  ]
