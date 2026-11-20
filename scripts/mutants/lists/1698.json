@@ -14,7 +14,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "if paneTooSmall && !AgentWindowBand.showsBesidesTier(self) {",
    "new": "if paneTooSmall {",
-   "expect": "survives"
+   "expect": "killed"
   },
   {
    "name": "tier-reads-raw-area",
