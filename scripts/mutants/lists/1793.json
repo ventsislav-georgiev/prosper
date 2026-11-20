@@ -1,0 +1,55 @@
+{
+ "entry": "1793",
+ "filter": "AgentTerminalKeepTests",
+ "mutants": [
+  {
+   "name": "no-passive-on-keep",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        setPassive(true, key: key, child: child, version: version)\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-active-on-restore",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793: active before the view comes back\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "gate-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "DchCommand.gate(.init(path: DchCommand.dchPath, version: version), masters: [], minimum: Self.passiveDch).isOK",
+   "new": "true",
+   "expect": "killed"
+  },
+  {
+   "name": "gate-lower",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "static let passiveDch = [1, 130, 0]",
+   "new": "static let passiveDch = [1, 129, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "no-pid-guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard let pid = child.clientPid, let version,",
+   "new": "guard let pid = child.clientPid ?? pid_t?(1), let version,",
+   "expect": "killed"
+  },
+  {
+   "name": "verb-swapped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "[on ? \"--passive\" : \"--active\", key.name",
+   "new": "[on ? \"--active\" : \"--passive\", key.name",
+   "expect": "killed"
+  },
+  {
+   "name": "uncounted",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        passiveToggles += 1\n",
+   "new": "\n",
+   "expect": "killed"
+  }
+ ]
+}

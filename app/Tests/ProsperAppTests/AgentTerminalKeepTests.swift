@@ -318,4 +318,55 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertEqual(rig.children.map(\.terminated), [1, 1], "end with no key shown: the kept one ends too")
         XCTAssertTrue(c.keptKeys.isEmpty)
     }
+
+    /// #1793: with dch 1.130.0 a kept client goes passive (one `dch --passive <name> --pid <its pid>`) and a restored one
+    /// active again (`--active`), one process per keep or restore, with the attach's binary and socket dir; an evicted or
+    /// ended kept client runs none (it ends).
+    @MainActor
+    func testKeptClientGoesPassiveAndComesBackActiveFromDch1130() {
+        let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
+        var runs: [AgentTerminalSpawn] = []
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.passiveToggle = { runs.append($0) }
+        c.attach(a)
+        rig.grid(100, 30)
+        XCTAssertTrue(runs.isEmpty, "the shown attach runs nothing")
+        c.attach(b)
+        XCTAssertEqual(runs.map(\.args), [["--passive", "api", "--pid", "4001"]], "a kept: passive")
+        XCTAssertEqual(runs.last?.exe, "/opt/example/bin/dch")
+        XCTAssertEqual(runs.last?.env["DCH_SOCKET_DIR"], "/Users/example/.dch-test")
+        c.attach(a)
+        XCTAssertEqual(runs.map(\.args).suffix(2), [["--passive", "api-qa", "--pid", "4002"], ["--active", "api", "--pid", "4001"]],
+                       "b kept, a restored")
+        c.attach(nil, leave: .keep)
+        XCTAssertEqual(runs.last?.args, ["--passive", "api", "--pid", "4001"], "the hide keeps a: passive")
+        XCTAssertEqual(runs.count, 4)
+        XCTAssertEqual(c.passiveToggles, runs.count, "one process per keep or restore")
+        c.attach(nil)
+        XCTAssertEqual(runs.count, 4, "ending kept clients runs nothing")
+        XCTAssertEqual(rig.requests.count, 2, "no new client")
+    }
+
+    /// #1793: below dch 1.130.0, with no probed version, or with a client that has no pid (gone), nothing runs and the
+    /// keep is as before (a -> b -> a: 2 clients, none ended).
+    @MainActor
+    func testNoPassiveToggleBelowDch1130OrWithoutAClientPid() {
+        for (version, pid) in [([1, 129, 9], true), (nil, true), ([1, 130, 0], false)] as [([Int]?, Bool)] {
+            let rig = AgentTerminalTests.Rig(version: version, keep: AgentTerminalController.keptSessions)
+            var runs = 0
+            let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+            c.passiveToggle = { _ in runs += 1 }
+            c.attach(a)
+            rig.grid(100, 30)
+            if !pid { rig.children.last?.clientPid = nil }
+            c.attach(b)
+            if !pid { rig.children.last?.clientPid = nil }
+            c.attach(a)
+            XCTAssertEqual(runs, 0, "\(String(describing: version)) pid \(pid)")
+            XCTAssertEqual(c.passiveToggles, 0)
+            XCTAssertEqual(rig.requests.count, 2, "the keep itself is unchanged")
+            XCTAssertEqual(rig.children.map(\.terminated), [0, 0])
+            c.attach(nil)
+        }
+    }
 }

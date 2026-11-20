@@ -163,6 +163,9 @@ final class PtyChild: @unchecked Sendable {
     /// this child (at worst a zombie), never one the system has handed to another process.
     func redraw() { redraw(rearm: false) }
 
+    /// #1793: the client's pid while it runs (dch's `--passive`/`--active <name> --pid` names it); nil once reaped.
+    var clientPid: pid_t? { lock.withLock { !done && pid > 0 ? pid : nil } }
+
     func redraw(rearm: Bool) {
         lock.lock()
         defer { lock.unlock() }

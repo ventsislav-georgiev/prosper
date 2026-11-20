@@ -39,6 +39,8 @@ final class AgentTerminalTests: XCTestCase {
         func redraw() { lock.withLock { _redraws += 1 } }
         func terminate() { lock.withLock { _terminated += 1 } }
         func clear() { lock.withLock { _written = [] } }
+        /// #1793: the Rig numbers its clients 4001, 4002 ...
+        var clientPid: pid_t?
     }
 
     @MainActor
@@ -108,6 +110,7 @@ final class AgentTerminalTests: XCTestCase {
                 requests.append(req)
                 ios.append(io)
                 let child = FakeChild()
+                child.clientPid = pid_t(4001 + children.count)
                 children.append(child)
                 return child
             }

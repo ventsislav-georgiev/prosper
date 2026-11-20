@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyTerminal
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -18,6 +19,12 @@ protocol AgentTerminalChild: AnyObject, Sendable {
     func resize(cols: Int, rows: Int)
     func redraw()
     func terminate()
+    /// #1793: the spawned client's pid; nil for a fake that has none (then no `--passive` runs).
+    var clientPid: pid_t? { get }
+}
+
+extension AgentTerminalChild {
+    var clientPid: pid_t? { nil }
 }
 
 extension PtyChild: AgentTerminalChild {}
@@ -276,12 +283,18 @@ final class AgentTerminalController: ObservableObject {
     /// #1782 (operator 2026-11-20, "Keep last 4 attached"): the sessions a pane keeps attached, the shown one included, so
     /// a switch back swaps the surface in with no new client and no replay. The one cap for the whole feature.
     static let keptSessions = 4
+    /// #1793: `dch --passive|--active <name> --pid <client pid>` (dch 1.130.0): a passive client gets the output, never
+    /// sets the size, is not counted, so plain `dch` in a terminal joins a session Prosper keeps instead of <name>-2.
+    static let passiveDch = [1, 130, 0]
 
     // Seams.
     /// #1782: rows that test one attach at a time set 0 or 1 (every switch detaches, as before).
     var keptCap = AgentTerminalController.keptSessions
     /// #1790: every terminal of this one's window (the model wires it): `keptCap` counts their kept clients together.
     var keptPeers: (() -> [AgentTerminalController])?
+    /// #1793: one short `dch --passive|--active` per keep or restore, run in order on a utility queue, never on main and
+    /// never awaited; never under XCTest (rows record it here).
+    var passiveToggle: (AgentTerminalSpawn) -> Void = AgentTerminalController.runPassiveToggle
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
     var makeScreen: (AgentTerminalScreenEvents) -> AgentTerminalScreen = { AgentGhosttyScreen($0) }
     var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2) }
@@ -409,6 +422,8 @@ final class AgentTerminalController: ObservableObject {
     var keptInboxBytes: Int { kept.reduce(0) { $0 + $1.inbox.count } }
     /// Main-thread drains that reached a kept inbox: one per keep at most (the inbox stays scheduled, so no more hops).
     private(set) var keptDrains = 0
+    /// #1793: the `dch --passive|--active` processes asked for (at most one per keep or restore; none below dch 1.130.0).
+    private(set) var passiveToggles = 0
     private static var keptTick = 0
     /// The view the pane shows: this attach's. A kept session brings its own back, surface and all.
     private var host: AgentTerminalHostView?
@@ -434,6 +449,7 @@ final class AgentTerminalController: ObservableObject {
         kept.append(Kept(key: key, child: child, inbox: inbox, writer: writer, screen: screen, view: host,
                          screenGeneration: screenGeneration, grid: grid, sentSize: sentSize, version: version,
                          focusJiggle: focusJiggle, fed: fed, at: Self.keptTick))
+        setPassive(true, key: key, child: child, version: version)
         Self.keptTick += 1
         Self.keepers.add(self)
         self.child = nil
@@ -455,6 +471,7 @@ final class AgentTerminalController: ObservableObject {
 
     /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
     private func restore(_ k: Kept) {
+        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793: active before the view comes back
         generation += 1   // the timers of the attach before end
         screenGeneration = k.screenGeneration
         child = k.child
@@ -476,6 +493,35 @@ final class AgentTerminalController: ObservableObject {
         phase = .live
         revealed = true
         drain(k.inbox)
+    }
+
+    /// #1793: a kept client goes passive, a restored one active again, when its client is dch >= 1.130.0 (the version
+    /// probed for this attach; unknown or older: nothing runs, as before). The size follows at the next focus-in/resize.
+    private func setPassive(_ on: Bool, key: AgentSessionKey, child: AgentTerminalChild, version: [Int]?) {
+        guard let pid = child.clientPid, let version,
+              DchCommand.gate(.init(path: DchCommand.dchPath, version: version), masters: [], minimum: Self.passiveDch).isOK
+        else { return }
+        let r = request(key, 1, 1)   // the attach's binary and env (DCH_SOCKET_DIR = the key's dir)
+        passiveToggles += 1
+        passiveToggle(AgentTerminalSpawn(exe: r.exe, args: [on ? "--passive" : "--active", key.name, "--pid", String(pid)],
+                                         env: r.env, cols: r.cols, rows: r.rows))
+    }
+
+    nonisolated private static let passiveQueue = DispatchQueue(label: "eu.illegible.prosper.dch-passive", qos: .utility)
+    nonisolated private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agent-terminal")
+
+    /// One bounded dch call on a serial queue (a keep then a restore of the same client stay in order). A failure (no
+    /// session, no such client, an older master, a timeout) logs its one reason line and changes nothing.
+    nonisolated static func runPassiveToggle(_ r: AgentTerminalSpawn) {
+        guard NSClassFromString("XCTestCase") == nil else { return }
+        passiveQueue.async {
+            let out = DchCommand.bounded(DchCommand.islandTimeout) { onPid, onExit in
+                DchCommand.runCapturingBoth(args: r.args, env: r.env, path: r.exe, onPid: onPid, onExit: onExit)
+            }
+            guard out?.status != 0 else { return }
+            let why = out.map { $0.err.split(separator: "\n").first.map(String.init) ?? "exit \($0.status)" } ?? "timed out"
+            log.notice("dch \(r.args.first ?? "", privacy: .public): \(why, privacy: .public)")
+        }
     }
 
     private func release(_ k: Kept, exited: Bool) {
