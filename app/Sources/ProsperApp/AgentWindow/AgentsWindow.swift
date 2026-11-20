@@ -1815,6 +1815,23 @@ private struct AgentDigitChipSlot: PreferenceKey {
     }
 }
 
+/// #1783: the chip column's slot: clear, as wide as the chips (AgentSidebarRowView.columnWidths) at this display scale.
+private struct AgentDigitColumn: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: a UI scale change re-reads the width, as the chips re-themed
+    let mini: Bool
+    @Environment(\.displayScale) private var displayScale
+    var body: some View {
+        let w = AgentSidebarRowView.columnWidths(backing: max(displayScale, 1))
+        return Color.clear.frame(width: mini ? w.mini : w.full, height: 0)
+    }
+}
+
+/// #1783: a window that is never shown, only reporting the backing its views lay out on.
+private final class AgentMeasureWindow: NSWindow {
+    var fixedBacking: CGFloat = 2
+    override var backingScaleFactor: CGFloat { fixedBacking }
+}
+
 /// #1470 a2: records its subviews' ideal widths (AgentSidebarRowView.idealWidths); draws nothing.
 private struct AgentIdealWidths: Layout {
     final class Box: @unchecked Sendable { var widths: [CGFloat] = [] }
@@ -1841,7 +1858,11 @@ struct AgentDigitChip: View {
     static func digit(_ n: Int) -> Int { n > 9 ? n - 9 : n }
     static func words(_ n: Int) -> String { (n > 9 ? "Option-Command-" : "Command-") + "\(digit(n))" }
 
+    /// #1783 counting seam: chip bodies run (a sidebar row's column draws none).
+    static var bodies = 0
+
     var body: some View {
+        let _ = Self.bodies += 1
         PositionKeyCap(digit: "\(Self.digit(number))", active: active, glyph: glyph ?? Self.glyphs(number), accent: Neon.blue,
                        edge: Neon.faded(Neon.blue, active ? 0.9 : 0.6))
             .fixedSize()
@@ -1872,14 +1893,28 @@ extension AgentSidebarRowView {
 
     /// #1345: the Command-<n> chip's column, the widest digit's chip at no height (digits are proportional: the chips together
     /// are the widest whatever the font); the row draws the chip over it, only with a number. #1470: all 18 (Option-Command-9's).
-    static var digitColumn: some View {
-        ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
-    }
+    /// #1783: one clear slot of that width, measured once per UI scale (the chips' font is the only input) and cached, not 18
+    /// hidden chips in every realized row.
+    static var digitColumn: some View { AgentDigitColumn(mini: false) }
 
     /// #1470: Mini's column keeps the nine Command chips' width (its rail has no room for an Option-Command chip).
-    static var miniDigitColumn: some View {
-        ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }.hidden().frame(height: 0)
+    static var miniDigitColumn: some View { AgentDigitColumn(mini: true) }
+
+    /// #1783: the two columns' exact ideal widths at the current UI scale and the view's display scale (`backing`: the chips'
+    /// text widths round to its pixel grid), measured offscreen from the chips themselves.
+    static func columnWidths(backing: CGFloat) -> (full: CGFloat, mini: CGFloat) {
+        let scale = [ThemeRuntime.scale, backing]   // the key: UI scale and backing (the chips' only inputs)
+        if let w = columnWidthByScale[scale] { return w }
+        digitMeasures += 1
+        let w = idealWidths(ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } },
+                            ZStack { ForEach(1...9, id: \.self) { AgentDigitChip(number: $0) } }, backing: backing)
+        guard w.count == 2 else { return (0, 0) }   // not measured: no slot, and measured again on the next read
+        columnWidthByScale[scale] = (w[0], w[1])
+        return (w[0], w[1])
     }
+    private static var columnWidthByScale: [[CGFloat]: (full: CGFloat, mini: CGFloat)] = [:]
+    /// #1783 counting seam: how many times the chips were measured (once per scale).
+    static var digitMeasures = 0
 
     /// #1457 (operator 2026-11-17): the wide characters Mini's rail is measured to fit (`miniWidestLine`); #1539: no
     /// longer a cut, a name takes the row's width.
@@ -1931,9 +1966,20 @@ extension AgentSidebarRowView {
     }
 
     /// #1470 a2: each view's exact ideal width, unrounded (a fittingSize is whole points rounded up); [] if not laid out.
-    static func idealWidths<A: View, B: View>(_ a: A, _ b: B) -> [CGFloat] {
+    /// #1783: `backing` hosts it in a never-shown window of that backing, as a row's chips are laid out (their text widths
+    /// round to that pixel grid; an unhosted view measures on whole points, up to a point wider).
+    static func idealWidths<A: View, B: View>(_ a: A, _ b: B, backing: CGFloat? = nil) -> [CGFloat] {
         let box = AgentIdealWidths.Box()
-        _ = NSHostingView(rootView: AgentIdealWidths(box: box) { a; b }).fittingSize
+        let host = NSHostingView(rootView: AgentIdealWidths(box: box) { a; b })
+        guard let backing else { _ = host.fittingSize; return box.widths }
+        let win = AgentMeasureWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 100), styleMask: [.borderless],
+                                     backing: .buffered, defer: true)
+        win.fixedBacking = backing
+        win.isReleasedWhenClosed = false
+        win.contentView = host
+        host.layoutSubtreeIfNeeded()
+        _ = host.fittingSize
+        win.contentView = nil
         return box.widths
     }
 

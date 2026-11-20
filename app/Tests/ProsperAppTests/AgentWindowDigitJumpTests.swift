@@ -467,6 +467,38 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1783 (counting, never timing): the chip column is one width measured once per UI scale and cached, so a realized row
+    /// runs at most its own chip's body (parent: 18 hidden chips per row), and a scale measures once, not per row.
+    @MainActor
+    func testDigitColumnIsOneCachedWidthNotEighteenChipsPerRow() {
+        _ = ThemeStore.shared
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        let row = AgentSidebar.row(session("api", .idle, ago: 300), details: .all, now: Self.now)
+        for scale: CGFloat in [0.7, 1.0] {
+            ThemeRuntime.scale = scale
+            // Hosting warms this scale's cache at the display scale a hosted view reads.
+            let warm = NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width
+            XCTAssertGreaterThan(warm, NSHostingView(rootView: AgentSidebarRowView.miniDigitColumn.fixedSize()).fittingSize.width,
+                                 "Option-Command-9 is wider than Command-9 (\(scale))")
+            let measures = AgentSidebarRowView.digitMeasures, bodies = AgentDigitChip.bodies
+            for n in 1...10 {
+                _ = NSHostingView(rootView: AgentSidebarRowView(row: row, selected: false, number: n)
+                    .frame(width: AgentWindowModel.fullSidebarWidth - sz(16))).fittingSize
+            }
+            XCTAssertEqual(AgentSidebarRowView.digitMeasures, measures, "ten rows measured the chips no more (\(scale))")
+            XCTAssertLessThanOrEqual(AgentDigitChip.bodies - bodies, 10, "at most one chip body per row (\(scale)), not 18")
+            let afterRows = AgentDigitChip.bodies
+            for _ in 1...20 { _ = NSHostingView(rootView: AgentSidebarRowView.digitColumn).fittingSize }
+            for _ in 1...20 { _ = NSHostingView(rootView: AgentSidebarRowView.miniDigitColumn).fittingSize }
+            XCTAssertEqual(AgentDigitChip.bodies, afterRows, "40 column hosts ran no chip body (\(scale))")
+            XCTAssertEqual(AgentSidebarRowView.digitMeasures, measures, "40 column hosts measured nothing (\(scale))")
+            // the cached slot is the 18 chips' own width
+            let want = NSHostingView(rootView: ZStack { ForEach(1...18, id: \.self) { AgentDigitChip(number: $0) } }.fixedSize()).fittingSize.width
+            XCTAssertEqual(NSHostingView(rootView: AgentSidebarRowView.digitColumn.fixedSize()).fittingSize.width, want, accuracy: 1, "\(scale)")
+        }
+    }
+
     /// Rows 10...18 draw an Option-Command chip, named and helped as such in the real accessibility tree, whole inside the
     /// row; the chip column is as wide as the Option-Command-9 chip (Mini's rail: AgentSidebarModeTests); at 0.7, 0.85
     /// and 1.0.

@@ -2233,6 +2233,8 @@ tag from the now-released section and put it on the new top draft.
   changed. (#1787)
 - Agent Sessions: switching back to one of your last few sessions is instant: it stays connected in
   the background instead of reconnecting and replaying its history (#1782).
+- Agent Sessions: the sidebar scrolls with less work: the Command-number column is measured once,
+  not drawn as 18 hidden chips in every row. (#1783)
 
 ## v2.174.0
 
