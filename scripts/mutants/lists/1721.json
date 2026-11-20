@@ -1,0 +1,13 @@
+{
+ "entry": 1721,
+ "filter": "XrayHoverTests/testListNumbersContinueTheirPrefixAndProseNumbersDoNot",
+ "mutants": [
+  {
+   "name": "any-length",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "max(2, seed.count - prefix.count - 1)",
+   "new": "1",
+   "expect": "killed"
+  }
+ ]
+}

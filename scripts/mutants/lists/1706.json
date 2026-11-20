@@ -1,0 +1,69 @@
+{
+ "entry": 1706,
+ "filter": "KitEnvPieceTests|KitManifestTests|KitValidatorTests|KitRenderTests|HelloKitDocTests",
+ "mutants": [
+  {
+   "name": "env-allowlist-open",
+   "file": "app/Sources/ProsperApp/Kit/KitManifest.swift",
+   "old": "if !ManagedConfigPlanner.envKeys.contains(k) { refuse(",
+   "new": "if false { refuse(",
+   "expect": "killed"
+  },
+  {
+   "name": "env-slot-any-key",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "path.count == 2 && path[0] == \"env\" && envKeys.contains(path[1])",
+   "new": "path.count == 2 && path[0] == \"env\"",
+   "expect": "killed"
+  },
+  {
+   "name": "env-value-any-shape",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "if path.first == \"env\", text == nil { throw",
+   "new": "if false, text == nil { throw",
+   "expect": "killed"
+  },
+  {
+   "name": "bypass-any-value",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "text != \"disable\" { throw",
+   "new": "false { throw",
+   "expect": "killed"
+  },
+  {
+   "name": "env-not-planned",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "for (key, value) in p.vars.sorted(by: { $0.key < $1.key }) {\n                    wiring",
+   "new": "for (key, value) in [String: String]().sorted(by: { $0.key < $1.key }) {\n                    wiring",
+   "expect": "killed"
+  },
+  {
+   "name": "bypass-not-planned",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "                if p.disableBypass {\n                    wiring",
+   "new": "                if false {\n                    wiring",
+   "expect": "killed"
+  },
+  {
+   "name": "env-note-dropped",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "if path.first == \"env\" { w.notes.append(",
+   "new": "if false { w.notes.append(",
+   "expect": "killed"
+  },
+  {
+   "name": "env-mask-open",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigDiff.swift",
+   "old": "return ManagedConfigPlanner.envKeys.contains(k.key)",
+   "new": "return true",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-env-accepted",
+   "file": "app/Sources/ProsperApp/Kit/KitManifest.swift",
+   "old": "if vars.isEmpty { refuse(",
+   "new": "if false { refuse(",
+   "expect": "killed"
+  }
+ ]
+}
