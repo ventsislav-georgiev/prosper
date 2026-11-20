@@ -40,7 +40,7 @@
   {
    "name": "drop-no-unpark",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if parked != nil { unpark(l) } else { layout = l }   // #1700",
+   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l }   // #1700",
    "new": "layout = l   // #1700",
    "expect": "killed"
   },
@@ -75,8 +75,8 @@
   {
    "name": "unpark-drops-refusal",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if let r = addLayout({ _ in l }) { paneRefusal = r }",
-   "new": "_ = addLayout({ _ in l })",
+   "old": "        paneRefusal = r\n        return false\n",
+   "new": "        return false\n",
    "expect": "killed"
   },
   {

@@ -1,0 +1,20 @@
+{
+ "entry": 1722,
+ "filter": "AgentWindowLayoutEditTests",
+ "mutants": [
+  {
+   "name": "unpark-always-true",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        paneRefusal = r\n        return false\n",
+   "new": "        paneRefusal = r\n        return true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "guard-removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l }",
+   "new": "if parked != nil { unpark(l) } else { layout = l }",
+   "expect": "killed"
+  }
+ ]
+}
