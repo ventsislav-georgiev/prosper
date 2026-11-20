@@ -2002,8 +2002,13 @@ final class AgentIslandController {
         queue.async {
             // #781 r2: false needs neither version nor build, so turning the toggle off always reaches the file.
             // #1757: group lines only for a dch that reads them; with none found the file keeps its own.
+            // #1765: the off value lands first, before the probe (which may fork dch --version); the group lines
+            // follow in a second write once the probe says dch reads them (.unchanged when equal).
             guard toggle else {
-                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: DchConfigWriter.groupLines(lines, dch: probe()))
+                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)
+                if let g = DchConfigWriter.groupLines(lines, dch: probe()) {
+                    DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g)
+                }
                 return
             }
             guard let bin = probe() else { return }

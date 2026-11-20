@@ -1424,4 +1424,34 @@ extension DchConfigWriterTests {
         c.queue.sync {}
         XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \n", "the empty list: an empty key, never a missing one")
     }
+
+    /// #1765: auto_allow = false lands before the dch probe returns; the group lines follow in a second write for
+    /// dch 1.124.0 and the file keeps its own below it.
+    @MainActor func testTheOffWriteLandsBeforeTheProbeReturns() {
+        usePattern(tabs: true, "-qa")
+        let saved = Preferences.defaults.object(forKey: "agentIslandSessionGroups")
+        addTeardownBlock {
+            if let saved { Preferences.defaults.set(saved, forKey: "agentIslandSessionGroups") } else {
+                Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+            }
+        }
+        Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$")]
+        for (v, want) in [([1, 123, 9], "auto_allow = false\ngroup = Old = x\nsidekick_pattern = -rev$\n"),
+                          ([1, 124, 0], "auto_allow = false\ngroup = Rev = -rev$\nsidekick_pattern = -rev$\n")] {
+            let file = tempDir("offFirst").appendingPathComponent("config").path
+            FileManager.default.createFile(atPath: file, contents: Data("auto_allow = true\ngroup = Old = x\n".utf8))
+            let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+            let bin = DchCommand.Binary(path: "/Users/example/bin/dch", version: v)
+            c.controlDch = { entered.signal(); _ = release.wait(timeout: .now() + 5); return bin }
+            c.syncDchConfig()
+            XCTAssertEqual(entered.wait(timeout: .now() + 5), .success, "dch \(v): the probe was reached")
+            let first = read(file)
+            release.signal()
+            c.queue.sync {}
+            XCTAssertEqual(first, "auto_allow = false\ngroup = Old = x\nsidekick_pattern = -rev$\n",
+                           "dch \(v): written before the probe returned, the file's own lines kept")
+            XCTAssertEqual(read(file), want, "dch \(v)")
+        }
+    }
 }
