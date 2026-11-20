@@ -1,0 +1,90 @@
+{
+ "entry": "1785",
+ "filter": "AgentWindowD1Tests/testSessionSwitchRebuildsNoSidebarCache|AgentWindowD1Tests/testEveryDrawnItemsInputInvalidates|AgentWindowD1Tests/testStoreSwapInvalidatesDrawnItems|AgentWindowD1Tests/testEveryNumbersInputInvalidates|AgentWindowD1Tests/testStoreGroupsCacheFollowsEveryInput|AgentWindowD1Tests/testDigitJump|AgentWindowGroupChordTests",
+ "mutants": [
+  {
+   "name": "store-memo-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPairs.swift",
+   "old": "if let m = groupsMemo, m.generation == groupsGeneration { return m.groups }",
+   "new": "if false, let m = groupsMemo, m.generation == groupsGeneration { return m.groups }",
+   "expect": "killed"
+  },
+  {
+   "name": "store-sessions-no-bump",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "resetTab(); dropStaleQuestions(); groupsGeneration &+= 1 } }",
+   "new": "resetTab(); dropStaleQuestions() } }",
+   "expect": "killed"
+  },
+  {
+   "name": "store-history-no-bump",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "[] { didSet { resetTab(); groupsGeneration &+= 1 } }",
+   "new": "[] { didSet { resetTab() } }",
+   "expect": "killed"
+  },
+  {
+   "name": "store-suffix-no-bump",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "@Published var pairSuffix = \"\" { didSet { groupsGeneration &+= 1 } }",
+   "new": "@Published var pairSuffix = \"\"",
+   "expect": "killed"
+  },
+  {
+   "name": "drawn-memo-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let m = drawnMemo, m.groups == gen { return m.drawn }",
+   "new": "if false, let m = drawnMemo, m.groups == gen { return m.drawn }",
+   "expect": "killed"
+  },
+  {
+   "name": "drawn-ignores-store-gen",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let m = drawnMemo, m.groups == gen { return m.drawn }",
+   "new": "if let m = drawnMemo { _ = gen; return m.drawn }",
+   "expect": "killed"
+  },
+  {
+   "name": "sections-no-clear",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "[AgentSidebar.Section] = [] { didSet { drawnMemo = nil } }",
+   "new": "[AgentSidebar.Section] = []",
+   "expect": "killed"
+  },
+  {
+   "name": "store-swap-no-clear",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "var store: AgentIslandStore? { didSet { drawnMemo = nil } }",
+   "new": "var store: AgentIslandStore?",
+   "expect": "killed"
+  },
+  {
+   "name": "numbered-memo-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let m = numberedMemo, m.collapsed == collapsed, m.mode == sidebarMode {",
+   "new": "if false, let m = numberedMemo, m.collapsed == collapsed, m.mode == sidebarMode {",
+   "expect": "killed"
+  },
+  {
+   "name": "numbered-ignores-fold",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let m = numberedMemo, m.collapsed == collapsed, m.mode == sidebarMode {",
+   "new": "if let m = numberedMemo, m.mode == sidebarMode {",
+   "expect": "killed"
+  },
+  {
+   "name": "numbered-ignores-mode",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let m = numberedMemo, m.collapsed == collapsed, m.mode == sidebarMode {",
+   "new": "if let m = numberedMemo, m.collapsed == collapsed {",
+   "expect": "killed"
+  },
+  {
+   "name": "drawn-keeps-numbered",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "[String: [AgentSidebar.Item]])? { didSet { numberedMemo = nil } }",
+   "new": "[String: [AgentSidebar.Item]])?",
+   "expect": "killed"
+  }
+ ]
+}

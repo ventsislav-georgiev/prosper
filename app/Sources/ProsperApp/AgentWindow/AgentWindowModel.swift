@@ -454,7 +454,7 @@ final class AgentPaneRuntime: ObservableObject {
 /// the store subscription too.
 @MainActor
 final class AgentWindowModel: ObservableObject {
-    @Published private(set) var sections: [AgentSidebar.Section] = []
+    @Published private(set) var sections: [AgentSidebar.Section] = [] { didSet { drawnMemo = nil } }
     /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
     /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
@@ -1073,7 +1073,7 @@ final class AgentWindowModel: ObservableObject {
         adopt(l)
     }
 
-    private(set) var store: AgentIslandStore?
+    private(set) var store: AgentIslandStore? { didSet { drawnMemo = nil } }
     private(set) var visible = false
     private(set) var closed = false
     private var subscription: AnyCancellable?
@@ -2363,28 +2363,48 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// #1342: the sidebar's drawn rows by section, the store's groups computed once (no store: no group).
-    var drawnItems: [String: [AgentSidebar.Item]] { AgentSidebar.items(sections) { store?.groups ?? [] } }
+    /// #1785: built once per real change, never per selection or draw. Inputs: `sections` and `store` (their didSets clear
+    /// it) and the store's groups (`groupsGeneration`: its sessions, history, pairSuffix). `drawnBuilds` counts the builds.
+    var drawnItems: [String: [AgentSidebar.Item]] {
+        let gen = store?.groupsGeneration ?? -1
+        if let m = drawnMemo, m.groups == gen { return m.drawn }
+        let drawn = AgentSidebar.items(sections) { store?.groups ?? [] }
+        drawnMemo = (gen, drawn)
+        drawnBuilds += 1
+        return drawn
+    }
+    private var drawnMemo: (groups: Int, drawn: [String: [AgentSidebar.Item]])? { didSet { numberedMemo = nil } }
+    private(set) var drawnBuilds = 0
+
+    /// #1785: the numbered items and their chips, rebuilt only when `drawnItems` is (its memo's didSet clears this one),
+    /// a fold (`collapsed`) or the mode (Mini folds nothing) changes. `numberedBuilds` counts the builds.
+    private var numbered: (items: [AgentSidebar.Item], numbers: [AgentSidebar.RowID: Int]) {
+        let drawn = drawnItems
+        if let m = numberedMemo, m.collapsed == collapsed, m.mode == sidebarMode { return (m.items, m.numbers) }
+        let items = Array(sections.filter { !isCollapsed($0.id) }.flatMap { drawn[$0.id] ?? [] }
+            .filter { $0.rows.first?.session != nil }.prefix(18))
+        let numbers = Dictionary(items.enumerated().map { ($1.id, $0 + 1) }) { a, _ in a }
+        numberedMemo = (collapsed, sidebarMode, items, numbers)
+        numberedBuilds += 1
+        return (items, numbers)
+    }
+    private var numberedMemo: (collapsed: Set<String>, mode: AgentSidebarMode, items: [AgentSidebar.Item],
+                               numbers: [AgentSidebar.RowID: Int])?
+    private(set) var numberedBuilds = 0
 
     /// #1110: the rows Command-1...9 select (#1470: then Option-Command-1...9), from the list the sidebar draws: the live rows
     /// it shows, top to bottom across its sections, the first 18. A folded section's rows are not shown, so not numbered;
-    /// History never is. #1111: a group (#1342: two live members or more) is one drawn row, so one number; `drawn` is the
-    /// view's own `drawnItems` (once per draw), the default reads it afresh.
-    func numberedItems(_ drawn: [String: [AgentSidebar.Item]]? = nil) -> [AgentSidebar.Item] {
-        let drawn = drawn ?? drawnItems
-        return Array(sections.filter { !isCollapsed($0.id) }.flatMap { drawn[$0.id] ?? [] }
-            .filter { $0.rows.first?.session != nil }.prefix(18))
-    }
+    /// History never is. #1111: a group (#1342: two live members or more) is one drawn row, so one number (#1785: cached).
+    func numberedItems() -> [AgentSidebar.Item] { numbered.items }
 
     /// The numbered rows' ids (a group's: its first member's, the line that wears the chip).
     var numberedIDs: [AgentSidebar.RowID] { numberedItems().map(\.id) }
 
     /// The sidebar row's chip: its 1-based number, nil for an unnumbered row (#1111: a group's other members too).
-    func number(_ id: AgentSidebar.RowID) -> Int? { numberedIDs.firstIndex(of: id).map { $0 + 1 } }
+    func number(_ id: AgentSidebar.RowID) -> Int? { numbers[id] }
 
-    /// #1111: every chip of one draw by row id, from the view's `drawnItems` (the groups computed once, R909-1).
-    func numbers(_ drawn: [String: [AgentSidebar.Item]]) -> [AgentSidebar.RowID: Int] {
-        Dictionary(numberedItems(drawn).enumerated().map { ($1.id, $0 + 1) }) { a, _ in a }
-    }
+    /// #1111: every chip by row id (#1785: built with the numbered items, not per draw).
+    var numbers: [AgentSidebar.RowID: Int] { numbered.numbers }
 
     /// ⌘<n>: the n-th numbered row, the human's pick, and the keyboard into its pane (as a click). False: no row there,
     /// nothing changes. #1111: a group's number picks its member selected last, its first member (the main) the first time.

@@ -1046,9 +1046,9 @@ struct AgentSidebarView: View {
             } else {
                 ScrollViewReader { proxy in
                     // #909 (R909-1): the groups once per draw, never per row (every row's menu reads them).
-                    let groups = model.store?.groups
-                    let drawn = AgentSidebar.items(model.sections) { groups ?? [] }   // #1342: a group is one row
-                    let numbers = model.numbers(drawn)   // #1111: a group's one number, on its first line
+                    let groups = model.store?.groups   // #1785: the store's cache, built once per change of its inputs
+                    let drawn = model.drawnItems   // #1342: a group is one row (#1785: cached on the model)
+                    let numbers = model.numbers   // #1111: a group's one number, on its first line
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.

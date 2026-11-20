@@ -218,9 +218,14 @@ final class AgentPairJoin {
 }
 
 extension AgentIslandStore {
-    /// #908: every group of the live sessions and the History records under `pairSuffix`, once per draw or click.
+    /// #908: every group of the live sessions and the History records under `pairSuffix`. #1785: built once per change of
+    /// those inputs (`groupsGeneration`), not per draw, click or selection.
     var groups: [AgentGroup] {
-        AgentIsland.groups(sessions.map(\.key) + history.map(\.key), suffix: pairSuffix)
+        if let m = groupsMemo, m.generation == groupsGeneration { return m.groups }
+        let g = AgentIsland.groups(sessions.map(\.key) + history.map(\.key), suffix: pairSuffix)
+        groupsMemo = (groupsGeneration, g)
+        groupsBuilds += 1
+        return g
     }
 
     /// #908: `s`'s group's live sessions in group order, `s` itself in its place; nil when `s` is in no group.

@@ -264,7 +264,7 @@ struct AgentIslandGeometry: Equatable {
 final class AgentIslandStore: ObservableObject {
     /// Every session, in the poller's order: the collapsed island and the
     /// header summarize these; the list draws `visible`.
-    @Published var sessions: [AgentSession] = [] { didSet { resetTab(); dropStaleQuestions() } }
+    @Published var sessions: [AgentSession] = [] { didSet { resetTab(); dropStaleQuestions(); groupsGeneration &+= 1 } }
     @Published var expanded = false
     @Published var geometry: AgentIslandGeometry
     /// Inline row notes: "Attach command copied", "Attached in tmux/ssh …".
@@ -288,10 +288,15 @@ final class AgentIslandStore: ObservableObject {
     @Published var groupTab: String? = nil { didSet { dropStaleQuestions() } }
     /// #908: the pair suffix (Settings > Pairs) the groups are read with; "" (pairing by name off) until
     /// the controller sets it, so a store a test builds outright draws no group item.
-    @Published var pairSuffix = ""
+    @Published var pairSuffix = "" { didSet { groupsGeneration &+= 1 } }
     /// #578: `dch --history --json`'s records, newest first, read on open and
     /// after an action; the History tab is chosen (it wins over `groupTab`).
-    @Published var history: [DchHistoryRecord] = [] { didSet { resetTab() } }
+    @Published var history: [DchHistoryRecord] = [] { didSet { resetTab(); groupsGeneration &+= 1 } }
+    /// #1785: bumped by every set of `groups`' inputs (sessions, history, pairSuffix); `groups` (AgentIslandPairs.swift)
+    /// is built once per generation, `groupsBuilds` counts the builds (the counting rows).
+    private(set) var groupsGeneration = 0
+    var groupsMemo: (generation: Int, groups: [AgentGroup])?
+    var groupsBuilds = 0
     @Published var historyTab = false
     /// #1536: the row the launcher command or its shortcut opened on (lit and scrolled to); nil once the island closes.
     @Published var focusKey: AgentSessionKey?

@@ -2241,6 +2241,8 @@ tag from the now-released section and put it on the new top draft.
   time is instant. (#1784)
 - The Violet theme is now Royal Purple: deep purple with gold accents. If you used Violet, you are
   moved to it. (#1794)
+- Agent Sessions: switching sessions is snappier: the sidebar no longer rebuilds its rows, groups
+  and Command-number shortcuts on every switch. (#1785)
 
 ## v2.174.0
 

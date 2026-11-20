@@ -92,7 +92,7 @@ final class AgentWindowGroupChordTests: XCTestCase {
             XCTAssertEqual(m.number(key("api")), 1)
             XCTAssertTrue(m.number(key("api-2")) == nil && m.number(key("api-qa")) == nil, "one chip per group")
             XCTAssertEqual(m.number(key("web")), 2)
-            let numbers = m.numbers(m.drawnItems)
+            let numbers = m.numbers
             XCTAssertEqual(numbers, [key("api"): 1, key("web"): 2], "the view's one-pass numbers are the model's")
 
             let plain = grouped(suffix: "")
@@ -100,7 +100,7 @@ final class AgentWindowGroupChordTests: XCTestCase {
             let live = plain.sections.filter { $0.title != "History" }.flatMap(\.rows).map(\.id)
             XCTAssertEqual(live.count, 4)
             XCTAssertEqual(plain.numberedIDs, live, "no group: every live row numbered, in the sidebar's order")
-            XCTAssertEqual(plain.numbers(plain.drawnItems).count, 4)
+            XCTAssertEqual(plain.numbers.count, 4)
             for (i, id) in live.enumerated() { XCTAssertEqual(plain.number(id), i + 1) }
         }
     }
