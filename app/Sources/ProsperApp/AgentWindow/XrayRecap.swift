@@ -47,14 +47,18 @@ struct XrayRecap: Equatable {
     static let keyCap = 512
     static let textCap = 240
     static let shapeCap = 16
-    /// The strip draws the first 3 titles and the top 3 refs.
-    static let shownChapters = 3
+    /// #1764: the strip draws the first 2 titles, each cut near 32 characters, and the top 3 refs.
+    static let shownChapters = 2
     static let shownRefs = 3
+    static let shortTitle = 32
+    /// #1764: the ref shapes the strip keeps (tickets, OQ ids as "ticket:OQ-n", PRs and issues); never a file or a URL.
+    static let keptShapes: Set<XrayRefs.Shape> = [.ticket, .pull, .issue]
 
     var isEmpty: Bool { chapters.isEmpty && refs.isEmpty }
 
     /// Bytes in, never throws: nil unless one object with schema 1 and both arrays. A row that is not an object, a
-    /// chapter with no anchor or a ref with no key or text is skipped.
+    /// chapter with no anchor or a ref with no key or text is skipped. #1764: a harness turn (isHarness) and a ref of
+    /// another shape than keptShapes are dropped here, once; the refs are kept most mentioned first (dch's order on a tie).
     static func parse(_ data: Data) -> XrayRecap? {
         guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               o["schema"] as? Int == 1, let cs = o["chapters"] as? [Any], let rs = o["refs"] as? [Any] else { return nil }
@@ -63,37 +67,64 @@ struct XrayRecap: Equatable {
         func date(_ v: Any?) -> Date? { (v as? Double).flatMap { (0...1e10).contains($0) ? Date(timeIntervalSince1970: $0) : nil } }
         let chapterRows = cs.compactMap { $0 as? [String: Any] }, refRows = rs.compactMap { $0 as? [String: Any] }
         let chapters = chapterRows.prefix(maxChapters).compactMap { c -> Chapter? in
-            guard let a = text(c["chapter"], anchorCap), !a.isEmpty else { return nil }
+            guard let a = text(c["chapter"], anchorCap), !a.isEmpty, !isHarness(c["turn_title"] as? String) else { return nil }
             return Chapter(anchor: a, title: text(c["turn_title"], TranscriptOutline.titleCap), at: date(c["at"]))
         }
         let refs = refRows.prefix(maxRefs).compactMap { r -> Ref? in
-            guard let k = text(r["key"], keyCap), !k.isEmpty, let t = text(r["text"], textCap) else { return nil }
-            return Ref(key: k, shape: text(r["shape"], shapeCap) ?? "", text: t, count: XrayChapters.count(r["count"]) ?? 1,
-                       lastAt: date(r["last_at"]))
-        }
+            guard let k = text(r["key"], keyCap), !k.isEmpty, let t = text(r["text"], textCap),
+                  let shape = text(r["shape"], shapeCap), XrayRefs.Shape(rawValue: shape).map({ keptShapes.contains($0) }) == true else { return nil }
+            return Ref(key: k, shape: shape, text: t, count: XrayChapters.count(r["count"]) ?? 1, lastAt: date(r["last_at"]))
+        }.enumerated().sorted { ($0.element.count, $1.offset) > ($1.element.count, $0.offset) }.map(\.element)
         return XrayRecap(since: date(o["since"]), chapters: chapters, refs: refs,
                          more: XrayChapters.isTrue(o["more"]) || chapterRows.count > maxChapters || refRows.count > maxRefs,
                          partial: XrayChapters.isTrue(o["partial"]))
     }
 
-    /// "Since you were last here: 3 chapters" ("20+" past a cap; "only the newest" when dch stopped early).
-    var headline: String {
-        let n = chapters.count
-        return "Since you were last here: \(n)\(more ? "+" : "") chapter\(n == 1 && !more ? "" : "s")"
-            + (partial ? " (only the newest)" : "")
+    /// #1764: a turn the harness wrote, not the person: a title that opens with a tag (<task-notification>,
+    /// <system-reminder>, <command-name>, <local-command-stdout>, ...) or "[Request interrupted".
+    static func isHarness(_ title: String?) -> Bool {
+        guard let t = title?.drop(while: \.isWhitespace) else { return false }
+        return t.hasPrefix("[Request interrupted") || t.prefixMatch(of: /<[a-z][a-z0-9_-]*[\s>]/) != nil
     }
 
-    /// A chapter's title as drawn: cleaned and cut; "Untitled turn" for none.
-    static func title(_ c: Chapter) -> String {
-        let t = OutsideText.shown(c.title ?? "", max: 60)
+    /// #1764: "Away 2h \u{00B7} 13 new prompts" ("no new prompts" when only refs came; "13+" past a cap; " \u{00B7} newest only" when dch stopped early); no
+    /// "Away" part when dch sent no since.
+    func headline(now: Date) -> String {
+        let n = chapters.count
+        let prompts = n == 0 && !more ? "no new prompts" : "\(n)\(more ? "+" : "") new prompt\(n == 1 && !more ? "" : "s")"
+        return ([since.map { "Away " + Self.span(now.timeIntervalSince($0)) }, prompts].compactMap { $0 }
+            .joined(separator: " \u{00B7} ")) + (partial ? " \u{00B7} newest only" : "")
+    }
+
+    /// "45m", "2h", "3d", floored; a clock that went back is "0m".
+    static func span(_ t: TimeInterval) -> String {
+        let m = t.isFinite ? Int(min(max(t, 0), 1e12) / 60) : 0
+        return m < 60 ? "\(m)m" : m < 24 * 60 ? "\(m / 60)h" : "\(m / (24 * 60))d"
+    }
+
+    /// A title in full, cleaned (the tooltip); "Untitled turn" for none.
+    static func fullTitle(_ c: Chapter) -> String {
+        let t = OutsideText.shown(c.title ?? "", max: TranscriptOutline.titleCap)
         return t.trimmingCharacters(in: .whitespaces).isEmpty ? "Untitled turn" : t
     }
 
-    /// The top refs, cleaned: "o/r#41 \u{00D7}2, main.swift".
-    var refsLine: String {
-        refs.prefix(Self.shownRefs).map { OutsideText.shown($0.text, max: 40) + ($0.count > 1 ? " \u{00D7}\($0.count)" : "") }
-            .joined(separator: ", ")
+    /// #1764: a title as drawn: at most shortTitle characters, cut at the last word boundary with an ellipsis (a
+    /// single long word is cut where it reaches the cap).
+    static func title(_ c: Chapter) -> String {
+        let t = fullTitle(c)
+        guard t.count > shortTitle else { return t }
+        let head = t.prefix(shortTitle - 1)
+        let word = head.lastIndex(of: " ").map { head[..<$0] }.flatMap { $0.count >= shortTitle / 2 ? $0 : nil } ?? head
+        return String(word).replacing(/[\s\p{P}]+$/, with: "") + "\u{2026}"   // "fix it:" + ... reads "fix it..."
     }
+
+    /// #1764: the top refs as chips, cleaned: "o/r#41 \u{00D7}2", "FT-1"; "\u{00D7}N" only above 1.
+    var refChips: [String] {
+        refs.prefix(Self.shownRefs).map { OutsideText.shown($0.text, max: 40) + ($0.count > 1 ? " \u{00D7}\($0.count)" : "") }
+    }
+
+    /// #1764: the refs past the chips ("+N more" opens the X-ray drawer); 0: none.
+    var moreRefs: Int { max(0, refs.count - Self.shownRefs) }
 }
 
 extension XrayTarget {
@@ -149,6 +180,8 @@ final class XrayRecaps: ObservableObject {
     var version: @MainActor () -> [Int]? = { XrayPanels.probed?.version }
     var run: @MainActor (XrayTarget) -> XrayPanels.Run = { XrayPanels.shared.requests.run(for: $0, cold: XrayPanels.run) }
     var openChapter: @MainActor (XrayRecap.Chapter, UUID, XrayTarget) -> Void = { XrayRecaps.jump($0, pane: $1, target: $2) }
+    /// #1764: "+N more": the pane's X-ray drawer on Refs (drawer below).
+    var openDrawer: @MainActor (UUID, XrayTarget) -> Void = { XrayRecaps.drawer(pane: $0, target: $1) }
 
     /// The key window's focused pane shows `target`. Another target than the last: the old strip and read go; after
     /// the gap, on dch 1.113.0+, one --since read from when `target` last left the focus.
@@ -197,6 +230,13 @@ final class XrayRecaps: ObservableObject {
         panels.wire(m, pane)
         m.openRecapChapter(c)
     }
+
+    /// #1764: the strip's "+N more": the pane's open drawer on this session goes to Refs; else the window opens its one
+    /// drawer on Refs (toggleXray, as Shift-Command-X; a session without Refs falls to its first tab there).
+    static func drawer(pane: UUID, target: XrayTarget) {
+        if let m = XrayPanels.shared.open[pane], m.target == target { return m.tabs.contains(.refs) ? m.select(.refs) : () }
+        AgentsNSWindow.window(of: pane)?.toggleXray(on: .refs)
+    }
 }
 
 extension XrayPanelModel {
@@ -244,14 +284,21 @@ struct XrayRecapStrip: View {
     private func line(_ r: XrayRecap, _ target: XrayTarget) -> some View {
         HStack(spacing: sz(8)) {
             Image(systemName: "clock.arrow.circlepath").foregroundStyle(Neon.blue).accessibilityHidden(true)
-            Text(verbatim: r.headline).foregroundStyle(Neon.textPrimary).lineLimit(1).layoutPriority(1)
+            Text(verbatim: r.headline(now: recaps.now())).foregroundStyle(Neon.textPrimary).lineLimit(1).layoutPriority(1)
             ForEach(Array(r.chapters.prefix(XrayRecap.shownChapters).enumerated()), id: \.offset) { _, c in
                 Button { recaps.openChapter(c, pane, target) } label: { Text(verbatim: XrayRecap.title(c)).lineLimit(1) }
                     .buttonStyle(.plain).foregroundStyle(Neon.blue)
-                    .accessibilityLabel("Open chapter " + XrayRecap.title(c))
+                    .help(XrayRecap.fullTitle(c)).accessibilityLabel("Open prompt " + XrayRecap.fullTitle(c))
             }
-            if !r.refs.isEmpty {
-                Text(verbatim: r.refsLine).foregroundStyle(Neon.textSecondary).lineLimit(1)
+            ForEach(Array(r.refChips.enumerated()), id: \.offset) { _, chip in
+                Text(verbatim: chip).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                    .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
+                    .background(Neon.stroke.opacity(0.5), in: Capsule())
+            }
+            if r.moreRefs > 0 {
+                Button { recaps.openDrawer(pane, target) } label: { Text(verbatim: "+\(r.moreRefs) more") }
+                    .buttonStyle(.plain).foregroundStyle(Neon.blue)
+                    .help("Show every reference in X-ray").accessibilityLabel("Show \(r.moreRefs) more references in X-ray")
             }
             Spacer(minLength: 0)
             Button { recaps.dismiss() } label: { Image(systemName: "xmark") }

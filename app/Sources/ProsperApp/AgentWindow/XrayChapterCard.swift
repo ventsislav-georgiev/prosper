@@ -17,9 +17,11 @@ struct XrayChapterCard: View {
     static let noResponse = "No response yet."
 
     /// "Prompt 3", after dch's mark when it has one (another session's message, a hand-back, an automatic prompt).
+    /// #1764: a recap title's card the panel's prompts do not hold (XrayPanelModel.recapOrdinal) is "Earlier prompt".
     static func heading(_ c: TranscriptOutline.Chapter) -> String {
         let row = XrayPromptRow(c)
-        return [row.mark, "Prompt \(row.ordinal)"].compactMap { $0 }.joined(separator: " ")
+        let name = c.ordinal == XrayPanelModel.recapOrdinal ? "Earlier prompt" : "Prompt \(row.ordinal)"
+        return [row.mark, name].compactMap { $0 }.joined(separator: " ")
     }
 
     /// The prompt as dch gives it (its title, dch's 120-scalar cap), cleaned as the row's.
@@ -157,10 +159,10 @@ final class XrayChapterRead: ObservableObject {
     /// dch #451 (1.93.0): an entry is cut as head + tail and carries `cut`; older dch cut a prefix at entryCap.
     static let cutFieldsDch = [1, 93, 0]
     static let cutNote = "cut at 6000 characters"
-    static let gone = "This chapter is gone or has no X-ray history"
-    static let badAnchor = "dch did not take this chapter's anchor"
-    static let nothing = "Nothing to read for this chapter"
-    static let failed = "The chapter read failed"
+    static let gone = "This prompt is gone or has no X-ray history"
+    static let badAnchor = "dch did not take this prompt's anchor"
+    static let nothing = "Nothing to read for this prompt"
+    static let failed = "Reading this prompt failed"
 
     func cancel() {
         reading?.cancel()

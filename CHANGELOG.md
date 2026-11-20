@@ -2220,6 +2220,9 @@ tag from the now-released section and put it on the new top draft.
   Command-C. When the X-ray drawer is open, cards open beside it instead of covering it. (#1760)
 - Session groups: make your own sidebar and Island groups with a name and a pattern in Settings;
   Sidekicks is the default group and can be renamed or removed. (#1758)
+- The "while you were away" strip in Agent Sessions is shorter and clearer: how long you were away
+  and how many new prompts, two short titles and the ticket and PR references, without system
+  messages. (#1764)
 
 ## v2.174.0
 

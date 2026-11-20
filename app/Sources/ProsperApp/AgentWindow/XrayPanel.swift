@@ -534,7 +534,7 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// #1472: Read the prompt with no transcript, for a prompt dch's chapters read does not hold (not read, newer, gone).
-    static let notReadNote = "The prompt is not among the chapters read."
+    static let notReadNote = "The prompt is not among the prompts read."
 
     /// Return or a click on a task row: its card (#1471: no transcript jump).
     func activate(_ t: XrayTasks.Task) { openCard(t) }
