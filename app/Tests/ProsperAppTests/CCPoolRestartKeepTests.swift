@@ -96,9 +96,8 @@ private final class HeldRelay: @unchecked Sendable {
 
     init(port: UInt16) {
         let payload = Data(#"{"model":"claude-opus-5","max_tokens":1,"stream":true}"#.utf8)
-        var out = Data(("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\ncontent-type: application/json\r\n"
-                        + "authorization: Bearer client-token-should-be-replaced\r\nContent-Length: \(payload.count)\r\n\r\n").utf8)
-        out.append(payload)
+        let out = Data(("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\ncontent-type: application/json\r\n"
+                        + "authorization: Bearer client-token-should-be-replaced\r\nContent-Length: \(payload.count)\r\n\r\n").utf8) + payload
         DispatchQueue.global().async { [self] in
             let raw = CCPoolTestClient.exchange(port: port, send: out, timeout: 30) { [self] d in
                 let first = lock.withLock { () -> Bool in
@@ -214,6 +213,28 @@ final class CCPoolRestartKeepTests: XCTestCase {
         XCTAssertEqual(after.done.wait(timeout: .now() + 20), .success)
         XCTAssertTrue(after.completedWhole, "a new relay after the restart is served")
         XCTAssertTrue(r.service.upstream.hasSession(accountID: idOf(r, "api")), "on a fresh upstream session")
+    }
+
+    // #1678: Restart writes the held usage and event rows now (they otherwise wait for 64 rows or 5 s), the listener kept.
+    func testCCPoolRestartFlushesTheUsageAndEventRecords() throws {
+        let r = try rig()
+        let t = 1_800_000_000.25
+        r.service.usageRecord.add(CCPoolUsageRow(t: t, acct: "acct-example-1", model: "claude-opus-5", sess: nil, agent: nil,
+                                                 path: "messages", st: 200, ms: 7, done: true, qc: false, att: 1, thr: 0,
+                                                 mv: false, routed: "pick", usage: nil, lim: [:]))
+        r.service.eventRecord.add(CCPoolEventRow(t: t, ev: .bench, acct: "Example Org A", from: nil, to: nil,
+                                                 claim: "five_hour", reset: 1_900_000_000, sess: nil))
+        r.service.usageRecord.settle()
+        r.service.eventRecord.settle()
+        func text(_ dir: URL) -> String {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+            return names.map { (try? String(contentsOf: dir.appendingPathComponent($0), encoding: .utf8)) ?? "" }.joined()
+        }
+        XCTAssertEqual(text(r.service.usageRecord.directory), "", "held, not yet written")
+        XCTAssertEqual(text(r.service.eventRecord.directory), "")
+        XCTAssertEqual(r.service.restart(), .running(port: r.port))
+        XCTAssertTrue(text(r.service.usageRecord.directory).contains("\"acct\":\"acct-example-1\""), "the usage row is on disk")
+        XCTAssertTrue(text(r.service.eventRecord.directory).contains("\"ev\":\"bench\""), "the event row is on disk")
     }
 
     // #1672 (F5): a client connecting in a loop across Restart is never refused (no unbound gap), and a relay held

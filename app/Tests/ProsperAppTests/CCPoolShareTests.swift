@@ -10,6 +10,7 @@ private final class ShareUpstream: @unchecked Sendable {
     private let lock = NSLock()
     private var _tokens: [String] = []
     private var limits: [String: [(String, String)]] = [:]
+    private var throttled: Set<String> = []
     var tokens: [String] { lock.withLock { _tokens } }
     /// 5h and 7d utilization (fractions) for `token`'s replies, both resetting at `reset`.
     func set(_ token: String, five: String, week: String, reset: Int) {
@@ -19,9 +20,15 @@ private final class ShareUpstream: @unchecked Sendable {
                              (p + "7d-status", "allowed"), (p + "7d-utilization", week), (p + "7d-reset", "\(reset)")]
         }
     }
+    /// `token`'s replies become 429s (a throughput 429) that still carry its rate-limit headers.
+    func throttle(_ token: String) { lock.withLock { _ = throttled.insert(token) } }
     func reply(_ head: CCPoolRequestHead) -> CCPoolFakeServer.Reply {
         let token = String((head.header("authorization") ?? "").dropFirst("Bearer ".count))
-        let extra = lock.withLock { () -> [(String, String)] in _tokens.append(token); return limits[token] ?? [] }
+        let (extra, busy) = lock.withLock { () -> ([(String, String)], Bool) in
+            _tokens.append(token)
+            return (limits[token] ?? [], throttled.contains(token))
+        }
+        if busy { return .respond(429, [("content-type", "application/json")] + extra, Data(#"{"type":"error"}"#.utf8)) }
         return .respond(200, [("content-type", "application/json")] + extra, Data(#"{"type":"message","content":[]}"#.utf8))
     }
 }
@@ -143,5 +150,27 @@ final class CCPoolShareTests: XCTestCase {
         XCTAssertEqual(Set(r.up.tokens), ["tok-a", "tok-b"], "both still take new sessions")
         XCTAssertEqual(r.store.snapshot.accounts.values.map(\.cooldown), [[:], [:]])
         XCTAssertFalse(r.log.lines.contains { $0.contains("every account is benched") })
+    }
+
+    /// #1678 (QA R1677 n24): the 429 path judges exhaustion at the fixed 1.0, never at the pane share. Share 0.8, A answers
+    /// 429 with 5h utilization 0.9 and status allowed (throughput, not quota): A is not benched, the outcome is the
+    /// throttle retry, the reason is "no exhausted quota". Red when the 429 path passes the share to exhaustedClaims.
+    func testThroughput429BetweenShareAndFullIsNotBenched() throws {
+        let rec = ThrottleWaitRecorder()   // installed first: no row waits
+        let saved = CCPoolConnection.throttleWait
+        CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
+        addTeardownBlock { CCPoolConnection.throttleWait = saved }
+        let r = try rig(share: 0.8)
+        r.up.set("tok-a", five: "0.9", week: "0.1", reset: Int(r.now) + 3600)
+        r.up.throttle("tok-a")
+        XCTAssertEqual(r.post("sess-example-1")?.status, 200, "A throttles, the session moves to B")
+        let first = try XCTUnwrap(r.log.lines.first { $0.contains(": 429 ") }, "\(r.log.lines)")
+        XCTAssertTrue(first.contains("5h=allowed/0.9") || first.contains("five_hour=allowed/0.9"), first)
+        XCTAssertTrue(first.contains("cooldown=none"), first)
+        XCTAssertTrue(first.contains("outcome=retry"), first)
+        XCTAssertTrue(first.hasSuffix("reason=no exhausted quota"), first)
+        XCTAssertFalse(r.log.lines.contains { $0.contains("reported exhausted quota") || $0.contains("now full") })
+        XCTAssertEqual(r.store.snapshot.accounts.values.map(\.cooldown), [[:], [:]], "nobody benched")
+        XCTAssertFalse(r.eventKinds().contains { $0 == "bench" || $0 == "retire" }, "no bench or retire row")
     }
 }
