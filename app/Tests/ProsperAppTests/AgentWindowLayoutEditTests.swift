@@ -333,6 +333,60 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
+    /// #1722 (QA R1717stack n47): an edge drop of a remote row on the single-pane view at the 9-layout cap is refused whole:
+    /// the notice shows, the open New Session form stays, the remote key is not armed (no attach without the #1330 card),
+    /// the single-pane view stays. With room (8 layouts) the same drop makes the layout and arms the key, the form closing.
+    @MainActor
+    func testAgentWindowLayoutEditRemoteEdgeDropRefusedAtTheCapArmsAndClearsNothing() throws {
+        try withGate(true) {
+            let remote = AgentSidebar.RowID.remote(host: "host-a", name: "api")
+            let key = AgentTerminalSpawn.remoteKey(host: "host-a", name: "api")
+            let json = #"[{"name":"api","alias":"","host":"host-a","state":"idle","stale":false,"cwd":null}]"#
+            // The controller's seams faked: a recording spawn, never a real dch; the form's gate a value, never run.
+            @MainActor func gated(_ m: AgentWindowModel) {
+                m.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
+                m.terminal.request = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: [:]) }
+                m.terminal.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+                m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+                m.terminal.after = { _, _ in }
+                m.terminal.clientVersion = { _ in [1, 74, 0] }
+                m.terminal.gridChanged(cols: 80, rows: 24)
+            }
+            // At the cap: refused.
+            let full = try locked().m
+            defer { full.close() }
+            gated(full)
+            full.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            for _ in 0..<8 { XCTAssertTrue(full.newLayout() == nil) }
+            full.setLayoutEditing(false)
+            full.remoteListed(Data(json.utf8))
+            full.click(row("docs"))
+            full.openNewSession()
+            XCTAssertTrue(full.parked != nil && full.row(remote) != nil && full.newSession != nil, "set up: view, remote row, open form")
+            let shown = full.layout
+            XCTAssertTrue(full.drop(remote, into: full.layout.focused, zone: .edge(.right)), "the drop is handled")
+            XCTAssertEqual(full.paneRefusal, .layoutCap)
+            XCTAssertTrue(full.newSession != nil, "the pending form is kept")
+            XCTAssertTrue(full.terminal.armed == nil, "the remote key is not armed")
+            XCTAssertTrue(full.parked != nil && full.layout == shown, "nothing made at 9")
+            // With room: unchanged.
+            let room = try locked().m
+            defer { room.close() }
+            gated(room)
+            room.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            for _ in 0..<7 { XCTAssertTrue(room.newLayout() == nil) }
+            room.setLayoutEditing(false)
+            room.remoteListed(Data(json.utf8))
+            room.click(row("docs"))
+            room.openNewSession()
+            XCTAssertTrue(room.parked != nil && room.newSession != nil)
+            XCTAssertTrue(room.drop(remote, into: room.layout.focused, zone: .edge(.right)))
+            XCTAssertTrue(room.paneRefusal == nil && room.parked == nil && room.layoutEditing, "the layout is made")
+            XCTAssertTrue(room.newSession == nil, "the form is cleared")
+            XCTAssertTrue(room.terminal.armed == key, "the remote key is armed on success")
+        }
+    }
+
     /// The Go menu's Edit Layout: with the split gate on only.
     @MainActor
     func testAgentWindowLayoutEditGoMenuItem() {

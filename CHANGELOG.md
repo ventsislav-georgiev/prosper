@@ -2180,6 +2180,9 @@ tag from the now-released section and put it on the new top draft.
   check now runs in the background. (#1719)
 - Double-clicking the Text Viewer window's top bar now zooms it to the screen and back, following
   the system double-click setting (as the Agent Sessions window does). (#1725)
+- Dragging a session to a pane edge from the single-pane view when the window already holds 9
+  layouts now just shows the limit notice, instead of also attaching a remote session without its
+  Attach card. (#1722)
 
 ## v2.174.0
 

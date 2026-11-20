@@ -1459,8 +1459,12 @@ final class AgentWindowModel: ObservableObject {
 
     /// #1700: the single-pane view is not a layout and draws no Edit, so a change to its panes (`l`) is saved as a new
     /// layout in Edit layout (addLayout: the view's layout left, the parked one stays saved); at 9 layouts the notice says so.
-    private func unpark(_ l: PaneLayout) {
-        if let r = addLayout({ _ in l }) { paneRefusal = r }
+    /// #1722: false when no layout was made (the cap, the notice set): the caller's after-success steps do not run.
+    @discardableResult
+    private func unpark(_ l: PaneLayout) -> Bool {
+        guard let r = addLayout({ _ in l }) else { return true }
+        paneRefusal = r
+        return false
     }
 
     /// New and Duplicate: the whole store is written once (explicitly, so a layout made while the island is off is saved
@@ -2289,9 +2293,10 @@ final class AgentWindowModel: ObservableObject {
         case let .failure(r):
             paneRefusal = r
         case let .success(l):
+            // #1722: a refused unpark (9 layouts) keeps the pending state and arms, follows and focuses nothing
+            if parked != nil { guard unpark(l) else { return true } } else { layout = l }   // #1700: an edge drop on the single-pane view
             removing = nil; pendingSpawn = nil; newSession = nil
             if paneRefusal != nil { paneRefusal = nil }
-            if parked != nil { unpark(l) } else { layout = l }   // #1700: an edge drop on the single-pane view
             if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
             follow()
             focusSelection()
