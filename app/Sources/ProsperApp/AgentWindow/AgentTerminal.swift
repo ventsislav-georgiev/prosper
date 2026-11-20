@@ -228,7 +228,8 @@ final class AgentTerminalController: ObservableObject {
     private var screenWaitOver = false
     private var child: AgentTerminalChild?
     private var inbox: AgentTerminalInbox?
-    let writer = AgentTerminalWriter()
+    /// #1782: one per attach, so a kept screen's late writes (a query's answer) never reach the shown session's client.
+    private(set) var writer = AgentTerminalWriter()
     /// One automatic reattach per attach (an exit 0 while the session is live).
     private var reattached = false
     /// #896 (dch ask 4): automatic reconnects of a remote attach since the human's last pick or Reconnect, or since an
@@ -239,6 +240,9 @@ final class AgentTerminalController: ObservableObject {
     /// #896 (dch ask 1): the session's pty size and attached clients from the store's `--ls-json`; the window model feeds it.
     @Published var sessionPty: AgentSessionPty?
     private(set) var generation = 0
+    /// #1782: the attach generation the current screen began at: its resize and backlog events carry it (a kept screen
+    /// shown again keeps its own while `generation` moves on and drops the timers of the attach before).
+    private var screenGeneration = 0
     private var resizeGeneration = 0
     private var backlogged = false
     /// The view is in a live resize: the size goes out once, at its end.
@@ -269,8 +273,13 @@ final class AgentTerminalController: ObservableObject {
     /// #896: a remote attach that stays up this long starts the backoff over.
     static let reconnectSettled: TimeInterval = 30
     static let sizedElsewhereText = "Sized for another window"
+    /// #1782 (operator 2026-11-20, "Keep last 4 attached"): the sessions a pane keeps attached, the shown one included, so
+    /// a switch back swaps the surface in with no new client and no replay. The one cap for the whole feature.
+    static let keptSessions = 4
 
     // Seams.
+    /// #1782: rows that test one attach at a time set 0 or 1 (every switch detaches, as before).
+    var keptCap = AgentTerminalController.keptSessions
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
     var makeScreen: (AgentTerminalScreenEvents) -> AgentTerminalScreen = { AgentGhosttyScreen($0) }
     var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2) }
@@ -351,14 +360,122 @@ final class AgentTerminalController: ObservableObject {
         if key != armed { armed = nil }
         guard key != self.key else { return }
         focusPending = false   // #845: a focus asked for on another session never lands on this one
-        detach()
+        // #1782: a kept session comes back as it was; the one shown now is kept if it can be, else detached as before.
+        let back = key.flatMap { k in kept.firstIndex { $0.key == k } }.map { kept.remove(at: $0) }
+        if key != nil, keptCap > 1 { keepShown() } else { detach() }
+        if key == nil { dropKept() }   // hidden, closed, a pane gone, the form, nothing live: no client stays behind
         self.key = key
         reattached = false
         reconnects = 0
         sessionPty = nil   // #896: the last session's size never shows on this one
         closeFind(refocus: false)   // QA #694 INFO-1: the find bar goes with the session, the keys stay put
-        guard key != nil else { phase = .idle; return }
+        guard let key else { phase = .idle; return }
+        if let back { return restore(back) }
+        Self.dropKept(key, except: self)   // #1477: one client per session: another pane's kept one goes first
         begin()
+    }
+
+    // MARK: #1782 kept sessions
+
+    /// A session attached but not shown: its client, inbox, screen and host view (libghostty's surface lives in the
+    /// view, out of any window: no display link, no frames, no resize). Its bytes wait in the inbox unparsed.
+    private struct Kept {
+        let key: AgentSessionKey
+        let child: AgentTerminalChild
+        let inbox: AgentTerminalInbox
+        let writer: AgentTerminalWriter
+        let screen: AgentTerminalScreen
+        let view: AgentTerminalHostView?
+        let screenGeneration: Int
+        let grid: (cols: Int, rows: Int)?
+        let sentSize: (cols: Int, rows: Int)?
+        let version: [Int]?
+        let focusJiggle: Bool
+        let fed: Bool
+    }
+    /// Oldest first; at most `keptCap` - 1 (the shown one is the cap's last).
+    private var kept: [Kept] = []
+    var keptKeys: [AgentSessionKey] { kept.map(\.key) }
+    /// The bytes the kept sessions hold unparsed (each inbox stops its pump at AgentTerminalInbox.cap).
+    var keptInboxBytes: Int { kept.reduce(0) { $0 + $1.inbox.count } }
+    /// Main-thread drains that reached a kept inbox: one per keep at most (the inbox stays scheduled, so no more hops).
+    private(set) var keptDrains = 0
+    /// The view the pane shows: this attach's. A kept session brings its own back, surface and all.
+    private var host: AgentTerminalHostView?
+    /// Controllers holding kept sessions (a session kept in one pane goes when another pane attaches it).
+    private static let keepers = NSHashTable<AgentTerminalController>.weakObjects()
+
+    /// The view for the pane (AgentTerminalHostSlot): made once per attach that needs a fresh surface.
+    func hostView() -> AgentTerminalHostView {
+        if let host { return host }
+        let v = AgentTerminalHostView(frame: .zero)
+        host = v
+        return v
+    }
+
+    /// The shown attach goes into `kept` when it is a live local client (a remote one would hold the other device's
+    /// session); otherwise it detaches. Past `keptCap` attached the oldest kept client ends (exactly one per switch).
+    private func keepShown() {
+        guard let key, remoteHost == nil, phase == .live, let child, let inbox, let screen else { return detach() }
+        generation += 1   // this attach's timers end here
+        reconnecting = false
+        host?.marks.follow = nil   // #1559: the X-ray follow is the shown session's only
+        host?.owner = nil   // no clipboard, link, grid or focus call from a kept surface reaches the controller
+        kept.append(Kept(key: key, child: child, inbox: inbox, writer: writer, screen: screen, view: host,
+                         screenGeneration: screenGeneration, grid: grid, sentSize: sentSize, version: version,
+                         focusJiggle: focusJiggle, fed: fed))
+        Self.keepers.add(self)
+        self.child = nil
+        self.inbox = nil
+        self.screen = nil
+        if view === host { view = nil }   // a view the controller does not own (rows hand one in) stays
+        host = nil
+        sentSize = nil
+        screenGeneration = 0
+        phase = .idle
+        while kept.count > keptCap - 1 { release(kept.removeFirst(), exited: false) }
+    }
+
+    /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
+    private func restore(_ k: Kept) {
+        generation += 1   // the timers of the attach before end
+        screenGeneration = k.screenGeneration
+        child = k.child
+        inbox = k.inbox
+        writer = k.writer
+        screen = k.screen
+        host = k.view
+        k.view?.owner = self
+        if let v = k.view { view = v }
+        grid = k.grid
+        sentSize = k.sentSize
+        version = k.version
+        versionKnown = true
+        focusJiggle = k.focusJiggle
+        fed = k.fed
+        backlogged = false
+        screenWaitOver = true
+        reconnecting = false
+        phase = .live
+        revealed = true
+        drain(k.inbox)
+    }
+
+    private func release(_ k: Kept, exited: Bool) {
+        k.inbox.close()
+        k.writer.child = nil
+        if !exited { k.child.terminate() }
+    }
+
+    /// Every kept client ends (the window hid or closed, the pane went).
+    private func dropKept() {
+        while !kept.isEmpty { release(kept.removeFirst(), exited: false) }
+    }
+
+    private static func dropKept(_ key: AgentSessionKey, except owner: AgentTerminalController) {
+        for c in keepers.allObjects where c !== owner {
+            if let i = c.kept.firstIndex(where: { $0.key == key }) { c.release(c.kept.remove(at: i), exited: false) }
+        }
     }
 
     /// #1559 (X-T a): pane focus. The window's focused pane holds its session's follow (XrayFollows.focus), whose
@@ -404,6 +521,9 @@ final class AgentTerminalController: ObservableObject {
     private func begin() {
         generation += 1
         let gen = generation
+        screenGeneration = gen
+        let writer = AgentTerminalWriter()
+        self.writer = writer
         reconnecting = false
         backlogged = false
         sentSize = nil
@@ -510,7 +630,12 @@ final class AgentTerminalController: ObservableObject {
 
     /// Feeds everything the pump has handed over, unless the renderer is backlogged.
     func drain(_ box: AgentTerminalInbox) {
-        guard box === inbox, let screen else { _ = box.take(); return }
+        guard box === inbox, let screen else {
+            // #1782: a kept session's bytes wait unparsed until it is shown; the drain stays scheduled, so its pump
+            // hands over without another main hop, and stops at the inbox cap (then the master's OUT_CAP drops it).
+            if kept.contains(where: { $0.inbox === box }) { keptDrains += 1 } else { _ = box.take() }
+            return
+        }
         if backlogged { return box.unschedule() }
         let bytes = box.take()
         guard !bytes.isEmpty else { return }
@@ -521,7 +646,7 @@ final class AgentTerminalController: ObservableObject {
     }
 
     private func backlogChanged(_ on: Bool, generation gen: Int) {
-        guard gen == generation else { return }
+        guard gen == screenGeneration else { return }
         backlogged = on
         if !on, let inbox { drain(inbox) }
     }
@@ -536,7 +661,7 @@ final class AgentTerminalController: ObservableObject {
     /// Later view grids reach the pty after a 150 ms trailing debounce, or once at the end of a live
     /// resize (one WINCH, one re-render).
     func gridChanged(cols: Int, rows: Int, generation gen: Int? = nil) {
-        guard cols > 0, rows > 0, gen.map({ $0 == generation }) ?? true else { return }
+        guard cols > 0, rows > 0, gen.map({ $0 == screenGeneration }) ?? true else { return }
         guard gen == nil else {
             screenGrid = (cols, rows)
             return start()
@@ -594,7 +719,11 @@ final class AgentTerminalController: ObservableObject {
     }
 
     private func childExited(_ code: Int32, _ box: AgentTerminalInbox) {
-        guard box === inbox, let key else { return }
+        guard box === inbox, let key else {
+            // #1782: a kept client that ended (the session ended, or it was detached) is dropped; showing it attaches anew.
+            if let i = kept.firstIndex(where: { $0.inbox === box }) { release(kept.remove(at: i), exited: true) }
+            return
+        }
         child = nil
         writer.child = nil
         inbox = nil
@@ -661,6 +790,7 @@ final class AgentTerminalController: ObservableObject {
         writer.child = nil
         screen = nil
         sentSize = nil
+        screenGeneration = 0
         if phase != .idle { phase = .idle }
     }
 
@@ -1369,6 +1499,21 @@ enum AgentTerminalLook {
     }
 }
 
+/// #1782: the pane's place for its terminal: the controller's current host view, swapped in whole when a kept session
+/// comes back (its surface, grid and scrollback with it). A view swapped out leaves the window, so libghostty stops its
+/// display link; the keys follow the swap when the old view had them.
+final class AgentTerminalHostSlot: NSView {
+    func hold(_ v: AgentTerminalHostView) {
+        guard v.superview !== self else { return }
+        let keys = subviews.contains { window?.firstResponder === $0 }
+        subviews.forEach { $0.removeFromSuperview() }
+        v.frame = bounds
+        v.autoresizingMask = [.width, .height]
+        addSubview(v)
+        if keys { window?.makeFirstResponder(v) }
+    }
+}
+
 // MARK: - SwiftUI
 
 struct AgentTerminalRepresentable: NSViewRepresentable {
@@ -1376,13 +1521,15 @@ struct AgentTerminalRepresentable: NSViewRepresentable {
     let controller: AgentTerminalController
     let screen: AgentTerminalScreen?
 
-    func makeNSView(context: Context) -> AgentTerminalHostView {
-        let v = AgentTerminalHostView(frame: .zero)
-        updateNSView(v, context: context)
-        return v
+    func makeNSView(context: Context) -> AgentTerminalHostSlot {
+        let slot = AgentTerminalHostSlot(frame: .zero)
+        updateNSView(slot, context: context)
+        return slot
     }
 
-    func updateNSView(_ v: AgentTerminalHostView, context: Context) {
+    func updateNSView(_ slot: AgentTerminalHostSlot, context: Context) {
+        let v = controller.hostView()
+        slot.hold(v)
         v.owner = controller
         controller.view = v
         v.dropModel = context.environment.agentPaneModel   // #1492

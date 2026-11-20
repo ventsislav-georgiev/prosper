@@ -2231,6 +2231,8 @@ tag from the now-released section and put it on the new top draft.
   group. (#1766)
 - X-ray uses less battery while following a session: its task list now reads only the tasks that
   changed. (#1787)
+- Agent Sessions: switching back to one of your last few sessions is instant: it stays connected in
+  the background instead of reconnecting and replaying its history (#1782).
 
 ## v2.174.0
 

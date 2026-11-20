@@ -78,6 +78,7 @@ extension AgentWindowD1Tests {
     @MainActor
     func slowTerminal(_ m: AgentWindowModel) {
         m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+        m.terminal.keptCap = 0   // #1782: every switch connects (a kept session would come back live at once)
     }
 
     @MainActor
@@ -104,17 +105,17 @@ extension AgentWindowD1Tests {
             clickRow("b", m, win, host)
             XCTAssertEqual(m.selection, live("b"))
             XCTAssertEqual(m.terminal.key?.name, "b")
-            XCTAssertTrue(win.firstResponder === term, "the click moved the keys into b's terminal")
+            XCTAssertTrue(m.terminal.view != nil && win.firstResponder === m.terminal.view, "the click moved the keys into b's terminal (#1782: b's own view, a's is kept)")
             XCTAssertFalse(win.sidebarFocused, "#822 P1: never a focused sidebar with the terminal first responder")
             win.sendEvent(focusKey(126, win, "\u{F700}"))
             XCTAssertEqual(m.selection, live("b"), "up went to the terminal, not the sidebar")
             // A click on the sidebar's empty part takes the keys back (#822), and the arrows select again.
             focusClick(NSPoint(x: sz(120), y: 120), win, host)
             XCTAssertTrue(win.sidebarFocused)
-            XCTAssertFalse(win.firstResponder === term)
+            XCTAssertFalse(win.firstResponder is AgentTerminalHostView)
             win.sendEvent(focusKey(126, win, "\u{F700}"))
             XCTAssertEqual(m.selection, live("a"))
-            XCTAssertFalse(win.firstResponder === term, "an arrow keeps the sidebar")
+            XCTAssertFalse(win.firstResponder is AgentTerminalHostView, "an arrow keeps the sidebar")
             XCTAssertFalse(win.isVisible, "never shown")
         }
     }

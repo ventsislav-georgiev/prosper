@@ -99,7 +99,9 @@ final class AgentTerminalTests: XCTestCase {
             window = AgentTerminalWindowState(onScreen: true, miniaturized: false, occlusionVisible: true)
         }
 
-        init(version: [Int]? = [1, 40, 0]) {
+        /// #1782: `keep` kept sessions; 0 (these rows) detaches on every switch, one attach at a time.
+        init(version: [Int]? = [1, 40, 0], keep: Int = 0) {
+            c.keptCap = keep
             c.request = { AgentTerminalSpawn.local($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: ["HOME": "/Users/example"]) }
             c.spawn = { [unowned self] req, io in
                 if let refuse { throw refuse }

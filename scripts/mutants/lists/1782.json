@@ -1,0 +1,90 @@
+{
+ "entry": "1782",
+ "filter": "AgentTerminalKeepTests|AgentTerminalTests|AgentWindowTerminalModeTests|AgentWindowFocusTests",
+ "mutants": [
+  {
+   "name": "no-keep",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if key != nil, keptCap > 1 { keepShown() }",
+   "new": "if key != nil, keptCap > 99 { keepShown() }",
+   "expect": "killed"
+  },
+  {
+   "name": "evict-late",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "while kept.count > keptCap - 1 {",
+   "new": "while kept.count > keptCap {",
+   "expect": "killed"
+  },
+  {
+   "name": "kept-drain-takes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "{ keptDrains += 1 } else { _ = box.take() }",
+   "new": "{ keptDrains += 1; _ = box.take() } else { _ = box.take() }",
+   "expect": "killed"
+  },
+  {
+   "name": "nil-keeps",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if key == nil { dropKept() }",
+   "new": "if key == nil { }",
+   "expect": "killed"
+  },
+  {
+   "name": "kept-owner-stays",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "host?.owner = nil   // no clipboard",
+   "new": "host?.owner = self   // no clipboard",
+   "expect": "killed"
+  },
+  {
+   "name": "exit-not-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if let i = kept.firstIndex(where: { $0.inbox === box }) { release(kept.remove(at: i), exited: true) }",
+   "new": "_ = kept",
+   "expect": "killed"
+  },
+  {
+   "name": "other-pane-keeps",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "Self.dropKept(key, except: self)   // #1477",
+   "new": "_ = key   // #1477",
+   "expect": "killed"
+  },
+  {
+   "name": "backlog-by-generation",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard gen == screenGeneration else { return }",
+   "new": "guard gen == generation else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "keys-stay",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if keys { window?.makeFirstResponder(v) }",
+   "new": "_ = keys",
+   "expect": "killed"
+  },
+  {
+   "name": "restore-no-drain",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        revealed = true\n        drain(k.inbox)\n",
+   "new": "        revealed = true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "view-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if view === host { view = nil }",
+   "new": "view = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "shared-writer",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        let writer = AgentTerminalWriter()\n        self.writer = writer\n",
+   "new": "        let writer = self.writer\n",
+   "expect": "killed"
+  }
+ ]
+}

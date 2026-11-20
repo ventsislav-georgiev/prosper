@@ -135,7 +135,7 @@ extension AgentWindowD1Tests {
             m.select(.live(two.key))
             XCTAssertNil(m.interaction.session, "#1471: every live pane is a terminal: no input box")
             XCTAssertEqual(t.spawned().last?.args, ["-E", "-a", "two", "--scrollback", "2000"], "#1471: another live session attaches too")
-            XCTAssertEqual(Array(terminated().prefix(2)), [1, 1], "one's client went")
+            XCTAssertEqual(Array(terminated().prefix(3)), [1, 0, 0], "#1782: one's client is kept, two's runs")
             m.select(.history(AgentSessionKey(dir: "/tmp/dch-test", name: "h")))
             XCTAssertEqual(terminated().last, 1, "a History row: nothing attached")
             XCTAssertEqual(t.spawned().count, 3)
