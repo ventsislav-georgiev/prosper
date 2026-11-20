@@ -2183,6 +2183,9 @@ tag from the now-released section and put it on the new top draft.
 - Dragging a session to a pane edge from the single-pane view when the window already holds 9
   layouts now just shows the limit notice, instead of also attaching a remote session without its
   Attach card. (#1722)
+- Text Viewer settings can install a pv command (like VS Code's code): type pv FILE in a terminal to
+  open files in Prosper, or pipe text into pv - to view it. Prosper never replaces a pv it did not
+  install. (#1723)
 
 ## v2.174.0
 

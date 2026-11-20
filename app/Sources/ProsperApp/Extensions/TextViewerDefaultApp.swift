@@ -98,7 +98,7 @@ struct TextViewerDefaultAppSection: View {
 
     /// The page footer ExtensionSettingsPane adds for the Text Viewer, and only for it. #1109: then its Editing section.
     static func footer(forExtension id: String) -> AnyView? {
-        id == TextViewerDefaultApp.extensionID ? AnyView(Group { TextViewerDefaultAppSection(); TextViewerPane() }) : nil
+        id == TextViewerDefaultApp.extensionID ? AnyView(Group { TextViewerDefaultAppSection(); PVCommandSection(); TextViewerPane() }) : nil
     }
 
     /// What VoiceOver reads for one type's line.
