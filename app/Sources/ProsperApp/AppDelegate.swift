@@ -667,8 +667,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// #1726: the standard Window menu, built once (the key window's own menus go before it). The first-responder
     /// selectors with a nil target: AppKit runs and validates them on the key window (off when it cannot miniaturize or
-    /// zoom). No key equivalents: Command-M is a key only some windows handle today (AgentsNSWindow, #1378), so the menu
-    /// adds no chord.
+    /// zoom). Prosper adds no key equivalent (every item is made with ""). On macOS 27 AppKit gives Minimize the standard
+    /// Command-M itself; that is accepted (#1763): it is the system's chord, and AgentsNSWindow minimises with it (#1378).
     static func makeWindowMenu() -> NSMenu {
         let menu = NSMenu(title: "Window")
         menu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "")

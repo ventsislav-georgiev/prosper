@@ -39,6 +39,12 @@ final class TextViewerMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
     }
 
+    /// #1763: an app's name for the Open in items, never with ".app": displayName keeps the extension while Finder shows
+    /// extensions (the CI runner's setting).
+    static func appName(_ app: URL) -> String { bareAppName(FileManager.default.displayName(atPath: app.path)) }
+
+    static func bareAppName(_ name: String) -> String { name.hasSuffix(".app") ? String(name.dropLast(4)) : name }
+
     weak var window: TextViewerNSWindow?
     let kind: Kind
     let item: NSMenuItem
@@ -66,7 +72,7 @@ final class TextViewerMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let app = window?.model?.defaultApp.map { FileManager.default.displayName(atPath: $0.path) }
+        let app = window?.model?.defaultApp.map(Self.appName)
         let list = Self.entries(kind, openWith: app)
         shown = list.compactMap { $0 }
         var tag = 0

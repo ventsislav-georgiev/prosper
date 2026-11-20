@@ -802,7 +802,7 @@ struct TextViewerRootView: View {
             Image(systemName: "doc.text").font(Neon.font(28)).foregroundStyle(Neon.textSecondary)
             Text(refusal.message).font(Neon.font(13)).foregroundStyle(Neon.textPrimary)
             if let app = model.defaultApp {
-                Button("Open in \(FileManager.default.displayName(atPath: app.path))") { model.openInDefaultApp() }
+                Button("Open in \(TextViewerMenu.appName(app))") { model.openInDefaultApp() }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -855,7 +855,7 @@ struct TextViewerHeader: View {
             .menuStyle(.borderlessButton).fixedSize()
             Menu {
                 if let app = model.defaultApp {
-                    Button("Open in \(FileManager.default.displayName(atPath: app.path))") { model.openInDefaultApp() }
+                    Button("Open in \(TextViewerMenu.appName(app))") { model.openInDefaultApp() }
                 }
                 Button("Reveal in Finder") { model.reveal() }
             } label: {

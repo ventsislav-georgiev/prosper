@@ -94,6 +94,15 @@ final class TextViewerMenuTests: XCTestCase {
         XCTAssertTrue(win.isVisible == false, "never shown")
     }
 
+    /// #1763: the Open in items never show ".app" (FileManager.displayName keeps it while Finder shows extensions, as on
+    /// the CI runner); the bare name either way, whatever this Mac's Finder setting.
+    func testAppNameNeverShowsTheAppExtension() {
+        XCTAssertEqual(TextViewerMenu.bareAppName("Example.app"), "Example", "Finder shows extensions")
+        XCTAssertEqual(TextViewerMenu.bareAppName("Example"), "Example", "Finder hides them")
+        XCTAssertEqual(TextViewerMenu.bareAppName("Example.app Helper"), "Example.app Helper", "only a trailing .app")
+        XCTAssertEqual(TextViewerMenu.appName(URL(fileURLWithPath: "/Applications/Example.app")), "Example")
+    }
+
     /// The key path through `perform`: a route that cannot act now answers false (super then gets the key), as before #1726.
     func testPerformAnswersFalseWhereTheKeyWentOn() {
         let win = window(defaultApp: nil)
@@ -125,13 +134,34 @@ final class TextViewerMenuTests: XCTestCase {
     }
 
     /// The app's Window menu: the standard items through the responder chain (nil target), no key equivalent added.
-    func testWindowMenuIsTheStandardOneWithNoNewChord() {
+    func testWindowMenuIsTheStandardOneWithNoNewChord() throws {
+        // #1763: a Mac's own App Shortcuts (System Settings > Keyboard, matched by title when the item is made) show
+        // through keyEquivalent, as Zoom (Cmd-M) and Minimize did on a dev Mac (userKeyEquivalent "m"); they are the
+        // user's chords, not the menu's. Off while the menu is built and checked, restored.
+        let userKeys = NSMenuItem.usesUserKeyEquivalents
+        NSMenuItem.usesUserKeyEquivalents = false
+        defer { NSMenuItem.usesUserKeyEquivalents = userKeys }
         let menu = AppDelegate.makeWindowMenu()
         XCTAssertEqual(menu.title, "Window")
         XCTAssertEqual(menu.items.map(\.title), ["Minimize", "Zoom", "", "Bring All to Front"])
         XCTAssertEqual(menu.items.map(\.action), [#selector(NSWindow.performMiniaturize(_:)), #selector(NSWindow.performZoom(_:)), nil,
                                                   #selector(NSApplication.arrangeInFront(_:))])
-        XCTAssertTrue(menu.items.allSatisfy { $0.target == nil && $0.keyEquivalent.isEmpty }, "first responder; no chord")
+        // #1763: Prosper makes every item with keyEquivalent "", pinned in the source (AppKit may fill it in before the
+        // row can look); on macOS 27 AppKit gives Minimize the standard Command-M, accepted. Nothing else carries a key.
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AppDelegate.swift"), encoding: .utf8)
+        let body = source.components(separatedBy: "static func makeWindowMenu() -> NSMenu {").last?
+            .components(separatedBy: "return menu").first ?? ""
+        XCTAssertEqual(body.components(separatedBy: "menu.addItem(withTitle:").count - 1, 3, "three titled items")
+        XCTAssertEqual(body.components(separatedBy: "keyEquivalent: \"\")").count - 1, 3, "each made with no key equivalent")
+        XCTAssertFalse(body.contains(".keyEquivalent"), "no key equivalent set afterwards")
+        for i in menu.items {   // per item, so a red run names the item and what it carries
+            let standardMinimize = i.action == #selector(NSWindow.performMiniaturize(_:)) && i.keyEquivalent == "m"
+                && i.keyEquivalentModifierMask == .command
+            XCTAssertTrue(i.target == nil && (i.keyEquivalent.isEmpty || standardMinimize),
+                          "first responder; no chord: '\(i.title)' target \(String(describing: i.target)) key '\(i.keyEquivalent)' "
+                          + "mods \(i.keyEquivalentModifierMask.rawValue) user '\(i.userKeyEquivalent)' separator \(i.isSeparatorItem)")
+        }
         XCTAssertTrue(NSWindow.instancesRespond(to: #selector(NSWindow.performMiniaturize(_:))))
         XCTAssertTrue(NSWindow.instancesRespond(to: #selector(NSWindow.performZoom(_:))))
         XCTAssertTrue(NSApplication.instancesRespond(to: #selector(NSApplication.arrangeInFront(_:))))
