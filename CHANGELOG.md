@@ -2172,6 +2172,9 @@ tag from the now-released section and put it on the new top draft.
   your previous values back. (#1706)
 - Prosper's X-ray no longer underlines a short number after a ref in prose ("#1700 and 2 more" or
   "OQ-190, 3 tests") as another ref. (#1721)
+- ccpool takeover: when another program (not ccpool) keeps the port after the old proxy closes its
+  socket, Prosper now says so within about 30 seconds instead of keeping the pane busy for up to 10
+  minutes. (#1720)
 
 ## v2.174.0
 

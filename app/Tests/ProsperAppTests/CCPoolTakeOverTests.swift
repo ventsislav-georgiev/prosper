@@ -64,7 +64,7 @@ final class CCPoolTakeOverTests: XCTestCase {
     private func service(port: UInt16, probe: CCPoolProbeScript, signals: CCPoolSignalRecorder,
                          owned: @escaping @Sendable (pid_t) -> Bool = { _ in true },
                          listens: (@Sendable (pid_t, UInt16) -> Bool)? = nil,
-                         ceiling: TimeInterval = 0.3, pids: [pid_t] = [], parent: [pid_t: pid_t] = [:],
+                         ceiling: TimeInterval = 0.3, afterListen: TimeInterval = 30, pids: [pid_t] = [], parent: [pid_t: pid_t] = [:],
                          exe: [pid_t: String] = [:], args: [pid_t: [String]] = [:]) -> CCPoolService {
         var cfg = CCPoolServiceConfig()
         cfg.port = port
@@ -75,6 +75,7 @@ final class CCPoolTakeOverTests: XCTestCase {
         // Default fake: every pid listens on the configured port, and only on that one.
         cfg.listensOn = listens ?? { _, p in p == port }
         cfg.takeOverCeiling = ceiling
+        cfg.takeOverAfterListenBound = afterListen
         cfg.takeOverPoll = 0.05
         // #1665: fake processes only; no row reads a real pid's parent, path or argv.
         cfg.userPids = { pids }
@@ -486,6 +487,39 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(probe.calls, 5, "re-probe, one probe per wait tick (other, other, free), start's own probe")
         XCTAssertEqual(listens.calls, 4, "pre-signal check, then one per wait tick")
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], "one SIGTERM, never a second signal")
+    }
+
+    // MARK: #1720 a holder that is not ccpool keeps the port after the flip
+
+    func testTakeOverReportsAnotherHolderAtTheAfterListenBoundNotTheCeiling() {
+        // Bound 0: the first wait tick out of LISTEN that still sees "other" ends the wait; start() reports it.
+        let probe = CCPoolProbeScript([.ccpool(pid: 4242, impl: "python"), .other])
+        let signals = CCPoolSignalRecorder()
+        let listens = CCPoolListenScript(listening: 1)
+        let began = Date()
+        let svc = service(port: 47_022, probe: probe, signals: signals, listens: { _, _ in listens.next() },
+                          ceiling: 3, afterListen: 0)
+        XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.heldByOther))
+        XCTAssertEqual(svc.status, .heldByOther)
+        XCTAssertEqual(probe.calls, 3, "re-probe, one wait probe (other, bound reached), start's own probe")
+        XCTAssertEqual(listens.calls, 2, "pre-signal check, one wait tick")
+        XCTAssertLessThan(Date().timeIntervalSince(began), 2.5, "not held to the 3 s ceiling")
+        XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"])
+        XCTAssertEqual(CCPoolServiceConfig().takeOverAfterListenBound, 30, "30 s after the flip by default")
+    }
+
+    func testTakeOverAfterListenBoundCountsTicksFromTheFlipAndStaysBounded() {
+        // Still listening for 4 ticks (the ceiling governs that phase), then "other" until the 0.2 s bound.
+        let probe = CCPoolProbeScript([.ccpool(pid: 4242, impl: "python"), .other])
+        let signals = CCPoolSignalRecorder()
+        let listens = CCPoolListenScript(listening: 5)
+        let svc = service(port: 47_023, probe: probe, signals: signals, listens: { _, _ in listens.next() },
+                          ceiling: 20, afterListen: 0.2)
+        XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.heldByOther))
+        // 0.2 s at a 0.05 s poll: about 4 probes after the flip, one per tick, never one while listening.
+        XCTAssertGreaterThanOrEqual(probe.calls, 4, "the bound waited a few ticks: \(probe.calls)")
+        XCTAssertLessThan(probe.calls, 15, "bounded, not the 20 s ceiling: \(probe.calls)")
+        XCTAssertEqual(listens.calls - 1, probe.calls - 2 + 4, "one listensOn per tick; probes only after the flip")
     }
 
     /// A fake holder the row spawns: python3 listening on 127.0.0.1 at a port the kernel picks, printed first.

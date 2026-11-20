@@ -40,6 +40,9 @@ struct CCPoolServiceConfig: Sendable {
     /// proxy finishes long streams (minutes); giving up early leaves the port empty (an outage).
     var takeOverCeiling: TimeInterval = 600
     var takeOverPoll: TimeInterval = 0.25
+    /// #1720: once the signalled pid left LISTEN, how long a port still held (no health answer, or the same pid) is
+    /// waited on before start() reports the holder. A closing socket clears in seconds; a real other holder never does.
+    var takeOverAfterListenBound: TimeInterval = 30
     /// #1665: this user's pids, scanned for the port's listener when the health answer names none. Empty under
     /// XCTest, so no test reads a real process's argv.
     var userPids: @Sendable () -> [pid_t] = { NSClassFromString("XCTestCase") == nil ? CCPoolService.currentUserPids() : [] }
@@ -352,6 +355,7 @@ final class CCPoolService: @unchecked Sendable {
         logger.note(nil, "sent SIGTERM to the ccpool proxy holding the port")
         // #1665: wait on the socket, not the health answer: a draining proxy stops answering but keeps its LISTEN socket.
         let deadline = Date().addingTimeInterval(config.takeOverCeiling)
+        var afterListen: Date?  // #1720: set on the first tick `p` is out of LISTEN, never reset
         wait: while true {
             // The wait holds the life cycle's queue: a toggle-off or Restart behind it must not end in a bind.
             guard stillWanted() else { return abandoned() }
@@ -363,7 +367,11 @@ final class CCPoolService: @unchecked Sendable {
                 switch config.portProbe(config.port, config.probeTimeout) {
                 case .free: break wait
                 case .ccpool(let q?, _) where q != pid: break wait
-                case .other, .ccpool: break
+                case .other, .ccpool:
+                    let bound = afterListen ?? Date().addingTimeInterval(config.takeOverAfterListenBound)
+                    afterListen = bound
+                    // #1720: start()'s probe then reports the holder (heldByOther) instead of waiting to the ceiling.
+                    if Date() >= bound { break wait }
                 }
             }
             guard Date() < deadline else {
