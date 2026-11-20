@@ -187,9 +187,10 @@ final class KitEnvPieceTests: XCTestCase {
         XCTAssertTrue(notes.contains("Claude Code sessions get the environment variable \(plain) = \"1\"."), "\(notes)")
     }
 
-    /// #1737: the line shows only when the value turns the behaviour on ("1"/"true", trimmed, any case); the plain env line always stays.
-    func testTheBehaviourLineShowsOnlyWhenTheValueTurnsItOn() async throws {
-        let rows: [(String, Bool)] = [("1", true), ("true", true), ("TRUE", true), (" True ", true), ("0", false), ("false", false), ("", false)]
+    /// #1742: the line shows unless the value is clearly off ("", 0, false, no, off; trimmed, any case); the plain env line always stays.
+    func testTheBehaviourLineShowsUnlessTheValueIsClearlyOff() async throws {
+        let rows: [(String, Bool)] = [("1", true), ("true", true), ("TRUE", true), (" True ", true), ("yes", true), ("on", true), ("YES", true), (" On ", true), ("2", true), ("enabled", true),
+                                    ("0", false), ("false", false), ("", false), ("no", false), ("off", false), (" OFF ", false)]
         for key in ["CLAUDE_CODE_ENABLE_AUTO_MODE", "ENABLE_CLAUDEAI_MCP_SERVERS"] {
             let line = try XCTUnwrap(ManagedConfigPlanner.envWarnings[key])
             for (value, shown) in rows {

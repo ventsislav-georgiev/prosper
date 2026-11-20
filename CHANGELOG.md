@@ -2210,6 +2210,8 @@ tag from the now-released section and put it on the new top draft.
   to check. (#1730)
 - Agent island: short notes on a row such as "Sent" or "Attach command copied" now hide by
   themselves after 10 seconds; error lines stay. (#1733)
+- Kit env sheet: the auto mode and connectors warnings now show for any value except clearly off
+  ones (empty, 0, false, no, off). (#1742)
 
 ## v2.174.0
 

@@ -616,9 +616,9 @@ struct ManagedConfigPlanner {
         guard case .string(let s) = value, let key = path.last else { return }
         if path.first == "env" {
             w.notes.append("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(s)).")
-            // n52: the two keys that change behaviour; #1737: the line only when the value turns it on
-            let on = ["1", "true"].contains(s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-            if on, let line = ManagedConfigPlanner.envWarnings[key] { w.notes.append(line) }
+            // n52: the two keys that change behaviour; #1737: #1742: the line unless the value is clearly off (fail safe)
+            let off = ["", "0", "false", "no", "off"].contains(s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+            if !off, let line = ManagedConfigPlanner.envWarnings[key] { w.notes.append(line) }
         }
         if path == ManagedConfigPlanner.bypassPath { w.notes.append("Claude Code's bypass permissions mode is switched off.") }
     }
