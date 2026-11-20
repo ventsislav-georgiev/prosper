@@ -1,0 +1,69 @@
+{
+ "entry": "1724",
+ "filter": "AgentTerminalFileLinkTests|AgentTerminalFileLinkWindowTests|XrayHoverTests|XrayGridMarksTests",
+ "mutants": [
+  {
+   "name": "no-take",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {",
+   "new": "if false, let link = capturedLink(at: q) {",
+   "expect": "killed"
+  },
+  {
+   "name": "shift-too",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {",
+   "new": "if let link = capturedLink(at: q) {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-capture-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard !unfocused, mouseCaptured(), let c = gridCell(at: p) else { return nil }",
+   "new": "guard !unfocused, let c = gridCell(at: p) else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "up-passes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "                pinnedDown = true\n                owner?.open(link.text)",
+   "new": "                owner?.open(link.text)",
+   "expect": "killed"
+  },
+  {
+   "name": "any-slash",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminalFileLink.swift",
+   "old": "return [\"/\", \"~/\", \"./\", \"../\"].contains { name.hasPrefix($0) } && !name.hasSuffix(\"/\")",
+   "new": "return name.contains(\"/\") && !name.hasSuffix(\"/\")",
+   "expect": "killed"
+  },
+  {
+   "name": "any-ext",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminalFileLink.swift",
+   "old": "return name.contains(\"/\") || textExtensions.contains(ext)",
+   "new": "return true",
+   "expect": "killed"
+  },
+  {
+   "name": "no-strip",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminalFileLink.swift",
+   "old": "while lo < hi, let u = line[line.index(before: hi)].unicodeScalars.last, closing.contains(u) { hi = line.index(before: hi) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-cell-cache",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if let c, let l = linkCell, c == l { return }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-hover",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        linkHover(down ? pointer : nil)\n    }",
+   "new": "    }",
+   "expect": "killed"
+  }
+ ]
+}
