@@ -96,8 +96,8 @@
   {
    "name": "title_raw",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
-   "old": "let t = OutsideText.shown(c.title ?? \"\", max: 60)",
-   "new": "let t = String((c.title ?? \"\").prefix(60))",
+   "old": "let t = OutsideText.shown(c.title ?? \"\", max: TranscriptOutline.titleCap)",
+   "new": "let t = String((c.title ?? \"\").prefix(TranscriptOutline.titleCap))",
    "expect": "killed"
   },
   {

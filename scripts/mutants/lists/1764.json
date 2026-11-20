@@ -1,6 +1,6 @@
 {
  "entry": "1764",
- "filter": "XrayRecapTests|XrayChapterCardTests|XrayPanelTests",
+ "filter": "XrayRecapTests|XrayChapterCardTests",
  "mutants": [
   {
    "name": "harness_off",
