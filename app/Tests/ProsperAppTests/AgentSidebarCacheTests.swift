@@ -187,4 +187,17 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(st.groups, [], "pairSuffix")
         XCTAssertEqual(st.groupsBuilds, b + 4, "one build per read after a change")
     }
+
+    /// #1797: a poll that sets the same keys (other states) builds nothing; a changed key builds once.
+    @MainActor
+    func testStoreGroupsPollWithSameKeysBuildsNothing() {
+        let st = store([session("api", .idle)])
+        _ = st.groups
+        let b = st.groupsBuilds
+        for _ in 0..<10 { st.sessions = [session("api", .working)]; st.history = []; st.pairSuffix = st.pairSuffix; _ = st.groups }
+        XCTAssertEqual(st.groupsBuilds, b, "10 polls with the same keys: no build")
+        st.sessions = [session("web", .idle)]
+        _ = st.groups; _ = st.groups
+        XCTAssertEqual(st.groupsBuilds, b + 1, "a changed key builds once")
+    }
 }
