@@ -2212,6 +2212,8 @@ tag from the now-released section and put it on the new top draft.
   themselves after 10 seconds; error lines stay. (#1733)
 - Kit env sheet: the auto mode and connectors warnings now show for any value except clearly off
   ones (empty, 0, false, no, off). (#1742)
+- The count pills on Agent Island cards (Follow theme off) now keep white and purple outlines that
+  stay visible on every theme. (#1739)
 
 ## v2.174.0
 

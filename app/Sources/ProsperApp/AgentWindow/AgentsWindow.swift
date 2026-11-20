@@ -2165,7 +2165,7 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), outlined: true,
+                             quiet: ink(.quiet), open: ink(.blue), outlined: true, ownCard: inks != nil,
                              help: row.countHelp)
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
@@ -2307,14 +2307,25 @@ struct AgentCountGroups: View {
     var open = Neon.blue
     /// #1735: the agents and shells groups are outlined pills (a 1 pt stroke inside, no fill, the padding in the group's width); false: none (the header).
     var outlined = false
+    /// #1739: drawn on the island's own dark card (Follow theme off): white shells and #9D7BEA agents strokes, whatever the theme (the sidebar's choice is made against Neon.sidebar).
+    var ownCard = false
     /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
     var help: [AgentSidebar.Count: String] = [:]
+
+    /// #1739: the pill stroke of a group (nil: none), chosen against the surface the row draws on.
+    static func stroke(_ c: AgentSidebar.Count, ownCard: Bool) -> Color? {
+        switch c {
+        case .agents: return ownCard ? AgentSidebarRowView.purpleLight : AgentSidebarRowView.agentsStroke
+        case .shells: return ownCard ? .white : AgentSidebarRowView.shellsStroke
+        default: return nil
+        }
+    }
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
-                    let pill = outlined ? (g.0 == .agents ? AgentSidebarRowView.agentsStroke : g.0 == .shells ? AgentSidebarRowView.shellsStroke : nil) : nil   // #1558: the shells chip is a pill too
+                    let pill = outlined ? Self.stroke(g.0, ownCard: ownCard) : nil   // #1558: the shells chip is a pill too
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }

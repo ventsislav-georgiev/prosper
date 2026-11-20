@@ -123,4 +123,29 @@ extension AgentRowSelectedTextTests {
         }
         XCTAssertEqual(pairs, 22 * 4)
     }
+
+    /// #1739: on the island's own card (Follow theme off: white at 0.05, 0.10 hovered, over the black notch about #0d0d0d) the strokes
+    /// are white (shells) and #9D7BEA (agents) on every theme, each >= 3:1 over both fills; the sidebar's choice is unchanged (ownCard false).
+    func testCountPillStrokesOnTheFollowOffIslandCardClearThreeToOneOnEveryTheme() throws {
+        var pairs = 0
+        let notch = (r: CGFloat(13) / 255, g: CGFloat(13) / 255, b: CGFloat(13) / 255, a: CGFloat(1))
+        try onEveryTheme { d, _ in
+            let shells = AgentCountGroups.stroke(.shells, ownCard: true), agents = AgentCountGroups.stroke(.agents, ownCard: true)
+            XCTAssertTrue(rgba(shells ?? .clear) == rgba(.white), "\(d.title): shells stroke is white")
+            XCTAssertTrue(rgba(agents ?? .clear) == rgba(AgentSidebarRowView.purpleLight), "\(d.title): agents stroke is #9D7BEA")
+            XCTAssertTrue(AgentCountGroups.stroke(.open, ownCard: true) == nil, "\(d.title): no pill on the open group")
+            XCTAssertTrue(rgba(AgentCountGroups.stroke(.shells, ownCard: false) ?? .clear) == rgba(AgentSidebarRowView.shellsStroke), "\(d.title): sidebar shells unchanged")
+            XCTAssertTrue(rgba(AgentCountGroups.stroke(.agents, ownCard: false) ?? .clear) == rgba(AgentSidebarRowView.agentsStroke), "\(d.title): sidebar agents unchanged")
+            for hover in [false, true] {
+                let bg = over(notch, AgentIslandHistoryRow.ownCardFill(selected: hover), 1)
+                let card = Color(nsColor: ns((bg.r, bg.g, bg.b, 1)))
+                for (name, stroke) in [("agents", agents), ("shells", shells)] {
+                    let ratio = stroke.map { ThemeRuntime.contrastRatio($0, card) } ?? 0
+                    XCTAssertGreaterThanOrEqual(ratio, 3, "\(d.title) hover \(hover): \(name) stroke over the card \(ratio):1")
+                    pairs += 1
+                }
+            }
+        }
+        XCTAssertEqual(pairs, 22 * 4)
+    }
 }
