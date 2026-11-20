@@ -126,6 +126,32 @@ final class SessionGroupsEditorTests: XCTestCase {
         XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Sidekicks", "Reviews", "Group 3"])
     }
 
+    /// QA R1758 n90: an invalid row keeps its stored name, so a duplicate is judged against that name and nothing stored is lost.
+    @MainActor
+    func testAnInvalidRowsStoredNameCountsForTheDuplicateCheck() {
+        for aFirst in [true, false] {
+            let a = Self.g("a", "Foo", "-a$"), b = Self.g("b", "Bar", "-b$")
+            let start = aFirst ? [a, b] : [b, a]
+            Preferences.agentIslandSessionGroups = start
+            var e = SessionGroupsEditor()
+            guard let ia = e.rows.firstIndex(where: { $0.id == "a" }), let ib = e.rows.firstIndex(where: { $0.id == "b" }) else { return XCTFail("rows") }
+            e.rows[ia].name = ""
+            e.rows[ib].name = " FOO "
+            XCTAssertEqual(e.reason(e.rows[ib]), "Another group has this name: not saved", "aFirst \(aFirst)")
+            XCTAssertEqual(e.saved(stored: start), start, "aFirst \(aFirst): nothing stored is lost")
+            // Equal names by nameKey among valid rows still flag both.
+            e.rows[ia].name = "x"
+            e.rows[ib].name = " X "
+            XCTAssertTrue(e.reason(e.rows[ia]) != nil && e.reason(e.rows[ib]) != nil, "aFirst \(aFirst)")
+            XCTAssertEqual(e.saved(stored: start), start, "aFirst \(aFirst)")
+        }
+        // A third row's edit onto a stored name that a duplicate pair falls back to is flagged too (the repeat).
+        let s3 = [Self.g("a", "Foo", "-a$"), Self.g("b", "Bar", "-b$"), Self.g("c", "Baz", "-c$")]
+        var e = SessionGroupsEditor(s3)
+        e.rows[0].name = "Y"; e.rows[1].name = "y"; e.rows[2].name = "foo"
+        XCTAssertEqual(e.saved(stored: s3), s3)
+    }
+
     // MARK: - The phone's stamp
 
     @MainActor

@@ -1279,11 +1279,7 @@ struct SessionGroupsEditor: Equatable {
         return n.isEmpty ? "Group \((rows.firstIndex { $0.id == g.id } ?? rows.count) + 1)" : n
     }
 
-    /// Why the row is not saved, nil when it is.
-    func reason(_ g: SessionGroup) -> String? {
-        guard SessionGroup.validName(g.name) else { return "A name is 1-32 bytes, without \"=\": not saved" }
-        let key = SessionGroup.nameKey(g.name)
-        if rows.contains(where: { $0.id != g.id && SessionGroup.nameKey($0.name) == key }) { return "Another group has this name: not saved" }
+    private func patternReason(_ g: SessionGroup) -> String? {
         let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         if p.isEmpty { return "No pattern yet: not saved" }
         switch AgentIsland.sidekickMatch(p) {
@@ -1293,12 +1289,40 @@ struct SessionGroupsEditor: Equatable {
         }
     }
 
+    private func stored(_ id: String, in stored: [SessionGroup]) -> SessionGroup? {
+        stored.first { $0.id == id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    /// Ids of the rows that are not saved. A row that is not saved is stored under its stored name, so a duplicate is
+    /// judged against that name, not the edited one (else a row normalized() drops would show no reason); each row
+    /// that joins moves its own name to the stored one, so this repeats until none joins.
+    private func unsavedIDs(stored st: [SessionGroup]) -> (own: Set<String>, all: Set<String>) {
+        let own = Set(rows.filter { !SessionGroup.validName($0.name) || patternReason($0) != nil }.map(\.id))
+        var all = own
+        while true {
+            let keys = rows.map { r in (r.id, all.contains(r.id) ? stored(r.id, in: st).map { SessionGroup.nameKey($0.name) } : SessionGroup.nameKey(r.name)) }
+            let dup = rows.filter { r in
+                guard !all.contains(r.id), let k = keys.first(where: { $0.0 == r.id })?.1 else { return false }
+                return keys.contains { $0.0 != r.id && $0.1 == k }
+            }
+            if dup.isEmpty { return (own, all) }
+            all.formUnion(dup.map(\.id))
+        }
+    }
+
+    /// Why the row is not saved, nil when it is. `stored` is the list the editor saves over.
+    func reason(_ g: SessionGroup, stored st: [SessionGroup] = Preferences.agentIslandSessionGroups) -> String? {
+        guard SessionGroup.validName(g.name) else { return "A name is 1-32 bytes, without \"=\": not saved" }
+        let u = unsavedIDs(stored: st)
+        if u.all.contains(g.id) && !u.own.contains(g.id) { return "Another group has this name: not saved" }
+        return patternReason(g)
+    }
+
     /// The list to store: each row in order, as edited when it has no reason, else as `stored` has it (same id, a
     /// pattern), else left out; so an invalid edit leaves the stored group as it was.
-    func saved(stored: [SessionGroup]) -> [SessionGroup] {
-        SessionGroup.normalized(rows.compactMap { g in
-            reason(g) == nil ? g : stored.first { $0.id == g.id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        })
+    func saved(stored st: [SessionGroup]) -> [SessionGroup] {
+        let bad = unsavedIDs(stored: st).all
+        return SessionGroup.normalized(rows.compactMap { g in bad.contains(g.id) ? stored(g.id, in: st) : g })
     }
 
     /// Stores `saved` when it differs (an unchanged editor stores nothing: the migration stays lazy). The first group's
