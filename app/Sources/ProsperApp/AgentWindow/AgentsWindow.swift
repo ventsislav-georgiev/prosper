@@ -2242,7 +2242,7 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), tinted: true, ownCard: inks != nil,
+                             quiet: ink(.quiet), open: ink(.blue), tinted: true, ownCard: inks != nil, selected: selected,
                              help: row.countHelp)
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
@@ -2386,6 +2386,8 @@ struct AgentCountGroups: View {
     var tinted = false
     /// #1739: drawn on the island's own dark card (Follow theme off): white shells and #9D7BEA agents inks, whatever the theme (the sidebar's choice is made against Neon.sidebar).
     var ownCard = false
+    /// #1789: the row is the selected one (the accent at 0.14 over the sidebar): the digits' ink is held to 4.5:1 over it.
+    var selected = false
     /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
     var help: [AgentSidebar.Count: String] = [:]
 
@@ -2396,6 +2398,20 @@ struct AgentCountGroups: View {
         case .shells: return ownCard ? .white : AgentSidebarRowView.shellsInk
         default: return nil
         }
+    }
+
+    /// #1789 (QA n105, WCAG 1.4.3): the digits are text, so they need 4.5:1 over the row (the sidebar, or the selected wash: the accent
+    /// at 0.14 over it); where the glyph's `tint` misses it they draw the theme's textPrimary, as the merges count does. The glyph keeps `tint` (3:1).
+    static func digitInk(_ tint: Color?, selected: Bool, ownCard: Bool) -> Color? {
+        guard let tint, !ownCard else { return tint }
+        func rgb(_ c: Color) -> [Double] {
+            let n = NSColor(c).usingColorSpace(.sRGB) ?? NSColor(c)
+            return [Double(n.redComponent), Double(n.greenComponent), Double(n.blueComponent)]
+        }
+        let side = rgb(Neon.sidebar), accent = rgb(Neon.blue)
+        let m = selected ? zip(side, accent).map { $0 * 0.86 + $1 * 0.14 } : side
+        let row = Color(red: m[0], green: m[1], blue: m[2])
+        return ThemeRuntime.contrastRatio(tint, row) >= 4.5 ? tint : Neon.textPrimary
     }
 
     /// #1745: test-only hook, nil in the product (one nil check per group): reports the tint each group draws, so a row proves the wiring from the caller's `ownCard`.
@@ -2411,6 +2427,7 @@ struct AgentCountGroups: View {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
+                            .foregroundStyle(g.0 == .open ? open : Self.digitInk(tint, selected: selected, ownCard: ownCard) ?? quiet)
                     }
                     .modifier(AgentSidebarRowProbe(kind: "count.\(g.0)", title: g.0.words(g.1)))
                     .foregroundStyle(g.0 == .open ? open : tint ?? quiet)

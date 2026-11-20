@@ -1,0 +1,34 @@
+{
+ "entry": "1789",
+ "filter": "AgentRowSelectedTextTests/testCountDigitsClearFourPointFiveOnEveryTheme",
+ "mutants": [
+  {
+   "name": "threshold-3",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "contrastRatio(tint, row) >= 4.5 ? tint",
+   "new": "contrastRatio(tint, row) >= 3 ? tint",
+   "expect": "killed"
+  },
+  {
+   "name": "no-fallback",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ">= 4.5 ? tint : Neon.textPrimary",
+   "new": ">= 4.5 ? tint : tint",
+   "expect": "killed"
+  },
+  {
+   "name": "ignore-selected",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "let m = selected ? zip(side",
+   "new": "let m = false ? zip(side",
+   "expect": "killed"
+  },
+  {
+   "name": "card-not-exempt",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard let tint, !ownCard else",
+   "new": "guard let tint else",
+   "expect": "killed"
+  }
+ ]
+}

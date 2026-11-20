@@ -149,6 +149,35 @@ extension AgentRowSelectedTextTests {
         XCTAssertEqual(pairs, 22 * 4)
     }
 
+    /// #1789 (QA n105, WCAG 1.4.3): the count DIGITS are text: over the sidebar and over the selected row each clears 4.5:1 on every theme;
+    /// they keep the glyph's ink (purple, white) wherever it already does and draw textPrimary where it does not; the glyph's ink is unchanged.
+    /// On the island's own card the ink is kept. Prints the lowest digit ratio as COUNTDIGIT1789-FACT and how many pairs fell back.
+    func testCountDigitsClearFourPointFiveOnEveryTheme() throws {
+        var pairs = 0, fallbacks = 0
+        var lowest = Double.infinity
+        try onEveryTheme { d, p in
+            let side = rgba(p.sidebar)
+            for selected in [false, true] {
+                let bg = selected ? over(side, p.blue, 0.14) : side
+                let row = Color(nsColor: ns((bg.r, bg.g, bg.b, 1)))
+                for (name, glyph) in [("agents", AgentSidebarRowView.agentsInk), ("shells", AgentSidebarRowView.shellsInk)] {
+                    let digits = AgentCountGroups.digitInk(glyph, selected: selected, ownCard: false) ?? .clear
+                    let ratio = ThemeRuntime.contrastRatio(digits, row)
+                    XCTAssertGreaterThanOrEqual(ratio, 4.5, "\(d.title) selected \(selected): \(name) digits over row \(ratio):1")
+                    let kept = ThemeRuntime.contrastRatio(glyph, row) >= 4.5
+                    XCTAssertTrue(rgba(digits) == rgba(kept ? glyph : p.textPrimary), "\(d.title) selected \(selected): \(name) digits keep the ink or draw textPrimary")
+                    if !kept { fallbacks += 1 }
+                    lowest = min(lowest, ratio)
+                    pairs += 1
+                }
+            }
+            XCTAssertTrue(rgba(AgentCountGroups.digitInk(.purple, selected: true, ownCard: true) ?? .clear) == rgba(.purple), "\(d.title): the island's own card keeps the ink")
+            XCTAssertTrue(AgentCountGroups.digitInk(nil, selected: true, ownCard: false) == nil, "\(d.title): no ink, no digits ink")
+        }
+        print("COUNTDIGIT1789-FACT lowest digit ratio \(lowest), \(fallbacks) of \(pairs) pairs draw textPrimary")
+        XCTAssertEqual(pairs, 22 * 4)
+    }
+
     /// #1739, #1776: on the island's own card (Follow theme off: white at 0.05, 0.10 hovered, over the black notch about #0d0d0d) the
     /// inks are white (shells) and #9D7BEA (agents) on every theme, each >= 3:1 over both fills; the sidebar's choice is unchanged (ownCard false).
     func testCountInksOnTheFollowOffIslandCardClearThreeToOneOnEveryTheme() throws {
