@@ -1,0 +1,27 @@
+{
+ "entry": 1703,
+ "filter": "DchChatTests|DchModelsReplyTests",
+ "mutants": [
+  {
+   "name": "resident-refused",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "m != id, await residentId() != m {",
+   "new": "m != id {",
+   "expect": "killed"
+  },
+  {
+   "name": "any-id-accepted",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "if let m = req.model, m != id, await residentId() != m {",
+   "new": "if let m = req.model, m != id, await residentId() == nil, true {",
+   "expect": "killed"
+  },
+  {
+   "name": "loaded-only-setting",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "\"loaded\": await residentId() != nil]",
+   "new": "\"loaded\": await residentId() == id]",
+   "expect": "killed"
+  }
+ ]
+}
