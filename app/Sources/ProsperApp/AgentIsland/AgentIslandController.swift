@@ -2008,7 +2008,9 @@ final class AgentIslandController {
             let owned: (DchCommand.Binary?) -> [String]? = { bin in
                 guard let g = DchConfigWriter.groupLines(lines, dch: bin) else { return nil }
                 let had = DchConfigWriter.fileGroupValues(path: path)
-                if adopt {
+                if adopt, had == g {
+                    // #1780: exactly Prosper's own lines (the migrated Sidekicks line): adopt and log nothing.
+                } else if adopt {
                     let found = DchConfigWriter.adoptable(had)
                     // #1779: lines dropped as refused (or all of them, for Sidekicks) log once, like a replaced list.
                     if found.count < had.count { replaced(had, found.isEmpty ? g : DchConfigWriter.groupValues(found)) }

@@ -1539,6 +1539,25 @@ extension DchConfigWriterTests {
         }
     }
 
+    /// #1780: two syncs, unstored and no hand lines: Prosper's own Sidekicks line is never adopted (no random id, no stamp move, no log).
+    @MainActor func testAnUnstoredListDoesNotAdoptProspersOwnLines() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandSessionGroupsUpdated = 7
+        let file = configFile("own", "picker_sort = name\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock(initialState: 0)
+        c.groupsReplaced = { _, _ in logged.withLock { $0 += 1 } }
+        for _ in 0..<2 {
+            c.syncDchConfig()
+            drain(c)
+        }
+        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\n"))
+        XCTAssertFalse(Preferences.agentIslandSessionGroupsStored)
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 7)
+        XCTAssertEqual(logged.withLock { $0 }, 0)
+    }
+
     /// #1779: a refused line is dropped from the adopted lines with one log; all refused: Sidekicks, one log.
     @MainActor func testDroppedGroupLinesLogOnceThroughTheSeam() {
         for (old, adopted, want) in [("group = Rev = -rev$\ngroup = Dots = a.b\n", ["Rev"],
