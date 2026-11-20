@@ -1,0 +1,20 @@
+{
+ "entry": 1702,
+ "filter": "ClipboardPasteProtectionTests",
+ "mutants": [
+  {
+   "name": "asks-reads",
+   "file": "app/Sources/ProsperApp/Clipboard/ClipboardMonitor.swift",
+   "old": "state == .denied || state == .asks",
+   "new": "state == .denied",
+   "expect": "killed"
+  },
+  {
+   "name": "default-holds",
+   "file": "app/Sources/ProsperApp/Clipboard/ClipboardMonitor.swift",
+   "old": "state == .denied || state == .asks",
+   "new": "state == .denied || state == .asks || state == .systemDefault",
+   "expect": "killed"
+  }
+ ]
+}
