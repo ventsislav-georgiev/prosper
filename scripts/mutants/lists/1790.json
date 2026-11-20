@@ -1,0 +1,62 @@
+{
+ "entry": "1790",
+ "filter": "AgentTerminalKeepTests|AgentWindowKeptCapTests|AgentWindowTerminalModeTests",
+ "mutants": [
+  {
+   "name": "cap_per_pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "var peers = keptPeers?() ?? []",
+   "new": "var peers: [AgentTerminalController] = []",
+   "expect": "killed"
+  },
+  {
+   "name": "no_wire",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "terminal.keptPeers = { [weak self] in self?.allTerminals ?? [] }",
+   "new": "_ = terminal",
+   "expect": "killed"
+  },
+  {
+   "name": "newest_first",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "$0.kept[0].at < $1.kept[0].at",
+   "new": "$0.kept[0].at > $1.kept[0].at",
+   "expect": "killed"
+  },
+  {
+   "name": "detach_drops",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if key == nil, leave == .end { dropKept() }",
+   "new": "if key == nil, leave != .keep { dropKept() }",
+   "expect": "killed"
+  },
+  {
+   "name": "end_needs_key",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if key == nil, leave == .end { dropKept() }",
+   "new": "if key == nil, leave == .end, self.key != nil { dropKept() }",
+   "expect": "killed"
+  },
+  {
+   "name": "keep_detaches",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "if key != nil || leave == .keep, keptCap > 1 { keepShown() }",
+   "new": "if key != nil, keptCap > 1 { keepShown() }",
+   "expect": "killed"
+  },
+  {
+   "name": "hide_drops",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "terminal.attach(nil, leave: visible ? .detach : .keep)",
+   "new": "terminal.attach(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused_hide_drops",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "r.terminal?.attach(nil, leave: visible ? .detach : .keep)   // #1790",
+   "new": "r.terminal?.attach(nil)   // #1790",
+   "expect": "killed"
+  }
+ ]
+}

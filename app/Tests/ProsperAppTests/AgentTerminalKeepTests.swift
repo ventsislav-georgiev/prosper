@@ -258,4 +258,64 @@ final class AgentTerminalKeepTests: XCTestCase {
               + " (\(per >> 10) KiB), grid \(c.grid.map { "\($0.cols)x\($0.rows)" } ?? "none"), scale \(win.backingScaleFactor)")
         XCTAssertLessThan(per, 256 << 20, "a kept session is bounded")
     }
+
+    /// #1790 counting row: 2 and 4 pane controllers of one window (keptPeers, as the model wires them) each switch through
+    /// 3 sessions: never more than keptSessions - 1 kept clients across them all, the oldest of any pane ends first.
+    @MainActor
+    func testKeptClientsShareOneCapAcrossTwoAndFourPanes() {
+        for panes in [2, 4] {
+            let rigs = (0..<panes).map { _ in AgentTerminalTests.Rig(keep: AgentTerminalController.keptSessions) }
+            for r in rigs { r.c.keptPeers = { rigs.map(\.c) } }
+            func kept() -> Int { rigs.reduce(0) { $0 + $1.c.keptKeys.count } }
+            func ended() -> Int { rigs.reduce(0) { $0 + $1.children.filter { $0.terminated > 0 }.count } }
+            var order: [String] = []
+            for step in 0..<3 {
+                for (i, r) in rigs.enumerated() {
+                    let name = "s\(i)-\(step)"
+                    r.c.attach(Self.key(name))
+                    r.grid(100, 30)
+                    order.append(name)
+                    XCTAssertLessThanOrEqual(kept(), AgentTerminalController.keptSessions - 1, "\(panes) panes, \(name)")
+                }
+            }
+            XCTAssertEqual(kept(), 3, "\(panes) panes: the window holds exactly 3 kept")
+            XCTAssertEqual(ended(), 3 * panes - panes - 3, "\(panes) panes: every other client ended, none more")
+            let shown = Set(rigs.compactMap { $0.c.key?.name })
+            let keptNames = rigs.flatMap { $0.c.keptKeys.map(\.name) }
+            XCTAssertEqual(Set(keptNames), Set(order.filter { !shown.contains($0) }.suffix(3)), "\(panes) panes: the newest 3 stay")
+            for r in rigs { r.c.attach(nil) }
+            XCTAssertEqual(kept(), 0)
+            XCTAssertEqual(ended(), 3 * panes, "\(panes) panes: attach(nil) ends every client")
+        }
+    }
+
+    /// #1790: attach(nil)'s three leaves. detach (the form, History, a row not live): the shown one ends, the kept stay;
+    /// keep (a hide, an unfocused pane's switch): the shown one is kept too, no client ends; end (teardown, pane gone):
+    /// every kept one ends, also when nothing is shown (a hidden window's).
+    @MainActor
+    func testAttachNilDetachesKeepsOrEndsAsAsked() {
+        let rig = AgentTerminalTests.Rig(keep: AgentTerminalController.keptSessions)
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.attach(a)
+        rig.grid(100, 30)
+        c.attach(b)
+        c.attach(nil, leave: .detach)
+        XCTAssertEqual(rig.children.map(\.terminated), [0, 1], "detach: b ends, a stays kept")
+        XCTAssertEqual(c.keptKeys, [a])
+        XCTAssertEqual(c.phase, .idle)
+        c.attach(a)
+        XCTAssertEqual(rig.requests.count, 2, "a comes back with no client")
+        c.attach(nil, leave: .keep)
+        XCTAssertEqual(rig.children.map(\.terminated), [0, 1], "keep: no client ends")
+        XCTAssertEqual(c.keptKeys, [a])
+        XCTAssertTrue(c.key == nil && c.screen == nil && c.phase == .idle, "nothing shown")
+        rig.ios.first?.output(Array("hidden|".utf8))
+        spin()
+        XCTAssertEqual(rig.screens.first?.fed.count, 0, "no feed while kept")
+        XCTAssertEqual(c.keptInboxBytes, 7)
+        XCTAssertLessThanOrEqual(c.keptDrains, 1, "one main hop at most")
+        c.attach(nil)
+        XCTAssertEqual(rig.children.map(\.terminated), [1, 1], "end with no key shown: the kept one ends too")
+        XCTAssertTrue(c.keptKeys.isEmpty)
+    }
 }

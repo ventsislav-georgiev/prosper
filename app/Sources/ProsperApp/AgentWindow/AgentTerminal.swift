@@ -280,6 +280,8 @@ final class AgentTerminalController: ObservableObject {
     // Seams.
     /// #1782: rows that test one attach at a time set 0 or 1 (every switch detaches, as before).
     var keptCap = AgentTerminalController.keptSessions
+    /// #1790: every terminal of this one's window (the model wires it): `keptCap` counts their kept clients together.
+    var keptPeers: (() -> [AgentTerminalController])?
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
     var makeScreen: (AgentTerminalScreenEvents) -> AgentTerminalScreen = { AgentGhosttyScreen($0) }
     var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2) }
@@ -352,18 +354,23 @@ final class AgentTerminalController: ObservableObject {
                             onOutput: io.output, onExit: io.exit)
     }
 
+    /// #1790: what attach(nil) does with the clients. end: the shown and every kept one end (the window torn down, the
+    /// pane gone). detach: the shown one detaches, the kept stay (the form, History, a row not live, park, a remote hold).
+    /// keep: the shown one is kept too (the window hidden or occluded, an unfocused pane's switch).
+    enum Leave { case end, detach, keep }
+
     /// Attach to `key`, or detach (nil). The window model calls this from follow(): visible, a live
     /// session selected, and its mode Terminal. The same key again changes nothing.
-    func attach(_ key: AgentSessionKey?) {
+    func attach(_ key: AgentSessionKey?, leave: Leave = .end) {
         defer { followFocus() }   // #1559: the same key too (another pane's focus may have come back to this one)
+        if key == nil, leave == .end { dropKept() }   // #1790: before the guard: a hidden window's are kept with no key
         if held != nil { held = nil }
         if key != armed { armed = nil }
         guard key != self.key else { return }
         focusPending = false   // #845: a focus asked for on another session never lands on this one
         // #1782: a kept session comes back as it was; the one shown now is kept if it can be, else detached as before.
         let back = key.flatMap { k in kept.firstIndex { $0.key == k } }.map { kept.remove(at: $0) }
-        if key != nil, keptCap > 1 { keepShown() } else { detach() }
-        if key == nil { dropKept() }   // hidden, closed, a pane gone, the form, nothing live: no client stays behind
+        if key != nil || leave == .keep, keptCap > 1 { keepShown() } else { detach() }
         self.key = key
         reattached = false
         reconnects = 0
@@ -392,6 +399,8 @@ final class AgentTerminalController: ObservableObject {
         let version: [Int]?
         let focusJiggle: Bool
         let fed: Bool
+        /// #1790: when it was kept (keptTick): the oldest across the window's panes ends first.
+        let at: Int
     }
     /// Oldest first; at most `keptCap` - 1 (the shown one is the cap's last).
     private var kept: [Kept] = []
@@ -400,6 +409,7 @@ final class AgentTerminalController: ObservableObject {
     var keptInboxBytes: Int { kept.reduce(0) { $0 + $1.inbox.count } }
     /// Main-thread drains that reached a kept inbox: one per keep at most (the inbox stays scheduled, so no more hops).
     private(set) var keptDrains = 0
+    private static var keptTick = 0
     /// The view the pane shows: this attach's. A kept session brings its own back, surface and all.
     private var host: AgentTerminalHostView?
     /// Controllers holding kept sessions (a session kept in one pane goes when another pane attaches it).
@@ -423,7 +433,8 @@ final class AgentTerminalController: ObservableObject {
         host?.owner = nil   // no clipboard, link, grid or focus call from a kept surface reaches the controller
         kept.append(Kept(key: key, child: child, inbox: inbox, writer: writer, screen: screen, view: host,
                          screenGeneration: screenGeneration, grid: grid, sentSize: sentSize, version: version,
-                         focusJiggle: focusJiggle, fed: fed))
+                         focusJiggle: focusJiggle, fed: fed, at: Self.keptTick))
+        Self.keptTick += 1
         Self.keepers.add(self)
         self.child = nil
         self.inbox = nil
@@ -433,7 +444,13 @@ final class AgentTerminalController: ObservableObject {
         sentSize = nil
         screenGeneration = 0
         phase = .idle
-        while kept.count > keptCap - 1 { release(kept.removeFirst(), exited: false) }
+        // #1790: one cap for the window (operator: shown + 3 kept): the oldest kept client of any of its panes ends first.
+        var peers = keptPeers?() ?? []
+        if !peers.contains(where: { $0 === self }) { peers.append(self) }
+        while peers.reduce(0, { $0 + $1.kept.count }) > keptCap - 1,
+              let c = peers.filter({ !$0.kept.isEmpty }).min(by: { $0.kept[0].at < $1.kept[0].at }) {
+            c.release(c.kept.removeFirst(), exited: false)
+        }
     }
 
     /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
@@ -467,7 +484,7 @@ final class AgentTerminalController: ObservableObject {
         if !exited { k.child.terminate() }
     }
 
-    /// Every kept client ends (the window hid or closed, the pane went).
+    /// Every kept client ends (the window torn down, the pane went).
     private func dropKept() {
         while !kept.isEmpty { release(kept.removeFirst(), exited: false) }
     }
@@ -497,7 +514,7 @@ final class AgentTerminalController: ObservableObject {
 
     /// #1330: remote `key` focused but not armed: nothing attached, the card with Attach.
     func hold(_ key: AgentSessionKey) {
-        if self.key != nil { attach(nil) }
+        if self.key != nil { attach(nil, leave: .detach) }
         armed = nil
         if held != key { held = key }
     }
@@ -815,7 +832,7 @@ final class AgentTerminalController: ObservableObject {
     func park() {
         guard key != nil else { return }
         let kept = screen
-        attach(nil)
+        attach(nil, leave: .detach)
         screen = kept
     }
 

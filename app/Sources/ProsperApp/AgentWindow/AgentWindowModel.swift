@@ -1402,6 +1402,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// The window model's answers a terminal asks for (the window's and, #1477, each pane's).
     private func wire(_ terminal: AgentTerminalController) {
+        terminal.keptPeers = { [weak self] in self?.allTerminals ?? [] }   // #1790: one kept cap per window
         terminal.isLive = { [weak self] key in self?.store?.sessions.contains { $0.key == key } ?? false }
         // OQ-66: an OSC 52 write needs the session to be the focused pane's, live now (4.3: resolved at the write).
         terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
@@ -3401,7 +3402,11 @@ final class AgentWindowModel: ObservableObject {
             interaction.follow(nil)   // 4.4 (d): nothing on an ended pane takes input; hidden or not live: nothing
             // #1477: gate on, an Ended pane's terminal keeps its last frame (its client already gone)
             // (its pending focus dropped: the session it was asked for is gone)
-            if AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil { terminal.dropPendingFocus() } else { terminal.attach(nil) }
+            if AgentPaneLayout.splitsEnabled && focusedRuntime?.ended != nil { terminal.dropPendingFocus() } else {
+                // #1790: hidden (closed into the grace, occluded): the shown client is kept with the rest, zero CPU; a
+                // row not live: only the shown one goes
+                terminal.attach(nil, leave: visible ? .detach : .keep)
+            }
             // #1471 b: the session ended: its unsent-first notice goes with it (the record too: nothing can send it now).
             // An Ended pane holds `.notRunning` content; its session is the kept target's (settle(_:target:)).
             if let u = unsentFirst, let e = focusedRuntime?.ended, Self.rowID(e.target) == .live(u.key) {
@@ -3416,7 +3421,7 @@ final class AgentWindowModel: ObservableObject {
         // #822: no input box (the terminal is the input); #1471: Terminal is the only mode.
         interaction.follow(nil)
         // #847: the New session form covers the pane, so no terminal under it.
-        terminal.attach(newSession == nil ? s.key : nil)
+        terminal.attach(newSession == nil ? s.key : nil, leave: .detach)   // #1790: the form leaves the kept ones
     }
 
     /// #1477 (11.2, spec 15 C): gate on, each unfocused pane's own terminal. A shown, live local session in Terminal mode
@@ -3446,14 +3451,17 @@ final class AgentWindowModel: ObservableObject {
             guard let k = want, !refused.contains(r.pane) else {
                 restPending[r.pane] = nil
                 if r.terminal?.key != nil {
-                    if visible, unfocusedTerminalKey(r, Set(layout.order)) != nil { r.terminal?.park() } else { r.terminal?.attach(nil) }
+                    if visible, unfocusedTerminalKey(r, Set(layout.order)) != nil { r.terminal?.park() } else {
+                        r.terminal?.attach(nil, leave: visible ? .detach : .keep)   // #1790: as the focused pane's
+                    }
                 }
                 continue
             }
             taken.insert(k)
             room -= 1
             if r.terminal?.key == k || restPending[r.pane] == k { continue }
-            if r.terminal?.key != nil { r.terminal?.attach(nil) }   // another session: the old client goes now
+            // another session: the old client is kept (#1790: the window-wide cap) and the rest waits
+            if r.terminal?.key != nil { r.terminal?.attach(nil, leave: .keep) }
             restPending[r.pane] = k
             let id = r.pane
             paneAfter(Self.attachRest) { [weak self] in
