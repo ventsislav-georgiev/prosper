@@ -1,0 +1,41 @@
+{
+ "entry": "1763",
+ "filter": "TextViewerMenuTests|TextViewerWindowTests/testSourceGuard",
+ "mutants": [
+  {
+   "name": "app-ext-kept",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerMenu.swift",
+   "old": "name.hasSuffix(\".app\") ? String(name.dropLast(4)) : name",
+   "new": "name",
+   "expect": "killed"
+  },
+  {
+   "name": "app-ext-anywhere",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerMenu.swift",
+   "old": "name.hasSuffix(\".app\") ? String(name.dropLast(4)) : name",
+   "new": "name.replacingOccurrences(of: \".app\", with: \"\")",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-raw-displayname",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerMenu.swift",
+   "old": ".map(Self.appName)",
+   "new": ".map { FileManager.default.displayName(atPath: $0.path) + \".app\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "window-menu-cmd-m",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: \"\")",
+   "new": "action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: \"m\")",
+   "expect": "killed"
+  },
+  {
+   "name": "window-menu-zoom-key",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "action: #selector(NSWindow.performZoom(_:)), keyEquivalent: \"\")",
+   "new": "action: #selector(NSWindow.performZoom(_:)), keyEquivalent: \"z\")",
+   "expect": "killed"
+  }
+ ]
+}
