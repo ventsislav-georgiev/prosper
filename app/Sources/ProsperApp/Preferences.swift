@@ -233,8 +233,9 @@ private extension String {
 /// #535: `Preferences.defaults` under XCTest. Its values live in this object, never in
 /// CFPreferences. On CI the old absolute-path suite froze mid-run (#528 probe, 7 hits): a remove
 /// reached the plist on disk, yet the removed value kept reading back for the rest of the run.
-/// cfprefsd had not restarted, the disk and modes were fine, and no app code touched the store off
-/// main. So the stale copy sat in CFPreferences' own in-process cache. Reads never fall through to
+/// Observed: cfprefsd had not restarted, the disk and modes were fine, and no app code was seen
+/// touching the store off main. Inferred, never proven: a stale copy in CFPreferences' own
+/// in-process cache. Keeping values here sidesteps that whatever the cause. Reads never fall through to
 /// CFPreferences either: a key not written here is nil, whatever the machine's global domain holds.
 final class XCTestDefaults: UserDefaults, @unchecked Sendable {
     private let lock = NSLock()
@@ -299,7 +300,7 @@ enum Preferences {
     }()
 
     /// The XCTest store's name (#535: no plist is written there any more). In the small
-    /// `prosper-test-defaults` dir (shared with the tests' `scratchDefaults`), not
+    /// `prosper-test-defaults` dir (no longer shared with the tests' `scratchDefaults`, which is in memory), not
     /// the $TMPDIR root: a path suite rewrites its plist synchronously on every `set` (temp
     /// file + rename beside it), on every keystroke via `AnalyticsStore.bumpUsage`. A create or
     /// rename in the root measured 30-100 ms on 2026-10-10 with ~2.1M entries there; QA #120's
