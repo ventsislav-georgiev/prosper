@@ -19,7 +19,7 @@
   {
    "name": "no_adopt_store",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "Preferences.adoptSessionGroups(phone.groups, updated: phone.updated)",
+   "old": "Preferences.adoptSessionGroups(winner.groups, updated: winner.updated)",
    "new": "_ = phone",
    "expect": "killed"
   },
@@ -33,8 +33,8 @@
   {
    "name": "no_count_cap",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "if list.count > SessionGroup.maxCount",
-   "new": "if list.count > SessionGroup.maxCount + 1",
+   "old": "if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }",
+   "new": "if list.count == SessionGroup.maxCount + 1 { return .failure(Failure(tooMany)) }",
    "expect": "killed"
   },
   {
@@ -124,15 +124,15 @@
   {
    "name": "sidekick_adopt_no_groups_stamp",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "        agentIslandSessionGroupsUpdated = max(groups, updated)\n",
-   "new": "        _ = groups\n",
+   "old": "        agentIslandSessionGroupsUpdated = changed && groups >= updated ? editStamp(now: now, after: groups) : max(groups, updated)\n",
+   "new": "        _ = (groups, changed)\n",
    "expect": "killed"
   },
   {
    "name": "sidekick_adopt_groups_stamp_back",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "agentIslandSessionGroupsUpdated = max(groups, updated)",
-   "new": "agentIslandSessionGroupsUpdated = updated",
+   "old": ": max(groups, updated)",
+   "new": ": updated",
    "expect": "killed"
   }
  ]
