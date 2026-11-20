@@ -63,6 +63,8 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     /// #1263: the reason words and the response header names (already through the name rule) of that note.
     var pendingReason = ""
     var responseHeaders = ""
+    /// The upstream x-should-retry word of that note ("true", "false", "absent" or "other").
+    var shouldRetry = "absent"
     /// The private part of that note: the model and the upstream body (QA #733 INFO-3).
     var pendingPrivate = ""
     /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
@@ -540,6 +542,7 @@ final class CCPoolConnection: @unchecked Sendable {
         store.recordUsage(id: id, limits: limits)
 
         if response.statusCode == 429 {
+            ex.shouldRetry = CCPoolThrottleShape.shouldRetry(headers["x-should-retry"])
             var spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
             let retry = headers["retry-after"]
             let wait = CCPoolCore.retryAfterSeconds(retry)
@@ -758,7 +761,8 @@ final class CCPoolConnection: @unchecked Sendable {
         if replayable, !quotaCheck, throttleRetries < CCPoolCore.throttleBackoff.count, attempts < maxAttempts {
             next = .retry
         }
-        log.note(ex.label, ex.pendingNote + shape + "; resp-headers=" + ex.responseHeaders
+        log.note(ex.label, ex.pendingNote + shape + "; beta=" + CCPoolThrottleShape.beta(head?.header("anthropic-beta"))
+                 + "; should-retry=" + ex.shouldRetry + "; resp-headers=" + ex.responseHeaders
                  + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(next.rawValue); " + ex.pendingReason,
                  private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
         switch next {
@@ -908,6 +912,25 @@ enum CCPoolThrottleShape {
     static func request(bytes: Int, _ obj: [String: Any]?) -> String {
         let effort = (obj?["output_config"] as? [String: Any])?["effort"]
         return "bytes=\(max(0, bytes)); max_tokens=\(maxTokens(obj)); effort=\(word(effort, efforts)); speed=\(word(obj?["speed"], speeds))"
+    }
+
+    static let betaMax = 120
+
+    /// The request's anthropic-beta list for the log: only letters, digits and "._,-" kept (flag names are public API
+    /// words; spaces and anything else are dropped), cut at 120 bytes with a trailing "+"; "none" when absent or empty.
+    static func beta(_ value: String?) -> String {
+        let kept = String(decoding: (value ?? "").utf8.filter {
+            ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5a) || ($0 >= 0x61 && $0 <= 0x7a) || $0 == 0x2d || $0 == 0x2e || $0 == 0x5f || $0 == 0x2c
+        }, as: UTF8.self)
+        if kept.isEmpty { return "none" }
+        return kept.utf8.count > betaMax ? String(kept.prefix(betaMax)) + "+" : kept
+    }
+
+    /// The upstream x-should-retry value as a fixed word: "true", "false", "absent" (no header) or "other".
+    static func shouldRetry(_ value: String?) -> String {
+        guard let value else { return "absent" }
+        let v = value.trimmingCharacters(in: .whitespaces).lowercased()
+        return v == "true" || v == "false" ? v : "other"
     }
 
     /// The unusual response header names (not ROUTINE, no rate-limit prefix) that pass the name rule: ASCII letters,

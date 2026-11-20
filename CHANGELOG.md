@@ -2104,6 +2104,8 @@ tag from the now-released section and put it on the new top draft.
   per account to events-YYYY-MM-DD.jsonl beside its usage record. (#1667)
 - ccpool's proxy rebinds its port at once after a restart or a takeover (no 30 s wait). (#1675)
 - ccpool keeps its port open while Prosper updates, so requests wait instead of failing. (#1676)
+- CCPool's throttle (429) log line now also shows the request's anthropic-beta flags (cleaned and
+  length-capped) and the upstream x-should-retry value. (#1671)
 
 ## v2.174.0
 

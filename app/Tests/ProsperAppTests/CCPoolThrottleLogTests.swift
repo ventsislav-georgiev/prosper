@@ -103,7 +103,7 @@ final class CCPoolThrottleLogTests: XCTestCase {
         XCTAssertEqual(r.post(Self.work, sid: sid)?.status, 200)
         XCTAssertEqual(r.rec.waits, [1, 2, 4])
         let common = "429 quota=NO unified rate-limit headers; retry-after=?; cooldown=none; bytes=106; max_tokens=4096; "
-            + "effort=high; speed=fast; resp-headers=x-queue-depth,x-trace-id; "
+            + "effort=high; speed=fast; beta=none; should-retry=absent; resp-headers=x-queue-depth,x-trace-id; "
         let outcomes = ["attempt=1; retry=0; outcome=retry", "attempt=2; retry=1; outcome=retry",
                         "attempt=3; retry=2; outcome=retry", "attempt=4; retry=3; outcome=move"]
         XCTAssertEqual(r.log.throttles.map(\.pub), outcomes.map { common + $0 + "; reason=no exhausted quota" })
@@ -209,6 +209,46 @@ final class CCPoolThrottleLogTests: XCTestCase {
             XCTAssertFalse((l.pub + l.priv).contains("VALUE-LEAK"), "a header value in a log part: \(l.pub)\(l.priv)")
             XCTAssertFalse(l.pub.contains(long))
         }
+    }
+
+    // Both present: the client's beta list and the upstream x-should-retry reach the one 429 line, as words.
+    func testBetaAndShouldRetryPresentAreOnTheLine() throws {
+        let r = try rig(throttles: 1, extra: [("x-should-retry", "true")])
+        let h = [("content-type", "application/json"), ("anthropic-beta", "context-1m-2025-08-07, interleaved-thinking-2025-05-14")]
+        XCTAssertEqual(CCPoolTestClient.request(port: r.port, headers: h, body: Self.work)?.status, 200)
+        XCTAssertEqual(CCPoolTestClient.request(port: r.port, headers: h, body: Self.work)?.status, 200)
+        let first = try XCTUnwrap(r.log.throttles.first)
+        XCTAssertTrue(first.pub.contains("speed=fast; beta=context-1m-2025-08-07,interleaved-thinking-2025-05-14; should-retry=true; resp-headers="),
+                      first.pub)
+    }
+
+    // Both absent: the fixed words "none" and "absent".
+    func testBetaAndShouldRetryAbsentAreOnTheLine() throws {
+        let r = try rig(throttles: 1)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 200)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 200)
+        let first = try XCTUnwrap(r.log.throttles.first)
+        XCTAssertTrue(first.pub.contains("speed=fast; beta=none; should-retry=absent; resp-headers="), first.pub)
+    }
+
+    func testBetaCleaningAndCap() {
+        XCTAssertEqual(CCPoolThrottleShape.beta(nil), "none")
+        XCTAssertEqual(CCPoolThrottleShape.beta(" \t"), "none")
+        XCTAssertEqual(CCPoolThrottleShape.beta("a-1, b_2.x\r\nX: y;z=\u{e9}\"q"), "a-1,b_2.xXyzq")
+        let exact = String(repeating: "b", count: CCPoolThrottleShape.betaMax)
+        XCTAssertEqual(CCPoolThrottleShape.beta(exact), exact)
+        let long = (1...30).map { "flag-\($0)-2025-01-01" }.joined(separator: ", ")
+        let out = CCPoolThrottleShape.beta(long)
+        XCTAssertEqual(out.utf8.count, CCPoolThrottleShape.betaMax + 1)
+        XCTAssertTrue(out.hasSuffix("+") && out.hasPrefix("flag-1-2025-01-01,flag-2-2025-01-01,"), out)
+    }
+
+    func testShouldRetryWords() {
+        XCTAssertEqual(CCPoolThrottleShape.shouldRetry(nil), "absent")
+        XCTAssertEqual(CCPoolThrottleShape.shouldRetry("true"), "true")
+        XCTAssertEqual(CCPoolThrottleShape.shouldRetry(" FALSE "), "false")
+        XCTAssertEqual(CCPoolThrottleShape.shouldRetry("VALUE-LEAK"), "other")
+        XCTAssertEqual(CCPoolThrottleShape.shouldRetry(""), "other")
     }
 
     func testHeaderNameRule() {
