@@ -301,6 +301,21 @@ final class CCPoolKeeperTests: XCTestCase {
                        "a keeper whose fd is not on its port does not start")
     }
 
+    // #1676 cause: a fresh link's exit reaches a keeper that accepts late (admit runs after the peer would have closed).
+    func testFreshLinkExitReachesAKeeperThatAcceptsLate() throws {
+        let l = try Self.listener()
+        let dir = keeperDir()
+        let exited = expectation(description: "exit")
+        _ = try XCTUnwrap(keeper(dup(l.fd), dir: dir, exited: exited, accept: { s in
+            Thread.sleep(forTimeInterval: 0.2)
+            let c = Darwin.accept(s, nil, nil)
+            return (c, c >= 0 ? 0 : errno)
+        }))
+        l.cancel()
+        keeperLink(dir).exit()
+        wait(for: [exited], timeout: 5)
+    }
+
     // The service: no keeper answers, so it binds and spawns one with its listener; a second service (the relaunch)
     // fetches that socket with no probe, no bind and no spawn.
     func testServiceFetchesFromAKeeperAndSpawnsOneOnlyWhenNoneAnswers() throws {

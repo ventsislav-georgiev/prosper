@@ -72,6 +72,10 @@ final class CCPoolKeeperLink: @unchecked Sendable {
             guard let c = connected() else { return }
             var b = PortKeeper.exit
             _ = Darwin.write(c, &b, 1)
+            // The keeper admits a fresh link only while its peer is still connected: wait for it to close ours (EOF, or the
+            // 2 s receive timeout) before closing, or the byte is lost.
+            var r: UInt8 = 0
+            while Darwin.read(c, &r, 1) > 0 {}
             dropLocked()
         }
     }
