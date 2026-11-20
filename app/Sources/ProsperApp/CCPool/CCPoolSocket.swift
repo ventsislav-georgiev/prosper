@@ -82,13 +82,19 @@ final class CCPoolListener: @unchecked Sendable {
         let named = withUnsafeMutablePointer(to: &a) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
         }
-        var listening: Int32 = 0
-        var olen = socklen_t(MemoryLayout<Int32>.size)
         guard fd >= 0, named == 0, a.sin_family == sa_family_t(AF_INET), a.sin_addr.s_addr == UInt32(0x7f00_0001).bigEndian,
-              getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &listening, &olen) == 0, listening != 0,
+              Self.isListeningTCP(fd),
               Self.configure(fd) else { return nil }
         self.fd = fd
         port = NWEndpoint.Port(rawValue: UInt16(bigEndian: a.sin_port))
+    }
+
+    /// TCP and LISTEN, read through libproc on our own pid: Darwin answers getsockopt(SO_ACCEPTCONN) with ENOPROTOOPT.
+    static func isListeningTCP(_ fd: Int32) -> Bool {
+        var si = socket_fdinfo()
+        let size = Int32(MemoryLayout<socket_fdinfo>.size)
+        return proc_pidfdinfo(getpid(), fd, PROC_PIDFDSOCKETINFO, &si, size) == size
+            && si.psi.soi_kind == Int32(SOCKINFO_TCP) && si.psi.soi_proto.pri_tcp.tcpsi_state == TSI_S_LISTEN
     }
 
     /// SO_NOSIGPIPE, O_NONBLOCK and FD_CLOEXEC (set on every accepted fd too: accept() does not carry them all).

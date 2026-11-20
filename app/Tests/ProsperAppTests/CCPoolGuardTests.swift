@@ -181,7 +181,7 @@ final class CCPoolGuardTests: XCTestCase {
         XCTAssertNotEqual(opt(SO_REUSEADDR), 0)
         XCTAssertEqual(opt(SO_REUSEPORT), 0, "never SO_REUSEPORT")
         XCTAssertNotEqual(opt(SO_NOSIGPIPE), 0)
-        XCTAssertNotEqual(opt(SO_ACCEPTCONN), 0, "listening")
+        XCTAssertTrue(CCPoolListener.isListeningTCP(l.fd), "listening (libproc; getsockopt SO_ACCEPTCONN is ENOPROTOOPT on Darwin)")
         XCTAssertNotEqual(fcntl(l.fd, F_GETFL) & O_NONBLOCK, 0)
         XCTAssertNotEqual(fcntl(l.fd, F_GETFD) & FD_CLOEXEC, 0)
         let all = try swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")).map { try String(contentsOf: $0, encoding: .utf8) }.joined()
