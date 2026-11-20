@@ -114,18 +114,17 @@ final class AgentNewSessionGroupTests: XCTestCase {
             XCTAssertEqual(m.newSession?.group, AgentNewSessionForm.GroupPick(stem: "web", sidekick: false))
             XCTAssertEqual(m.newSession?.folder, "~/web", "the group's folder")
             XCTAssertEqual(m.newSession?.command, "claude --verbose", "the main's command")
-            XCTAssertEqual(m.newSessionName, "web-4", "past web-3 in History: never a gap")
-            XCTAssertEqual(m.newSessionAutoName, "web-4", "the preview")
-            XCTAssertEqual(m.newSession?.name, "", "a preview, not typed text")
-            XCTAssertTrue(m.newSessionGroupError == nil && m.canStartNewSession)
+            XCTAssertEqual(m.newSessionName, "", "#1731: no generated group name (was: web-4)")
+            XCTAssertEqual(m.newSession?.name, "", "nothing typed")
+            XCTAssertTrue(m.newSessionGroupError == nil && !m.canStartNewSession, "Start waits for a typed name")
+            m.setNewSessionName("web-4")
 
             m.setNewSessionGroup("web", sidekick: true)
             XCTAssertEqual(m.newSession?.command, "claude --debug", "the sidekick's command")
-            XCTAssertEqual(m.newSessionName, "web-qa-2")
+            XCTAssertEqual(m.newSessionName, "", "the role choice leaves the name empty (was: web-qa-2)")
             m.setNewSessionName("web-qa-9")
-            XCTAssertEqual(m.newSessionName, "web-qa-9", "the person can still edit it")
-            m.setNewSessionName("")
-            XCTAssertEqual(m.newSessionName, "web-qa-2", "cleared: the preview again")
+            XCTAssertEqual(m.newSessionName, "web-qa-9", "the person types it")
+            m.setNewSessionName("web-qa-2")
             m.setNewSessionSidekick(true)
             XCTAssertEqual(m.newSession?.sidekick, false, "one session joins: no second spawn")
 
@@ -139,7 +138,7 @@ final class AgentNewSessionGroupTests: XCTestCase {
 
             m.openNewSession()
             m.setNewSessionGroup("api", sidekick: false)
-            XCTAssertEqual(m.newSessionName, "api-2", "first extra main")
+            m.setNewSessionName("api-2")
             st.sessions.removeAll { $0.name == "api-qa" }
             XCTAssertEqual(m.newSessionGroupError, "api is not running any more")
             XCTAssertFalse(m.canStartNewSession, "a stopped group starts nothing")
@@ -199,7 +198,7 @@ final class AgentNewSessionGroupTests: XCTestCase {
                 m.setNewSessionGroup("api", sidekick: true)
                 XCTAssertEqual(m.newSession?.prompt, "Work for \(main).", "opened on \(selected.name)")
                 XCTAssertEqual(m.newSession?.promptShown, true)
-                XCTAssertEqual(m.newSessionName, "api-qa-2")
+                XCTAssertEqual(m.newSessionName, "", "#1731: no generated group name (was: api-qa-2)")
                 m.setNewSessionGroup("api", sidekick: false)
                 XCTAssertEqual(m.newSession?.prompt, "", "a main: the filled prompt taken back")
                 m.cancelNewSession()
@@ -256,7 +255,7 @@ final class AgentNewSessionGroupTests: XCTestCase {
             XCTAssertEqual(m.newSession?.group, AgentNewSessionForm.GroupPick(stem: "web", sidekick: false), "the group, as a main")
             XCTAssertEqual(m.newSession?.folder, "~/web", "the group's folder")   // red if the group is ignored: the default folder
             XCTAssertEqual(m.newSession?.command, "claude --verbose", "the group's harness")
-            XCTAssertEqual(m.newSessionName, "web-2")
+            XCTAssertEqual(m.newSessionName, "", "#1731: no generated group name (was: web-2)")
             m.setNewSessionGroup("web", sidekick: true)
             XCTAssertEqual(m.newSession?.command, "claude --debug", "the person picks the role")
 
@@ -306,7 +305,7 @@ final class AgentNewSessionGroupTests: XCTestCase {
             m.setNewSessionName("mine")
             m.setNewSessionGroup("api", sidekick: false)
             XCTAssertEqual(m.newSession?.name, "", "the choice clears it")
-            XCTAssertEqual(m.newSessionName, "api-2")
+            XCTAssertEqual(m.newSessionName, "", "#1731: empty (was: api-2)")
             m.setNewSessionGroup("api", sidekick: true)
             m.setNewSessionGroup(nil, sidekick: false)
             XCTAssertEqual(m.newSession?.name, "mine", "None brings it back")   // red before the fix: ""

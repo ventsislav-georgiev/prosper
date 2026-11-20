@@ -2522,7 +2522,7 @@ final class AgentWindowModel: ObservableObject {
     var shell = ProcessInfo.processInfo.environment["SHELL"]
 
     /// ⌘N, +, the empty state's pill: the form, prefilled (last folder > the selected session's cwd > ~,
-    /// its free name, the island's command setting, else its inference). Open already: its Name field.
+    /// no name: #1731 it is typed, the island's command setting, else its inference). Open already: its Name field.
     func openNewSession(folder: String? = nil) {
         newSessionFocus += 1
         guard newSession == nil else { return }
@@ -2574,7 +2574,7 @@ final class AgentWindowModel: ObservableObject {
 
     func setNewSessionFolder(_ s: String) { newSession?.folder = s }
 
-    /// Typing pins the name; clearing it returns to the folder's free name.
+    /// #1731: no generated name: an empty one (after trim) is refused at Start.
     func setNewSessionName(_ s: String) {
         newSession?.name = s
         newSession?.nameEdited = !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -2607,7 +2607,7 @@ final class AgentWindowModel: ObservableObject {
     /// The box as Start reads it: checked and allowed.
     var newSessionSidekickOn: Bool { newSession?.sidekick == true && newSessionClaude }
 
-    /// #847 D3.2: the main name (typed or automatic) and the Settings suffix.
+    /// #847 D3.2: the main name (typed) and the Settings suffix.
     var newSessionSidekickName: String {
         AgentNewSession.sidekickName(newSessionName, suffix: Preferences.agentIslandSidekickSuffix)
     }
@@ -2718,31 +2718,10 @@ final class AgentWindowModel: ObservableObject {
         setNewSessionGroup(stem, sidekick: false)
     }
 
-    /// The chosen group's next name; nil: no group chosen. "" when none fits (newSessionGroupError says why).
-    private var newSessionGroupName: String? {
-        guard let p = newSession?.group else { return nil }
-        guard let store, newSessionGroups.contains(where: { $0.stem == p.stem }) else { return "" }
-        return AgentNewSession.groupName(stem: p.stem, sidekick: p.sidekick, suffix: store.pairSuffix, taken: spawnTaken,
-                                         dir: island().spawnDir()) ?? ""
-    }
-
-    /// The group row's slot: the chosen group stopped, or no name of it fits (and none is typed).
+    /// The group row's slot: the chosen group stopped.
     var newSessionGroupError: String? {
         guard let p = newSession?.group else { return nil }
-        if !newSessionGroups.contains(where: { $0.stem == p.stem }) { return "\(p.stem) is not running any more" }
-        return newSession?.nameEdited == false && newSessionGroupName == "" ? "No free name in \(p.stem) fits: type one" : nil
-    }
-
-    var newSessionAutoName: String {
-        if let name = newSessionGroupName { return name }   // #1214
-        if let host = newSession?.host {
-            return AgentNewSession.autoName(folder: newSessionFolder, taken: remoteTaken(host), dir: island().spawnDir())
-        }
-        // #847 D3.4: with the box on, a free name whose sidekick is free too.
-        let suffix = Preferences.agentIslandSidekickSuffix
-        return AgentNewSession.autoName(folder: AgentNewSession.expand(newSession?.folder ?? "", home: home), taken: spawnTaken,
-                                        dir: island().spawnDir(),
-                                        suffix: newSessionSidekickOn && AgentIsland.suffixOK(suffix) ? suffix : nil)
+        return newSessionGroups.contains(where: { $0.stem == p.stem }) ? nil : "\(p.stem) is not running any more"
     }
 
     // MARK: #1323 New session on another Mac
@@ -2814,10 +2793,9 @@ final class AgentWindowModel: ObservableObject {
         refresh()
     }
 
-    /// The name Start uses: the typed one, else the free name now (an untouched name taken since is re-picked).
+    /// #1731: the name Start uses: the typed one, trimmed. "" when none is typed: Start refuses (no generated name).
     var newSessionName: String {
-        guard let f = newSession, f.nameEdited else { return newSessionAutoName }
-        return f.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        (newSession?.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var newSessionErrors: (folder: String?, name: String?, sidekick: String?) {
@@ -2827,7 +2805,7 @@ final class AgentWindowModel: ObservableObject {
                     AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()), nil)
         }
         // #847 D3.3: the sidekick's slot, only with the box on: the suffix first, then the main's rules on main + suffix.
-        let sidekick: String? = !newSessionSidekickOn ? nil
+        let sidekick: String? = !newSessionSidekickOn || newSessionName.isEmpty ? nil   // #1731: no name yet: nothing to check
             : !AgentIsland.suffixOK(Preferences.agentIslandSidekickSuffix) ? Self.sidekickSuffixUnusable
             : AgentNewSession.nameError(newSessionSidekickName, taken: spawnTaken, dir: island().spawnDir())
         return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
@@ -2836,7 +2814,8 @@ final class AgentWindowModel: ObservableObject {
 
     /// #847 D7.4: the argv that runs, `--name` included.
     var newSessionRuns: String {
-        let argv = AgentIsland.naming(AgentNewSession.argv(newSession?.command ?? "", shell: newSessionShell), name: newSessionName)
+        let argv = AgentIsland.naming(AgentNewSession.argv(newSession?.command ?? "", shell: newSessionShell),
+                                    name: newSessionName.isEmpty ? "<name>" : newSessionName)
         return AgentIsland.shellLine(argv) + (AgentIsland.shellWords(newSession?.command ?? "").isEmpty ? " (your login shell)" : "")
     }
 
@@ -2860,7 +2839,7 @@ final class AgentWindowModel: ObservableObject {
         guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
-        return e.folder == nil && e.name == nil && e.sidekick == nil && newSessionGroupError == nil   // #1214
+        return !newSessionName.isEmpty && e.folder == nil && e.name == nil && e.sidekick == nil && newSessionGroupError == nil   // #1214
     }
 
     /// Start or Return: nothing runs unless every check passes now.

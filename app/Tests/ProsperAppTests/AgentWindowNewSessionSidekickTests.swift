@@ -31,7 +31,7 @@ extension AgentWindowD1Tests {
             do {
                 let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
                 defer { m.close() }
-                m.openNewSession(folder: "/Users/example/api")
+                m.openNewSessionNamed(folder: "/Users/example/api")
                 XCTAssertEqual(m.newSession?.sidekick, false, "off on every open")
                 XCTAssertTrue(m.startNewSession())
                 spawns.done.first?(spawnKey("api"), nil)
@@ -41,7 +41,7 @@ extension AgentWindowD1Tests {
             }
             let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --chrome")
             m.setNewSessionSidekick(true)
             m.setNewSessionPrompt("fix the login bug")
@@ -76,7 +76,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionSidekick(true)
             m.setNewSessionPrompt("fix the login bug")
             XCTAssertTrue(m.startNewSession())
@@ -102,7 +102,7 @@ extension AgentWindowD1Tests {
             let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
             defer { m.close() }
             let line = AgentSessionKey(dir: m.island().spawnDir(), name: "")
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionSidekick(true)
             m.setNewSessionPrompt("fix the login bug")
             XCTAssertTrue(m.startNewSession())
@@ -121,7 +121,7 @@ extension AgentWindowD1Tests {
             // The runner refuses the second spawn (busy): the same line at once, the form still goes the main's way.
             let spawns2 = SpawnCalls(), says2 = SayCalls(), m2 = sidekickModel(store([]), spawns2, says2)
             defer { m2.close() }
-            m2.openNewSession(folder: "/Users/example/web")
+            m2.openNewSessionNamed(folder: "/Users/example/web")
             m2.setNewSessionSidekick(true)
             XCTAssertTrue(m2.startNewSession())
             spawns2.accept = false
@@ -142,7 +142,7 @@ extension AgentWindowD1Tests {
             @MainActor func run(prompt: String, sidekick: Bool, _ check: (SpawnCalls, SayCalls) -> Void) {
                 let spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(store([]), spawns, says)
                 defer { m.close() }
-                m.openNewSession(folder: "/Users/example/api")
+                m.openNewSessionNamed(folder: "/Users/example/api")
                 m.setNewSessionSidekick(sidekick)
                 m.setNewSessionPrompt(prompt)
                 XCTAssertTrue(m.startNewSession())
@@ -178,19 +178,17 @@ extension AgentWindowD1Tests {
     }
 
     /// T23: the sidekick's slot: a case-folded taken or too long sidekick name, or an unusable suffix (#909's rule),
-    /// turns Start off and runs nothing; with the box on the automatic main name leaves its sidekick free (D3.4).
+    /// turns Start off and runs nothing; with the box on a typed main name whose sidekick is taken says so (#1731: no automatic name to re-pick, D3.4).
     @MainActor
     func testAgentWindowNewSessionSidekickNameCheckedAtStart() throws {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = sidekickModel(store([mapped("API-QA")]), spawns, SayCalls())
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSessionName, "api", "box off: P1a's name")
             XCTAssertTrue(m.newSessionErrors.sidekick == nil)
             m.setNewSessionSidekick(true)
-            XCTAssertEqual(m.newSessionName, "api-2", "box on: api's sidekick API-QA is taken, so the next one")
-            XCTAssertTrue(m.newSessionErrors.sidekick == nil)
-            m.setNewSessionName("api")
+            XCTAssertEqual(m.newSessionName, "api", "box on: the typed name stays (#1731; was: re-picked as api-2)")
             XCTAssertEqual(m.newSessionErrors.sidekick, "API-QA is taken", "typed: never re-picked, the slot says why")
             XCTAssertTrue(m.newSessionErrors.name == nil)
             XCTAssertFalse(m.canStartNewSession)
@@ -223,7 +221,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(store([]), spawns, says)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             for c in ["", "node x.js", "claude -p hi", "claude mcp list"] {
                 m.setNewSessionCommand(c)
                 XCTAssertFalse(m.newSessionClaude, c)
@@ -252,7 +250,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = sidekickModel(store([]), spawns, SayCalls())
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.newSessionShellRefusal == nil)
             m.setNewSessionSidekick(true)
             XCTAssertEqual(m.newSessionShellRefusal, "Clear the prompt and sidekick to start a plain shell")
@@ -273,7 +271,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), m = sidekickModel(st, spawns, SayCalls())
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.promptShown, false, "collapsed with nothing kept")
             m.toggleNewSessionPrompt()
             XCTAssertEqual(m.newSession?.promptShown, true)
@@ -281,7 +279,7 @@ extension AgentWindowD1Tests {
             m.setNewSessionSidekick(true)
             m.cancelNewSession()
             XCTAssertEqual(m.lastPrompt, "two\nlines")
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.prompt, "two\nlines")
             XCTAssertEqual(m.newSession?.promptShown, true, "open with a kept prompt")
             XCTAssertEqual(m.newSession?.sidekick, false, "the box is not remembered")
@@ -289,7 +287,7 @@ extension AgentWindowD1Tests {
             spawns.done.first?(spawnKey("api"), nil)
             XCTAssertEqual(m.lastPrompt, "", "taken by the start")
             st.sessions = [mapped("api")]
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.prompt, "")
             XCTAssertEqual(m.newSession?.promptShown, false)
         }
@@ -301,7 +299,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = sidekickModel(store([]), spawns, SayCalls())
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --name x --chrome")
             m.setNewSessionSidekick(true)
             m.setNewSessionPrompt("secret task text")

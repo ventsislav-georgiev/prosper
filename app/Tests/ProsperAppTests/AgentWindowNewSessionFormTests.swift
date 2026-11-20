@@ -189,7 +189,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
-            m.openNewSession()
+            m.openNewSessionNamed()
             m.toggleNewSessionPrompt()
             m.setNewSessionPrompt("Example task")
             settle(host)
@@ -220,7 +220,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
-            m.openNewSession()
+            m.openNewSessionNamed()
             @MainActor func shell() throws -> AXTreeNode {
                 let tree = formRows(host).tree
                 return try XCTUnwrap(tree.last { $0.role == "AXButton" && $0.named("New shell") }, "\(tree.map(\.name))")
@@ -265,7 +265,11 @@ extension AgentWindowD1Tests {
             m.setNewSessionCommand("claude")
             let tree = formRows(host).tree
             XCTAssertTrue(tree.last(where: isBox)?.enabled == true, "a Claude: the box is live")
-            XCTAssertTrue(tree.contains { $0.named(prefix: "Also start api-qa") }, "the line names the sidekick: \(tree.map(\.name))")
+            XCTAssertTrue(tree.contains { $0.named(prefix: "Also start a -qa sidekick, briefed by the sidekick prompt") }, "#1731: no name yet: \(tree.map(\.name))")
+            m.setNewSessionName("api")
+            settle(host)
+            let named = formRows(host).tree
+            XCTAssertTrue(named.contains { $0.named(prefix: "Also start api-qa") }, "the line names the sidekick: \(named.map(\.name))")
         }
     }
 
@@ -354,6 +358,80 @@ extension AgentWindowD1Tests {
             let scroller = try XCTUnwrap(focusViews(a.host, NSScrollView.self).first, "the pane's ScrollView")
             XCTAssertGreaterThan(scroller.documentView?.frame.height ?? 0, scroller.contentView.bounds.height, "the form is taller than the pane: Start is reached by scrolling")
             XCTAssertTrue(formRows(a.host).rows != nil, "Start is on the tree")
+        }
+    }
+
+    // MARK: #1731: centred in the real scrolling host; the name is required and empty
+
+    /// #1731: through the real host (AgentDetailView, scrolls = true: the pane's ScrollView), not the bare form. The form's
+    /// natural height F is the document's in a pane too short for it (it starts at the top there); in a tall pane its
+    /// top gap is (H - F) / 2, so the bottom gap is the same, within one device pixel; 200 pt more pane moves it down by
+    /// 100; opening the Prompt keeps the middle (the first field moves up by half of the added height); a short pane
+    /// starts at the top and Start is on the tree to scroll to.
+    @MainActor
+    func testAgentWindowNewSessionFormIsCentredInTheRealScrollingHost() throws {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let pixel = AXTreeSupport.devicePixel
+        try withNewSessionPrefs {
+            @MainActor func measure(_ height: CGFloat, promptOpen: Bool = false) throws -> (top: CGFloat, doc: CGFloat, scroller: NSScrollView, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
+                let m = wiringModel(store([mapped("a")]), SpawnCalls())
+                let (win, host) = centredFormWindow(m, CGSize(width: 1600, height: height), scrolls: true)
+                m.openNewSession()
+                if promptOpen { m.toggleNewSessionPrompt() }
+                settle(host)
+                _ = formRows(host)
+                let fields = formFields(host).map { host.convert($0.bounds, from: $0) }
+                XCTAssertEqual(fields.count, 3, "Folder, Name, Command at \(height)")
+                let scroller = try XCTUnwrap(focusViews(host, NSScrollView.self).first, "the pane's ScrollView at \(height)")
+                return (try XCTUnwrap(fields.map(\.minY).min(), "fields at \(height)"), scroller.documentView?.frame.height ?? 0, scroller, host, win, m)
+            }
+            let short = try measure(260), tall = try measure(1200), taller = try measure(1400), open = try measure(1200, promptOpen: true)
+            defer { for r in [short, tall, taller, open] { r.m.close(); r.win.close() } }
+            let form = short.doc   // too short a pane: the document is the form's own height
+            XCTAssertGreaterThan(form, 260, "the form does not fit 260 pt: it scrolls")
+            XCTAssertLessThan(form, 1200 - 100, "and fits 1200 pt with room to centre")
+            XCTAssertLessThan(short.top, 200, "a short pane starts at the top")
+            XCTAssertGreaterThan(short.doc, short.scroller.contentView.bounds.height, "Start is reached by scrolling")
+            XCTAssertTrue(formRows(short.host).rows != nil, "Start is on the tree of the short pane")
+            XCTAssertEqual(tall.top - short.top, (1200 - form) / 2, accuracy: pixel, "top gap = bottom gap = (pane - form) / 2")
+            XCTAssertEqual(taller.top - tall.top, 100, accuracy: pixel, "200 pt more pane: down by half")
+            XCTAssertEqual(tall.doc, 1200, accuracy: pixel, "the content fills the viewport: nothing to scroll")
+            XCTAssertEqual(tall.top - open.top, (sz(96) + sz(6)) / 2, accuracy: 1, "the Prompt opens and the form stays centred")
+        }
+    }
+
+    /// #1731: the name is required and empty: no text, no placeholder, no generated name; Start is dimmed and every
+    /// start path refuses (the recorder seam: nothing starts); a typed name starts with exactly that name.
+    @MainActor
+    func testAgentWindowNewSessionFormNameIsRequiredAndEmptyInTheRealHost() throws {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = wiringModel(store([mapped("a")]), spawns)
+            defer { m.close() }
+            let (win, host) = centredFormWindow(m, CGSize(width: 900, height: 700), scrolls: true)
+            defer { win.close() }
+            m.openNewSession()
+            settle(host)
+            @MainActor func start() throws -> AXTreeNode {
+                let tree = formRows(host).tree
+                return try XCTUnwrap(tree.last { $0.role == "AXButton" && $0.named("Start") }, "\(tree.map(\.name))")
+            }
+            let name = try XCTUnwrap(formFields(host).dropFirst().first, "the Name field")
+            XCTAssertEqual(name.stringValue, "", "no generated text")
+            XCTAssertTrue((name.placeholderString ?? name.placeholderAttributedString?.string ?? "").isEmpty, "no placeholder")
+            XCTAssertFalse(try start().enabled, "Start is dimmed while the name is empty")
+            XCTAssertFalse(m.startNewSession(), "the submit path refuses")
+            XCTAssertFalse(m.startShell(), "the form's New shell uses the name: refused")
+            m.setNewSessionName("   ")
+            XCTAssertFalse(m.startNewSession(), "spaces only")
+            XCTAssertTrue(spawns.calls.isEmpty, "nothing started")
+            m.setNewSessionName("api")
+            settle(host)
+            XCTAssertTrue(try start().enabled, "a typed name enables Start")
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertEqual(spawns.calls.map(\.name), ["api"], "exactly the typed name")
         }
     }
 }

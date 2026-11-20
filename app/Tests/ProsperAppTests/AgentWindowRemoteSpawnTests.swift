@@ -45,7 +45,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
         }
         log.clock += AgentWindowModel.remoteHistoryEvery
         m.refresh()   // the History fixture in
-        m.openNewSession()
+        m.openNewSessionNamed()
         return (m, log, calls)
     }
 
@@ -86,7 +86,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             defer { m.close() }
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
-            XCTAssertEqual(m.newSessionName, "site", "named from the folder, as the local start")
+            XCTAssertEqual(m.newSessionName, "site", "the typed name (#1731)")
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.verbs.count, 1)
             XCTAssertEqual(calls.verbs.last?.args,

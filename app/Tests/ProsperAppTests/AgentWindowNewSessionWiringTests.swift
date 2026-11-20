@@ -190,10 +190,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(fields.count, 3, "Folder, Name, Command in the detail pane")
             guard fields.count == 3 else { return }
             XCTAssertEqual(fields[1].stringValue, "", "#1265: the field text is what was typed: empty")
-            XCTAssertEqual(m.newSessionAutoName, "api", "the free name is the placeholder")
-            if let ph = fields[1].placeholderString ?? fields[1].placeholderAttributedString?.string {
-                XCTAssertEqual(ph, "api", "the placeholder as hosted")
-            }
+            XCTAssertEqual(m.newSessionName, "", "#1731: no generated name (was: api, the placeholder)")
+            XCTAssertTrue((fields[1].placeholderString ?? fields[1].placeholderAttributedString?.string ?? "").isEmpty, "no placeholder as hosted")
             XCTAssertTrue(hasKeys(fields[1], win), "Name has the keys on open")
             XCTAssertTrue(win.makeFirstResponder(fields[2]))
             settle(host)
@@ -414,7 +412,7 @@ extension AgentWindowD1Tests {
                 let host = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))
                 host.frame = CGRect(origin: .zero, size: size)
                 win.contentView = host
-                m.openNewSession()
+                m.openNewSessionNamed()
                 settle(host)
                 let pane = CGRect(x: AgentWindowModel.fullSidebarWidth + 1, y: 0, width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height)
                 @MainActor func frames(_ tag: String) -> [CGRect] {
@@ -497,7 +495,7 @@ extension AgentWindowD1Tests {
                 XCTAssertFalse(m.terminal.focusPending, "\(tag): nothing left pending")
             }
             // Cancel.
-            m.openNewSession()
+            m.openNewSessionNamed()
             formOver("cancel")
             m.cancelNewSession()
             back("a", attaches: 1, keys: true, "cancel")
@@ -508,7 +506,7 @@ extension AgentWindowD1Tests {
             back("a", attaches: 2, keys: true, "esc")
             // Opened with the keys in the sidebar: Cancel re-attaches and leaves them there.
             sidebarKeys(win)
-            m.openNewSession()
+            m.openNewSessionNamed()
             formOver("sidebar")
             m.cancelNewSession()
             back("a", attaches: 3, keys: false, "sidebar")
@@ -516,7 +514,7 @@ extension AgentWindowD1Tests {
             // Start lands on another row: its terminal, with the keys.
             clickRow("a", m, win, host)
             XCTAssertTrue(win.firstResponder === m.terminal.view)
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             formOver("start")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
@@ -672,7 +670,7 @@ extension AgentWindowD1Tests {
             // The runner: busy.
             XCTAssertFalse(m.startShell())
             XCTAssertEqual(dirLine(), "api is busy: try again")
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertFalse(m.startNewSession())
             XCTAssertEqual(m.newSessionStatus, "api is busy: try again")
             // The name: the spawn dir moved under the island between the window's check and its own.
@@ -691,7 +689,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(dirLine(), "Controls \(why)")
             XCTAssertEqual(dirLine(), AgentNewSessionButtons.help("New shell (⇧⌘N)", refusal: why), "the tooltip's words")
             st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertFalse(m.startNewSession())
             XCTAssertEqual(m.newSession?.status, "Controls \(why)")
         }
@@ -703,7 +701,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), m = wiringModel(st, spawns)
             defer { m.close() }
-            m.openNewSession()
+            m.openNewSessionNamed()
             m.setNewSessionName("web")
             let size = CGSize(width: sz(560), height: sz(420))
             for backing: CGFloat in [1, 2] {
@@ -763,7 +761,7 @@ extension AgentWindowD1Tests {
             sidebarKeys(win)
             clickRow("a", m, win, host)
             XCTAssertTrue(win.firstResponder === m.terminal.view, "the keys in a's terminal")
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             settle(host)
@@ -802,7 +800,7 @@ extension AgentWindowD1Tests {
             let a = mapped("a"), st = store([a]), spawns = SpawnCalls(), m = wiringModel(st, spawns)
             defer { m.close() }
             m.select(.live(a.key))
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             XCTAssertNotNil(m.pendingSpawn)
@@ -810,7 +808,7 @@ extension AgentWindowD1Tests {
             XCTAssertNil(m.pendingSpawn, "Cancel drops the pending pick")
             st.sessions = [a, mapped("web")]
             XCTAssertEqual(m.selection, .live(a.key), "the row shows: nothing moves")
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.startNewSession())
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertNotNil(m.newSession)

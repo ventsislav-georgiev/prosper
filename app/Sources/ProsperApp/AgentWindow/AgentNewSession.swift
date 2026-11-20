@@ -5,13 +5,13 @@ import SwiftUI
 // #847: New session from the Agent Sessions window: the form in the detail pane (folder, name, command)
 // and the quick shell. One spawn path with the island's New session (AgentIslandController.spawn).
 
-/// The form's state. `name` "" with `nameEdited` false is the folder's automatic free name.
+/// The form's state. #1731: `name` starts "" (required, never generated); Start refuses it while its trim is empty.
 struct AgentNewSessionForm: Equatable {
     /// As typed; may be "~/x".
     var folder: String
     var name = ""
     var nameEdited = false
-    /// The Name field's text: what was typed. The automatic name is the placeholder only; as text it came back when the field was emptied.
+    /// The Name field's text: what was typed (no placeholder, no generated text).
     var nameFieldText: String { name }
     /// As typed; "" runs the login shell.
     var command: String
@@ -152,7 +152,7 @@ enum AgentNewSession {
         AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4 - room))), taken: taken)
     }
 
-    /// nil: the name can be spawned into socket dir `dir`. Empty (after trim) is the automatic name, so no error.
+    /// nil: the name can be spawned into socket dir `dir`. Empty (after trim): no error here (the form shows none while it is untouched); #1731 canStartNewSession refuses it.
     static func nameError(_ n: String, taken: Set<String>, dir: String) -> String? {
         let t = n.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return nil }
@@ -355,8 +355,7 @@ struct AgentNewSessionView: View {
                 }
             }
             field("Name", error: errors.name) {
-                TextField(model.newSessionAutoName, text: Binding(get: { form.nameFieldText },
-                                                                 set: { model.setNewSessionName($0) }))
+                TextField("", text: Binding(get: { form.nameFieldText }, set: { model.setNewSessionName($0) }))
                     .focused($focus, equals: .name)
                     .accessibilityLabel("Name")
             }
@@ -417,10 +416,16 @@ struct AgentNewSessionView: View {
             : "Needs a claude command (claude, or a wrapper that runs claude)"
     }
 
+    /// #1731: the Sidekick line; with no name typed yet it reads "a -qa sidekick" (the same words reach VoiceOver).
+    static func sidekickLine(name: String, suffix: String) -> String {
+        (name.isEmpty ? "Also start a \(suffix) sidekick" : "Also start " + AgentNewSession.sidekickName(name, suffix: suffix))
+            + ", briefed by the sidekick prompt"
+    }
+
     /// #847 D3, D5.4: the box in a fixed sz(18) row, its line (the sidekick's name, or why it is dimmed) and its slot.
     private func sidekickRow(_ error: String?) -> some View {
         let claude = model.newSessionClaude
-        let line = claude ? "Also start " + model.newSessionSidekickName + ", briefed by the sidekick prompt"
+        let line = claude ? Self.sidekickLine(name: model.newSessionName, suffix: Preferences.agentIslandSidekickSuffix)
             : Self.notClaude(command: form.command, host: form.host)
         return field("Sidekick", error: error) {
             HStack(spacing: sz(6)) {

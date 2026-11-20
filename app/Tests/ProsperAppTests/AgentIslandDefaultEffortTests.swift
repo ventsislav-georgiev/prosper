@@ -154,7 +154,7 @@ extension AgentWindowD1Tests {
             Preferences.agentIslandDefaultEffort = "high"
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.command, "claude --chrome", "the typed text never gets the flag")
             XCTAssertEqual(m.newSessionRuns, "claude --name api --model claude-example-1 --effort high --chrome")
             m.setNewSessionCommand("claude --effort low")
@@ -180,7 +180,7 @@ extension AgentWindowD1Tests {
             Preferences.agentIslandDefaultEffort = "max"
             let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --chrome")
             m.setNewSessionSidekick(true)
             XCTAssertTrue(m.startNewSession())

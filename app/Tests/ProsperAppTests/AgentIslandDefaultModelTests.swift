@@ -593,7 +593,7 @@ extension AgentWindowD1Tests {
             Preferences.agentIslandDefaultModel = "claude-example-1"
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.command, "claude --chrome", "the typed text never gets the flag")
             XCTAssertEqual(m.newSessionRuns, "claude --name api --model claude-example-1 --chrome", "the shown command holds it")
             m.setNewSessionCommand("claude --model sonnet")

@@ -2202,6 +2202,8 @@ tag from the now-released section and put it on the new top draft.
   list). (#1726)
 - The agents count is outlined in royal purple and the shells count in white, with no grey wash
   behind either. (#1735)
+- The New session form asks for a name (no generated default) and sits in the middle of the pane.
+  (#1731)
 
 ## v2.174.0
 

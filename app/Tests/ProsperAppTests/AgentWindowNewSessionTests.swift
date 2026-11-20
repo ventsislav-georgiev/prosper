@@ -94,12 +94,12 @@ extension AgentWindowD1Tests {
             m.select(nil)
             m.openNewSession()
             XCTAssertEqual(m.newSession?.folder, "~")
-            XCTAssertEqual(m.newSessionName, "example")
+            XCTAssertEqual(m.newSessionName, "", "#1731: no generated name (was: the folder's free name, \"example\")")
             XCTAssertEqual(m.newSession?.nameEdited, false)
             XCTAssertEqual(m.newSession?.command, "claude --chrome", "the island's setting (OQ-3)")
             XCTAssertNil(m.newSessionErrors.folder)
             XCTAssertNil(m.newSessionErrors.name)
-            XCTAssertTrue(m.canStartNewSession)
+            XCTAssertFalse(m.canStartNewSession, "#1731: Start waits for a typed name")
             // ⌘N again: the open form keeps its fields; its Name field is asked for the keys.
             let focus = m.newSessionFocus
             m.setNewSessionCommand("typed")
@@ -108,12 +108,12 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionFocus, focus + 1)
             m.cancelNewSession()
             XCTAssertNil(m.newSession)
-            // The selected live session's cwd; its name is taken (case-folded), so the free name is next.
+            // The selected live session's cwd; its name is not offered (#1731).
             m.select(.live(live.key))
             XCTAssertEqual(m.transcript.cwd, "/Users/example/proj")
             m.openNewSession()
             XCTAssertEqual(m.newSession?.folder, "~/proj")
-            XCTAssertEqual(m.newSessionName, "proj-2")
+            XCTAssertEqual(m.newSessionName, "")
             m.cancelNewSession()
             // The last folder wins while it exists.
             Preferences.agentWindowNewSessionFolder = "/Users/example/last"
@@ -134,21 +134,21 @@ extension AgentWindowD1Tests {
     }
 
     @MainActor
-    func testAgentWindowNewSessionTypedNamePinsAndClearingReturnsToAuto() throws {
+    func testAgentWindowNewSessionTypedNamePinsAndClearingReturnsToEmpty() throws {
         try withNewSessionPrefs {
             let m = newSessionModel(store([]), SpawnCalls())
             defer { m.close() }
             m.openNewSession(folder: "/Users/example/api")
-            XCTAssertEqual(m.newSessionName, "api")
+            XCTAssertEqual(m.newSessionName, "")
             m.setNewSessionFolder("~/web")
-            XCTAssertEqual(m.newSessionName, "web", "untouched: the name follows the folder")
+            XCTAssertEqual(m.newSessionName, "", "untouched: the name does not follow the folder (#1731; was: web)")
             m.setNewSessionName("mine")
             m.setNewSessionFolder("~/other")
             XCTAssertEqual(m.newSessionName, "mine", "typed: pinned")
             XCTAssertEqual(m.newSession?.nameEdited, true)
             m.setNewSessionName("  ")
             XCTAssertEqual(m.newSession?.nameEdited, false)
-            XCTAssertEqual(m.newSessionName, "other", "cleared: the automatic name again")
+            XCTAssertEqual(m.newSessionName, "", "cleared: empty again, no automatic name (#1731; was: other)")
             m.setNewSessionName(" spaced ")
             XCTAssertEqual(m.newSessionName, "spaced", "trimmed")
             XCTAssertEqual(m.newSessionRuns, "claude --name spaced", "#847 D7.4: the named argv")
@@ -164,7 +164,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --chrome 'my x'")
             m.setNewSessionName("a:b")
             XCTAssertEqual(m.newSessionErrors.name, "Use ASCII letters, digits, . _ and - only")
@@ -200,7 +200,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionName("web")
             XCTAssertTrue(m.canStartNewSession)
             st.sessions = [session("WEB", .idle), session("api", .idle)]
@@ -208,8 +208,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionErrors.name, "WEB is taken", "QA #713 INFO-7: the session as it is spelled")
             XCTAssertEqual(spawns.calls.count, 0)
             m.setNewSessionName("")
-            XCTAssertTrue(m.startNewSession(), "the automatic name, taken since: quietly re-picked")
-            XCTAssertEqual(spawns.calls.map(\.name), ["api-2"])
+            XCTAssertFalse(m.startNewSession(), "#1731: emptied: refused, no automatic name re-picked (was: api-2)")
+            XCTAssertTrue(spawns.calls.isEmpty)
         }
     }
 
@@ -219,7 +219,7 @@ extension AgentWindowD1Tests {
             Preferences.agentIslandNewSessionCommand = "claude"
             let st = store([]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --x")
             XCTAssertTrue(m.startNewSession())
             let failed = "New session failed: dch: api: claude: No such file or directory"
@@ -253,7 +253,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --name x --chrome")
             XCTAssertEqual(m.newSessionRuns, "claude --name api --chrome", "the typed name replaced by the session's")
             XCTAssertEqual(m.newSession?.command, "claude --name x --chrome", "the field keeps what was typed")
@@ -261,13 +261,13 @@ extension AgentWindowD1Tests {
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
             st.sessions = [mapped("api")]   // its row lands: the form closes
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude  \"--chrome\"  'my x'")
             XCTAssertTrue(m.startNewSession())
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude  \"--chrome\"  'my x'", "byte-identical")
             XCTAssertNil(m.newSession, "listed already: it lands at the answer")
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude -p 'one shot' -n x")
             XCTAssertEqual(m.newSessionRuns, "claude -p 'one shot' -n x", "a batch run is not named")
         }
@@ -280,7 +280,7 @@ extension AgentWindowD1Tests {
             Preferences.agentIslandNewSessionCommand = "headroom wrap claude"
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("  ")
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(spawns.calls.first?.argv, ["/bin/fish", "-l"])
@@ -302,7 +302,7 @@ extension AgentWindowD1Tests {
             let other = mapped("other"), st = store([other]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             m.select(.live(other.key))
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             m.refresh()
@@ -347,7 +347,7 @@ extension AgentWindowD1Tests {
             st.sessions = [other]
             XCTAssertTrue(m.startShell())
             spawns.done[2](AgentSessionKey(dir: "/tmp/dch-test", name: "example"), nil)
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertNil(m.pendingSpawn)
         }
     }
@@ -359,16 +359,16 @@ extension AgentWindowD1Tests {
             let a = mapped("a"), b = mapped("b"), st = store([a, b]), m = newSessionModel(st, SpawnCalls())
             defer { m.close() }
             m.select(.live(a.key))
-            m.openNewSession()
+            m.openNewSessionNamed()
             m.select(.live(b.key))
             XCTAssertNil(m.newSession, "another row")
-            m.openNewSession()
+            m.openNewSessionNamed()
             m.click(.live(b.key))
             XCTAssertNil(m.newSession, "the selected row's click")
-            m.openNewSession()
+            m.openNewSessionNamed()
             m.move(-1)
             XCTAssertNil(m.newSession, "arrows")
-            m.openNewSession()
+            m.openNewSessionNamed()
             st.sessions = [b]
             XCTAssertNil(m.selection, "the selected session ended")
             XCTAssertTrue(m.focusedEnded, "#831 B1, rewrite 13: Ended under the form")
@@ -384,7 +384,7 @@ extension AgentWindowD1Tests {
             let other = mapped("other"), st = store([other]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
             m.select(.live(other.key))
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude --y")
             XCTAssertTrue(m.startNewSession())
             m.cancelNewSession()
@@ -416,7 +416,7 @@ extension AgentWindowD1Tests {
             @MainActor func inferLate(_ meanwhile: @MainActor () -> Void) {
                 Preferences.agentIslandNewSessionCommand = ""
                 m.cancelNewSession()
-                m.openNewSession(folder: "/Users/example/api")
+                m.openNewSessionNamed(folder: "/Users/example/api")
                 XCTAssertEqual(m.newSession?.command, "claude", "claude until the inference answers")
                 XCTAssertEqual(asked.wait(timeout: .now() + 5), .success)
                 meanwhile()
@@ -449,7 +449,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.stopSession = { _ in true }
             m.select(.live(a.key))
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertEqual(m.newSession?.folder, "~/proj", "live: its cwd")
             m.cancelNewSession()
             m.ask(.stop, a)
@@ -457,7 +457,7 @@ extension AgentWindowD1Tests {
             st.sessions = [session("b", .idle)]
             XCTAssertTrue(m.focusedEnded)   // #831 B1, rewrite 7: the Ended state, by resolve (rewrites-B1)
             XCTAssertEqual(m.transcript.cwd, "/Users/example/proj", "the ended session's cwd is still known")
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertEqual(m.newSession?.folder, "~", "Ended: home")
         }
     }
@@ -480,7 +480,7 @@ extension AgentWindowD1Tests {
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "last-2"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --x", "a shell writes no command")
             // The form's New shell: its folder and name, the shell's argv.
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             m.setNewSessionName("sh")
             XCTAssertTrue(m.startShell())
             XCTAssertEqual(spawns.calls.last?.folder, "/Users/example/web")
@@ -500,7 +500,7 @@ extension AgentWindowD1Tests {
             let spawns = SpawnCalls(), st = store([session("a", .idle)]), m = newSessionModel(st, spawns)
             defer { m.close() }
             // R2 F2: the gate closes while the form is open: it stays, says why, Start and New shell refuse.
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             st.controlDch = nil
             let why = try XCTUnwrap(st.resumeGate.refusal)
             XCTAssertNotNil(m.newSession)
@@ -510,7 +510,7 @@ extension AgentWindowD1Tests {
             XCTAssertFalse(m.startShell())
             m.cancelNewSession()
             XCTAssertFalse(m.startShell())
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertNil(m.newSession, "R2 F2: refused, ⌘N, + and the pill open nothing")
             XCTAssertEqual(spawns.calls.count, 0)
         }
@@ -525,7 +525,7 @@ extension AgentWindowD1Tests {
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
             m.island().historyDirs = { ["/Users/example-user/.config/prosper/dch-isolated-00001"] }   // 54 bytes: 43 left
-            m.openNewSession(folder: "/Users/example/" + String(repeating: "b", count: 60))
+            m.openNewSessionNamed(folder: "/Users/example/" + String(repeating: "b", count: 60))
             XCTAssertEqual(m.newSessionName, String(repeating: "b", count: 39), "room for a -N under 43")
             m.setNewSessionName(String(repeating: "a", count: 44))
             XCTAssertEqual(m.newSessionErrors.name, "43 characters at most")
@@ -548,7 +548,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             XCTAssertTrue(m.startShell())
             XCTAssertNil(m.newSession)
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](nil, "New session failed: dch: example: nope")
             XCTAssertEqual(m.newSession?.starting, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
@@ -568,7 +568,7 @@ extension AgentWindowD1Tests {
             m.select(.live(other.key))
             XCTAssertTrue(m.startShell())
             let shell = try XCTUnwrap(spawns.calls.first?.name)
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: shell), nil)
             XCTAssertNotNil(m.newSession, "the form stays")
             XCTAssertNil(m.pendingSpawn)
@@ -585,7 +585,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.startNewSession())
             m.bind(nil)
             XCTAssertNil(m.newSession?.starting)
@@ -625,10 +625,10 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertTrue(m.startNewSession())
             m.cancelNewSession()
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](nil, "New session failed: dch: api: nope")
             XCTAssertEqual(m.newSessionStatus, "Starting web…", "the old failure is not this form's")
@@ -648,7 +648,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             m.setNewSessionName("api")
             let runs = m.newSessionRuns
             XCTAssertTrue(m.startNewSession())
@@ -674,7 +674,7 @@ extension AgentWindowD1Tests {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), st = store([]), m = newSessionModel(st, spawns)
             defer { m.close() }
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSessionName, "api")
             let runs = m.newSessionRuns
             XCTAssertTrue(m.startNewSession())
@@ -690,27 +690,37 @@ extension AgentWindowD1Tests {
             m.cancelNewSession()   // R2 F5: the form waits for its row; Cancel closes it and drops the pending pick
             XCTAssertNil(m.newSession)
             XCTAssertNil(m.pendingSpawn)
-            m.openNewSession(folder: "/Users/example/api")
+            m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSessionName, "api-2", "the claim counts for the next form")
         }
     }
 }
 
-/// #1265: the Name field's text is what the person typed; the automatic name is the placeholder only.
+/// #1265, #1731: the Name field's text is what the person typed; there is no automatic name, grey or filled.
 extension AgentWindowD1Tests {
 
     @MainActor
-    func testAgentWindowNewSessionNameFieldIsEmptyOnAFreshForm() throws {
+    func testAgentWindowNewSessionNameFieldIsEmptyOnAFreshFormAndStartRefuses() throws {
         try withNewSessionPrefs {
             let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
             defer { m.close() }
             for folder in ["~", "/Users/example/api"] {
                 m.openNewSession(folder: folder)
                 XCTAssertEqual(m.newSession?.nameFieldText, "", "fresh form \(folder): no text")
-                XCTAssertFalse(m.newSessionAutoName.isEmpty, "the placeholder")
-                XCTAssertEqual(m.newSessionName, m.newSessionAutoName, "Start would use the automatic name")
+                XCTAssertEqual(m.newSessionName, "", "no generated name")
+                XCTAssertFalse(m.canStartNewSession, "Start is disabled while the name is empty")
+                XCTAssertFalse(m.startNewSession(), "the submit path refuses")
+                XCTAssertFalse(m.startShell(), "New shell uses the form's name: refused too")
+                m.cancelNewSession()
             }
+            XCTAssertTrue(spawns.calls.isEmpty, "nothing started")
+            m.openNewSession(folder: "/Users/example/api")
+            m.setNewSessionName("   ")
+            XCTAssertFalse(m.startNewSession(), "spaces only: empty")
             XCTAssertTrue(spawns.calls.isEmpty)
+            m.setNewSessionName(" mine ")
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertEqual(spawns.calls.map(\.name), ["mine"], "exactly the typed name, trimmed")
         }
     }
 
@@ -725,15 +735,27 @@ extension AgentWindowD1Tests {
             m.setNewSessionName("")
             XCTAssertEqual(m.newSession?.nameFieldText, "", "emptied: stays empty")
             XCTAssertEqual(m.newSession?.nameEdited, false)
-            XCTAssertEqual(m.newSessionName, "api", "the automatic name again")
+            XCTAssertEqual(m.newSessionName, "", "no automatic name (#1731; was: api)")
             m.setNewSessionName("  ")
             XCTAssertEqual(m.newSession?.nameFieldText, "  ", "the person's own spaces stay")
             XCTAssertEqual(m.newSession?.nameEdited, false)
-            XCTAssertEqual(m.newSessionName, "api")
+            XCTAssertEqual(m.newSessionName, "")
             m.setNewSessionName(" spaced ")
             XCTAssertEqual(m.newSession?.nameFieldText, " spaced ", "shown as typed")
             XCTAssertEqual(m.newSessionName, "spaced", "spawned trimmed")
             XCTAssertTrue(spawns.calls.isEmpty)
         }
+    }
+}
+
+extension AgentWindowModel {
+    /// #1731: the form opens with an empty name that Start refuses. Rows that go on to start a session open it through
+    /// this, which types the folder's free name (the old default) when the form has none: the typed name is the row's.
+    @MainActor
+    func openNewSessionNamed(folder: String? = nil) {
+        openNewSession(folder: folder)
+        guard let f = newSession, newSessionName.isEmpty else { return }
+        setNewSessionName(AgentNewSession.autoName(folder: AgentNewSession.expand(f.folder, home: home), taken: spawnTaken,
+                                                   dir: island().spawnDir()))
     }
 }

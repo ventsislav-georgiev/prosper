@@ -2397,7 +2397,13 @@ struct AgentDetailView: View {
             // #847: the form in place of the pane's content (the selected session's terminal detaches meanwhile).
             // D5.4: a short window scrolls the form instead of clipping Start.
             if scrolls {
-                ScrollView(.vertical) { AgentNewSessionView(model: model, form: form) }
+                // #1731: the viewport's height is the content's minimum, so the form is centred when it fits (the ScrollView
+                // gives it its own height, which #1479's outer frame cannot centre) and starts at the top and scrolls when not.
+                GeometryReader { geo in
+                    ScrollView(.vertical) {
+                        AgentNewSessionView(model: model, form: form).frame(minHeight: geo.size.height, alignment: .center)
+                    }
+                }
             } else {
                 AgentNewSessionView(model: model, form: form)
             }

@@ -101,10 +101,10 @@ extension AgentWindowD1Tests {
 
             // Command-N's refusal, then the form opening (the gate opened without a publish).
             st.controlDch = nil
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertEqual(st.actions[key], why, "Command-N says why")
             st.controlDch = open
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertNotNil(m.newSession)
             XCTAssertTrue(st.actions[key] == nil, "the form opened: the line is gone")
             m.cancelNewSession()
@@ -115,7 +115,7 @@ extension AgentWindowD1Tests {
             st.actions[key] = "End all: 1 ended"
             st.controlDch = open
             st.history = []
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertEqual(st.actions[key], "End all: 1 ended", "the island's line stays")
             XCTAssertEqual(NSHostingView(rootView: AgentDirStatusStrip(store: st).frame(width: 290)).fittingSize.height,
                            AgentWindowControls.stripHeight, accuracy: 1, "the same fixed slot")
@@ -178,7 +178,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(st.actions[key] == nil, "a session of that name lists: the line is gone")
 
             // The form: a record of the name from before the request is not this start's.
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             var old = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: "web"))
             old.started = clock.t - 3600
@@ -220,7 +220,7 @@ extension AgentWindowD1Tests {
             let key = AgentSessionKey(dir: "/tmp/dch-test", name: "")
             let raw = "signal 9 from 4242 /bin/kill\u{202E}x -9"
 
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             var r = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: "web"))
             r.started = clock
@@ -291,7 +291,7 @@ extension AgentWindowD1Tests {
             let again = try XCTUnwrap(spawns.calls.last?.name)
             spawns.done.last?(nil, "New session failed: dch: \(again): nope")
             XCTAssertEqual(st.actions[key], "New session failed: dch: \(again): nope")
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertNotNil(m.newSession)
             XCTAssertTrue(st.actions[key] == nil, "the form opens: gone")
 

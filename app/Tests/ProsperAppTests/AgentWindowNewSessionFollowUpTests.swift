@@ -33,7 +33,7 @@ extension AgentWindowD1Tests {
             let asked = Asked()
             m.scheduleDeadline = { t, block in asked.intervals.append(t); return Timer(timeInterval: t, repeats: false, block: block) }
             m.select(.live(other.key))   // a first listed row is otherwise selected as the window fills (#828)
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             XCTAssertTrue(m.spawnDeadline == nil, "no answer yet: no deadline")
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
@@ -97,7 +97,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.now = { clock.t }
             m.select(.live(other.key))
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             XCTAssertNotNil(m.pendingSpawn)
@@ -124,7 +124,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.now = { clock.t }
             m.select(.live(other.key))
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             m.setVisible(false)
@@ -137,7 +137,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] == nil, "no never-started line")
             XCTAssertEqual(m.selection, .live(other.key), "nothing picked")
             // Never listed while hidden: never started, as before.
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             let name = try XCTUnwrap(spawns.calls.last?.name)
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: name), nil)
@@ -158,7 +158,7 @@ extension AgentWindowD1Tests {
             let words = Words(), st = store([mapped("a")]), m = newSessionModel(st, SpawnCalls())
             defer { m.close() }
             m.island().chooseFolder = { ask in words.all.append(ask.prompt); ask("/Users/example/web") }
-            m.openNewSession(folder: "/Users/example")
+            m.openNewSessionNamed(folder: "/Users/example")
             m.chooseNewSessionFolder()
             XCTAssertEqual(words.all, [AgentIslandController.FolderAsk.choose])
             XCTAssertEqual(m.newSession?.folder, "~/web", "the form's field filled")
@@ -183,7 +183,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.now = { clock.t }
             m.select(.live(other.key))
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.startNewSession())
             spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             m.setVisible(false)
@@ -210,7 +210,7 @@ extension AgentWindowD1Tests {
         m.now = { clock.t }
         m.scheduleDeadline = { t, block in Timer(timeInterval: t, repeats: false, block: block) }
         m.select(.live(other.key))
-        m.openNewSession(folder: "/Users/example/web")
+        m.openNewSessionNamed(folder: "/Users/example/web")
         XCTAssertTrue(m.startNewSession())
         spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
         clock.t += AgentWindowModel.spawnSlack + 1
@@ -268,7 +268,7 @@ extension AgentWindowD1Tests {
             let m = try lateWebModel(st, spawns, other: other)
             defer { m.close() }
             m.cancelNewSession()
-            m.openNewSession(folder: "/Users/example/web")
+            m.openNewSessionNamed(folder: "/Users/example/web")
             XCTAssertTrue(m.lateSpawn == nil, "R1096-i1: the reopened form drops it")
             st.sessions = [other, mapped("web")]
             XCTAssertEqual(m.selection, live("other"), "nothing lands")
@@ -359,7 +359,7 @@ extension AgentWindowD1Tests {
             defer { win.close() }
             m.select(.live(a.key))
             settle(host)
-            m.openNewSession()
+            m.openNewSessionNamed()
             settle(host)
             sidebarKeys(win)
             XCTAssertEqual(win.responderKind, .other)
@@ -393,7 +393,7 @@ extension AgentWindowD1Tests {
             // Opened from the sidebar: Cancel leaves the keys there.
             sidebarKeys(win)
             let side = win.firstResponder
-            m.openNewSession()
+            m.openNewSessionNamed()
             settle(host)
             XCTAssertEqual(formFields(host).count, 3)
             m.cancelNewSession()
@@ -407,7 +407,7 @@ extension AgentWindowD1Tests {
             mt.select(.live(b.key))
             XCTAssertTrue(mt.focusSelection())
             XCTAssertTrue(mt.terminal.focusPending, "pending: no terminal view in a window")
-            mt.openNewSession()
+            mt.openNewSessionNamed()
             XCTAssertFalse(mt.terminal.focusPending, "the form detached the terminal")
             mt.cancelNewSession()
             XCTAssertTrue(mt.terminal.focusPending, "Cancel asks for the keys again")
@@ -431,7 +431,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             let (win, host) = focusWindow(m)
             defer { win.close() }
-            m.openNewSession()
+            m.openNewSessionNamed()
             XCTAssertFalse(m.newSessionRecents.isEmpty, "the menu is enabled")
             // The tree fills in on the run loop: poll for the form's three fields and its recents menu (the sidebar's own menu button is no signal), with a deadline.
             let tree = AXTreeSupport.poll(host) { t in
