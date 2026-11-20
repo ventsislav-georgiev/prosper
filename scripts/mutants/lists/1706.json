@@ -47,8 +47,8 @@
   {
    "name": "env-note-dropped",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "if path.first == \"env\" { w.notes.append(",
-   "new": "if false { w.notes.append(",
+   "old": "if path.first == \"env\" {\n            w.notes.append(\"Claude Code sessions get",
+   "new": "if false {\n            w.notes.append(\"Claude Code sessions get",
    "expect": "killed"
   },
   {
