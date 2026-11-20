@@ -49,6 +49,12 @@ final class PVCommandTests: XCTestCase {
         return (p.terminationStatus, o, e)
     }
 
+    nonisolated static func realpath(_ path: String) -> String {
+        guard let p = Foundation.realpath(path, nil) else { return path }
+        defer { free(p) }
+        return String(cString: p)
+    }
+
     private static let id = "eu.illegible.prosper"
 
     /// The script under both shells: #1732 opens by bundle id (`open -b`), a space and a quote in a file name,
@@ -74,9 +80,11 @@ final class PVCommandTests: XCTestCase {
             let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map(String.init)
             XCTAssertEqual(lines.count, 4, sh)
             let a = "[-b][\(Self.id)]"
-            XCTAssertEqual(lines.first, "\(a)[\(cwd.path)/a b.txt]", sh)
+            // The script resolves relative paths against the shell's physical dir ($TMPDIR may sit under the /var symlink).
+            let phys = Self.realpath(cwd.path)
+            XCTAssertEqual(lines.first, "\(a)[\(phys)/a b.txt]", sh)
             XCTAssertTrue(lines.contains("\(a)[/abs/x.md]"), sh)
-            XCTAssertEqual(lines.last, "\(a)[\(cwd.path)/-it's.md]", sh)
+            XCTAssertEqual(lines.last, "\(a)[\(phys)/-it's.md]", sh)
             let piped = try XCTUnwrap(lines.first { $0.hasPrefix("\(a)[\(tmp.path)/prosper.") }, sh)
             let path = String(piped.dropFirst(a.count + 1).dropLast())
             XCTAssertTrue(path.hasSuffix("/stdin.txt"), sh)
