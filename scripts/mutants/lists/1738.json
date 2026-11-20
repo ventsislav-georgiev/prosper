@@ -1,0 +1,41 @@
+{
+ "entry": "1738",
+ "filter": "WindowMenuExclusionTests",
+ "mutants": [
+  {
+   "name": "keyable-panel",
+   "file": "app/Sources/ProsperApp/RunnerPanel.swift",
+   "old": "        isExcludedFromWindowsMenu = true\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "island-panel",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        isExcludedFromWindowsMenu = true\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "overlay-panel",
+   "file": "app/Sources/ProsperApp/ScreenTools/RegionSelector.swift",
+   "old": "        isExcludedFromWindowsMenu = true\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "footprint",
+   "file": "app/Sources/ProsperApp/FootprintWindow.swift",
+   "old": "        panel.isExcludedFromWindowsMenu = true   // #1738: a helper, not a user window\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "modelsetup",
+   "file": "app/Sources/ProsperApp/ModelSetup.swift",
+   "old": "        window.isExcludedFromWindowsMenu = true   // #1738: a progress notice\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
