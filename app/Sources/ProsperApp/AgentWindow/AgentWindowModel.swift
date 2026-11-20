@@ -588,7 +588,11 @@ final class AgentWindowModel: ObservableObject {
     private func syncTier() {
         guard AgentPaneLayout.splitsEnabled else { return }   // gate off: nothing read, nothing written
         // #1697: an unmeasured area (.zero, before the view's first pass) is not too small: no band flash on open.
-        let t = if paneArea.isEmpty { false } else if case .tooSmall = layout.frames(in: paneArea, minimum: paneMinimum, splitsEnabled: true) { true } else { false }
+        // #1698 (QA R1697 n35): a band up for the tier alone is measured as the area it took, so the line is the same
+        // both ways (else the band's 30 pt kept the tier on until the window grew 30 pt past the line).
+        var area = paneArea
+        if paneTooSmall && !AgentWindowBand.showsBesidesTier(self) { area.size.height += AgentWindowBand.height }
+        let t = if paneArea.isEmpty { false } else if case .tooSmall = layout.frames(in: area, minimum: paneMinimum, splitsEnabled: true) { true } else { false }
         if t != paneTooSmall { paneTooSmall = t }
     }
     /// Counts `paneArea` changes (tests: the same size twice is one change).

@@ -144,6 +144,66 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1698 (QA R1697 n35): the band the too-small tier raises takes 30 pt from the pane area; the tier is measured
+    /// without it, so a pane column that fits two rows without the band tiles every pane after growing from too small
+    /// (the window, hosted offscreen and never shown, settles with no band), and stepping the column down and back up
+    /// flips the tier at the same height both ways, each step settled after one re-measure (no loop).
+    @MainActor
+    func testPaneCostTooSmallTierIgnoresItsOwnBandNoHysteresis() {
+        let saved = ThemeRuntime.scale
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { ThemeRuntime.scale = saved; restoreModes() }
+        ThemeRuntime.scale = 1.0
+        withTreeGate(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            let width: CGFloat = 1000, minH = m.paneMinimum.height, band = AgentWindowBand.height
+            @MainActor func fits(_ h: CGFloat) -> Bool {
+                if case .tiled = m.layout.frames(in: CGRect(x: 0, y: 0, width: width, height: h), minimum: m.paneMinimum, splitsEnabled: true) { true } else { false }
+            }
+            // What the view does: it measures the pane column less the band when the band shows.
+            @MainActor func feed(_ column: CGFloat) {
+                m.paneArea = CGRect(x: 0, y: 0, width: width, height: column - (AgentWindowBand.shows(m) ? band : 0))
+            }
+            // Row 2: down then up across the line; the tier is the band-less fit at every height, both ways.
+            let down = Array(stride(from: minH + 40, through: minH - 40, by: -5)), up = Array(down.reversed())
+            var flips: [CGFloat] = [], prev = false
+            for h in down + up {
+                feed(h); feed(h)   // the measure, then the re-measure after the band came or went
+                let tier = m.paneTooSmall, changes = m.paneAreaChanges
+                feed(h)
+                XCTAssertEqual(m.paneAreaChanges, changes, "settled after one re-measure at \(h)")
+                XCTAssertEqual(m.paneTooSmall, tier, "no loop at \(h)")
+                XCTAssertEqual(tier, !fits(h), "the tier is the band-less fit at \(h)")
+                XCTAssertEqual(AgentWindowBand.shows(m), tier, "the band follows the tier at \(h)")
+                if tier != prev { flips.append(h); prev = tier }
+            }
+            XCTAssertEqual(flips.count, 2, "one flip down, one flip up: \(flips)")
+            XCTAssertEqual(flips.first.map { $0 + 5 }, flips.last, "the same line both ways: \(flips)")
+            // Row 1, drawn: too small, then the window grows to a column inside the band's strip.
+            feed(minH - 40); feed(minH - 40)
+            XCTAssertTrue(m.paneTooSmall && AgentWindowBand.shows(m), "too small, the band is up")
+            let column = minH + band / 2
+            XCTAssertTrue(fits(column) && !fits(column - band), "the column is inside the strip")
+            let size = CGSize(width: AgentWindowModel.fullSidebarWidth + 1 + width, height: column)
+            let win = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: AgentWindowRootView(model: m, scrolls: false))
+            host.frame = CGRect(origin: .zero, size: size)
+            win.contentView = host
+            for _ in 0..<3 { settle(host) }
+            XCTAssertFalse(win.isVisible, "never on screen")
+            win.contentView = nil
+            win.close()
+            XCTAssertFalse(m.paneTooSmall, "grown into the strip: not too small")
+            XCTAssertFalse(AgentWindowBand.shows(m), "no band")
+            XCTAssertEqual(m.paneArea.height, column, "the panes have the whole column")
+            XCTAssertEqual(m.paneFrames(in: m.paneArea).count, 2, "every pane tiled")
+        }
+    }
+
     /// The drawn check, through the window's own sidebar (never shown): gate on with A | B the other pane's row has the
     /// glyph and reads "in view"; a window resize that only crosses the too-small line redraws the row (the label loses
     /// "in view") with no other change of the model, and every frame the probes report after keeps its place (the slot,

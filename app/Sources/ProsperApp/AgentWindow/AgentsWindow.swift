@@ -2603,10 +2603,14 @@ struct AgentWindowBand: View {
     /// and its slide-in must not move the panes). Else no band at all, as with the gate off. One rule for the view, the
     /// sidebar's top padding, the Slide hover area and AgentWindowModel.paneAreaFrame.
     /// #1697 (operator 2026-11-20, "empty row on layouts"): two panes alone left the band empty above the pane headers;
-    /// it shows for the chip's words only (zoomed, or too small: once too small, the band's row keeps it so). Both are
+    /// it shows for the chip's words only (zoomed, or too small; #1698: the tier is measured without its own band). Both are
     /// published, so the root redraws when either flips.
     @MainActor static func shows(_ m: AgentWindowModel) -> Bool {
-        shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))
+        shown && (m.paneTooSmall || showsBesidesTier(m))
+    }
+    /// #1698: the band's reasons other than the too-small tier (the zoom's chip, the hidden sidebar's glyph).
+    @MainActor static func showsBesidesTier(_ m: AgentWindowModel) -> Bool {
+        (m.layout.zoomed != nil && m.layout.panes.count >= 2) || (m.sidebarMode != .slide && !m.sidebarShown)
     }
     static var height: CGFloat { sz(30) }
     /// shortcut: fixed widths for slots that draw nothing before B2/B3/C; the phase that fills one sizes it to its widest.
