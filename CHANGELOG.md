@@ -2127,13 +2127,13 @@ tag from the now-released section and put it on the new top draft.
   another machine's session is unchanged). (#1684)
 - X-ray: Cmd-clicking a ref in Terminal mode now opens the right ref at any terminal padding, taking
   the grid position from the terminal itself. (#1682)
-- Fixed a rare race where a newer follow cutting an older one at the instant it ended busy could
-  still restart the cut follow. (#1693)
+- Remote Terminal's live view: a view that was closed at the very moment dch reported busy no longer
+  starts again on its own. (#1693)
 - Snippet and autocomplete pastes now put back an image or copied files that were on your clipboard,
   not only text, and no longer overwrite something you copy in the moment right after the paste.
   (#1691)
-- Prosper's next copy after the system's paste-access permission returns is no longer skipped.
-  (#1692)
+- Clipboard history no longer skips your first copy after macOS gives Prosper clipboard access
+  back. (#1692)
 
 ## v2.174.0
 
