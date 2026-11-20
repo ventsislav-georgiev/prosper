@@ -5,8 +5,8 @@
   {
    "name": "other-ends-wait",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "                case .other, .ccpool: break\n",
-   "new": "                case .other, .ccpool: break wait\n",
+   "old": "                case .other, .ccpool:\n                    let bound",
+   "new": "                case .other, .ccpool:\n                    break wait\n                    let bound",
    "expect": "killed"
   },
   {
