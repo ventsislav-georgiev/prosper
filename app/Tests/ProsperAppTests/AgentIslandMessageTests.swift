@@ -192,6 +192,37 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(waits.count, 2, "an error line arms nothing")
     }
 
+    /// #1746: a Kill that ended the session ("Ended") or found it gone ("Already ended") hides after the 10 s seam; a failed Kill's text stays and arms nothing.
+    @MainActor
+    func testKillSuccessHidesAfterTenSecondsAndAFailedKillStays() throws {
+        let p = Proc()
+        let c = controller(p, [session("api")])
+        let store = try XCTUnwrap(c.store)
+        let api = AgentSessionKey(dir: "/d", name: "api")
+        var waits: [(TimeInterval, @MainActor @Sendable () -> Void)] = []
+        c.noteAfter = { d, fire in waits.append((d, fire)) }
+        for (out, status, text) in [("killed: api", Int32(0), AgentIsland.killedText), ("no session: api", 1, AgentIsland.alreadyEndedText)] {
+            p.out["/d"] = (out, status)
+            store.actions[api] = nil
+            let before = waits.count
+            XCTAssertTrue(c.kill(session("api")))
+            settle { store.actions[api] == text }
+            XCTAssertEqual(store.actions[api], text)
+            XCTAssertEqual(waits.count, before + 1, "\(text): one clear armed")
+            XCTAssertEqual(waits.last?.0, 10)
+            waits.last?.1()
+            XCTAssertTrue(store.actions[api] == nil, "\(text): gone after")
+        }
+        p.out["/d"] = ("boom", 1)
+        let armed = waits.count
+        XCTAssertTrue(c.kill(session("api")))
+        settle { store.actions[api] == "End failed: boom" }
+        XCTAssertEqual(store.actions[api], "End failed: boom")
+        XCTAssertEqual(waits.count, armed, "a failed Kill arms nothing")
+        for w in waits { w.1() }
+        XCTAssertEqual(store.actions[api], "End failed: boom", "and stays")
+    }
+
     /// #1733: the info set is the verbs' done words, a Kill's outcomes and the auto-allow note; errors are outside it.
     func testInfoNotesAreTheGoodNewsTextsOnly() {
         for t in ["Sent", "Restarted", "Stopped", "Resumed", "Pinned", "Cleared", AgentIsland.killedText,
