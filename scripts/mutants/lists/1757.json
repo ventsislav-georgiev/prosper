@@ -1,0 +1,69 @@
+{
+ "entry": "1757",
+ "filter": "SessionGroupsTests|DchConfigWriterTests",
+ "mutants": [
+  {
+   "name": "first_match_off",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "            rest = m.rest\n",
+   "new": "            _ = m.rest\n",
+   "expect": "killed"
+  },
+  {
+   "name": "migration_default",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "pattern: defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault)]",
+   "new": "pattern: AgentIsland.sidekickDefault)]",
+   "expect": "killed"
+  },
+  {
+   "name": "max_count",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "    static let maxCount = 8\n",
+   "new": "    static let maxCount = 9\n",
+   "expect": "killed"
+  },
+  {
+   "name": "name_bytes",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return (1...maxNameBytes).contains(n.utf8.count)",
+   "new": "return (1...maxNameBytes).contains(n.count)",
+   "expect": "killed"
+  },
+  {
+   "name": "name_equals",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "!n.unicodeScalars.contains { $0 == \"=\" || ",
+   "new": "!n.unicodeScalars.contains { ",
+   "expect": "killed"
+  },
+  {
+   "name": "groups_gate",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "static let groupsMinimum = [1, 124, 0]",
+   "new": "static let groupsMinimum = [1, 123, 0]",
+   "expect": "killed"
+  },
+  {
+   "name": "empty_value_line",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "return v.isEmpty ? nil : ",
+   "new": "return ",
+   "expect": "killed"
+  },
+  {
+   "name": "render_keeps_old_groups",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "if groups != nil, setsKey(line, \"group\") {",
+   "new": "if groups != nil, setsKey(line, \"group\"), false {",
+   "expect": "killed"
+  },
+  {
+   "name": "adopt_appends",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if !list.isEmpty { list[0].pattern = newValue }",
+   "new": "if !list.isEmpty { list.append(SessionGroup(id: \"x\", name: \"x\", pattern: newValue)) }",
+   "expect": "killed"
+  }
+ ]
+}
