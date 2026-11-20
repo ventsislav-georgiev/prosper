@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import ProsperApp
 
 /// Correctness + hot-path budgets for the marketplace browse state machine
@@ -127,7 +128,7 @@ final class MarketplaceBrowseModelTests: XCTestCase {
 
     func testCategoryChangeReloads() async {
         let stub = Stub([
-            .init(packages: [pkg("a"), pkg("b")], cursor: nil),       // all
+            .init(packages: [pkg("a"), pkg("b")], cursor: 2),         // all, more pages left
             .init(packages: [pkg("t", kind: "theme")], cursor: nil),  // themes
         ])
         let model = MarketplaceBrowseModel { q, _, _, c in await stub.next(q, c) }
@@ -305,5 +306,79 @@ final class MarketplaceBrowseModelTests: XCTestCase {
         XCTAssertTrue(q["kind"] == nil, "\(q)")
         XCTAssertEqual(q["q"], "calm")
         XCTAssertEqual(q["cursor"], "20")
+    }
+
+    // MARK: #1717 filter switch in place
+
+    /// With the whole All list in hand, a category switch filters it locally: no fetch,
+    /// no loading flash in the first pass, and the server's order is kept.
+    func testCategorySwitchOverCompleteAllListFiltersLocallyWithoutFetch() async {
+        let stub = Stub([.init(packages: [pkg("t", kind: "theme"), pkg("e", kind: "extension"),
+                                          pkg("k", kind: "kit"), pkg("t2", kind: "theme")], cursor: nil)])
+        let model = MarketplaceBrowseModel { q, _, _, c in await stub.next(q, c) }
+        model.reload(); await settle(model)
+        model.category = .themes
+        XCTAssertFalse(model.loading, "a local filter switch must not show the spinner")
+        XCTAssertEqual(model.packages.map(\.id), ["t", "t2"])
+        model.category = .kits
+        XCTAssertFalse(model.loading)
+        XCTAssertEqual(model.packages.map(\.id), ["k"])
+        model.category = .all
+        XCTAssertEqual(model.packages.map(\.id), ["t", "e", "k", "t2"])
+        XCTAssertFalse(model.hasMore)
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 1, "a local filter switch must not hit the network")
+    }
+
+    /// A different sort is a different server list: the complete All list is not reused.
+    func testSortChangeStillFetches() async {
+        let stub = Stub([.init(packages: [pkg("t", kind: "theme")], cursor: nil),
+                         .init(packages: [pkg("u", kind: "theme")], cursor: nil)])
+        let model = MarketplaceBrowseModel { q, _, _, c in await stub.next(q, c) }
+        model.reload(); await settle(model)
+        model.sort = .downloads; await settle(model)
+        model.category = .themes
+        XCTAssertEqual(model.packages.map(\.id), ["u"])
+        let calls = await stub.callCount
+        XCTAssertEqual(calls, 2)
+    }
+
+    /// A local switch clears a spinner left by an in-flight fetch, and that page,
+    /// arriving late, is dropped instead of replacing the filtered list.
+    func testLocalSwitchDropsInFlightPage() async {
+        let model = MarketplaceBrowseModel { q, _, _, _ in
+            if q == "x" { try? await Task.sleep(nanoseconds: 200_000_000) }
+            return MarketClient.BrowseResult(packages: [MarketClient.Package(
+                id: q.isEmpty ? "t" : "late", title: "", description: "", author: "a", icon: nil, license: nil,
+                latest_version: "1.0.0", downloads: 0, updated_at: 0, kind: "theme", preview: nil)], cursor: nil)
+        }
+        model.reload(); await settle(model)
+        model.query = "x"; model.reload()
+        XCTAssertTrue(model.loading)
+        model.query = ""; model.category = .themes
+        XCTAssertFalse(model.loading, "the local switch must clear the stale spinner")
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(model.packages.map(\.id), ["t"])
+        XCTAssertFalse(model.loading)
+    }
+
+    private func fittingSize<V: View>(_ view: V) -> CGSize {
+        let host = NSHostingView(rootView: view)
+        host.layoutSubtreeIfNeeded()
+        return host.fittingSize
+    }
+
+    /// The search-field spinner keeps one fixed slot, so the header (and the list top
+    /// under it) has the same frame while loading and after.
+    func testSearchSpinnerSlotDoesNotReflowTheHeader() {
+        let idle = fittingSize(MarketplaceSearchSpinner(loading: false))
+        let busy = fittingSize(MarketplaceSearchSpinner(loading: true))
+        XCTAssertEqual(idle, busy)
+        XCTAssertGreaterThan(idle.height, 0, "the slot is reserved even when idle")
+        func field(_ loading: Bool) -> some View {
+            HStack { TextField("Search", text: .constant("")); MarketplaceSearchSpinner(loading: loading) }
+                .controlSize(.small).frame(width: 400)
+        }
+        XCTAssertEqual(fittingSize(field(false)).height, fittingSize(field(true)).height)
     }
 }

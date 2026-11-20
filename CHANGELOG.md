@@ -2154,6 +2154,8 @@ tag from the now-released section and put it on the new top draft.
   edge) in the single-session view now makes a new layout from that session plus an empty pane, with
   Edit layout on, instead of showing "Edit layout to change it" with no Edit button to press.
   (#1700)
+- The Marketplace no longer jumps when you switch between All, Themes, Extensions and Agent Kits;
+  once the full list is loaded, switching categories is instant and needs no reload. (#1717)
 
 ## v2.174.0
 

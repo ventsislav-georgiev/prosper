@@ -118,6 +118,9 @@ final class MarketplaceBrowseModel: ObservableObject {
     /// Filter set whose first page is already loaded — dedupes the Enter-press +
     /// debounce double-trigger and re-entrant `reload()` calls for the same filters.
     private var loadedKey: String?
+    /// #1717: the complete All list (no next page) for one query+sort. A category switch
+    /// over it filters in place with no fetch and no loading flash.
+    private var completeAll: (key: String, packages: [MarketClient.Package])?
 
     private let browse: @Sendable (_ query: String, _ sort: String, _ kind: String?, _ cursor: Int) async -> MarketClient.BrowseResult
 
@@ -136,6 +139,14 @@ final class MarketplaceBrowseModel: ObservableObject {
         if !force, loadedKey == filterKey, error == nil { return }
         loadedKey = filterKey
         generation &+= 1
+        if !force, let all = completeAll, all.key == "\(query)|\(sort.rawValue)" {
+            let kind = category.kind
+            packages = kind == nil ? all.packages : all.packages.filter { $0.kind == kind }
+            cursor = nil
+            error = nil
+            loading = false   // a stale in-flight page is dropped by the generation bump
+            return
+        }
         packages = []
         cursor = 0
         error = nil
@@ -157,6 +168,7 @@ final class MarketplaceBrowseModel: ObservableObject {
         let q = query.trimmingCharacters(in: .whitespaces)
         let kind = category.kind
         let sortParam = sort.param
+        let allKey = kind == nil ? "\(query)|\(sort.rawValue)" : nil
         let browse = self.browse
         Task {
             let result = await browse(q, sortParam, kind, offset)
@@ -174,8 +186,19 @@ final class MarketplaceBrowseModel: ObservableObject {
                 self.error = nil
                 self.packages.append(contentsOf: result.packages)
                 self.cursor = result.cursor
+                if result.cursor == nil, let allKey { self.completeAll = (allKey, self.packages) }
             }
         }
+    }
+}
+
+/// #1717: the search-field spinner sits in a fixed slot, shown or not, so a filter
+/// reload never grows the header and pushes the list down.
+struct MarketplaceSearchSpinner: View {
+    let loading: Bool
+    var body: some View {
+        ZStack { if loading { ProgressView().controlSize(.small) } }
+            .frame(width: sz(16), height: sz(16))
     }
 }
 
@@ -219,7 +242,7 @@ struct MarketplaceRootView: View {
                     .textFieldStyle(.plain)
                     .foregroundStyle(Neon.textPrimary)
                     .onSubmit { model.reload(force: true) }
-                if model.loading { ProgressView().controlSize(.small) }
+                MarketplaceSearchSpinner(loading: model.loading)
             }
             .padding(.horizontal, sz(12)).padding(.vertical, sz(8))
             .background(RoundedRectangle(cornerRadius: sz(8)).fill(Neon.card)
