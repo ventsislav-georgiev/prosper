@@ -1,0 +1,13 @@
+{
+ "entry": 1725,
+ "filter": "TextViewerWindowTests/testHeaderDragViewDragsAndDoubleClickFollowsTheSetting",
+ "mutants": [
+  {
+   "name": "no-drag-area",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        .background(AgentWindowDragArea())   // #1725",
+   "new": "        // #1725",
+   "expect": "killed"
+  }
+ ]
+}
