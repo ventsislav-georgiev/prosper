@@ -587,7 +587,8 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var paneTooSmall = false
     private func syncTier() {
         guard AgentPaneLayout.splitsEnabled else { return }   // gate off: nothing read, nothing written
-        let t = if case .tooSmall = layout.frames(in: paneArea, minimum: paneMinimum, splitsEnabled: true) { true } else { false }
+        // #1697: an unmeasured area (.zero, before the view's first pass) is not too small: no band flash on open.
+        let t = if paneArea.isEmpty { false } else if case .tooSmall = layout.frames(in: paneArea, minimum: paneMinimum, splitsEnabled: true) { true } else { false }
         if t != paneTooSmall { paneTooSmall = t }
     }
     /// Counts `paneArea` changes (tests: the same size twice is one change).

@@ -330,7 +330,8 @@ extension AgentWindowD1Tests {
             let m = windowModel(store([session("api", .idle), session("web", .idle)]))
             defer { m.close() }
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
-            let area = zoomViewArea(size)
+            // #1697: two plain panes draw no band: the whole pane column
+            let area = CGRect(origin: .zero, size: CGSize(width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: size.height))
             m.paneArea = area
             let snap = paneSnapshot(m, size)
             let line = try XCTUnwrap(m.dividers(in: area.size).first).line

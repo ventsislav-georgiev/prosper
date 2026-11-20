@@ -147,6 +147,11 @@ extension AgentWindowD1Tests {
         for (k, r) in a { assertSame(r, b[k], "\(why) \(k)", line: line) }
     }
 
+    /// #1697: plain tiled panes draw no band; the refusal notice must not make one appear (nothing moves down).
+    func paneRefusalNoBand(_ a: [String: CGRect], _ b: [String: CGRect], _ why: String, line: UInt = #line) {
+        XCTAssertTrue(a.isEmpty && b.isEmpty, "\(why): no band before or after: \(a.keys.sorted()) \(b.keys.sorted())", line: line)
+    }
+
     /// Gate on, six panes at 1600 x 900 (all tiled), the focused one empty (the cap's commonest case: ⌘D again from the new
     /// empty pane): the 7th split is refused and its notice is drawn in that pane's slot and in no other; every pane part
     /// and band slot is where it was; a landed focus key (⌘] through perform) clears it and the line is gone.
@@ -180,7 +185,7 @@ extension AgentWindowD1Tests {
             paneRefusalOnlyIn(tree, text, index: index, of: 6)
             XCTAssertEqual(paneRefusalBody(tree, index: index, of: 6), body, "an overlay: the pane's own content did not move")
             paneRefusalSame(panesBefore, paneSnapshot(m, size), "pane parts")
-            paneRefusalSame(bandBefore, bandSnapshot(m, size), "band slots")
+            paneRefusalNoBand(bandBefore, bandSnapshot(m, size), "band slots")
             XCTAssertTrue(m.perform(.cycle(1)), "a landed focus key")
             XCTAssertTrue(m.paneRefusal == nil, "the model cleared it")
             let gone = AXTreeSupport.poll(host) { !$0.contains { $0.reads(text) } }
@@ -219,7 +224,7 @@ extension AgentWindowD1Tests {
             let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads(text) } }
             paneRefusalOnlyIn(tree, text, index: index, of: 2)
             paneRefusalSame(panesBefore, paneSnapshot(m, size), "pane parts")
-            paneRefusalSame(bandBefore, bandSnapshot(m, size), "band slots")
+            paneRefusalNoBand(bandBefore, bandSnapshot(m, size), "band slots")
             m.select(live("web"))
             XCTAssertNotEqual(m.layout.focused, named, "the pick focused web's pane")
             XCTAssertTrue(m.paneRefusal == nil, "the model cleared it")
@@ -474,7 +479,7 @@ extension AgentWindowD1Tests {
                 let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads(text) } }
                 paneRefusalOnlyIn(tree, text, index: 1, of: 2)
                 paneRefusalSame(panesBefore, paneSnapshot(m, size), "\(c.why): pane parts")
-                paneRefusalSame(bandBefore, bandSnapshot(m, size), "\(c.why): band slots")
+                paneRefusalNoBand(bandBefore, bandSnapshot(m, size), "\(c.why): band slots")
                 XCTAssertFalse(win.isVisible, "never shown")
             }
         }

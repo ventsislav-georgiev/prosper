@@ -123,6 +123,27 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1697 (QA n37): a fresh model's pane area is unmeasured (.zero) until the view's first pass; a layout adopted then
+    /// is not too small, so the first pass draws no band (no 30 pt jump when a layout opens). Measured, the tier works.
+    @MainActor
+    func testPaneCostUnmeasuredAreaIsNotTooSmallAndDrawsNoBand() {
+        let names = ["api", "web", "db"]
+        let restoreModes = transcriptMode(names)
+        defer { restoreModes() }
+        withTreeGate(true) {
+            let m = windowModel(store(names.map { session($0, .idle) }))
+            m.setVisible(true)
+            defer { m.close() }
+            XCTAssertEqual(m.paneArea, .zero, "unmeasured")
+            m.adopt(paneLayout(names.map { paneTarget($0) }))
+            XCTAssertFalse(m.paneTooSmall, "an unmeasured area is not too small")
+            XCTAssertFalse(AgentWindowBand.shows(m), "no band for it")
+            XCTAssertTrue(bandSnapshot(m, CGSize(width: 1600, height: 900)).isEmpty, "the first pass draws no band")
+            m.paneArea = CGRect(x: 0, y: 0, width: 400, height: 300)
+            XCTAssertTrue(m.paneTooSmall, "measured too small: the tier is set")
+        }
+    }
+
     /// The drawn check, through the window's own sidebar (never shown): gate on with A | B the other pane's row has the
     /// glyph and reads "in view"; a window resize that only crosses the too-small line redraws the row (the label loses
     /// "in view") with no other change of the model, and every frame the probes report after keeps its place (the slot,
