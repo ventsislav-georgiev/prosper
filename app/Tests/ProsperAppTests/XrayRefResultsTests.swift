@@ -36,6 +36,31 @@ final class XrayRefResultsTests: XCTestCase {
         return p
     }
 
+    /// #1772 (QA R1760 n89): red at base (bytes sums out only; put never expired). The parsed stream counts in bytes (and
+    /// evicts), and a put drops an entry past 30 s without a get.
+    func testBytesCountTheParsedStreamAndPutExpires() {
+        let clock = Clock(), c = cache(clock)
+        var s = XrayRefStream()
+        s.mentions = [XrayRefStream.Mention(session: "api", chapter: nil, at: nil, line: String(repeating: "a", count: 1000),
+                                            offset: nil, index: 0)]
+        let est = XrayRefResults.estimate(s)
+        XCTAssertGreaterThanOrEqual(est, 1000 + XrayRefResults.perItem)
+        c.put(key("#1"), Data(count: 10), parsed: s)
+        XCTAssertEqual(c.bytes, 10 + est)
+        c.put(key("#2"), Data(count: 10))
+        XCTAssertEqual(c.bytes, 20 + est, "no parsed: out only")
+        c.put(key("#big"), Data(count: 10), parsed: {
+            var b = XrayRefStream()
+            b.mentions = [XrayRefStream.Mention(session: "api", chapter: nil, at: nil,
+                                                line: String(repeating: "b", count: XrayRefResults.maxBytes), offset: nil, index: 0)]
+            return b
+        }())
+        XCTAssertEqual(c.entries.map { $0.key.ref }, ["#1", "#2"], "parsed alone over the cap: refused")
+        clock.t += 30
+        c.put(key("#3"), Data(count: 5))
+        XCTAssertEqual(c.entries.map { $0.key.ref }, ["#3"], "put drops the stale entries")
+    }
+
     func key(_ ref: String, light: Bool = false, target: XrayTarget = api, scope: String = "project") -> XrayRefResults.Key {
         XrayRefResults.Key(target: target, ref: ref, light: light, scope: scope)
     }

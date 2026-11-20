@@ -38,6 +38,20 @@ final class XrayCardPresenterTests: XCTestCase {
         p.close()
     }
 
+    /// #1772: red if a click's promote does not tell the hover (`promoted`), or a key card's click does.
+    func testAClickOnAHoverCardRunsPromotedOnce() throws {
+        let (p, _) = presenter()
+        var n = 0
+        show(p, key: false) {}
+        p.promoted = { n += 1 }
+        let panel = try XCTUnwrap(p.panel)
+        panel.clicked()
+        panel.clicked()
+        XCTAssertEqual(n, 1)
+        p.close()
+        XCTAssertTrue(p.promoted == nil, "cleared with the card")
+    }
+
     /// A clicked or keyboard open asks for key; the protocol's old form is a key open.
     func testAClickOpenRequestsKey() {
         let (p, shows) = presenter()

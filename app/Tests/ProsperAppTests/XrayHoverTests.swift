@@ -207,6 +207,42 @@ final class XrayHoverTests: XCTestCase {
         }
     }
 
+    /// #1772 (QA R1760 n88): red at base (no promote: the linger closes a card the user clicked and types in). A promoted
+    /// card: the linger is cancelled and not re-armed on leaving the mark or the card, output leaves it, another mark does
+    /// not replace it, Esc still closes it. An unpromoted hover card still closes on its linger.
+    func testAPromotedHoverCardIsPinnedInPlace() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            let h = r.v.marks.hover
+            dwell(r, "issue:#12")
+            h.point(nil)
+            let armed = try XCTUnwrap(r.items.last { $0.delay == 0.25 && !$0.item.isCancelled }?.item)
+            h.promote()
+            XCTAssertTrue(armed.isCancelled, "the armed linger is cancelled")
+            XCTAssertTrue(h.promoted)
+            let n = r.items.count
+            h.onCard(true)
+            h.onCard(false)
+            h.point("issue:#1")
+            h.point(nil)
+            XCTAssertEqual(r.items.count, n, "no linger or settle is armed for a promoted card")
+            XCTAssertEqual(h.card?.key, "issue:#12", "another mark does not replace it")
+            r.v.marks.output()
+            XCTAssertTrue(r.cards.shown != nil, "output leaves it")
+            r.v.marks.escape()
+            XCTAssertTrue(r.cards.shown == nil, "Esc closes it")
+            XCTAssertFalse(h.promoted)
+            await r.panels.refReading?.value
+            // an unpromoted one still closes on its linger
+            dwell(r, "issue:#12")
+            h.point(nil)
+            let linger = try XCTUnwrap(r.items.last { $0.delay == 0.25 && !$0.item.isCancelled }?.item)
+            linger.perform()
+            XCTAssertTrue(r.cards.shown == nil, "a hover card closes on linger")
+            await r.panels.refReading?.value
+        }
+    }
+
     /// Red if output leaves an unpinned card up, or closes a pinned one.
     func testOutputClosesUnpinnedKeepsPinned() async throws {
         try await withSeams { fake in

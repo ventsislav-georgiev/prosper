@@ -421,6 +421,8 @@ final class XrayHover {
     /// The panel of the last card, pinned or not (Esc, blur and hide close its card too).
     private(set) weak var model: XrayPanelModel?
     private var onCard = false
+    /// #1772: a click promoted the card (it is key, its filter takes typing): pinned in place, no linger, output or switch closes it.
+    private(set) var promoted = false
     private var gen = 0
 
     private func arm(_ d: TimeInterval, _ body: @escaping @MainActor @Sendable () -> Void) -> DispatchWorkItem {
@@ -436,13 +438,13 @@ final class XrayHover {
         dwell?.cancel()
         dwell = nil
         guard let key else {
-            if card != nil, !onCard, linger == nil { linger = arm(Self.lingerDelay) { [weak self] in self?.close(all: false) } }
+            if card != nil, !onCard, !promoted, linger == nil { linger = arm(Self.lingerDelay) { [weak self] in self?.close(all: false) } }
             return
         }
         linger?.cancel()
         linger = nil
         if card != nil {
-            guard key != card?.key else { return }
+            guard key != card?.key, !promoted else { return }
             show(key)   // a switch: the new card at once, its read after the settle
             settle = arm(Self.settleDelay) { [weak self] in
                 guard let self, let e = self.card, e.key == key else { return }
@@ -481,9 +483,18 @@ final class XrayHover {
         if inside {
             linger?.cancel()
             linger = nil
-        } else if over == nil, card != nil, linger == nil {
+        } else if over == nil, card != nil, !promoted, linger == nil {
             linger = arm(Self.lingerDelay) { [weak self] in self?.close(all: false) }
         }
+    }
+
+    /// #1772: a click on the hover card made it key: it stays as it is (its light read goes on) until Escape, a click
+    /// outside, Pin or a Pin-less close; the linger no longer closes it. Not Pin: that would replace the panel mid-click.
+    func promote() {
+        guard card != nil else { return }
+        promoted = true
+        linger?.cancel()
+        linger = nil
     }
 
     /// Pin: the light read is killed (SIGTERM through the runner's cancel) and today's full card opens in its place.
@@ -505,6 +516,7 @@ final class XrayHover {
             if all { model?.dismiss() }
             return
         }
+        if promoted, !all { return }   // #1772: output and the linger leave a promoted card be
         gen += 1
         model?.panels?.closeRef(started: read)
         reset()
@@ -519,7 +531,7 @@ final class XrayHover {
         }
         model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now
         settle?.cancel()
-        (settle, read) = (nil, nil)
+        (settle, read, promoted) = (nil, nil, false)   // a new card is a quiet one
         gen += 1
         let g = gen
         (card, model, shell, extCard) = (e, p.panel, XrayRefContext.shell(p.refs.sessionID), x)
@@ -536,6 +548,6 @@ final class XrayHover {
 
     private func reset() {
         for item in [settle, linger] { item?.cancel() }
-        (card, read, settle, linger, onCard, extCard) = (nil, nil, nil, nil, false, nil)
+        (card, read, settle, linger, onCard, extCard, promoted) = (nil, nil, nil, nil, false, nil, false)
     }
 }

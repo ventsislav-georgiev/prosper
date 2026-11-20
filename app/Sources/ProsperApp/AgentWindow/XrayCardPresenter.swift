@@ -24,7 +24,8 @@ extension XrayCardPresenter {
 /// no arrow. Key while shown, so Escape and the filter field reach the card; Escape the card does not take closes it.
 final class XrayCardPanel: NSPanel {
     var onCancel: (() -> Void)?
-    /// #1760: a hover card: never key or main until a click on it (clicked) promotes it.
+    /// #1760: a hover card: never key or main until a click on it (clicked) promotes it; #1772: a promoted card is pinned in
+    /// its hover (XrayHover.promote: the 250 ms linger no longer closes it) through the presenter's `promoted`.
     var quiet = false
     var onPromote: (() -> Void)?
     override var canBecomeKey: Bool { !quiet }
@@ -49,6 +50,8 @@ final class XrayCardPanel: NSPanel {
 final class XrayCardPanelPresenter: XrayCardPresenter {
     // Internal, not private: rows read the panel and post its resign-key without ever showing one.
     var panel: XrayCardPanel?
+    /// #1772: runs once the card's click promotes it (the hover's pin); cleared with the card.
+    var promoted: (@MainActor () -> Void)?
     var closed: (@MainActor () -> Void)?
     private var resign: NSObjectProtocol?
     enum Order: Equatable { case showKey, showQuiet, promote, hide }
@@ -99,7 +102,7 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         p.contentView = host
         p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close() } }
         p.quiet = !key
-        p.onPromote = { [weak self, weak p] in if let self, let p, self.panel === p { self.order(p, p.parent, .promote) } }
+        p.onPromote = { [weak self, weak p] in if let self, let p, self.panel === p { self.order(p, p.parent, .promote); self.promoted?() } }
         resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
             [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
         }
@@ -111,7 +114,7 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         guard let p = panel else { return }
         let f = closed
         resign.map { NotificationCenter.default.removeObserver($0) }
-        (panel, self.closed, resign) = (nil, nil, nil)
+        (panel, self.closed, resign, promoted) = (nil, nil, nil, nil)
         order(p, p.parent, .hide)
         f?()
     }

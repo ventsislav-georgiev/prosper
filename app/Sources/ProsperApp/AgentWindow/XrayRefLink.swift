@@ -109,8 +109,8 @@ extension XrayPanelModel {
     /// count), no read yet (XrayHover starts the light one). `closed` runs once when it goes, whoever closed it.
     func hoverRef(_ e: XrayRefs.Entry, hover: XrayHover, closed: @escaping @MainActor () -> Void) {
         (refContext, refNote) = (nil, nil)
-        hovering = true
-        defer { hovering = false }
+        (hovering, hoverPromote) = (true, { [weak hover] in hover?.promote() })
+        defer { (hovering, hoverPromote) = (false, nil) }
         presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true, hover: hover)),
                    XrayRefPopover.size, closed)
     }

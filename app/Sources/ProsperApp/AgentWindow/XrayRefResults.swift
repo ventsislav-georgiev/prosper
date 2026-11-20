@@ -24,15 +24,31 @@ final class XrayRefResults {
     var now: @MainActor () -> Date = { Date() }
     /// Oldest use first.
     /// #1760: `parsed`: the answer's stream, parsed off main by the read that put it, so a hit parses nothing on main.
-    private(set) var entries: [(key: Key, out: Data, at: Date, parsed: XrayRefStream?)] = []
-    /// Each kept out is at most maxBytes (put refuses more) and at most maxKeys are kept: the sum cannot overflow.
-    var bytes: Int { entries.reduce(0) { $0 + $1.out.count } }
+    private(set) var entries: [(key: Key, out: Data, at: Date, parsed: XrayRefStream?, cost: Int)] = []
+    /// #1772: `out` plus the parsed stream's estimate (cost, worked out once in put). Each cost is at most maxBytes (put
+    /// refuses more) and at most maxKeys are kept: the sum cannot overflow.
+    var bytes: Int { entries.reduce(0) { $0 + $1.cost } }
+
+    /// #1772: a parsed stream's size, estimated: the kept strings' UTF-8 bytes plus a constant per struct and run.
+    static let perItem = 64
+    static func estimate(_ s: XrayRefStream) -> Int {
+        var n = s.definitions.count * perItem + s.mentions.count * perItem
+        for d in s.definitions { n += d.title.utf8.count + d.passage.utf8.count + d.rule.utf8.count }
+        for m in s.mentions {
+            n += m.line.utf8.count + m.fold.utf8.count + m.rich.count * perItem
+            for r in m.rich { n += r.text.utf8.count }
+            if let t = m.sentence { n += t.before.utf8.count + t.hit.utf8.count + t.after.utf8.count }
+        }
+        return n
+    }
 
     /// A read's exit-0 answer. One over the byte cap is never kept.
     func put(_ k: Key, _ out: Data, parsed: XrayRefStream? = nil) {
-        entries.removeAll { $0.key == k }
-        guard out.count <= Self.maxBytes else { return }
-        entries.append((k, out, now(), parsed))
+        let t = now()
+        entries.removeAll { $0.key == k || t.timeIntervalSince($0.at) >= Self.keptFor }   // #1772: stale ones go on put too
+        let cost = out.count + (parsed.map(Self.estimate) ?? 0)
+        guard cost <= Self.maxBytes else { return }
+        entries.append((k, out, t, parsed, cost))
         while entries.count > Self.maxKeys || bytes > Self.maxBytes { entries.removeFirst() }
     }
 

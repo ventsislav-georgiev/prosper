@@ -510,7 +510,8 @@ extension XrayPanelModel {
         (refContext, refNote) = (nil, nil)
         let card = XrayExtensionCard(m, calls: calls, dir: cwd(), session: target.name)
         hovering = hover != nil   // #1760: an unpinned card is shown without key
-        defer { hovering = false }
+        hoverPromote = { [weak hover] in hover?.promote() }
+        defer { (hovering, hoverPromote) = (false, nil) }
         presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: true, hover: hover, ext: card)), XrayRefPopover.size, closed)
     }
 }
