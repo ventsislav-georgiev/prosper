@@ -148,7 +148,7 @@ enum KitRender {
     /// The owner every piece of the kit carries: the extension id, the `kitconfig:` slug, the kit
     /// dir as the `ext:` root (spec 2.7, 4.1).
     static func owner(_ v: KitValidated, kitDir: URL) -> ManagedConfigOwner {
-        ManagedConfigOwner(id: v.extensionID, version: v.version, kitSlug: v.slug, extensionDir: kitDir)
+        ManagedConfigOwner(id: v.extensionID, version: v.version, kitSlug: v.slug, extensionDir: kitDir, isKit: true)
     }
 
     /// spec 4.2 piece table. Seeds come first, so local.md exists before the block importing it.

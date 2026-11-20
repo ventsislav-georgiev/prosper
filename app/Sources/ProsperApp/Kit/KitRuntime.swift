@@ -192,7 +192,7 @@ final class KitRuntime: @unchecked Sendable {
 
     private func owner(_ ext: LoadedExtension, _ v: KitValidated, dir: String) -> ManagedConfigOwner {
         ManagedConfigOwner(id: ext.id, version: v.version, kitSlug: kitSlug(v.slug), extensionDir: URL(fileURLWithPath: dir, isDirectory: true),
-                           displayName: ext.manifest.extension.title)
+                           displayName: ext.manifest.extension.title, isKit: true)
     }
 
     private func kit(_ version: String) -> KitValidated? { lock.withLock { kits[version] } }

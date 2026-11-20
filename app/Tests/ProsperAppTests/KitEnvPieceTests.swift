@@ -116,13 +116,13 @@ final class KitEnvPieceTests: XCTestCase {
     /// op on env, a top-level bypass key, and a value of the wrong shape are refused before the sheet.
     func testPlannerAllowsOnlyTheAllowlistedSlotsAndShapes() async throws {
         let a = try XCTUnwrap(ManagedConfigPlanner.envKeys.first)
-        XCTAssertTrue(ManagedConfigPlanner.jsonRule(["env", a], .set) == nil)
-        XCTAssertTrue(ManagedConfigPlanner.jsonRule(ManagedConfigPlanner.bypassPath, .set) == nil)
-        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", "ANTHROPIC_API_KEY"], .set), .refusedJSONPath("env.ANTHROPIC_API_KEY"))
-        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", a.lowercased()], .set), .refusedJSONPath("env.\(a.lowercased())"))
-        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env"], .set), .refusedJSONPath("env"))
-        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", a], .union), .refusedJSONPath("env.\(a)"))
-        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["disableBypassPermissionsMode"], .set), .refusedJSONPath("disableBypassPermissionsMode"))
+        XCTAssertTrue(ManagedConfigPlanner.jsonRule(["env", a], .set, kit: true) == nil)
+        XCTAssertTrue(ManagedConfigPlanner.jsonRule(ManagedConfigPlanner.bypassPath, .set, kit: true) == nil)
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", "ANTHROPIC_API_KEY"], .set, kit: true), .refusedJSONPath("env.ANTHROPIC_API_KEY"))
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", a.lowercased()], .set, kit: true), .refusedJSONPath("env.\(a.lowercased())"))
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env"], .set, kit: true), .refusedJSONPath("env"))
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", a], .union, kit: true), .refusedJSONPath("env.\(a)"))
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["disableBypassPermissionsMode"], .set, kit: true), .refusedJSONPath("disableBypassPermissionsMode"))
 
         let env = makeMCEnv()
         let bad = [
@@ -130,10 +130,60 @@ final class KitEnvPieceTests: XCTestCase {
             ManagedConfigPiece(id: "b", kind: .json, target: "claude:settings.json", path: ManagedConfigPlanner.bypassPath, op: .set, value: #""allow""#),
         ]
         for piece in bad {
+            var kitOwner = env.owner
+            kitOwner.isKit = true // the shape check must be what refuses, not the owner
+            let r = await env.mc.apply([piece], owner: kitOwner)
+            XCTAssertEqual(r.status, .refused, piece.id)
+        }
+        XCTAssertEqual(env.consent.seen.count, 0, "refused before the sheet")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: env.settings.path))
+    }
+
+    /// n51: an extension (host.config, not a kit owner) asking for an allowlisted env key or the bypass slot is refused
+    /// before the sheet, like any other env key; the same pieces plan for a kit owner.
+    func testAnExtensionOwnerIsRefusedTheEnvAndBypassSlots() async throws {
+        let a = try XCTUnwrap(ManagedConfigPlanner.envKeys.first)
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(["env", a], .set), .refusedJSONPath("env.\(a)"))
+        XCTAssertEqual(ManagedConfigPlanner.jsonRule(ManagedConfigPlanner.bypassPath, .set), .refusedJSONPath("permissions.disableBypassPermissionsMode"))
+        XCTAssertTrue(ManagedConfigPlanner.jsonRule(["statusLine"], .set) == nil, "the status line stays open to every owner")
+        let pieces = [
+            ManagedConfigPiece(id: "e", kind: .json, target: "claude:settings.json", path: ["env", a], op: .set, value: #""1""#),
+            ManagedConfigPiece(id: "b", kind: .json, target: "claude:settings.json", path: ManagedConfigPlanner.bypassPath, op: .set, value: #""disable""#),
+        ]
+        let env = makeMCEnv()
+        XCTAssertFalse(env.owner.isKit)
+        for piece in pieces {
             let r = await env.mc.apply([piece], owner: env.owner)
             XCTAssertEqual(r.status, .refused, piece.id)
         }
         XCTAssertEqual(env.consent.seen.count, 0, "refused before the sheet")
         XCTAssertFalse(FileManager.default.fileExists(atPath: env.settings.path))
+        var kit = env.owner
+        kit.isKit = true
+        for piece in pieces {
+            let r = await env.mc.apply([piece], owner: kit)
+            XCTAssertEqual(r.status, .done, r.message)
+        }
+    }
+
+    /// n52: the two keys that change behaviour get one plain line each on the sheet; no other key does.
+    func testTheTwoBehaviourKeysGetTheirLineOnTheSheetAndNoOtherKeyDoes() async throws {
+        let autoMode = "CLAUDE_CODE_ENABLE_AUTO_MODE", connectors = "ENABLE_CLAUDEAI_MCP_SERVERS"
+        let plain = try XCTUnwrap(ManagedConfigPlanner.envKeys.first)
+        XCTAssertEqual(Set(ManagedConfigPlanner.envWarnings.keys), [autoMode, connectors])
+        XCTAssertTrue(ManagedConfigPlanner.envKeys.contains(autoMode) && ManagedConfigPlanner.envKeys.contains(connectors))
+        let env = makeMCEnv()
+        var kit = env.owner
+        kit.isKit = true
+        func piece(_ k: String) -> ManagedConfigPiece {
+            ManagedConfigPiece(id: k, kind: .json, target: "claude:settings.json", path: ["env", k], op: .set, value: #""1""#)
+        }
+        let applied = await env.mc.apply([piece(plain), piece(autoMode), piece(connectors)], owner: kit)
+        XCTAssertEqual(applied.status, .done, applied.message)
+        let notes = try XCTUnwrap(env.consent.seen.first?.files.first { $0.target == "claude:settings.json" }).notes
+        XCTAssertTrue(notes.contains("Claude Code sessions act without asking you."), "\(notes)")
+        XCTAssertTrue(notes.contains("Your claude.ai connectors load in every session."), "\(notes)")
+        XCTAssertEqual(notes.filter { $0.contains("act without asking") || $0.contains("connectors load") }.count, 2, "\(notes)")
+        XCTAssertTrue(notes.contains("Claude Code sessions get the environment variable \(plain) = \"1\"."), "\(notes)")
     }
 }

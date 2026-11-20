@@ -14,6 +14,8 @@ struct ManagedConfigOwner: Sendable, Equatable {
     /// #1235 (B-INFO-6): the manifest's display name for the consent sheet's title (outside data, sanitized
     /// where shown). nil: the sheet shows the id. Shown only; never part of a path or a record.
     var displayName: String? = nil
+    /// n51: true only for a kit's owner; the env and bypass slots of the JSON allowlist are open to it alone.
+    var isKit = false
 
     /// #1245: one owner is one id; a version, slug, dir or display name never splits it in two.
     static func == (l: Self, r: Self) -> Bool { l.id == r.id }

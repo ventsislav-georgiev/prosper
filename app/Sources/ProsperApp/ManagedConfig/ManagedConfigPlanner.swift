@@ -58,9 +58,15 @@ struct ManagedConfigPlanner {
         "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS", "CLAUDE_CODE_ENABLE_AUTO_MODE", "CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
         "DISABLE_ERROR_REPORTING", "DISABLE_NON_ESSENTIAL_MODEL_CALLS", "DISABLE_TELEMETRY_OFF", "ENABLE_CLAUDEAI_MCP_SERVERS", "ENABLE_TOOL_SEARCH",
     ]
+    /// n52: one plain line on the sheet for the two keys that change how Claude Code behaves.
+    static let envWarnings: [String: String] = [
+        "CLAUDE_CODE_ENABLE_AUTO_MODE": "Claude Code sessions act without asking you.",
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "Your claude.ai connectors load in every session.",
+    ]
     /// OQ-193: a permissions piece's disable_bypass sets this slot to "disable"; Remove restores what was there.
     static let bypassPath = ["permissions", "disableBypassPermissionsMode"]
 
+    /// n51 (OQ-193 for kits): the env slot and the bypass slot are a kit's; an extension's host.config asking for them is refused.
     static func isEnvSlot(_ path: [String]) -> Bool { path.count == 2 && path[0] == "env" && envKeys.contains(path[1]) }
 
     /// errata A5: the hook events Claude Code documents, from the table on code.claude.com/docs/en/hooks
@@ -75,9 +81,9 @@ struct ManagedConfigPlanner {
         "Elicitation", "ElicitationResult", "SessionEnd",
     ]
 
-    static func jsonRule(_ path: [String], _ op: ManagedConfigPiece.Op) -> ManagedConfigRefusalReason? {
+    static func jsonRule(_ path: [String], _ op: ManagedConfigPiece.Op, kit: Bool = false) -> ManagedConfigRefusalReason? {
         let name = path.joined(separator: ".")
-        guard let first = path.first, !refusedTopKeys.contains(first) || isEnvSlot(path), !(path.count >= 2 && path[0] == "permissions" && path[1] == "defaultMode") else {
+        guard let first = path.first, !refusedTopKeys.contains(first) || (kit && isEnvSlot(path)), !(path.count >= 2 && path[0] == "permissions" && path[1] == "defaultMode") else {
             return .refusedJSONPath(name)
         }
         switch op {
@@ -86,7 +92,7 @@ struct ManagedConfigPlanner {
         case .union:
             if path.count == 2, first == "permissions", ManagedConfigDiff.allowedPermissionKeys.contains(path[1]) { return nil }
         case .set:
-            if path == ["statusLine"] || path == bypassPath || isEnvSlot(path) { return nil }
+            if path == ["statusLine"] || (kit && (path == bypassPath || isEnvSlot(path))) { return nil }
         }
         return .refusedJSONPath(name)
     }
@@ -268,7 +274,7 @@ struct ManagedConfigPlanner {
         guard let path = piece.path, let op = piece.op, let valueText = piece.value else {
             throw .invalidPiece("a json piece needs path, op and value")
         }
-        if let r = ManagedConfigPlanner.jsonRule(path, op) { throw r }
+        if let r = ManagedConfigPlanner.jsonRule(path, op, kit: owner.isKit) { throw r }
         guard let value = try? OrderedJSON(valueText).root.value else { throw .invalidPiece("value is not JSON") }
         let doc: OrderedJSON
         do { doc = try OrderedJSON(bytes: w.text) } catch { throw .corrupt("\(w.target) does not parse: \(error)") }
@@ -608,7 +614,10 @@ struct ManagedConfigPlanner {
         liveNote(&w)
         if let command = string(value, "command") { w.notes.append("Claude Code will run `\(command)` as the status line in every session.") }
         guard case .string(let s) = value, let key = path.last else { return }
-        if path.first == "env" { w.notes.append("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(s)).") }
+        if path.first == "env" {
+            w.notes.append("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(s)).")
+            if let line = ManagedConfigPlanner.envWarnings[key] { w.notes.append(line) } // n52: the two keys that change behaviour
+        }
         if path == ManagedConfigPlanner.bypassPath { w.notes.append("Claude Code's bypass permissions mode is switched off.") }
     }
 }

@@ -2191,6 +2191,9 @@ tag from the now-released section and put it on the new top draft.
   (including bare names like CHANGELOG.md, resolved against the session's folder) and links even
   while the program in the pane uses the mouse, as Claude Code does; Shift is no longer needed, and
   plain clicks still go to the program. (#1724)
+- Kit settings that set an environment variable or switch off bypass permissions now work for kits
+  only, and the consent sheet adds a plain line when a kit turns on auto mode or claude.ai
+  connectors. (#1729)
 
 ## v2.174.0
 

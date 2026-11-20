@@ -194,7 +194,7 @@ final class KitRenderTests: XCTestCase {
                     || (path == ["permissions", "disableBypassPermissionsMode"] && p.op == .set && p.value == #""disable""#)
                     || (path.count == 2 && path[0] == "env" && ManagedConfigPlanner.envKeys.contains(path[1]) && p.op == .set)
                 XCTAssertTrue(allowed, "\(p.id) writes \(path) with \(String(describing: p.op))")
-                XCTAssertNil(ManagedConfigPlanner.jsonRule(path, p.op ?? .set), p.id)
+                XCTAssertNil(ManagedConfigPlanner.jsonRule(path, p.op ?? .set, kit: true), p.id)
                 let value = try JSONSerialization.jsonObject(with: Data((p.value ?? "").utf8), options: .fragmentsAllowed)
                 switch path.first {
                 case "hooks":
