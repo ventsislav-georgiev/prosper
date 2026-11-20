@@ -84,7 +84,7 @@ extension AgentWindowD1Tests {
                 m.setNewSessionName("a:b")
                 XCTAssertTrue(m.newSessionErrors.name != nil && m.newSessionErrors.sidekick != nil, "both slots at \(scale)")
                 assertRows(formRows(host).rows, base.rows, "both slot errors at \(scale)")
-                m.setNewSessionName("")
+                m.setNewSessionName("web")   // #1731: the name is required; "web" and its sidekick web-qa are free
                 XCTAssertTrue(m.startNewSession())
                 XCTAssertEqual(spawns.calls.count, 1)
                 assertRows(formRows(host, starting: true).rows, base.rows, "Starting\u{2026} at \(scale)")

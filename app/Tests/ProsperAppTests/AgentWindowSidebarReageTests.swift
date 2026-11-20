@@ -183,6 +183,7 @@ final class AgentWindowSidebarReageTests: XCTestCase {
             defer { m.close() }
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
             XCTAssertTrue(m.startNewSession())
             let before = m.remoteCalls
             calls.done?(DchActionResult(status: 0))

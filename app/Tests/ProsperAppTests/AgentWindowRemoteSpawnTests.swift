@@ -86,6 +86,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             defer { m.close() }
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
             XCTAssertEqual(m.newSessionName, "site", "the typed name (#1731)")
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.verbs.count, 1)
@@ -117,6 +118,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
                                                  file: "host-a:site")]
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.verbs.last?.args,
                            ["--host", "host-a", "--spawn", "site", "--cwd", "/Users/example/site", "--", "make", "test"],
@@ -223,6 +225,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             defer { m.close() }
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
             let n = log.spawns.count
             XCTAssertTrue(m.startNewSession())
             calls.done?(DchActionResult(status: 0))
@@ -255,6 +258,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             m.setNewSessionHost("host-b")
             m.setNewSessionHost(nil)
             m.setNewSessionFolder("~/proj")
+            m.setNewSessionName("proj")   // #1731: the name is typed, not derived from the folder
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.local.count, 1)
             XCTAssertEqual(calls.local.last?.folder, "/Users/example/proj")
@@ -277,6 +281,7 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             XCTAssertEqual(m.newSessionHostLabel(raw), "host-a", "the picker's label")
             m.setNewSessionHost(raw)
             m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.verbs.last?.args.prefix(4), ["--host", raw, "--spawn", "site"], "argv keeps the raw host")
             calls.done?(DchActionResult(status: 7, text: ["dch: " + raw + ": unreachable: down"]))

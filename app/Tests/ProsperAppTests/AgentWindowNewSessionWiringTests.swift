@@ -231,13 +231,25 @@ extension AgentWindowD1Tests {
             let name = try XCTUnwrap(formFields(host).dropFirst().first)
             if !hasKeys(name, win) { XCTAssertTrue(win.makeFirstResponder(name)) }
             let editor = try XCTUnwrap(name.currentEditor() as? NSTextView)
+            // #1731: the name starts empty and is required: Return on it starts nothing and the form stays.
+            XCTAssertTrue(m.newSessionName.isEmpty, "opened unnamed")
+            editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+            XCTAssertEqual(spawns.calls.count, 0, "Return on an empty name starts nothing")
+            XCTAssertNotNil(m.newSession, "the form stays")
+            XCTAssertTrue(m.newSession?.starting == nil, "not starting")
+            // Typed through the field editor (the real path), then Return starts.
+            editor.insertText("api", replacementRange: editor.selectedRange())
+            settle(host)
+            XCTAssertEqual(m.newSessionName, "api", "typed")
             editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
             XCTAssertEqual(spawns.calls.count, 1, "Return started")
             XCTAssertEqual(spawns.calls.first?.folder, "/Users/example/api")
             XCTAssertEqual(spawns.calls.first?.argv, ["claude"])
             XCTAssertEqual(spawns.calls.first?.name, "api")
             XCTAssertNotNil(m.newSession?.starting, "Starting…")
-            spawns.done[0](nil, "New session failed: test")
+            // A red row must never trap on an empty array (it would end the whole xctest process).
+            let done = try XCTUnwrap(spawns.done.first, "the spawn was asked")
+            done(nil, "New session failed: test")
             m.cancelNewSession()
             settle(host)
             // ⇧⌘N: no form, the login shell at once.
@@ -448,7 +460,7 @@ extension AgentWindowD1Tests {
                 settle(host)
                 same(frames("name error \(scale)"), base, "a name error moves nothing at \(scale)")
                 XCTAssertEqual(height(), h, accuracy: 0.01, "name error at \(scale)")
-                m.setNewSessionName("")
+                m.setNewSessionName("api")   // #1731: the name is required: type the one the form opened with
                 XCTAssertTrue(m.startNewSession())
                 XCTAssertEqual(m.newSessionStatus, "Starting api…")
                 settle(host)
