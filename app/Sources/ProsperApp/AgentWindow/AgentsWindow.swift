@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 // Agent Island's store, no new fork or poll) and the selected session's read-only
 // conversation (spike A). Built on open and torn down on close, like
 // MarketplaceWindow: a closed window leaves no view, model, timer or watch behind.
+// #1784 (operator 2026-11-20, supersedes that for this window): a close hides it for `hideGrace`, stopped as an
+// occluded window is; a show inside the grace presents it as it was; then the teardown above runs.
 
 @MainActor
 final class AgentsWindow {
@@ -17,7 +19,12 @@ final class AgentsWindow {
     /// #831 B1 step 2 (4.1a, R899-3): the panes' last live sights, kept for the process: they outlive a window close.
     let lastLive = AgentLastLiveHome()
     private var observers: [NSObjectProtocol] = []
-    var isOpen: Bool { window != nil }
+    /// #1784: how long a closed window is kept hidden before its teardown (the one place to change it).
+    static let hideGrace: TimeInterval = 600
+    /// #1784: the one timer while the window is hidden; nil while shown and after the teardown. Rows fire it.
+    private(set) var grace: Timer?
+    /// Open for the person: shown (a hidden kept window is closed to them).
+    var isOpen: Bool { window != nil && grace == nil }
     static let title = "Agent Sessions"
     static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
     /// #1470 a2: wider by the full sidebar's growth at `scale` (AgentWindowModel.digitColumnExtra), so the panes' least
@@ -37,7 +44,13 @@ final class AgentsWindow {
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
 
     func show() {
-        if let window { return present(window) }
+        if let window {
+            grace?.invalidate()   // #1784: the kept window comes back as it was, no rebuild
+            grace = nil
+            present(window)
+            model?.setVisible(window.occlusionState.contains(.visible))
+            return
+        }
         let island = island()
         let model = AgentWindowModel(lastLive: lastLive, layouts: Preferences.defaults)
         model.interaction.controller = island
@@ -52,7 +65,7 @@ final class AgentsWindow {
         let nc = NotificationCenter.default
         observers = [
             nc.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.teardown(win) }
+                MainActor.assumeIsolated { self?.hide(win) }
             },
             // Miniaturized, behind other windows fully, on another Space, the app hidden:
             // the transcript stops and the age clock with it (design "Energy").
@@ -161,7 +174,24 @@ final class AgentsWindow {
     /// #1378: the rounded Borderless window's corner radius, near the system's for a window without a toolbar.
     static let cornerRadius: CGFloat = 12
 
+    /// #1784: the close keeps the window hidden: the model stops as for an occluded window (no transcript, terminal,
+    /// clock or sidebar rebuild), the Dock lets go of it, and one coalescable timer ends the grace with the teardown.
+    /// Already hidden (a second willClose): nothing, still one timer.
+    private func hide(_ win: NSWindow) {
+        guard grace == nil else { return }
+        model?.setVisible(false)
+        dismissed(win)
+        let t = Timer(timeInterval: Self.hideGrace, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { if let self, let w = self.window { self.teardown(w) } }
+        }
+        t.tolerance = Self.hideGrace / 10
+        RunLoop.main.add(t, forMode: .common)
+        grace = t
+    }
+
     private func teardown(_ win: NSWindow) {
+        grace?.invalidate()
+        grace = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         model?.close()
@@ -171,7 +201,6 @@ final class AgentsWindow {
         let island = island()
         island.onStoreChanged = nil
         island.onHoldChanged = nil
-        dismissed(win)
         DispatchQueue.main.async { win.contentViewController = nil }
     }
 }

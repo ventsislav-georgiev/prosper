@@ -152,6 +152,7 @@ final class WindowShortcutToggleTests: XCTestCase {
         AgentsWindow.toggleFromShortcut()
         XCTAssertFalse(w.isOpen, "focused: the press closes")
         XCTAssertEqual(f.closes, 1, "through the teardown")
+        w.grace?.fire()   // #1784: past the hide grace
         XCTAssertNil(c.onStoreChanged, "the teardown let go of the island")
         XCTAssertEqual(f.presents, 2)
 
@@ -325,6 +326,7 @@ extension XCTestCase {
         }
         addTeardownBlock { @MainActor in
             w.window?.close()
+            w.grace?.fire()   // #1784: a window kept hidden goes too
             (w.island, w.build, w.present, w.dismissed) = live
         }
         return (f, c)

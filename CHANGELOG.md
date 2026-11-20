@@ -2235,6 +2235,8 @@ tag from the now-released section and put it on the new top draft.
   the background instead of reconnecting and replaying its history (#1782).
 - Agent Sessions: the sidebar scrolls with less work: the Command-number column is measured once,
   not drawn as 18 hidden chips in every row. (#1783)
+- Agent Sessions: closing the window keeps it hidden for 10 minutes, so reopening it within that
+  time is instant. (#1784)
 
 ## v2.174.0
 

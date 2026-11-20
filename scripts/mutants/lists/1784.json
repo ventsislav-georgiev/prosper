@@ -1,0 +1,69 @@
+{
+ "entry": "1784",
+ "filter": "AgentWindowD1Tests/testAgentsWindow|WindowShortcutToggleTests/testAgentSessionsShortcutToggles",
+ "mutants": [
+  {
+   "name": "hide-second-timer",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        guard grace == nil else { return }\n        model?.setVisible(false)\n",
+   "new": "        model?.setVisible(false)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "show-keeps-timer",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            grace?.invalidate()   // #1784: the kept window comes back as it was, no rebuild\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "show-rebuilds-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if let window {\n            grace?.invalidate()",
+   "new": "        if let window, grace == nil {\n            grace?.invalidate()",
+   "expect": "killed"
+  },
+  {
+   "name": "close-tears-down",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "MainActor.assumeIsolated { self?.hide(win) }",
+   "new": "MainActor.assumeIsolated { self?.teardown(win) }",
+   "expect": "killed"
+  },
+  {
+   "name": "hide-keeps-running",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        guard grace == nil else { return }\n        model?.setVisible(false)\n",
+   "new": "        guard grace == nil else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden-is-open",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "var isOpen: Bool { window != nil && grace == nil }",
+   "new": "var isOpen: Bool { window != nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "teardown-keeps-grace",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        grace?.invalidate()\n        grace = nil\n        observers.forEach",
+   "new": "        grace?.invalidate()\n        observers.forEach",
+   "expect": "killed"
+  },
+  {
+   "name": "teardown-dismisses-again",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        island.onHoldChanged = nil\n        DispatchQueue",
+   "new": "        island.onHoldChanged = nil\n        dismissed(win)\n        DispatchQueue",
+   "expect": "killed"
+  },
+  {
+   "name": "grace-60s",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "static let hideGrace: TimeInterval = 600",
+   "new": "static let hideGrace: TimeInterval = 60",
+   "expect": "killed"
+  }
+ ]
+}

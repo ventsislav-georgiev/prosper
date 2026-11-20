@@ -1590,6 +1590,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(presented, 2)
         let win = try XCTUnwrap(built)
         win.close()
+        w.grace?.fire()   // #1784: past the hide grace, today's teardown
         XCTAssertNil(w.model)
         XCTAssertNil(w.window)
         XCTAssertNil(c.onStoreChanged)
@@ -1605,6 +1606,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertTrue(again.lastLiveHome === w.lastLive, "the same home as before the close")
         XCTAssertEqual(presented, 3)
         try XCTUnwrap(built).close()
+        w.grace?.fire()
         XCTAssertNil(w.model)
         XCTAssertEqual(dismissed, 2)
     }
@@ -1642,6 +1644,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         let win = try XCTUnwrap(w.window)
         XCTAssertTrue(w.model?.interaction.controller === c)
         win.close()
+        w.grace?.fire()   // #1784: the shared window kept hidden would outlive the row
         XCTAssertFalse(w.isOpen)
         XCTAssertFalse(win.isVisible, "never on screen")
     }
@@ -1684,6 +1687,7 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(built, 1, "no second window")
         XCTAssertTrue(w.window === win)
         win.close()
+        w.grace?.fire()   // #1784: the shared window kept hidden would outlive the row
         XCTAssertFalse(w.isOpen)
         XCTAssertFalse(win.isVisible, "never on screen")
     }
