@@ -2170,6 +2170,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Kits can now set a fixed set of approved Claude Code environment variables and switch off
   bypass-permissions mode; every key and value is shown before you agree, and removing the kit puts
   your previous values back. (#1706)
+- Prosper's X-ray no longer underlines a short number after a ref in prose ("#1700 and 2 more" or
+  "OQ-190, 3 tests") as another ref. (#1721)
 
 ## v2.174.0
 

@@ -379,6 +379,11 @@ final class XrayHoverTests: XCTestCase {
         XCTAssertEqual(keys("OQ-1977; 1978", oq), [], "only , and or")
         XCTAssertEqual(keys("OQ-1977, 1978, 1980", oq + [("issue:1978", "1978")]), [], "a number that is a ref of its own ends the list")
         XCTAssertEqual(keys("#24065 and 24066", [("pull:#24065", "#24065")]), ["pull:#24066"])
+        XCTAssertEqual(keys("#1700 and 2 more", [("pull:#1700", "#1700")]), [], "#1721: too few digits")
+        XCTAssertEqual(keys("OQ-190, 3 tests", [("ticket:OQ-190", "OQ-190")]), [], "#1721: one digit")
+        XCTAssertEqual(keys("wt-12 or 4 days", [("ticket:wt-12", "wt-12")]), [], "#1721: one digit")
+        XCTAssertEqual(keys("OQ-1977, 197", oq), ["ticket:OQ-197"], "#1721: seed digits minus 1 still continues")
+        XCTAssertEqual(keys("OQ-1977, 19", oq), [], "#1721: fewer than seed digits minus 1")
         XCTAssertEqual(keys("abc123, 456", [("commit:abc123", "abc123")]), [], "a hex has no list prefix")
         XCTAssertTrue(XrayRefSpans.listPrefix("OQ-") == nil && XrayRefSpans.listPrefix("-12") == nil && XrayRefSpans.listPrefix("#") == nil)
         let e = try XCTUnwrap(XrayRefSpans.listed("ticket:OQ-1978", in: [XrayRefs.Entry(

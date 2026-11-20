@@ -219,7 +219,7 @@ enum XrayRefSpans {
     /// 1994") are refs too, keyed as the seed's key with the number in place ("ticket:OQ-1978"). Tight: each number
     /// follows the seed or the previous number through ", ", " and ", " or ", ", and " or ", or " only, is ASCII digits
     /// ending at a space, a comma, a semicolon, a ")" or a "." not before a digit (so "2026-11-21", "1.5" and "12ms"
-    /// stop the list), and lies in no other span. A plain "2558" in prose is never one. No code-span check: a backtick
+    /// stop the list), has at least 2 digits and the seed's digit count minus 1 (#1721: "#1700 and 2 more" is prose), and lies in no other span. A plain "2558" in prose is never one. No code-span check: a backtick
     /// between the seed and a number already ends the list (no separator holds one, nor does a number).
     static func continued(_ text: String, after spans: [Span]) -> [Span] {
         var out: [Span] = []
@@ -232,7 +232,7 @@ enum XrayRefSpans {
             while let sep = seps.first(where: { text[at...].hasPrefix($0) }) {
                 let lo = text.index(at, offsetBy: sep.count)
                 let hi = text[lo...].firstIndex { !($0.isASCII && $0.isNumber) } ?? text.endIndex
-                guard hi > lo else { break }
+                guard text.distance(from: lo, to: hi) >= max(2, seed.count - prefix.count - 1) else { break }
                 if hi < text.endIndex {
                     let c = text[hi]
                     let next = text.index(after: hi)
