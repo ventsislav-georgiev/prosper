@@ -29,7 +29,15 @@ extension XCTestCase {
     /// XCTest): nothing reaches CFPreferences, ~/Library/Preferences or the disk, so there is no plist to
     /// clean up. #1057 item 4: it replaces the old absolute-path CoreFoundation suites; no row needs one.
     func scratchDefaults(_ prefix: String) -> UserDefaults {
-        XCTestDefaults(suiteName: "\(prefix)-\(UUID().uuidString)")!
+        XCTestDefaults(suiteName: scratchDefaultsName(prefix))!
+    }
+
+    /// #1690: an absolute path, so a domain API XCTestDefaults does not override (register, setPersistentDomain,
+    /// removePersistentDomain) writes `<name>.plist` under $TMPDIR, never ~/Library/Preferences. Its own
+    /// subdirectory, never the $TMPDIR root (#339); nothing creates the file unless such a call is made.
+    func scratchDefaultsName(_ prefix: String) -> String {
+        testTempRoot.deletingLastPathComponent().appendingPathComponent("prosper-test-defaults", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)").path
     }
 }
 
@@ -231,6 +239,17 @@ final class PreferencesScratchStoreTests: XCTestCase {
         Preferences.defaults.set(true, forKey: key)
         defer { Preferences.defaults.removeObject(forKey: key) }
         XCTAssertNil(UserDefaults.standard.object(forKey: key))
+    }
+
+    /// #1690: the scratchDefaults suite name is absolute and under the prosper-test-defaults subdir, not the root.
+    func testScratchDefaultsNameIsAnAbsolutePathUnderItsOwnSubdir() {
+        let url = URL(fileURLWithPath: scratchDefaultsName("x"))
+        XCTAssertTrue(scratchDefaultsName("x").hasPrefix("/"))
+        XCTAssertEqual(url.deletingLastPathComponent().lastPathComponent, "prosper-test-defaults")
+        XCTAssertEqual(url.deletingLastPathComponent().deletingLastPathComponent().standardizedFileURL,
+                       testTempRoot.deletingLastPathComponent().standardizedFileURL)
+        XCTAssertTrue(url.lastPathComponent.hasPrefix("x-"))
+        XCTAssertNotEqual(scratchDefaultsName("x"), scratchDefaultsName("x"))
     }
 
     /// #381 leak detector: a direct child of testTempRoot older than 10 minutes is a leftover
