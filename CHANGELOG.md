@@ -2132,8 +2132,8 @@ tag from the now-released section and put it on the new top draft.
 - Snippet and autocomplete pastes now put back an image or copied files that were on your clipboard,
   not only text, and no longer overwrite something you copy in the moment right after the paste.
   (#1691)
-- Clipboard history no longer skips your first copy after macOS gives Prosper clipboard access
-  back. (#1692)
+- Extensions that watch the clipboard no longer miss your first copy after macOS gives Prosper
+  clipboard access back. (#1692)
 
 ## v2.174.0
 

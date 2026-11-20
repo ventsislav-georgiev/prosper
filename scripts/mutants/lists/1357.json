@@ -40,7 +40,7 @@
   {
    "name": "M6-no-padding",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "static let gridOrigin = CGPoint(x: 4, y: 2)",
+   "old": "static let gridOrigin = CGPoint(x: AgentTerminalLook.paddingX, y: AgentTerminalLook.paddingY)",
    "new": "static let gridOrigin = CGPoint(x: 0, y: 0)",
    "expect": "killed"
   },
