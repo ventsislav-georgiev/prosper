@@ -1,0 +1,13 @@
+{
+ "entry": "1780",
+ "filter": "DchConfigWriterTests",
+ "mutants": [
+  {
+   "name": "readopt-own",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if adopt, had == g {",
+   "new": "if false, had == g {",
+   "expect": "killed"
+  }
+ ]
+}
