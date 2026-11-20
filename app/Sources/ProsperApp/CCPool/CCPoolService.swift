@@ -324,8 +324,8 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     /// #1660 "Stop ccpool and start": SIGTERM to the ccpool proxy the probe names at `pid` (nil: whichever
-    /// ccpool holds the port now, prosper://ccpool/takeover), wait until it no longer listens on the port,
-    /// then the normal start. The port is re-probed first: a holder that changed (free, another pid, not
+    /// ccpool holds the port now, prosper://ccpool/takeover), wait until it no longer listens on the port
+    /// and (#1714) the port probes free or names a new ccpool, then the normal start. The port is re-probed first: a holder that changed (free, another pid, not
     /// ccpool) is never signalled and the normal start reports it. Signalled only when the holder itself
     /// listens on the port (config.listensOn). #1665: its respawn loop (a shell parent running
     /// ccpool_proxy.py) gets SIGTERM first. Never SIGKILL, never by name. Blocks up to probe + ceiling +
@@ -352,10 +352,25 @@ final class CCPoolService: @unchecked Sendable {
         logger.note(nil, "sent SIGTERM to the ccpool proxy holding the port")
         // #1665: wait on the socket, not the health answer: a draining proxy stops answering but keeps its LISTEN socket.
         let deadline = Date().addingTimeInterval(config.takeOverCeiling)
-        while config.listensOn(p, config.port) {
+        wait: while true {
             // The wait holds the life cycle's queue: a toggle-off or Restart behind it must not end in a bind.
             guard stillWanted() else { return abandoned() }
+            let listening = config.listensOn(p, config.port)
+            // #1714: `p` out of LISTEN (or gone) is not a free port: a socket still closing or kept by another process
+            // answers no health GET, and start()'s probe took that for another program and gave up (an outage).
+            // Only a free port or a new ccpool (another pid) ends the wait; start() then binds or reports it.
+            if !listening {
+                switch config.portProbe(config.port, config.probeTimeout) {
+                case .free: break wait
+                case .ccpool(let q?, _) where q != pid: break wait
+                case .other, .ccpool: break
+                }
+            }
             guard Date() < deadline else {
+                guard listening else {
+                    logger.note(nil, "takeover failed: the port did not free after the signalled ccpool proxy closed its socket")
+                    break wait
+                }
                 _ = finishStart(.heldByCCPool(pid: pid), note: "the signalled ccpool proxy did not free the port")
                 return .didNotStop(pid: pid)
             }

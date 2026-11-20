@@ -2146,6 +2146,10 @@ tag from the now-released section and put it on the new top draft.
   the rest) now opens its X-ray card the same way, only while you hold Command over it; letting go
   of Command closes it. Command-clicking a ref pins its card instead of opening the link, and bare
   numbers that continue a ref list ("OQ-1977, 1978 and 1980") are refs too. (#1701)
+- ccpool: taking over the port from the Python ccpool (the pane's "Stop ccpool and start" or
+  prosper://ccpool/takeover) now waits until the port is really free before Prosper starts its
+  proxy, instead of giving up a moment after stopping ccpool and leaving every session without its
+  API; if the port never frees, the pane says so and the log names the reason.
 
 ## v2.174.0
 

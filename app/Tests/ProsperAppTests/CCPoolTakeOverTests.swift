@@ -96,7 +96,7 @@ final class CCPoolTakeOverTests: XCTestCase {
         let svc = service(port: port, probe: probe, signals: signals, listens: { _, _ in listens.next() })
         XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.running(port: port)))
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], "SIGTERM to the probed pid, once")
-        XCTAssertEqual(probe.calls, 2, "re-probe, then start's own probe; the wait asks the socket, not the health path")
+        XCTAssertEqual(probe.calls, 3, "re-probe, one wait probe once the socket closed (#1714), then start's own probe")
         XCTAssertEqual(listens.calls, 3, "pre-signal check, one tick still listening, one tick closed")
     }
 
@@ -223,6 +223,8 @@ final class CCPoolTakeOverTests: XCTestCase {
             XCTAssertEqual(svc.status, want, name)
             XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], name)
             XCTAssertTrue(probe.calls < 30, "\(name): \(probe.calls)")
+            // #1714: a new ccpool ends the wait at once (re-probe, one wait probe, start's probe), "other" waits to the ceiling.
+            if case .heldByCCPool = want { XCTAssertEqual(probe.calls, 3, name) }
         }
     }
 
@@ -340,7 +342,7 @@ final class CCPoolTakeOverTests: XCTestCase {
         let svc = service(port: port, probe: probe, signals: signals, listens: { _, _ in listens.next() }, ceiling: 5)
         XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.running(port: port)))
         XCTAssertEqual(listens.calls, 6, "no start until listensOn flips; one call per tick, not a busy loop")
-        XCTAssertEqual(probe.calls, 2, "re-probe and start's own probe only: the wait never asks the health path")
+        XCTAssertEqual(probe.calls, 3, "re-probe, one wait probe after listensOn flips (#1714), start's own probe: never while it listens")
         XCTAssertEqual(CCPoolServiceConfig().takeOverCeiling, 600, "a draining proxy gets 600 s by default")
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"])
     }
@@ -468,5 +470,142 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], "the pane button's takeover ran")
         XCTAssertEqual(rt.model.stuckPid, 4242, "the pane shows the outcome")
         XCTAssertFalse(rt.model.proxyBusy)
+    }
+
+    // MARK: #1714 the signalled pid stopped listening, the port is not free yet
+
+    func testTakeOverWaitsForThePortAfterThePidStopsListeningThenBinds() {
+        let port = freePort()
+        // Out of LISTEN on the first wait tick, but the port answers no health GET twice more (a socket still
+        // closing): the parent took the first "other" for another program and bound nothing (the 2026-11-20 outage).
+        let probe = CCPoolProbeScript([.ccpool(pid: 4242, impl: "python"), .other, .other, .free])
+        let signals = CCPoolSignalRecorder()
+        let listens = CCPoolListenScript(listening: 1)
+        let svc = service(port: port, probe: probe, signals: signals, listens: { _, _ in listens.next() }, ceiling: 5)
+        XCTAssertEqual(svc.takeOver(pid: 4242, bindRetry: 0), .started(.running(port: port)))
+        XCTAssertEqual(probe.calls, 5, "re-probe, one probe per wait tick (other, other, free), start's own probe")
+        XCTAssertEqual(listens.calls, 4, "pre-signal check, then one per wait tick")
+        XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], "one SIGTERM, never a second signal")
+    }
+
+    /// A fake holder the row spawns: python3 listening on 127.0.0.1 at a port the kernel picks, printed first.
+    /// "fork": SIGTERM forks a child that keeps the listening socket 2 s and exits on its own (never signalled),
+    /// prints its pid, and the holder exits: the holder no longer listens, the port is still held.
+    /// "ignore": SIGTERM is ignored. The row SIGKILLs only the holder it spawned, at teardown, while unreaped.
+    private static let holderScript = """
+    import os, signal, socket, sys, time
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    s.listen(8)
+    def term(*_):
+        pid = os.fork()
+        if pid == 0:
+            time.sleep(2.0)
+            os._exit(0)
+        print(pid, flush=True)
+        os._exit(0)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN if sys.argv[1] == "ignore" else term)
+    print(s.getsockname()[1], flush=True)
+    while True:
+        time.sleep(1)
+    """
+
+    private final class Lines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buf = ""
+        func add(_ d: Data) { lock.withLock { buf += String(decoding: d, as: UTF8.self) } }
+        /// The next whole line, waiting up to `timeout`.
+        func next(timeout: TimeInterval) -> String? {
+            let end = Date().addingTimeInterval(timeout)
+            while Date() < end {
+                let line: String? = lock.withLock {
+                    guard let nl = buf.firstIndex(of: "\n") else { return nil }
+                    defer { buf.removeSubrange(...nl) }
+                    return String(buf[..<nl])
+                }
+                if let line { return line }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            return nil
+        }
+    }
+
+    private func spawnHolder(_ mode: String) throws -> (Process, Lines, UInt16) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        p.arguments = ["-I", "-c", Self.holderScript, mode]
+        let out = Pipe()
+        p.standardOutput = out
+        let lines = Lines()
+        let reader = out.fileHandleForReading
+        reader.readabilityHandler = { lines.add($0.availableData) }
+        try p.run()
+        addTeardownBlock {
+            reader.readabilityHandler = nil
+            if p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            p.waitUntilExit()
+        }
+        guard let first = lines.next(timeout: 10), let port = UInt16(first), port != 0 else {
+            throw XCTSkip("the fake holder did not report its port")
+        }
+        return (p, lines, port)
+    }
+
+    /// prosper://ccpool/takeover against the spawned holder: the real libproc listensOn, the real port probe on the
+    /// row's own port; the holder is recognized as ccpool by an argv seam; only the holder can be signalled.
+    @MainActor
+    private func takeOverByLink(holder: pid_t, port: UInt16, ceiling: TimeInterval,
+                                signals: CCPoolSignalRecorder) async throws -> (CCPoolRuntime, CCPoolCapturingLogger) {
+        let dir = tempDir()
+        let argv = proxyArgv
+        var cfg = CCPoolServiceConfig()
+        cfg.port = port
+        cfg.upstream = dead
+        cfg.probeTimeout = 0.3
+        cfg.signal = { pid, sig in signals.record(pid, sig) && pid == holder && kill(pid, sig) == 0 }
+        cfg.userPids = { [holder] }
+        cfg.argv = { $0 == holder ? argv : [] }
+        cfg.parentPid = { _ in nil }
+        cfg.takeOverCeiling = ceiling
+        cfg.takeOverPoll = 0.05
+        let log = CCPoolCapturingLogger()
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: scratchDefaults("ccpool-drain"),
+                               probeBase: dead, logger: log)
+        let svc = rt.service
+        addTeardownBlock { svc.stop() }
+        try rt.store.addAccount(label: "a", token: "tok-a", secrets: rt.secrets)
+        rt.lifecycle.live = true
+        let task = CCPoolRuntime.openLink(URL(string: "prosper://ccpool/takeover")!, runtime: rt)
+        XCTAssertTrue(task != nil, "the link ran the takeover")
+        await task?.value
+        return (rt, log)
+    }
+
+    @MainActor
+    func testTakeOverLinkBindsAfterAHolderWhosePortOutlivesItByTwoSeconds() async throws {
+        let (p, lines, port) = try spawnHolder("fork")
+        let signals = CCPoolSignalRecorder()
+        let (rt, log) = try await takeOverByLink(holder: p.processIdentifier, port: port, ceiling: 20, signals: signals)
+        XCTAssertTrue(lines.next(timeout: 5) != nil, "the holder forked its socket keeper on SIGTERM")
+        XCTAssertEqual(signals.sent, ["\(p.processIdentifier):\(SIGTERM)"], "one SIGTERM to the holder only")
+        XCTAssertEqual(rt.service.status, .running(port: port), "bound once the port freed: \(log.lines)")
+        XCTAssertFalse(log.lines.contains { $0.contains("not binding") }, "never gave up on the draining port: \(log.lines)")
+        XCTAssertTrue(rt.model.stuckPid == nil)
+    }
+
+    @MainActor
+    func testTakeOverLinkAgainstAHolderThatNeverExitsEndsInAClearFailure() async throws {
+        let (p, _, port) = try spawnHolder("ignore")
+        let signals = CCPoolSignalRecorder()
+        let began = Date()
+        let (rt, log) = try await takeOverByLink(holder: p.processIdentifier, port: port, ceiling: 1, signals: signals)
+        XCTAssertLessThan(Date().timeIntervalSince(began), 15, "bounded by the ceiling")
+        XCTAssertEqual(signals.sent, ["\(p.processIdentifier):\(SIGTERM)"], "one SIGTERM, never SIGKILL from Prosper")
+        XCTAssertEqual(rt.service.status, .heldByCCPool(pid: Int(p.processIdentifier)), "nothing bound")
+        XCTAssertEqual(rt.model.stuckPid, Int(p.processIdentifier))
+        XCTAssertEqual(rt.model.proxyText, "ccpool (pid \(p.processIdentifier)) did not stop; quit it, then Start proxy.")
+        XCTAssertTrue(log.lines.contains { $0.contains("the signalled ccpool proxy did not free the port") }, "\(log.lines)")
+        XCTAssertTrue(p.isRunning, "the holder still runs: Prosper sent nothing more")
     }
 }
