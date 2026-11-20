@@ -853,6 +853,121 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertEqual(resp.header("transfer-encoding")?.lowercased(), "chunked", "the chunked framing carries the length")
     }
 
+    // #1674: the pane's Hold and Release over a loopback POST on the proxy port.
+    private func control(_ r: Rig, _ path: String, method: String = "POST", headers: [(String, String)] = [("x-ccpool-control", "1")],
+                         body: Data = Data()) throws -> CCPoolClientResponse {
+        try XCTUnwrap(CCPoolTestClient.request(port: r.port, method: method, path: path, headers: headers, body: body))
+    }
+
+    func testCCPoolLoopbackHoldSetsHeldWithItsUntil() throws {
+        let r = try rig()
+        let before = Int(Date().timeIntervalSince1970)
+        // Percent-encoded and exact: "tw%6F" is the label "two".
+        let resp = try control(r, CCPoolConnection.holdPath + "?label=tw%6F&hours=2")
+        let after = Int(Date().timeIntervalSince1970) + 1
+        XCTAssertEqual(resp.status, 200, resp.text)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: resp.body) as? [String: Any], resp.text)
+        XCTAssertEqual(obj["label"] as? String, "two")
+        XCTAssertEqual(obj["state"] as? String, "held")
+        let until = try XCTUnwrap(obj["until"] as? Int)
+        XCTAssertTrue((before + 7200...after + 7200).contains(until), "\(until) not two hours on")
+        XCTAssertEqual(r.store.snapshot.accounts["two"]?.held, until, "the store holds what the answer says")
+        XCTAssertEqual(r.cooldown("two")["five_hour"], until)
+        XCTAssertEqual(r.cooldown("one"), [:])
+        XCTAssertEqual(Set(obj.keys), ["label", "state", "until"], "never a token, key or Keychain id")
+        XCTAssertFalse(resp.text.contains("tok-"), resp.text)
+        XCTAssertEqual(r.log.lines.filter { $0.contains("loopback") }, ["two: held for 2.0 h by a loopback request"])
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 0)
+        XCTAssertEqual(r.up.accepted, 0, "never relayed")
+        // Health still answers beside the new routes.
+        XCTAssertEqual(CCPoolTestClient.request(port: r.port, method: "GET", path: CCPoolService.healthPath, headers: [])?.status, 200)
+    }
+
+    func testCCPoolLoopbackClearReleasesEveryCooldown() throws {
+        let r = try rig()
+        let now = r.store.now
+        r.store.mutate { s in
+            _ = s.hold("one", hours: 1, now: now)
+            _ = s.bench("one", claim: "seven_day", until: Int(now) + 900, now: now)
+        }
+        XCTAssertEqual(r.cooldown("one").count, 2)
+        let resp = try control(r, CCPoolConnection.clearPath + "?label=one")
+        XCTAssertEqual(resp.status, 200, resp.text)
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: resp.body) as? [String: Any], resp.text)
+        XCTAssertEqual(obj["label"] as? String, "one")
+        XCTAssertEqual(obj["state"] as? String, "ready")
+        XCTAssertTrue(obj["until"] == nil, "no until once released")
+        XCTAssertEqual(r.cooldown("one"), [:])
+        XCTAssertTrue(r.store.snapshot.accounts["one"]?.held == nil)
+        XCTAssertEqual(r.log.lines.filter { $0.contains("loopback") }, ["one: released by a loopback request"])
+        XCTAssertEqual(r.up.accepted, 0, "never relayed")
+    }
+
+    func testCCPoolLoopbackUnknownLabelIs404AndChangesNothing() throws {
+        let r = try rig()
+        let before = r.store.snapshot
+        for path in [CCPoolConnection.holdPath + "?label=nobody&hours=1", CCPoolConnection.clearPath + "?label=nobody",
+                     CCPoolConnection.holdPath + "?label=TWO&hours=1", CCPoolConnection.clearPath + "?label=tw"] {
+            XCTAssertEqual(try control(r, path).status, 404, path)
+        }
+        XCTAssertTrue(r.store.snapshot == before, "nothing changed")
+        XCTAssertEqual(r.up.accepted, 0)
+    }
+
+    func testCCPoolLoopbackBadHoursOrLabelIs400AndChangesNothing() throws {
+        let r = try rig()
+        let before = r.store.snapshot
+        for query in ["?label=two&hours=0", "?label=two&hours=-1", "?label=two&hours=nan", "?label=two&hours=inf",
+                      "?label=two&hours=abc", "?label=two&hours=", "?label=two", "?hours=1", "?label=&hours=1",
+                      "?label=two&label=one&hours=1", "?label=two&hours=1&hours=2", ""] {
+            XCTAssertEqual(try control(r, CCPoolConnection.holdPath + query).status, 400, query)
+        }
+        for query in ["", "?label=", "?label=one&label=two"] {
+            XCTAssertEqual(try control(r, CCPoolConnection.clearPath + query).status, 400, query)
+        }
+        XCTAssertTrue(r.store.snapshot == before, "nothing changed")
+        XCTAssertEqual(r.up.accepted, 0)
+    }
+
+    func testCCPoolLoopbackGetIs405() throws {
+        let r = try rig()
+        let before = r.store.snapshot
+        for path in [CCPoolConnection.holdPath + "?label=two&hours=1", CCPoolConnection.clearPath + "?label=two"] {
+            let resp = try control(r, path, method: "GET")
+            XCTAssertEqual(resp.status, 405, path)
+            XCTAssertEqual(resp.header("allow"), "POST")
+        }
+        XCTAssertTrue(r.store.snapshot == before, "nothing changed")
+        XCTAssertEqual(r.up.accepted, 0)
+    }
+
+    // A web page can POST to 127.0.0.1 without a preflight: no control header, or any Origin, is refused.
+    func testCCPoolLoopbackNeedsTheHeaderAndNoOrigin() throws {
+        let r = try rig()
+        let before = r.store.snapshot
+        let hold = CCPoolConnection.holdPath + "?label=two&hours=1"
+        let clear = CCPoolConnection.clearPath + "?label=two"
+        for headers in [[], [("x-ccpool-control", "0")], [("x-ccpool-control", "true")],
+                        [("x-ccpool-control", "1"), ("Origin", "https://example.com")],
+                        [("x-ccpool-control", "1"), ("origin", "null")]] as [[(String, String)]] {
+            XCTAssertEqual(try control(r, hold, headers: headers).status, 403, "\(headers)")
+            XCTAssertEqual(try control(r, clear, headers: headers).status, 403, "\(headers)")
+        }
+        XCTAssertTrue(r.store.snapshot == before, "nothing changed")
+        XCTAssertEqual(r.up.accepted, 0)
+        XCTAssertEqual(try control(r, hold).status, 200, "the same request with the header and no Origin is served")
+    }
+
+    func testCCPoolLoopbackBodyOverTheCapIsRefused() throws {
+        let r = try rig()
+        let before = r.store.snapshot
+        let hold = CCPoolConnection.holdPath + "?label=two&hours=1"
+        XCTAssertEqual(try control(r, hold, body: Data(count: CCPoolConnection.controlBodyCap + 1)).status, 413)
+        XCTAssertTrue(r.store.snapshot == before, "nothing changed")
+        XCTAssertEqual(try control(r, hold, body: Data(count: CCPoolConnection.controlBodyCap)).status, 200, "a body at the cap is ignored")
+        XCTAssertEqual(r.up.accepted, 0)
+    }
+
     // P2a follow-up (b): a query string does not send the health path upstream.
     func testCCPoolHealthWithQueryAnsweredLocally() throws {
         let r = try rig()

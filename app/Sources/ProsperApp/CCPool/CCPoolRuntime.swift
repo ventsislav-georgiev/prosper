@@ -243,20 +243,24 @@ extension CCPoolService {
     static func statusJSON(running: Bool, port: UInt16, state: CCPoolState?, now: Double) -> String {
         var obj: [String: Any] = ["running": running, "port": Int(port)]
         if let current = state?.current { obj["current"] = current }
-        obj["accounts"] = (state?.order ?? []).compactMap { label -> [String: Any]? in
-            guard let account = state?.accounts[label] else { return nil }
-            // The Refresh-only states (rejected, unverified) live in the pane model, not the store: never reached here.
-            let row = CCPoolPaneModel.rowState(label: label, account: account, current: state?.current, now: now,
-                                               rejected: [], unverified: [])
-            switch row {
-            case .active: return ["label": label, "state": "active"]
-            case .ready, .rejected, .unverified: return ["label": label, "state": "ready"]
-            case .limited(let until, _): return ["label": label, "state": "limited", "until": until]
-            case .held(let until): return ["label": label, "state": "held", "until": until]
-            case .refused: return ["label": label, "state": "refused"]
-            }
-        }
+        obj["accounts"] = (state?.order ?? []).compactMap { statusRow(label: $0, state: state, now: now) }
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return ExtensionPoolStatus.off }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// One account of the status answer, {label, state, until}; nil for a label the state does not hold.
+    /// #1674: the loopback hold / clear answer is this same row.
+    static func statusRow(label: String, state: CCPoolState?, now: Double) -> [String: Any]? {
+        guard let account = state?.accounts[label] else { return nil }
+        // The Refresh-only states (rejected, unverified) live in the pane model, not the store: never reached here.
+        let row = CCPoolPaneModel.rowState(label: label, account: account, current: state?.current, now: now,
+                                           rejected: [], unverified: [])
+        switch row {
+        case .active: return ["label": label, "state": "active"]
+        case .ready, .rejected, .unverified: return ["label": label, "state": "ready"]
+        case .limited(let until, _): return ["label": label, "state": "limited", "until": until]
+        case .held(let until): return ["label": label, "state": "held", "until": until]
+        case .refused: return ["label": label, "state": "refused"]
+        }
     }
 }

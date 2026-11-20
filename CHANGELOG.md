@@ -2106,6 +2106,9 @@ tag from the now-released section and put it on the new top draft.
 - ccpool keeps its port open while Prosper updates, so requests wait instead of failing. (#1676)
 - CCPool's throttle (429) log line now also shows the request's anthropic-beta flags (cleaned and
   length-capped) and the upstream x-should-retry value. (#1671)
+- Claude Account Pool: you can now hold an account or release it without opening the pane, using a
+  local POST to the pool's port (see extensions.md for the two curl lines). Browsers cannot send
+  this request. (#1674)
 
 ## v2.174.0
 

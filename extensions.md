@@ -427,6 +427,11 @@ A background call still running when its extension is turned off, untrusted, res
 - `host.menubar.set{ id=, title=, icon=, menu={ {title=, handler=, payload=, enabled=, checked=, stay=} | {separator=true} } }` · `host.menubar.remove(id)` ([`ExtensionMenuBar.swift`](app/Sources/ProsperApp/Extensions/ExtensionMenuBar.swift)). A row with no `handler`, or `enabled=false`, is disabled; `stay=true` runs the handler on a click without closing the menu (Return still closes it), and the re-rendered menu updates in place (worked example: [`openlid`](app/Sources/ProsperApp/Resources/extensions/openlid/)) · `host.dialog.{prompt,confirm}` · `host.alert.show(text [, seconds])` — host-rendered UI
 - `host.dch.sessions()` → `{ {name=, alias=, active=}, … }` — live remote-terminal sessions (drives the OpenLid status readout)
 - `host.ccpool.status()` → `{ running=, port=, current=, accounts = { {label=, state=, until=}, … } }` — the Claude Account Pool, read-only and label-level; open to every extension (no trust or System Access needed). `state` is `active`, `ready`, `limited`, `held` or `refused`; `until` (epoch seconds) is set for `limited` and `held` only; `current` is the label in use, or absent. It never carries a token, an account id or a header value. When the pool was never built (it is off, or not started yet) it answers `{ running = false, port = 0, accounts = {} }`, so `host.ccpool.status().accounts` is always a table. A routed `claude` session keeps its own API keys and tokens: the pool sets only `ANTHROPIC_BASE_URL`.
+  - Hold and Release without the pane, from the same Mac: a POST to the pool's proxy port (8790 unless changed), loopback only. The `x-ccpool-control: 1` header is required and a request carrying an `Origin` header is refused (403), so a web page cannot do it. The answer is that account's `{label, state, until}` as above; 404 for an unknown label, 400 for a missing label or hours that are not a number above zero, 405 for GET.
+    ```sh
+    curl -X POST -H 'x-ccpool-control: 1' 'http://127.0.0.1:8790/ccpool/hold?label=work&hours=5'
+    curl -X POST -H 'x-ccpool-control: 1' 'http://127.0.0.1:8790/ccpool/clear?label=work'
+    ```
 
 ### System-only calls
 

@@ -313,6 +313,12 @@ final class CCPoolConnection: @unchecked Sendable {
                 sendHealth()
                 return true
             }
+            let bare = String(h.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+            if Self.controlRoutes.contains(bare) {
+                relayStarted = true   // #1674: answered here, never relayed; the body is ignored
+                control(bare, h, bodyLength: length)
+                return true
+            }
             if h.header("expect")?.lowercased() == "100-continue", length > 0 {
                 conn.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8), completion: nil)
             }
@@ -840,6 +846,56 @@ final class CCPoolConnection: @unchecked Sendable {
         conn.send(Data(h.utf8)) { [weak self] error in
             if error != nil { self?.close() }
         }
+    }
+
+    // MARK: Loopback control (#1674)
+
+    static let holdPath = "/ccpool/hold"
+    static let clearPath = "/ccpool/clear"
+    static let controlRoutes = [holdPath, clearPath]
+    /// A custom header forces a browser preflight, which the proxy never grants; admits() already refuses any Origin.
+    static let controlHeader = "x-ccpool-control"
+    static let controlBodyCap = 4 << 10
+
+    /// POST /ccpool/hold?label=&hours= and POST /ccpool/clear?label=: the pane's Hold and Release, the same store calls.
+    private func control(_ route: String, _ h: CCPoolRequestHead, bodyLength: Int) {
+        guard h.method == "POST" else {
+            return fail(405, "use POST", type: "invalid_request_error", headers: [("Allow", "POST")])
+        }
+        guard h.header(Self.controlHeader) == "1" else {
+            log.note(nil, "refused a control request: no \(Self.controlHeader) header")
+            return fail(403, "forbidden", type: "permission_error")
+        }
+        guard bodyLength <= Self.controlBodyCap else { return fail(413, "request body too large", type: "invalid_request_error") }
+        let items = URLComponents(string: h.path)?.queryItems ?? []
+        func one(_ name: String) -> String? {
+            let values = items.filter { $0.name == name }
+            guard values.count == 1, let v = values.first?.value, !v.isEmpty else { return nil }
+            return v
+        }
+        guard let label = one("label") else { return fail(400, "label missing", type: "invalid_request_error") }
+        let now = store.now
+        let found: Bool
+        if route == Self.holdPath {
+            // The pane's rule (CCPoolPaneModel.hold): a finite number of hours above zero.
+            guard let hours = one("hours").flatMap(Double.init), hours.isFinite, hours > 0 else {
+                return fail(400, "hours must be a number above zero", type: "invalid_request_error")
+            }
+            found = store.mutate { $0.hold(label, hours: hours, now: now) }
+            if found { log.note(label, "held for \(hours) h by a loopback request") }
+        } else {
+            found = store.mutate { s -> Bool in
+                guard s.accounts[label] != nil else { return false }
+                s.clear(label)
+                return true
+            }
+            if found { log.note(label, "released by a loopback request") }
+        }
+        guard found, let row = CCPoolService.statusRow(label: label, state: store.snapshot, now: now),
+              let body = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else {
+            return fail(404, "no such account", type: "not_found_error")
+        }
+        sendComplete(200, contentType: "application/json", body: body)
     }
 
     private func sendHealth() {
