@@ -1,0 +1,27 @@
+{
+ "entry": 1720,
+ "filter": "CCPoolTakeOverTests",
+ "mutants": [
+  {
+   "name": "no_bound",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "                    if Date() >= bound { break wait }\n",
+   "new": "                    _ = bound\n",
+   "expect": "killed"
+  },
+  {
+   "name": "bound_reset",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "                    afterListen = bound\n",
+   "new": "                    afterListen = nil\n",
+   "expect": "killed"
+  },
+  {
+   "name": "default_600",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "    var takeOverAfterListenBound: TimeInterval = 30\n",
+   "new": "    var takeOverAfterListenBound: TimeInterval = 600\n",
+   "expect": "killed"
+  }
+ ]
+}
