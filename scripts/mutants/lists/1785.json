@@ -12,22 +12,22 @@
   {
    "name": "store-sessions-no-bump",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
-   "old": "resetTab(); dropStaleQuestions(); groupsGeneration &+= 1 } }",
-   "new": "resetTab(); dropStaleQuestions() } }",
+   "old": "if sessions.map(\\.key) != oldValue.map(\\.key) { groupsGeneration &+= 1 }",
+   "new": "_ = 0",
    "expect": "killed"
   },
   {
    "name": "store-history-no-bump",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
-   "old": "[] { didSet { resetTab(); groupsGeneration &+= 1 } }",
-   "new": "[] { didSet { resetTab() } }",
+   "old": "if history.map(\\.key) != oldValue.map(\\.key) { groupsGeneration &+= 1 }",
+   "new": "_ = 0",
    "expect": "killed"
   },
   {
    "name": "store-suffix-no-bump",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
-   "old": "@Published var pairSuffix = \"\" { didSet { groupsGeneration &+= 1 } }",
-   "new": "@Published var pairSuffix = \"\"",
+   "old": "if pairSuffix != oldValue { groupsGeneration &+= 1 }",
+   "new": "_ = 0",
    "expect": "killed"
   },
   {
