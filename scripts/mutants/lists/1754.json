@@ -1,0 +1,48 @@
+{
+ "entry": "1754",
+ "filter": "AgentTerminalColoursTests|AgentTerminalTests",
+ "mutants": [
+  {
+   "name": "dark-bg",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": ": (\"#000000\", \"#ffffff\", [",
+   "new": ": (\"#05080d\", \"#ffffff\", [",
+   "expect": "killed"
+  },
+  {
+   "name": "no-p3",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            $0.withCustom(\"window-colorspace\", \"display-p3\")\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-palette",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            for (i, c) in look.palette.enumerated() { $0.withPalette(i, color: c) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "dim-blue",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "\"#0a84ff\"",
+   "new": "\"#0000ff\"",
+   "expect": "killed"
+  },
+  {
+   "name": "light-is-dark",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        appearance == .light\n",
+   "new": "        false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "p3-over-user",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard colours.isEmpty else { return TerminalTheme() }\n        let look = vivid(appearance)\n",
+   "new": "        let look = vivid(appearance)\n",
+   "expect": "killed"
+  }
+ ]
+}
