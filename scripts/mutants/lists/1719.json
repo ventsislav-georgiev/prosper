@@ -1,0 +1,27 @@
+{
+ "entry": 1719,
+ "filter": "AgentTerminalFileLinkTests",
+ "mutants": [
+  {
+   "name": "fileCheck_default_inline",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "var fileCheck: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }",
+   "new": "var fileCheck: (@escaping @Sendable () -> Void) -> Void = { $0() }",
+   "expect": "killed"
+  },
+  {
+   "name": "check_on_main_again",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()) else { return }",
+   "new": "let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()),\n              AgentTerminalFileLink.isViewable(file) else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_viewable_check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            guard AgentTerminalFileLink.isViewable(file) else { return }\n            let show",
+   "new": "            guard true else { return }\n            let show",
+   "expect": "killed"
+  }
+ ]
+}
