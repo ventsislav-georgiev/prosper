@@ -1,0 +1,48 @@
+{
+ "entry": 1717,
+ "filter": "MarketplaceBrowseModelTests",
+ "mutants": [
+  {
+   "name": "spinner-no-slot",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": ".frame(width: sz(16), height: sz(16))",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-local-filter",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "all.key == \"\\(query)|\\(sort.rawValue)\"",
+   "new": "all.key == \"never\"",
+   "expect": "killed"
+  },
+  {
+   "name": "local-ignores-kind",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "all.packages.filter { $0.kind == kind }",
+   "new": "all.packages",
+   "expect": "killed"
+  },
+  {
+   "name": "key-ignores-sort",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "let allKey = kind == nil ? \"\\(query)|\\(sort.rawValue)\" : nil",
+   "new": "let allKey = kind == nil ? \"\\(query)|\\(Sort.updated.rawValue)\" : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "complete-on-partial",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "if result.cursor == nil, let allKey {",
+   "new": "if let allKey {",
+   "expect": "killed"
+  },
+  {
+   "name": "keep-stale-spinner",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "loading = false   // a stale in-flight page",
+   "new": "// a stale in-flight page",
+   "expect": "killed"
+  }
+ ]
+}
