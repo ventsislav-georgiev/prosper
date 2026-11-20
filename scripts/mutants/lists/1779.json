@@ -1,0 +1,20 @@
+{
+ "entry": "1779",
+ "filter": "DchConfigWriterTests",
+ "mutants": [
+  {
+   "name": "nolog",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if found.count < had.count { replaced(",
+   "new": "if false { replaced(",
+   "expect": "killed"
+  },
+  {
+   "name": "emptyonly",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if found.count < had.count { replaced(",
+   "new": "if found.isEmpty && !had.isEmpty { replaced(",
+   "expect": "killed"
+  }
+ ]
+}
