@@ -7,8 +7,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/GhosttyUserColours.swift",
    "old": ", \"bold-color\", \"window-colorspace\"]",
    "new": ", \"bold-color\"]",
-   "expect": "killed",
-   "filter": "AgentTerminalColoursTests/testKeepsWindowColorspaceWithItsTwoValuesOnly|AgentTerminalTests/testMyGhosttyThemeCarriesWindowColorspaceToTheSurface"
+   "expect": "killed"
   },
   {
    "name": "colorspace-any-value",
