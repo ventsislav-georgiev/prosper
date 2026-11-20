@@ -1015,14 +1015,26 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     var openRef: @MainActor (NSWindow?, AgentSessionKey, String, Int) -> Bool = {
         XrayRefLink.openOnGrid($0 as? AgentsNSWindow, key: $1, line: $2, column: $3)
     }
-    /// AgentTerminalLook's window-padding-x and -y (points; padding balance off): the grid's top-left.
-    static let gridOrigin = CGPoint(x: 4, y: 2)
+    /// The padding the pane's config applies (window-padding-x and -y, points; padding balance off): the grid's top-left
+    /// when the surface cannot say (no surface yet, and the marks' underlines).
+    static let gridOrigin = CGPoint(x: AgentTerminalLook.paddingX, y: AgentTerminalLook.paddingY)
+    /// Tests: the cell under a top-left point instead of the surface's; nil in the product (#1682).
+    var cellAt: ((CGPoint) -> (col: Int, row: Int)?)?
+
+    /// #1682: the cell under a top-left point as libghostty's surface maps it (its own padding, whatever the config
+    /// said); nil before the surface has a first frame. viewportCell flips y itself (surface top-left from view y).
+    func surfaceCell(at p: CGPoint) -> (col: Int, row: Int)? {
+        guard p.x.isFinite, p.y.isFinite, bounds.height.isFinite,
+              let c = viewportCell(at: NSPoint(x: p.x, y: bounds.height - p.y)) else { return nil }
+        return (c.column, c.row)
+    }
 
     /// The cell (column, row) under a top-left point, nil off the grid. Every value is checked before Int() (an event's).
-    static func cell(at p: CGPoint, _ g: TerminalGridMetrics, scale: CGFloat) -> (col: Int, row: Int)? {
+    static func cell(at p: CGPoint, _ g: TerminalGridMetrics, scale: CGFloat,
+                     origin: CGPoint = gridOrigin) -> (col: Int, row: Int)? {
         guard scale > 0, g.cellWidthPixels > 0, g.cellHeightPixels > 0 else { return nil }
-        let x = (p.x - gridOrigin.x) / (CGFloat(g.cellWidthPixels) / scale)
-        let y = (p.y - gridOrigin.y) / (CGFloat(g.cellHeightPixels) / scale)
+        let x = (p.x - origin.x) / (CGFloat(g.cellWidthPixels) / scale)
+        let y = (p.y - origin.y) / (CGFloat(g.cellHeightPixels) / scale)
         guard x.isFinite, y.isFinite, x >= 0, y >= 0, x < CGFloat(g.columns), y < CGFloat(g.rows) else { return nil }
         return (Int(x), Int(y))
     }
@@ -1041,8 +1053,12 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// off, no grid yet, off the grid, or no ref there.
     @discardableResult
     func refClick(at p: CGPoint) -> Bool {
-        guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics,
-              let c = Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2) else { return false }
+        guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics else { return false }
+        let c: (col: Int, row: Int)?
+        if let cellAt { c = cellAt(p) } else {
+            c = surfaceCell(at: p) ?? Self.cell(at: p, g, scale: window?.backingScaleFactor ?? 2)
+        }
+        guard let c else { return false }
         let lines = (viewportText() ?? "").components(separatedBy: "\n")
         guard c.row < lines.count else { return false }
         return openRef(window, key, lines[c.row], c.col)
@@ -1206,6 +1222,9 @@ enum AgentTerminalLook {
         choice == "ghostty" ? GhosttyUserColours.read(files(), themeDirs: themeDirs(), appearance: appearance()) : []
     }
 
+    /// window-padding-x and -y in points: the fallback grid origin of a Cmd-click (#1682) and the marks' origin.
+    static let paddingX = 4, paddingY = 2
+
     static var configuration: TerminalConfiguration { configuration(colours: []) }
 
     static func configuration(colours: [(key: String, value: String)]) -> TerminalConfiguration {
@@ -1223,8 +1242,8 @@ enum AgentTerminalLook {
             $0.withCustom("macos-option-as-alt", "false")
             // Ghostty.app doubles precise (trackpad) deltas in its own view; the package passes them at 1x. Discrete wheels keep the default 3.
             $0.withCustom("mouse-scroll-multiplier", "precision:2")
-            $0.withWindowPaddingX(4)
-            $0.withWindowPaddingY(2)
+            $0.withWindowPaddingX(paddingX)
+            $0.withWindowPaddingY(paddingY)
         }
     }
 

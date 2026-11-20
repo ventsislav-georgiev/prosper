@@ -53,6 +53,40 @@ final class XrayTerminalRefTests: XCTestCase {
         XCTAssertTrue(V.cell(at: CGPoint(x: 10, y: 10), empty, scale: 2) == nil)
     }
 
+    /// Red if the cell map assumes the 4x2 origin (#1682): at origin (10, 6) the same pixel lands in another cell, and the
+    /// config's padding lines are the ones the fallback origin is made from.
+    func testCellFromAPointHonoursANonDefaultOrigin() {
+        typealias V = AgentTerminalHostView
+        let o = CGPoint(x: 10, y: 6)
+        XCTAssertTrue(V.cell(at: CGPoint(x: 10 + 8 * 3 + 1, y: 6 + 17 * 2 + 1), grid, scale: 2, origin: o).map { [$0.col, $0.row] } == [3, 2])
+        XCTAssertTrue(V.cell(at: CGPoint(x: 9, y: 10), grid, scale: 2, origin: o) == nil, "left of the origin")
+        XCTAssertTrue(V.cell(at: CGPoint(x: 4 + 8 * 3 + 1, y: 2 + 17 * 2 + 1), grid, scale: 2, origin: o).map { [$0.col, $0.row] } != [3, 2])
+        XCTAssertEqual([V.gridOrigin.x, V.gridOrigin.y], [CGFloat(AgentTerminalLook.paddingX), CGFloat(AgentTerminalLook.paddingY)])
+    }
+
+    /// Red if refClick maps the point itself instead of asking the surface (#1682): the seam stands for a surface whose
+    /// padding is not 4x2 and answers column 4, row 1 for a point the 4x2 map puts elsewhere; its nil is off the grid.
+    func testRefClickTakesTheCellFromTheSurface() {
+        let opened = Opened()
+        let (v, t) = view(local, opened)
+        withExtendedLifetime(t) {
+            var asked: [CGPoint] = []
+            v.cellAt = { asked.append($0); return $0.x < 100 ? (col: 4, row: 1) : nil }
+            F.gateOn { XCTAssertTrue(v.refClick(at: CGPoint(x: 12, y: 9))) }   // the 4x2 map: column 1, row 0
+            XCTAssertEqual(opened.calls.last?.line, "fix #12 now")
+            XCTAssertEqual(opened.calls.last?.col, 4)
+            F.gateOn { XCTAssertFalse(v.refClick(at: CGPoint(x: 200, y: 9))) }
+            XCTAssertEqual(asked.count, 2)
+            XCTAssertEqual(opened.calls.count, 1)
+        }
+    }
+
+    /// Red if a view with no surface (rows have none) stops falling back on the config's padding, or answers a cell.
+    func testNoSurfaceAnswersNoCell() {
+        let (v, t) = view(local, Opened())
+        withExtendedLifetime(t) { XCTAssertTrue(v.surfaceCell(at: CGPoint(x: 40, y: 20)) == nil) }
+    }
+
     private final class Opened { var calls: [(key: AgentSessionKey, line: String, col: Int)] = [] }
 
     private func view(_ key: AgentSessionKey, _ opened: Opened) -> (AgentTerminalHostView, AgentTerminalController) {

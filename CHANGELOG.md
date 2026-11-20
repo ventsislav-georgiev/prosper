@@ -2125,6 +2125,8 @@ tag from the now-released section and put it on the new top draft.
 - Resume now keeps the tools of your enabled kits on the resumed session's PATH, in the same order a
   new session gets, even when your shell startup files reorder PATH (needs dch 1.94.0; resuming
   another machine's session is unchanged). (#1684)
+- X-ray: Cmd-clicking a ref in Terminal mode now opens the right ref at any terminal padding, taking
+  the grid position from the terminal itself. (#1682)
 
 ## v2.174.0
 
