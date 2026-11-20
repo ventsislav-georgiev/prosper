@@ -2162,6 +2162,8 @@ tag from the now-released section and put it on the new top draft.
   (#1704)
 - Clipboard settings now say that clipboard history waits until Prosper is allowed to paste from
   other apps. (#1715)
+- Phone chat: the model list now shows the model that actually answers while another model is
+  loaded. (#1716)
 
 ## v2.174.0
 

@@ -201,6 +201,21 @@ final class DchChatTests: XCTestCase {
         XCTAssertEqual(s.get { $0.acquires }, 0, "listing never loads")
     }
 
+    /// #1716: another model is resident: the row names it (id and label) and is loaded; none resident: the setting, not loaded.
+    func testModelsRowNamesTheResidentModelWhileOneIsLoaded() async {
+        let s = State()
+        for (resident, want) in [("example-model-b" as String?, "example-model-b"), (nil, Self.modelId)] {
+            let r = connection({ let c = makeChat(s); c.residentId = { resident }; return c }())
+            ingest(r, DchFrame.encode(DchFrame.models, [UInt8]()))
+            await waitUntil("modelsResp") { !finals(r).isEmpty }
+            let rows = finals(r).first.flatMap(Self.json) as? [[String: Any]] ?? []
+            XCTAssertEqual(rows.count, 1)
+            XCTAssertEqual(rows.first?["id"] as? String, want)
+            XCTAssertEqual(rows.first?["name"] as? String, AgentModelRegistry.model(for: want).label)
+            XCTAssertEqual(rows.first?["loaded"] as? Bool, resident != nil)
+        }
+    }
+
     func testOffDiskModelsIsEmptyAndChatLeavesOps() async {
         let s = State()
         for onDisk in [false, true] {

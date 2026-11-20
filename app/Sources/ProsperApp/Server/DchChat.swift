@@ -118,13 +118,17 @@ final class DchChat: @unchecked Sendable {
     }
 
     /// 0x1e: modelsResp `[{id, name, loaded}]`, the agent model only when it is on disk. #1703: "loaded" is true
-    /// while ANY agent model is resident (a chat is answered by it at once, so the phone shows no cold hint).
+    /// while ANY agent model is resident (a chat is answered by it at once, so the phone shows no cold hint). #1716: that
+    /// resident model is the one named; the setting model is named only when none is resident.
     func models(_ payload: Data, reply: Reply) async {
         let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
         guard o?.isEmpty == true else { return reply(Self.error("malformed models request: send nothing or {}")) }
         let id = modelId()
         guard isModelOnDisk(id) else { return reply(DchFrame.encode(DchFrame.modelsResp, json: [Any]())) }
-        let row: [String: Any] = ["id": id, "name": AgentModelRegistry.model(for: id).label, "loaded": await residentId() != nil]
+        // #1716: the row names the model that answers: the resident one while loaded (acquireLoadedAgent), else the setting.
+        let resident = await residentId()
+        let shown = resident ?? id
+        let row: [String: Any] = ["id": shown, "name": AgentModelRegistry.model(for: shown).label, "loaded": resident != nil]
         reply(DchFrame.encode(DchFrame.modelsResp, json: [row]))
     }
 
