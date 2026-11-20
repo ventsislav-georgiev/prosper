@@ -42,6 +42,7 @@ struct CCPoolPane: View {
             accountsSection
             addSection
             usageSection
+            thresholdSection
             CCPoolUsageStatsSection(model: model.usageStats)
             // Shown since the spawn path applies the env (P2b-2 flipped CCPool.routingWired).
             if CCPool.routingWired { sessionsSection }
@@ -189,6 +190,27 @@ struct CCPoolPane: View {
                         .accessibilityLabel(Self.routeTitle)
                 }
                 caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))
+            }
+        }
+    }
+
+    private var thresholdSection: some View {
+        let pct = Int((model.exhaustedThreshold * 100).rounded())
+        return NeonSection("Account switching") {
+            VStack(alignment: .leading, spacing: sz(6)) {
+                NeonRow("Move off an account at") {
+                    HStack(spacing: sz(10)) {
+                        Text("\(pct) %")
+                            .font(Neon.font(13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Neon.textPrimary)
+                            .frame(minWidth: sz(44), alignment: .trailing)
+                        Stepper("", value: Binding(get: { pct }, set: { model.setExhaustedThreshold(Double($0) / 100) }),
+                                in: 50...100, step: 5)
+                            .labelsHidden()
+                            .accessibilityLabel("Move off an account at")
+                    }
+                }
+                caption("Below 100 %, Prosper moves new requests to another account before this one hits its limit.")
             }
         }
     }

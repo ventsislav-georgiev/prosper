@@ -111,6 +111,7 @@ final class CCPoolRuntime {
          launcherPath: String? = nil) {
         store = CCPoolStore(directory: directory, logger: logger)
         self.secrets = secrets
+        config.exhaustedThreshold = CCPoolPaneModel.exhaustedValue(in: defaults)
         service = CCPoolService(config: config, store: store, secrets: secrets, logger: logger)
         lifecycle = CCPoolLifecycle(service: service)
         model = CCPoolPaneModel(store: store, secrets: secrets, service: service, logger: logger, defaults: defaults,

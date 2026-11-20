@@ -9,7 +9,13 @@ struct CCPoolServiceConfig: Sendable {
     /// are streamed upstream once (errata C1).
     var replayCap: Int = 32 << 20
     var timeout: TimeInterval = 900
-    var exhaustedThreshold: Double = CCPoolCore.exhaustedDefault
+    /// The threshold as a lock-guarded box shared by every copy of this config (each connection holds a copy), so the
+    /// pane's change (#1670) reaches requests already being served and later ones without a restart.
+    let thresholdBox = CCPoolThresholdBox()
+    var exhaustedThreshold: Double {
+        get { thresholdBox.value }
+        nonmutating set { thresholdBox.value = newValue }
+    }
     /// How long the start-up probe of an occupied port waits for an answer.
     var probeTimeout: TimeInterval = 2
     /// The start-up port probe, a test seam: a bound socket that is not listening makes the real
@@ -44,6 +50,15 @@ struct CCPoolServiceConfig: Sendable {
     /// #1676: the port keeper that holds the listening socket across a relaunch. nil (tests, unless a row sets a link
     /// with a recording spawner): bind as before, nothing kept.
     var keeper: CCPoolKeeperLink? = nil
+}
+
+final class CCPoolThresholdBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v = CCPoolCore.exhaustedDefault
+    var value: Double {
+        get { lock.withLock { v } }
+        set { lock.withLock { v = newValue } }
+    }
 }
 
 /// #871: the in-process ccpool proxy. HTTP/1.1 on a BSD loopback socket (#1675; Network.framework before), loopback only. Clients point

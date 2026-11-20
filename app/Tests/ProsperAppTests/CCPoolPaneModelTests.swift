@@ -945,4 +945,49 @@ extension CCPoolPaneModelTests {
         XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") },
                        ["Example Org D: token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token"])
     }
+
+    // #1670: "Move off an account at".
+    func testExhaustedThresholdDefaultsToOne() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(r.model.exhaustedThreshold, 1.0)
+        XCTAssertEqual(r.service.config.exhaustedThreshold, 1.0)
+    }
+
+    func testExhaustedThresholdBadStoredValuesReadAsTheDefault() throws {
+        let r = try ccpoolPaneRig()
+        for bad in [0.2, 7, Double.nan, Double.infinity, -1] {
+            r.defaults.set(bad, forKey: CCPoolPaneModel.exhaustedKey)
+            XCTAssertEqual(r.model.exhaustedThreshold, 1.0, "\(bad)")
+        }
+        r.defaults.set("0.9", forKey: CCPoolPaneModel.exhaustedKey)
+        XCTAssertEqual(r.model.exhaustedThreshold, 1.0, "a string")
+        r.defaults.set(0.5, forKey: CCPoolPaneModel.exhaustedKey)
+        XCTAssertEqual(r.model.exhaustedThreshold, 0.5)
+    }
+
+    func testExhaustedThresholdSetterWritesTheKeyAndTheLiveService() throws {
+        let r = try ccpoolPaneRig()
+        r.model.setExhaustedThreshold(0.9)
+        XCTAssertEqual(r.defaults.double(forKey: CCPoolPaneModel.exhaustedKey), 0.9)
+        XCTAssertEqual(r.service.config.exhaustedThreshold, 0.9)
+        let limits = ["five_hour": CCPoolLimit(status: "allowed", utilization: "0.92", reset: "1800003600")]
+        let copy = r.service.config   // a connection's copy sees the next change too
+        XCTAssertEqual(CCPoolCore.exhaustedClaims(limits, now: 1_800_000_000, threshold: copy.exhaustedThreshold).keys.sorted(), ["five_hour"])
+        r.model.setExhaustedThreshold(7)   // refused value stores the default
+        XCTAssertEqual(r.defaults.double(forKey: CCPoolPaneModel.exhaustedKey), 1.0)
+        XCTAssertEqual(copy.exhaustedThreshold, 1.0)
+        XCTAssertTrue(CCPoolCore.exhaustedClaims(limits, now: 1_800_000_000, threshold: copy.exhaustedThreshold).isEmpty)
+    }
+
+    func testRuntimeStartReadsTheStoredThreshold() throws {
+        let dir = tempDir()
+        let defaults = scratchDefaults("ccpool-threshold-rt")
+        defaults.set(0.9, forKey: CCPoolPaneModel.exhaustedKey)
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: defaults,
+                               probeBase: cfg.upstream, logger: CCPoolCapturingLogger())
+        XCTAssertEqual(rt.service.config.exhaustedThreshold, 0.9)
+    }
 }

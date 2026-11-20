@@ -14,6 +14,17 @@ import Foundation
 @MainActor
 final class CCPoolPaneModel: ObservableObject {
     nonisolated static let routeKey = "ccpoolRouteAgentSessions"
+    /// #1670: "Move off an account at", a Double 0.5...1.0 (1.0 = only when the account is spent).
+    nonisolated static let exhaustedKey = "ccpoolExhaustedThreshold"
+    nonisolated static let exhaustedRange = 0.5...1.0
+    /// A stored value as the proxy uses it: missing, non-finite or outside 0.5...1.0 reads as the default.
+    nonisolated static func exhaustedValue(_ raw: Double?) -> Double {
+        guard let raw, raw.isFinite, exhaustedRange.contains(raw) else { return CCPoolCore.exhaustedDefault }
+        return raw
+    }
+    nonisolated static func exhaustedValue(in defaults: UserDefaults) -> Double {
+        exhaustedValue(defaults.object(forKey: exhaustedKey) as? Double)
+    }
 
     enum RowState: Equatable, Sendable {
         case active, ready
@@ -259,6 +270,18 @@ final class CCPoolPaneModel: ObservableObject {
             "\(CCPoolCore.display[c.claim] ?? c.claim) \(Int((c.free * 100).rounded()))%"
                 + (c.growsAt.map { " (more at \(Self.timeText($0, timeZone: timeZone)))" } ?? "")
         }.joined(separator: " · ")
+    }
+
+    // MARK: Move-off threshold
+
+    var exhaustedThreshold: Double { Self.exhaustedValue(in: defaults) }
+
+    /// The stepper's write: stored (bad values read as the default) and handed to the running service.
+    func setExhaustedThreshold(_ v: Double) {
+        let ok = Self.exhaustedValue(v)
+        objectWillChange.send()
+        defaults.set(ok, forKey: Self.exhaustedKey)
+        service.config.exhaustedThreshold = ok
     }
 
     // MARK: Agent Sessions toggle

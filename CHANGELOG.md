@@ -2109,6 +2109,8 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: you can now hold an account or release it without opening the pane, using a
   local POST to the pool's port (see extensions.md for the two curl lines). Browsers cannot send
   this request. (#1674)
+- ccpool: new setting "Move off an account at" (50-100 %, default 100 %) moves new requests to
+  another account before the current one hits its limit. (#1670)
 
 ## v2.174.0
 
