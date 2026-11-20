@@ -810,7 +810,7 @@ final class AgentWindowModel: ObservableObject {
     /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane. 7.2: a close moves the
     /// keys to the panes.
     func closePane(_ pane: UUID) {
-        if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538
+        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }   // #1538; #1700: the view's one pane never closes
         let shown = layout.focused
         if case let .success(l) = layout.close(pane) { keyFocus = .pane; adopt(l); cancelFormOfClosed(pane, shown: shown) }
     }
@@ -839,8 +839,11 @@ final class AgentWindowModel: ObservableObject {
         switch a {
         case let .split(axis):
             next = splitting(axis, pane: pane)
+            // #1700: the single-pane view's split makes a new layout of it, Edit layout on (as "+" then a split)
+            if parked != nil, case let .success(l) = next { keyFocus = .pane; unpark(l); return true }
         case .closePane:
-            if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed
+            // #1538: refused, the chord swallowed. #1700: the single-pane view swallows it with no notice (never the window close)
+            if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }
             closing = base.focused
             next = base.close(base.focused)
         case let .focus(d):
@@ -882,7 +885,8 @@ final class AgentWindowModel: ObservableObject {
     /// unfocused pane focuses it first): perform's own call, so the menu and the key share one cap and one room rule.
     func splitting(_ axis: PaneNode.Axis, pane: UUID? = nil) -> Result<PaneLayout, PaneRefusal> {
         countDryRun()
-        if layoutLocked { return .failure(.layoutLocked) }   // #1538: the key, the menu's dry run and a drop's edge
+        // #1538: the key, the menu's dry run and a drop's edge. #1700: the single-pane view splits (perform's unpark).
+        if layoutLocked, parked == nil { return .failure(.layoutLocked) }
         let l = pane.flatMap { try? layout.focus($0).get() } ?? layout
         // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
         return l.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
@@ -1449,6 +1453,12 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func duplicateLayout(_ id: UUID) -> PaneRefusal? {
         addLayout { s in s.layouts.first { $0.id == id }.map { $0.duplicated(name: s.duplicateName(of: $0.name)) } }
+    }
+
+    /// #1700: the single-pane view is not a layout and draws no Edit, so a change to its panes (`l`) is saved as a new
+    /// layout in Edit layout (addLayout: the view's layout left, the parked one stays saved); at 9 layouts the notice says so.
+    private func unpark(_ l: PaneLayout) {
+        if let r = addLayout({ _ in l }) { paneRefusal = r }
     }
 
     /// New and Duplicate: the whole store is written once (explicitly, so a layout made while the island is off is saved
@@ -2149,7 +2159,8 @@ final class AgentWindowModel: ObservableObject {
         switch next {
         case let .success(l):
             if paneRefusal != nil { paneRefusal = nil }
-            layout = l
+            // #1700: Open to the Side from the single-pane view: a new layout of the view and the side pane
+            if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else { layout = l }
         case let .failure(r):
             paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
         }
@@ -2197,7 +2208,7 @@ final class AgentWindowModel: ObservableObject {
     /// in the pane area at the minimum paneFrames tiles with; `.focused` never reads the area.
     func showing(_ id: AgentSidebar.RowID, placement: PaneLayout.Placement = .focused) -> Result<PaneLayout, PaneRefusal> {
         countDryRun()
-        if placement == .side, layoutLocked { return .failure(.layoutLocked) }   // #1538: Open to the Side splits
+        if placement == .side, layoutLocked, parked == nil { return .failure(.layoutLocked) }   // #1538: Open to the Side splits
         return layout.show(target(id), placement: placement, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size),
                     splitsEnabled: AgentPaneLayout.splitsEnabled)
     }
@@ -2216,7 +2227,7 @@ final class AgentWindowModel: ObservableObject {
     /// that already shows it (PaneLayout.put), then the pane takes the focus and the keys as a sidebar click does (a remote
     /// row arms its attach). The pane's own session, or a pane no longer in the layout: nothing changes.
     func choose(_ id: AgentSidebar.RowID, into pane: UUID) {
-        if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538: a pane retarget
+        if layoutLocked { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }   // #1538: a pane retarget; #1700: the view's one pane takes the pick
         guard case let .success(put) = layout.put(target(id), in: pane), put != layout,
               case let .success(l) = put.focus(pane) else { return }
         removing = nil; pendingSpawn = nil; newSession = nil
@@ -2269,7 +2280,7 @@ final class AgentWindowModel: ObservableObject {
     func drop(_ id: AgentSidebar.RowID, into pane: UUID, zone: PaneDropZone) -> Bool {
         dropHover = nil
         guard !closed, Self.dragToken(id) != nil, row(id) != nil, layout.order.contains(pane) else { return false }
-        if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits
+        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits
         guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }
         switch layout.split(pane, side: side, target: target(id), minimum: paneMinimum,
                             in: CGRect(origin: .zero, size: paneArea.size)) {
@@ -2278,7 +2289,7 @@ final class AgentWindowModel: ObservableObject {
         case let .success(l):
             removing = nil; pendingSpawn = nil; newSession = nil
             if paneRefusal != nil { paneRefusal = nil }
-            layout = l
+            if parked != nil { unpark(l) } else { layout = l }   // #1700: an edge drop on the single-pane view
             if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
             follow()
             focusSelection()

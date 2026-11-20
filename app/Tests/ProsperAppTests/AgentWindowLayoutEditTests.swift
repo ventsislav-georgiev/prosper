@@ -249,6 +249,90 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
+    /// #1700 (operator 2026-11-20: "pressing cmd+d in a single session does not do the split, it shows to click edit, but
+    /// there is no such button"): Command-D in the single-pane view makes a new layout of the view's session plus an
+    /// empty pane, Edit layout on, saved; the parked layout stays saved as it was. The next click fills the new pane. The
+    /// Split menu item (runPane, the same perform) from another single-pane view does the same and is drawn enabled.
+    @MainActor
+    func testAgentWindowLayoutEditCommandDInTheSinglePaneViewMakesANewLayout() throws {
+        try withGate(true) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            m.click(row("docs"))
+            XCTAssertTrue(m.parked != nil, "the single-pane view")
+            XCTAssertTrue(m.perform(.split(.columns)), "the chord is swallowed")
+            XCTAssertTrue(m.paneRefusal == nil, "no Edit notice")
+            XCTAssertTrue(m.parked == nil, "the view became a layout")
+            XCTAssertTrue(m.layoutEditing, "Edit layout on (#1617)")
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("docs"), nil], "the session in pane 1, an empty pane 2")
+            XCTAssertTrue(m.layout.panes.first { $0.id == m.layout.focused }?.target == nil, "the empty pane focused")
+            XCTAssertEqual(m.layouts?.layouts.count, 2, "a new layout")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved and active")
+            XCTAssertTrue(m.layouts?.layouts.first { $0.id == two.id } == two, "the parked layout kept as saved")
+            m.click(row("ops"))
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("docs"), t("ops")], "the next click fills the new pane")
+            XCTAssertTrue(m.switchLayout(two.id) == nil)
+            m.setLayoutEditing(false)
+            m.click(row("ops"))   // not in `two`: the single-pane view again
+            XCTAssertTrue(m.parked != nil)
+            let pane = m.layout.focused
+            XCTAssertEqual(AgentWindowControls.paneMenu(m, pane: pane).filter { if case .pane(_, true, .action(.split)) = $0 { true } else { false } }.count,
+                           2, "Split Right and Split Down drawn enabled")
+            AgentWindowControls.runPane(.action(.split(.rows)), pane: pane, in: m)
+            XCTAssertTrue(m.parked == nil && m.layoutEditing, "the Split menu item makes a layout too")
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("ops"), nil])
+        }
+    }
+
+    /// #1700: the notice never names a control that is not drawn. In the single-pane view (no Edit anywhere) Close Pane,
+    /// a pane retarget, a drop and Open to the Side never answer "Edit layout to change it": the retarget takes the pick,
+    /// an edge drop and Open to the Side make a new layout as Command-D does. At 9 layouts the split says so instead.
+    @MainActor
+    func testAgentWindowLayoutEditSinglePaneViewNeverNamesAMissingEdit() throws {
+        try withGate(true) {
+            @MainActor func view() throws -> AgentWindowModel {
+                let m = try locked().m
+                m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+                m.click(row("docs"))
+                XCTAssertTrue(m.parked != nil && !m.layoutShown, "the single-pane view")
+                return m
+            }
+            let m = try view()
+            defer { m.close() }
+            let pane = m.layout.focused
+            let shownView = m.layout
+            XCTAssertTrue(m.perform(.closePane), "Command-W swallowed: it never reaches the window close or the terminal")
+            XCTAssertFalse(m.closed, "the window stays open")
+            XCTAssertTrue(m.paneRefusal == nil, "Command-W: no notice")
+            XCTAssertTrue(m.layout == shownView && m.parked != nil, "the view and its pane stay")
+            m.closePane(pane)
+            XCTAssertTrue(m.paneRefusal == nil, "Close Pane: no notice")
+            m.choose(row("ops"), into: pane)
+            XCTAssertTrue(m.paneRefusal == nil, "a retarget: no notice")
+            XCTAssertTrue(m.layout.panes.first?.target == t("ops"), "the view's pane takes the pick")
+            XCTAssertTrue(m.drop(row("docs"), into: m.layout.focused, zone: .edge(.right)))
+            XCTAssertTrue(m.paneRefusal == nil && m.parked == nil && m.layoutEditing, "an edge drop makes a layout")
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("ops"), t("docs")])
+            let side = try view()
+            defer { side.close() }
+            side.openToTheSide(row("ops"))
+            XCTAssertTrue(side.paneRefusal == nil && side.parked == nil && side.layoutEditing, "Open to the Side makes a layout")
+            XCTAssertEqual(side.layout.panes.map(\.target), [t("docs"), t("ops")])
+            let full = try locked().m
+            defer { full.close() }
+            full.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            for _ in 0..<8 { XCTAssertTrue(full.newLayout() == nil) }
+            full.setLayoutEditing(false)
+            full.click(row("docs"))
+            XCTAssertTrue(full.parked != nil)
+            XCTAssertTrue(full.perform(.split(.columns)))
+            XCTAssertEqual(full.paneRefusal, .layoutCap)
+            XCTAssertEqual(full.paneRefusal?.notice, "9 layouts is the most a window holds")
+            XCTAssertTrue(full.parked != nil && full.layout.panes.count == 1, "nothing made at 9")
+        }
+    }
+
     /// The Go menu's Edit Layout: with the split gate on only.
     @MainActor
     func testAgentWindowLayoutEditGoMenuItem() {

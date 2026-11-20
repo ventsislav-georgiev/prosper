@@ -139,6 +139,7 @@ enum PaneRefusal: Error, Equatable {
         switch self {
         case .cap: "6 panes is the most a layout holds"
         case .layoutLocked: "Edit layout to change it"
+        case .layoutCap: "9 layouts is the most a window holds"   // #1700: a split of the single-pane view makes one
         case .noRoom: "No room for another pane here. Widen the window or hide the sidebar (⌃⌘S)."
         default: nil
         }

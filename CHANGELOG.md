@@ -2150,6 +2150,10 @@ tag from the now-released section and put it on the new top draft.
   prosper://ccpool/takeover) now waits until the port is really free before Prosper starts its
   proxy, instead of giving up a moment after stopping ccpool and leaving every session without its
   API; if the port never frees, the pane says so and the log names the reason. (#1714)
+- Agent Sessions: Command-D (and Split Right / Split Down, Open to the Side or a drop on a pane
+  edge) in the single-session view now makes a new layout from that session plus an empty pane, with
+  Edit layout on, instead of showing "Edit layout to change it" with no Edit button to press.
+  (#1700)
 
 ## v2.174.0
 
