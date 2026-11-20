@@ -41,10 +41,17 @@ enum Pasteboard {
     /// #1691: copies the bytes each item holds, as they are (no conversion), until `cap` is reached.
     static func save(_ pb: NSPasteboard, access: ClipboardAccess, cap: Int = saveByteCap) -> SavedClip {
         guard access != .denied else { return SavedClip() }
+        return save(items: pb.pasteboardItems ?? [], cap: cap)
+    }
+
+    /// #1694: the read loop, over the items (a seam for the call-counting row). `dyn.*` types are conversions
+    /// macOS synthesizes on each read and the restore re-synthesizes them, so they are never read; every
+    /// concrete type is read exactly once.
+    static func save(items: [NSPasteboardItem], cap: Int = saveByteCap) -> SavedClip {
         var saved = SavedClip()
-        for item in pb.pasteboardItems ?? [] {
+        for item in items {
             var reps: [SavedClip.Representation] = []
-            for type in item.types {
+            for type in item.types where !type.rawValue.hasPrefix("dyn.") {
                 guard let data = item.data(forType: type) else { continue }
                 saved.bytesRead += data.count
                 guard saved.bytesRead <= cap else {

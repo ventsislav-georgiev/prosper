@@ -202,6 +202,27 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         XCTAssertEqual(mid.items.first?.count, 1)
     }
 
+    /// #1694: a clip with synthesized dyn.* types is read once per concrete type and never per dyn type;
+    /// the concrete bytes are all kept. A counting row, not a timing one.
+    func testSaveReadsEachConcreteTypeOnceAndNeverADynType() {
+        final class CountingItem: NSPasteboardItem {
+            nonisolated(unsafe) var reads: [NSPasteboard.PasteboardType] = []
+            nonisolated(unsafe) var declared: [NSPasteboard.PasteboardType] = []
+            override var types: [NSPasteboard.PasteboardType] { declared }
+            override func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+                reads.append(type)
+                return Data(count: 10)
+            }
+        }
+        let item = CountingItem()
+        item.declared = [NSPasteboard.PasteboardType("dyn.ah62d4rv4gu8y63n2nuuhg5pbsm4ca6dbsr4gnkduqf31k3pcr7u1e3basv61a3k"),
+                         .png, NSPasteboard.PasteboardType("dyn.age80g55"), .tiff]
+        let saved = Pasteboard.save(items: [item])
+        XCTAssertEqual(item.reads, [.png, .tiff], "no dyn type read, each concrete type once")
+        XCTAssertEqual(saved.items.first?.map(\.type), [.png, .tiff])
+        XCTAssertEqual(saved.bytesRead, 20)
+    }
+
     /// The snippet (plain and rich) and autocomplete paste paths all save and restore through the seam,
     /// so the three agree on the end state.
     func testEveryPastePathSavesAndRestoresThroughTheSeam() throws {
