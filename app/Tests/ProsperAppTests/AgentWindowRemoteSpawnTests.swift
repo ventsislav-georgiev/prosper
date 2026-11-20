@@ -84,10 +84,15 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
         try withPrefs {
             let (m, _, calls) = model()
             defer { m.close() }
+            m.cancelNewSession()
+            m.openNewSession()   // unnamed: model() opens the form with openNewSessionNamed, which types a name
             m.setNewSessionHost("host-a")
             m.setNewSessionFolder("/Users/example/site")
-            m.setNewSessionName("site")   // #1731: the name is typed, not derived from the folder
-            XCTAssertEqual(m.newSessionName, "site", "the typed name (#1731)")
+            // #1731: picking only a folder derives no name; Start refuses until one is typed.
+            XCTAssertEqual(m.newSessionName, "", "a folder alone leaves the name empty (#1731)")
+            XCTAssertFalse(m.startNewSession(), "no typed name: Start refuses (#1731)")
+            XCTAssertEqual(calls.verbs.count, 0)
+            m.setNewSessionName("site")
             XCTAssertTrue(m.startNewSession())
             XCTAssertEqual(calls.verbs.count, 1)
             XCTAssertEqual(calls.verbs.last?.args,
