@@ -186,4 +186,23 @@ final class KitEnvPieceTests: XCTestCase {
         XCTAssertEqual(notes.filter { $0.contains("act without asking") || $0.contains("connectors load") }.count, 2, "\(notes)")
         XCTAssertTrue(notes.contains("Claude Code sessions get the environment variable \(plain) = \"1\"."), "\(notes)")
     }
+
+    /// #1737: the line shows only when the value turns the behaviour on ("1"/"true", trimmed, any case); the plain env line always stays.
+    func testTheBehaviourLineShowsOnlyWhenTheValueTurnsItOn() async throws {
+        let rows: [(String, Bool)] = [("1", true), ("true", true), ("TRUE", true), (" True ", true), ("0", false), ("false", false), ("", false)]
+        for key in ["CLAUDE_CODE_ENABLE_AUTO_MODE", "ENABLE_CLAUDEAI_MCP_SERVERS"] {
+            let line = try XCTUnwrap(ManagedConfigPlanner.envWarnings[key])
+            for (value, shown) in rows {
+                let env = makeMCEnv()
+                var kit = env.owner
+                kit.isKit = true
+                let p = ManagedConfigPiece(id: key, kind: .json, target: "claude:settings.json", path: ["env", key], op: .set, value: OrderedJSON.quote(value))
+                let applied = await env.mc.apply([p], owner: kit)
+                XCTAssertEqual(applied.status, .done, applied.message)
+                let notes = try XCTUnwrap(env.consent.seen.first?.files.first { $0.target == "claude:settings.json" }).notes
+                XCTAssertEqual(notes.contains(line), shown, "\(key)=\(value): \(notes)")
+                XCTAssertTrue(notes.contains("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(value))."), "\(notes)")
+            }
+        }
+    }
 }
