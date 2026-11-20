@@ -19,8 +19,8 @@
   {
    "name": "loaded-only-setting",
    "file": "app/Sources/ProsperApp/Server/DchChat.swift",
-   "old": "\"loaded\": await residentId() != nil]",
-   "new": "\"loaded\": await residentId() == id]",
+   "old": "\"loaded\": resident != nil]",
+   "new": "\"loaded\": resident == id]",
    "expect": "killed"
   }
  ]

@@ -1,0 +1,34 @@
+{
+ "entry": 1707,
+ "filter": "AgentWindowD1Tests/(testHeaderFirstClick|testInHeaderIsTheTopLineOfTheFrameOnly|testAgentWindowSendEventSwallowsTheFocusingClick)",
+ "mutants": [
+  {
+   "name": "header-swallows",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return !AgentsNSWindow.inHeader(local, frames[id])",
+   "new": "return true",
+   "expect": "killed"
+  },
+  {
+   "name": "body-passes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return !AgentsNSWindow.inHeader(local, frames[id])",
+   "new": "return false",
+   "expect": "killed"
+  },
+  {
+   "name": "header-bound-inclusive",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "p.y < f.minY + AgentCompactHeader.height",
+   "new": "p.y <= f.minY + AgentCompactHeader.height",
+   "expect": "killed"
+  },
+  {
+   "name": "header-no-contains",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "return f.contains(p) && p.y < f.minY",
+   "new": "return p.y < f.minY",
+   "expect": "killed"
+  }
+ ]
+}

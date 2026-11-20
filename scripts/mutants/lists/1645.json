@@ -26,8 +26,8 @@
   {
    "name": "header-pane-id",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "        case let .local(row, s, ended):\n            if focused {\n                detail.header(row, s)\n            } else {\n                AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,\n                                      ask: { model.ask($0, s) }, open: { model.openSession(s) },\n                                      // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.\n                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },",
-   "new": "        case let .local(row, s, ended):\n            if focused {\n                detail.header(row, s)\n            } else {\n                AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,\n                                      ask: { model.ask($0, s) }, open: { model.openSession(s) },\n                                      // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.\n                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: model.layout.focused, in: model) },",
+   "old": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },",
+   "new": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: model.layout.focused, in: model) },",
    "expect": "killed"
   }
  ]
