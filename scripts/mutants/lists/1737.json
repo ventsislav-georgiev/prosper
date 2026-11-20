@@ -1,0 +1,27 @@
+{
+ "entry": "1737",
+ "filter": "KitEnvPieceTests",
+ "mutants": [
+  {
+   "name": "m1737a-always",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "if on, let line",
+   "new": "if true, let line",
+   "expect": "killed"
+  },
+  {
+   "name": "m1737b-notrim",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": ".trimmingCharacters(in: .whitespacesAndNewlines).lowercased()",
+   "new": ".lowercased()",
+   "expect": "killed"
+  },
+  {
+   "name": "m1737c-nocase",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": ".trimmingCharacters(in: .whitespacesAndNewlines).lowercased()",
+   "new": ".trimmingCharacters(in: .whitespacesAndNewlines)",
+   "expect": "killed"
+  }
+ ]
+}
