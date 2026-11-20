@@ -40,9 +40,10 @@
   {
    "name": "shells-chip-no-pill",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "g.0 == .agents || g.0 == .shells ? fill : nil",
-   "new": "g.0 == .agents ? fill : nil",
-   "expect": "killed"
+   "old": "g.0 == .shells ? AgentSidebarRowView.shellsStroke : nil",
+   "new": "g.0 == .shells ? nil : nil",
+   "expect": "killed",
+   "filter": "AgentRowModelEffortTests/testShellsCountDraws|DchShellsTests"
   }
  ]
 }
