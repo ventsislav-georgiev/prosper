@@ -2127,6 +2127,8 @@ tag from the now-released section and put it on the new top draft.
   another machine's session is unchanged). (#1684)
 - X-ray: Cmd-clicking a ref in Terminal mode now opens the right ref at any terminal padding, taking
   the grid position from the terminal itself. (#1682)
+- Fixed a rare race where a newer follow cutting an older one at the instant it ended busy could
+  still restart the cut follow. (#1693)
 
 ## v2.174.0
 

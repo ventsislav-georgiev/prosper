@@ -785,7 +785,7 @@ final class DchConnection: @unchecked Sendable {
             // "dch: busy", exit 1) runs once more DchCtl.retryDelay later, nothing sent, its slot kept; never a third run.
             for attempt in 1...2 {
                 let busy = job.run(path: path, argv: argv, env: env, cwd: cwd, follow: follow, cap: ctl.cap,
-                                   holdBusy: counted && attempt == 1, timeout: timeout, grace: ctl.grace(of: argv[0]),
+                                   holdBusy: counted && attempt == 1, afterReap: ctl.afterReap, timeout: timeout, grace: ctl.grace(of: argv[0]),
                                    after: ctl.after, send: { self.sendStreamed($0, stall: ctl.stall, end: end) },
                                    reply: { self.ctlFinal($0) })
                 guard busy else { break }

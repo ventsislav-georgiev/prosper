@@ -22,6 +22,8 @@ struct DchCtlOps: Sendable {
     /// #1680: waits `delay` s (serve's CTL_RETRY_MS) before the one rerun of a follow that was busy at its start; tests
     /// record it and return at once. The wait ends early never: a cut or 0x34 during it is seen by the rerun.
     var retryWait: @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    /// #1693: runs between a run's reap and its busy decision; tests cut the job there, the window a cut can land in.
+    var afterReap: @Sendable () -> Void = {}
     /// stdout + stderr of a non-follow verb.
     var cap = 8 << 20
     /// #1013: dch serve's STALL_MS (#201, serve.c:85 and :2262-2270@v1.73.0): a 0x31/0x32 the socket has not taken
@@ -429,6 +431,9 @@ final class DchCtlJob: @unchecked Sendable {
     private var hold = false
     private var held: [UInt8] = []
     private var waiting = false
+    /// #1693 (under lock): the run was reaped (pid 0 after a spawn), and a cut found it so: busy or not, it is not rerun.
+    private var reapedRun = false
+    private var cutAfterReap = false
 
     /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
     /// dch is not yet reaped (one that exited in time ends with its own exit) and not cut by a 0x34
@@ -460,7 +465,7 @@ final class DchCtlJob: @unchecked Sendable {
         sendLock.withLock {
             if end(.killGroup, running: true) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
             // #1680: cut between a busy start and its rerun (serve: "cut while it waited: its 0x33 now"); the rerun then runs nothing.
-            else if lock.withLock({ waiting }), end(.none) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
+            else if lock.withLock({ if !ended && !cancelled && reapedRun { cutAfterReap = true }; return waiting }), end(.none) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
         }
     }
 
@@ -516,7 +521,7 @@ final class DchCtlJob: @unchecked Sendable {
     /// stays open and this returns true: the caller waits retryDelay and runs it once more. Else false, as before.
     @discardableResult
     func run(path: String, argv: [String], env: [String: String], cwd: String?, follow: Bool, cap: Int,
-             holdBusy: Bool = false, timeout: TimeInterval, grace: TimeInterval, after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after,
+             holdBusy: Bool = false, afterReap: @Sendable () -> Void = {}, timeout: TimeInterval, grace: TimeInterval, after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after,
              send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
@@ -546,14 +551,14 @@ final class DchCtlJob: @unchecked Sendable {
         let exited = DispatchSemaphore(value: 0), poke = wake[1]
         // Cleared once reaped: a late kill must not signal a recycled pid.
         p.terminationHandler = { [lock] _ in
-            lock.withLock { self.pid = 0 }
+            lock.withLock { self.pid = 0; self.reapedRun = true }
             var b: UInt8 = 0
             _ = Darwin.write(poke, &b, 1)
             exited.signal()
         }
         lock.lock()   // a cancel either sees the pid or stops the spawn
         if !stopping { self.grace = grace }   // QA #729 INFO-1: a stop that came first keeps its 2 s
-        waiting = false
+        waiting = false; reapedRun = false; cutAfterReap = false
         guard !ended else { lock.unlock(); return false }
         if cancelled {   // a 0x34 that came before the spawn: nothing runs
             ended = true
@@ -577,11 +582,18 @@ final class DchCtlJob: @unchecked Sendable {
         exited.wait()
         let code = p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus
         let frame = lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: "cancel") : DchCtl.exitFrame(code)
+        afterReap()
         sendLock.withLock {
             if hold {
                 hold = false
                 let live = lock.withLock { !ended && !cancelled }
                 if live, held == DchCtl.busyText, code == 1, p.terminationReason == .exit {
+                    // #1693: a cut that came after the reap (cutTimeout saw pid 0): the job ends here with its 0x33, no rerun.
+                    if lock.withLock({ cutAfterReap }) {
+                        held = []
+                        if end(.none) { reply(DchCtl.exitFrame(2, why: "timeout")) }
+                        return
+                    }
                     held = []
                     lock.withLock { waiting = true }
                     again = true

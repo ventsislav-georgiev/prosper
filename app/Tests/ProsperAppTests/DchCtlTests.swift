@@ -606,6 +606,20 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(Self.object(finals(b.rig).first) as NSDictionary, ["exit": 1] as NSDictionary)
     }
 
+    /// #1693: a cut that lands after the reap but before the busy decision (forced by the afterReap seam): the 0x33
+    /// timeout goes out, no wait, no rerun.
+    func testACutBetweenTheReapAndTheBusyDecisionAnswersTimeoutAndStopsTheRerun() throws {
+        let b = try busyRig("echo 'dch: busy' >&2; exit 1")
+        let rig = b.rig
+        rig.conn.ctl.afterReap = { rig.queue.sync { rig.conn.ctlJob }?.cutTimeout() }
+        send(rig, Self.ctl(["--xray", "api", "--follow", "--json"]))
+        XCTAssertTrue(wait(5) { finals(rig).count == 1 })
+        XCTAssertEqual(Self.object(finals(rig).first) as NSDictionary, ["exit": 2, "why": "timeout"] as NSDictionary)
+        XCTAssertEqual(runs(b.dir), 1, "no rerun")
+        XCTAssertEqual(b.waits.count, 0)
+        XCTAssertEqual(bytes(rig, DchFrame.ctlStderr).count, 0, "the busy line was never sent")
+    }
+
     /// Not a busy start: a plain --follow is never held or rerun; stdout before the busy words, other words, or another
     /// exit are sent as they came. One run each.
     func testOnlyACountedFollowWithNothingButTheBusyWordsIsRerun() throws {
