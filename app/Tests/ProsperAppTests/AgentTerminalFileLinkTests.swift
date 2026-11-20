@@ -1,3 +1,6 @@
+import AppKit
+import GhosttyTerminal
+import os
 import XCTest
 @testable import ProsperApp
 
@@ -147,5 +150,55 @@ final class AgentTerminalFileLinkTests: XCTestCase {
         XCTAssertEqual(AgentTerminalFileLink.resolve("~/n.md", cwd: nil, home: "/Users/example")?.path, "/Users/example/n.md")
         XCTAssertTrue(AgentTerminalFileLink.resolve("a/b.md", cwd: nil, home: "/Users/example") == nil)
         XCTAssertTrue(AgentTerminalFileLink.resolve("a/b.md", cwd: "relative", home: "/Users/example") == nil)
+    }
+
+    /// #1719 (incident 2026-11-20): the link the operator Cmd+Shift-clicked, trailing period included.
+    static let incidentLink = "~/Documents/ai-reviewer-weekly-update-2026-11-20.txt."
+
+    func testTheIncidentLinkResolvesUnderHomeWithoutItsPeriod() {
+        XCTAssertEqual(AgentTerminalFileLink.resolve(Self.incidentLink, cwd: nil, home: "/Users/example")?.path,
+                       "/Users/example/Documents/ai-reviewer-weekly-update-2026-11-20.txt")
+    }
+
+    /// #1719: a Cmd+Shift click on the link, then libghostty's open_url on the release (it calls back on main): the click
+    /// returns having queued exactly one disk check and run none; the main thread never stats the path (a stat under a
+    /// TCC-guarded or iCloud folder can block it; the file is made only after the click, so a check on the click would
+    /// queue nothing). The held check, run, shows the file once.
+    func testACommandShiftClickOnTheIncidentLinkReturnsBeforeAnyDiskCheck() throws {
+        let f = try fixture()
+        let docs = f.dir.appendingPathComponent("home/Documents")
+        var held: [@Sendable () -> Void] = []
+        f.rig.c.fileCheck = { held.append($0) }
+        let v = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
+        v.owner = f.rig.c
+        var passed: [NSEvent.EventType] = []
+        v.passedClick = { passed.append($0.type) }
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let e = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 40, y: 380), modifierFlags: [.command, .shift],
+                                                     timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            if type == .leftMouseDown { v.mouseDown(with: e) } else { v.mouseUp(with: e) }
+        }
+        v.terminalDidRequestOpenURL(Self.incidentLink, kind: .text)
+        XCTAssertEqual(passed, [.leftMouseDown, .leftMouseUp], "the click goes on to libghostty, as before")
+        XCTAssertEqual(held.count, 1, "one disk check queued")
+        XCTAssertTrue(shown(f).isEmpty, "nothing shown, nothing checked, on the click")
+        // The file appears only now: a check made during the click would have found nothing and queued nothing.
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        try "fake\n".write(to: docs.appendingPathComponent("ai-reviewer-weekly-update-2026-11-20.txt"), atomically: true, encoding: .utf8)
+        held.first?()
+        XCTAssertEqual(shown(f), [docs.path + "/ai-reviewer-weekly-update-2026-11-20.txt"])
+        XCTAssertEqual(held.count, 1)
+    }
+
+    /// #1719: the product's check never runs on the calling (main) thread.
+    func testTheLinkDiskCheckRunsOffMainByDefault() {
+        let done = DispatchSemaphore(value: 0)
+        let onMain = OSAllocatedUnfairLock(initialState: true)
+        AgentTerminalController().fileCheck {
+            onMain.withLock { $0 = Thread.isMainThread }
+            done.signal()
+        }
+        XCTAssertEqual(done.wait(timeout: .now() + 30), .success)
+        XCTAssertFalse(onMain.withLock { $0 })
     }
 }

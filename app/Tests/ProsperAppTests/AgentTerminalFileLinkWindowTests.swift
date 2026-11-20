@@ -41,6 +41,7 @@ final class AgentTerminalFileLinkWindowTests: XCTestCase {
         m.terminal.homeDirectory = { dir.path }
         let rec = Recorder()
         m.terminal.showFile = { rec.urls.append($0) }
+        m.terminal.fileCheck = { $0() }   // #1719: the link's disk check inline (the product runs it off main)
         m.terminal.openURL = { _ in XCTFail("a file never reaches openURL") }
         m.terminal.attach(s.key)
         return Fixture(model: m, dir: dir, shown: rec)

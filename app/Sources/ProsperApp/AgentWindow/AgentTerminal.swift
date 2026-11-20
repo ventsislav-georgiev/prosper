@@ -284,6 +284,10 @@ final class AgentTerminalController: ObservableObject {
     var cwd: (AgentSessionKey) -> String? = { _ in nil }
     var homeDirectory: () -> String = { NSHomeDirectory() }
     var showFile: @MainActor (URL) -> Void = { TextViewerIntake.shared.receive($0) }
+    /// #1719: where a file link's disk check runs: off main, so a stat that blocks (a first look into a TCC-guarded
+    /// folder waits for the consent answer, an iCloud folder for its download) holds a utility thread, never the UI.
+    /// Rows run it inline.
+    var fileCheck: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }
     /// #1357 (P9): a prosper-xray link (OSC 8) to the window's ref card, the key checked against this session's refs.
     var openRefLink: @MainActor (URL, NSWindow?, AgentSessionKey?) -> Void = {
         XrayRefLink.openTerminalLink($0, $1 as? AgentsNSWindow, key: $2)
@@ -694,7 +698,8 @@ final class AgentTerminalController: ObservableObject {
 
     // MARK: Links and find
 
-    /// ⌘-click on a URL or an OSC 8 link: web and mail links to openURL; a text file to the Text Viewer;
+    /// ⌘-click on a URL or an OSC 8 link: web and mail links to openURL; a text file to the Text Viewer
+    /// (#1719: its disk check off main, fileCheck);
     /// #1357: a prosper-xray link to the ref card (a local session's only); never any other file or an app.
     func open(_ link: String) {
         if let url = URL(string: link), let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) {
@@ -707,9 +712,12 @@ final class AgentTerminalController: ObservableObject {
         }
         // A remote row's paths are another machine's: never open one here, not even an absolute one (same-named local file).
         guard remoteHost == nil,
-              let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()),
-              AgentTerminalFileLink.isViewable(file) else { return }
-        showFile(file)
+              let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()) else { return }
+        fileCheck { [weak self] in
+            guard AgentTerminalFileLink.isViewable(file) else { return }
+            let show: @Sendable () -> Void = { MainActor.assumeIsolated { self?.showFile(file) } }
+            if Thread.isMainThread { show() } else { DispatchQueue.main.async(execute: show) }   // inline: rows
+        }
     }
 
     func openFind() {

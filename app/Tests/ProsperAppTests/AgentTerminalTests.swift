@@ -119,6 +119,7 @@ final class AgentTerminalTests: XCTestCase {
             c.isLive = { [unowned self] _ in live }
             c.openURL = { [unowned self] in opened.append($0) }
             c.showFile = { [unowned self] in shown.append($0) }
+            c.fileCheck = { $0() }   // #1719: the link's disk check inline (the product runs it off main)
             c.homeDirectory = { "/Users/example" }
             c.clientVersion = { _ in version }
             c.socketExists = { [unowned self] _ in socket }

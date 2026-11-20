@@ -2175,6 +2175,9 @@ tag from the now-released section and put it on the new top draft.
 - ccpool takeover: when another program (not ccpool) keeps the port after the old proxy closes its
   socket, Prosper now says so within about 30 seconds instead of keeping the pane busy for up to 10
   minutes. (#1720)
+- Agent Sessions: opening a file link from a terminal (Cmd+Shift-click in Claude Code) no longer
+  freezes Prosper while macOS asks for folder access or downloads the folder from iCloud; the file
+  check now runs in the background. (#1719)
 
 ## v2.174.0
 
