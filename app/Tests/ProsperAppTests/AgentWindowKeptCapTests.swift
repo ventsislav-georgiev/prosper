@@ -118,4 +118,68 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(Set(live), Set(kept()), "every client still running is a kept one, no more")
         }
     }
+
+    /// #1796: an unfocused pane (b) is retargeted to another session (c) while its old client is live: the old client is
+    /// kept, not ended (followUnfocusedTerminals leaves it `.keep`), under the window's cap; the new one starts after the rest.
+    @MainActor
+    func testAgentWindowUnfocusedPaneSwitchingSessionKeepsItsOldClient() throws {
+        splitsOn()
+        try withModePref {
+            let ss = ["a", "b", "c"].map { session($0, .idle) }
+            let m = windowModel(store(ss))
+            defer { m.close() }
+            let (log, _) = keptRecorders(m)
+            m.paneArea = Self.wideArea
+            m.adopt(paneLayout([paneTarget("a"), paneTarget("b")]))
+            m.setVisible(true)
+            Self.drainMain()
+            endRests(log)
+            XCTAssertEqual(log.spawned, ["a", "b"])
+            @MainActor func kept() -> [String] { log.made.flatMap { $0.keptKeys.map(\.name) } }
+            let pb = try paneID(m, "b"), l = m.layout
+            let moved = l.tree.replacing(pb) { .leaf(Pane(id: $0.id, target: self.paneTarget("c"))) }
+            m.adopt(PaneLayout(id: l.id, name: l.name, tree: moved, focused: l.focused, zoomed: nil))   // b's pane now shows c
+            XCTAssertEqual(kept(), ["b"], "the unfocused pane's old client is kept")
+            XCTAssertEqual(log.children["b"]?.terminated, 0, "not ended by the switch")
+            endRests(log)
+            XCTAssertEqual(log.spawned, ["a", "b", "c"], "the new session attached after the rest")
+            XCTAssertEqual(kept(), ["b"])
+            XCTAssertEqual(log.children["b"]?.terminated, 0)
+            XCTAssertLessThanOrEqual(kept().count, AgentTerminalController.keptSessions - 1, "kept window-wide <= 3")
+        }
+    }
+
+    /// #1796: the New session form over a pane with kept clients: only the shown client detaches; the kept ones stay.
+    @MainActor
+    func testAgentWindowNewSessionFormLeavesTheKeptClientsAlone() throws {
+        splitsOn()
+        try withNewSessionPrefs {
+            let ss = ["a", "b", "c"].map { session($0, .idle) }
+            let st = store(ss)
+            st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
+            let m = windowModel(st)
+            defer { m.close() }
+            let island = AgentIslandController()
+            island.historyDirs = { ["/tmp/dch-test"] }
+            island.io = AgentPromptIO(read: { _ in "" }, status: { _ in "" }, send: { _, _ in }, noMirror: { _ in true })
+            m.island = { island }
+            m.home = "/Users/example"
+            let (log, _) = keptRecorders(m)
+            m.paneArea = Self.wideArea
+            m.adopt(paneLayout([paneTarget("a"), paneTarget("b")]))
+            m.setVisible(true)
+            Self.drainMain()
+            endRests(log)
+            m.select(.live(ss[2].key))   // the focused pane a -> c: a kept
+            Self.drainMain()
+            @MainActor func kept() -> [String] { log.made.flatMap { $0.keptKeys.map(\.name) } }
+            XCTAssertEqual(kept(), ["a"])
+            m.openNewSession()
+            XCTAssertTrue(m.newSession != nil, "the form is open")
+            XCTAssertEqual(log.children["c"]?.terminated, 1, "the shown client detaches")
+            XCTAssertEqual(kept(), ["a"], "the kept one stays")
+            XCTAssertEqual(log.children["a"]?.terminated, 0)
+            XCTAssertLessThanOrEqual(kept().count, AgentTerminalController.keptSessions - 1)
+        }
+    }
 }

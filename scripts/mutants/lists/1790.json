@@ -1,6 +1,6 @@
 {
  "entry": "1790",
- "filter": "AgentTerminalKeepTests|AgentWindowKeptCapTests|AgentWindowTerminalModeTests",
+ "filter": "AgentTerminalKeepTests|AgentWindowD1Tests/testAgentWindowKeptClients|AgentWindowD1Tests/testAgentWindowUnfocusedPaneSwitchingSessionKeepsItsOldClient|AgentWindowD1Tests/testAgentWindowNewSessionFormLeavesTheKeptClientsAlone|AgentWindowTerminalModeTests",
  "mutants": [
   {
    "name": "cap_per_pane",
@@ -56,6 +56,20 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "r.terminal?.attach(nil, leave: visible ? .detach : .keep)   // #1790",
    "new": "r.terminal?.attach(nil)   // #1790",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused_switch_drops",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if r.terminal?.key != nil { r.terminal?.attach(nil, leave: .keep) }",
+   "new": "if r.terminal?.key != nil { r.terminal?.attach(nil) }",
+   "expect": "killed"
+  },
+  {
+   "name": "form_drops",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "terminal.attach(newSession == nil ? s.key : nil, leave: .detach)",
+   "new": "terminal.attach(newSession == nil ? s.key : nil)",
    "expect": "killed"
   }
  ]
