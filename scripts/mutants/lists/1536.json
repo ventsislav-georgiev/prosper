@@ -19,8 +19,8 @@
   {
    "name": "sidekick-tab",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "        store.sidekickTab = hit.1\n",
-   "new": "        store.sidekickTab = false\n",
+   "old": "        store.groupTab = hit.1\n",
+   "new": "        store.groupTab = nil\n",
    "expect": "killed"
   },
   {
