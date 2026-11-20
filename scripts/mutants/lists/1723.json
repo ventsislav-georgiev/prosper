@@ -19,14 +19,14 @@
   {
    "name": "uninstall_any",
    "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
-   "old": "if [ -f \\(t) ] && [ ! -L \\(t) ] && /usr/bin/grep -qF \\(quote(marker)) \\(t); then /bin/rm",
+   "old": "if [ -f \\(t) ] && [ ! -L \\(t) ] && /usr/bin/grep -qF \\(quote(mark)) \\(t); then /bin/rm",
    "new": "if [ -f \\(t) ]; then /bin/rm",
    "expect": "killed"
   },
   {
    "name": "no_mkdir",
    "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
-   "old": "/bin/mkdir -p \\(dir) && ",
+   "old": "/bin/mkdir -p \\(quote(parent)) && ",
    "new": "",
    "expect": "killed"
   },
@@ -40,8 +40,8 @@
   {
    "name": "unquoted_path",
    "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
-   "old": "open -a \"$app\" \"$f\" || rc=1",
-   "new": "open -a \"$app\" $f || rc=1",
+   "old": "open -b \"$app\" \"$f\" || rc=1",
+   "new": "open -b \"$app\" $f || rc=1",
    "expect": "killed"
   },
   {

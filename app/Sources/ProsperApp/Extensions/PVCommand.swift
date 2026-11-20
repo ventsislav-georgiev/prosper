@@ -1,9 +1,10 @@
 import Foundation
 import SwiftUI
 
-// #1723: the Text Viewer Settings section's "Install pv Command" control, like VS Code's `code`.
+// #1723: the Text Viewer Settings section's "Install prosper Command" control, like VS Code's `code`.
+// #1732 (QA n57): the command is `prosper`, not `pv` (Homebrew's Pipe Viewer); pv is never installed again.
 // /usr/local/bin is in /etc/paths for every user (~/bin is not). Only its button writes anything,
-// through one admin prompt; it never replaces or removes a pv it did not write.
+// through one admin prompt; it never replaces or removes a command it did not write.
 
 /// The one privileged step, behind a seam so tests run the command unprivileged against a scratch dir.
 protocol PrivilegedShell: Sendable {
@@ -29,31 +30,32 @@ struct AdminPromptShell: PrivilegedShell {
     }
 }
 
-/// Whether /usr/local/bin/pv is ours, and the Install / Uninstall actions.
+/// Whether /usr/local/bin/prosper is ours, and the Install / Uninstall actions.
 @MainActor
 final class PVCommand: ObservableObject {
     enum State: Equatable { case missing, installed, outdated, other }
 
     /// Under XCTest the real seam is never built: a test sets a fake; with none, nothing is run.
     static var shell: (any PrivilegedShell)? = NSClassFromString("XCTestCase") == nil ? AdminPromptShell() : nil
-    /// The line that makes a pv ours. Install replaces and Uninstall removes only a file that has it.
-    nonisolated static let marker = "# prosper-pv:"
+    /// The line that makes the command ours. Install replaces and Uninstall removes only a file that has it.
+    nonisolated static let marker = "# prosper-cli:"
+    /// #1723's pv marker: recognised only so Uninstall removes a pv that Prosper installed next to the target.
+    nonisolated static let legacyMarker = "# prosper-pv:"
 
     @Published private(set) var state: State?
     @Published private(set) var busy = false
     @Published private(set) var error: String?
     let target: URL
-    let appURL: URL
-    let scratch: URL
+    let bundleID: String
 
-    init(target: URL = URL(fileURLWithPath: "/usr/local/bin/pv"), appURL: URL = Bundle.main.bundleURL,
-         scratch: URL = FileManager.default.temporaryDirectory) {
+    /// #1732: the script opens the app by bundle id, so it never launches an app at a path the installer chose.
+    init(target: URL = URL(fileURLWithPath: "/usr/local/bin/prosper"),
+         bundleID: String = Bundle.main.bundleIdentifier ?? "eu.illegible.prosper") {
         self.target = target
-        self.appURL = appURL
-        self.scratch = scratch
+        self.bundleID = bundleID
     }
 
-    var script: String { Self.script(appPath: appURL.path) }
+    var script: String { Self.script(bundleID: bundleID) }
 
     /// Reads only, off main. The Settings page calls it when it appears and after every action.
     func refresh() async {
@@ -64,13 +66,7 @@ final class PVCommand: ObservableObject {
     func install() async {
         guard let shell = Self.shell, !busy else { return }
         busy = true
-        let file = scratch.appendingPathComponent("prosper-pv-\(UUID().uuidString)")
-        let script = script, target = target
-        error = await Task.detached { () async -> String? in
-            do { try script.write(to: file, atomically: true, encoding: .utf8) } catch { return error.localizedDescription }
-            defer { try? FileManager.default.removeItem(at: file) }
-            return await shell.run(Self.installCommand(source: file.path, target: target.path))
-        }.value
+        error = await shell.run(Self.installCommand(script: script, target: target.path))
         busy = false
         await refresh()
     }
@@ -94,15 +90,15 @@ final class PVCommand: ObservableObject {
         return text.contains(marker) ? .outdated : .other
     }
 
-    /// POSIX sh (dash-safe): `pv FILE...` opens each file, `pv -` saves what is piped in to a .txt first.
-    nonisolated static func script(appPath: String) -> String {
+    /// POSIX sh (dash-safe): `prosper FILE...` opens each file, `prosper -` saves what is piped in to a .txt first.
+    nonisolated static func script(bundleID: String) -> String {
         """
         #!/bin/sh
-        \(marker) installed by Prosper (Settings > Text Viewer). Prosper replaces or removes only a pv with this line.
-        app=\(quote(appPath))
+        \(marker) installed by Prosper (Settings > Text Viewer). Prosper replaces or removes only a prosper command with this line.
+        app=\(quote(bundleID))
         if [ $# -eq 0 ]; then
-          echo 'usage: pv FILE...  open files in the Prosper Text Viewer' >&2
-          echo '       pv -        open what is piped in' >&2
+          echo 'usage: prosper FILE...  open files in the Prosper Text Viewer' >&2
+          echo '       prosper -        open what is piped in' >&2
           exit 2
         fi
         rc=0
@@ -113,25 +109,35 @@ final class PVCommand: ObservableObject {
             cat > "$f" || exit 1
           fi
           case $f in /*) ;; *) f=$PWD/$f ;; esac
-          open -a "$app" "$f" || rc=1
+          open -b "$app" "$f" || rc=1
         done
         exit $rc
 
         """
     }
 
-    /// Refuses when the target is a link or a file without our marker, so another pv is never replaced.
-    nonisolated static func installCommand(source: String, target: String) -> String {
-        let t = quote(target), dir = quote((target as NSString).deletingLastPathComponent)
+    /// Refuses when the target is a link or a file without our marker, so another command is never replaced.
+    /// #1732: root reads no file a user can write: the script is inside the command. It is written into a
+    /// fresh root-owned 0700 dir in the target's dir (entered and checked with -O, so a dir swapped in by name
+    /// is refused and nobody else can place a link inside it), then renamed over the target: rename replaces
+    /// a link swapped in after the check instead of following it, and -h keeps a link to a dir from being entered.
+    nonisolated static func installCommand(script: String, target: String) -> String {
+        let t = quote(target), parent = (target as NSString).deletingLastPathComponent
         return "if [ -L \(t) ] || { [ -e \(t) ] && ! /usr/bin/grep -qF \(quote(marker)) \(t); }; then "
-            + "echo \(quote("Another pv is at \(target). Prosper did not replace it.")) >&2; exit 3; fi; "
-            + "/bin/mkdir -p \(dir) && /bin/cp \(quote(source)) \(t) && /bin/chmod 755 \(t)"
+            + "echo \(quote("Another command is at \(target). Prosper did not replace it.")) >&2; exit 3; fi; "
+            + "/bin/mkdir -p \(quote(parent)) && d=$(/usr/bin/mktemp -d \(quote(parent + "/.prosper.XXXXXX"))) && cd \"$d\" && [ -O . ] && "
+            + "{ printf '%s' \(quote(script)) > new && /bin/chmod 755 new && /bin/mv -fh new \(t); "
+            + "r=$?; /bin/rm -f new; cd / && /bin/rmdir \"$d\"; exit $r; }"
     }
 
-    /// Removes only a regular file with our marker; anything else is left alone.
+    /// Removes only a regular file with our marker; anything else is left alone. The same goes for
+    /// #1723's pv next to the target, by its old marker.
     nonisolated static func uninstallCommand(target: String) -> String {
-        let t = quote(target)
-        return "if [ -f \(t) ] && [ ! -L \(t) ] && /usr/bin/grep -qF \(quote(marker)) \(t); then /bin/rm -f \(t); fi"
+        let legacy = ((target as NSString).deletingLastPathComponent as NSString).appendingPathComponent("pv")
+        return [(target, marker), (legacy, legacyMarker)].map { path, mark in
+            let t = quote(path)
+            return "if [ -f \(t) ] && [ ! -L \(t) ] && /usr/bin/grep -qF \(quote(mark)) \(t); then /bin/rm -f \(t); fi"
+        }.joined(separator: "; ")
     }
 
     nonisolated static func quote(_ s: String) -> String {
@@ -152,13 +158,13 @@ struct PVCommandSection: View {
         _model = StateObject(wrappedValue: model())
     }
 
-    static let explanation = "Type pv FILE in a terminal to open files in the Prosper Text Viewer, or pipe text into pv - to view it. Install puts a small script at /usr/local/bin/pv and macOS asks for an administrator password. Uninstall removes only that script."
+    static let explanation = "Type prosper FILE in a terminal to open files in the Prosper Text Viewer, or pipe text into prosper - to view it. Install puts a small script at /usr/local/bin/prosper and macOS asks for an administrator password. Uninstall removes only that script."
 
     static func status(_ state: PVCommand.State?, target: String) -> String {
         switch state {
         case .installed: "Installed at \(target)"
-        case .outdated: "Installed for another copy of Prosper. Install again to update it."
-        case .other: "Another pv is at \(target). Prosper will not replace it."
+        case .outdated: "An older prosper command is installed. Install again to update it."
+        case .other: "Another command is at \(target). Prosper will not replace it."
         case .missing: "Not installed"
         case nil: ""
         }
@@ -166,7 +172,7 @@ struct PVCommandSection: View {
 
     var body: some View {
         NeonSection("Shell Command", footer: Self.explanation) {
-            NeonRow("pv command", subtitle: model.error.map { "Not changed: \($0)" }) {
+            NeonRow("prosper command", subtitle: model.error.map { "Not changed: \($0)" }) {
                 Text(Self.status(model.state, target: model.target.path))
                     .font(Neon.font(.caption))
                     .foregroundStyle(model.state == .installed ? Neon.blue : Neon.textSecondary)
@@ -175,10 +181,10 @@ struct PVCommandSection: View {
             NeonDivider()
             HStack {
                 if model.state == .installed {
-                    Button("Uninstall pv Command") { Task { await model.uninstall() } }
+                    Button("Uninstall prosper Command") { Task { await model.uninstall() } }
                         .buttonStyle(.neon).fixedSize().disabled(model.busy)
                 } else {
-                    Button("Install pv Command") { Task { await model.install() } }
+                    Button("Install prosper Command") { Task { await model.install() } }
                         .buttonStyle(.neon).fixedSize().disabled(model.busy || model.state == .other || model.state == nil)
                 }
                 Spacer(minLength: 0)

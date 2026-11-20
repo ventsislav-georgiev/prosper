@@ -2204,6 +2204,8 @@ tag from the now-released section and put it on the new top draft.
   behind either. (#1735)
 - The New session form asks for a name (no generated default) and sits in the middle of the pane.
   (#1731)
+- The prosper command installs without the administrator step ever reading a file you can write, and
+  opens Prosper by its app id. (#1732)
 
 ## v2.174.0
 
