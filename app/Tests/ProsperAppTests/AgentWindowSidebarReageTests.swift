@@ -53,7 +53,7 @@ final class AgentWindowSidebarReageTests: XCTestCase {
         XCTAssertEqual(m.row(Self.key("api"))?.age, "2m")
         XCTAssertTrue(m.row(Self.key("api"))?.session == aged.first, "a publish carries the sessions of the list")
         let full = AgentSidebar.sections(sessions: aged, history: [Self.record], sort: store.sort,
-                                         sidekickPattern: store.sidekickPattern, details: store.details, now: Self.now)
+                                         groups: store.sessionGroups, details: store.details, now: Self.now)
         XCTAssertTrue(m.sections == full, "re-aged rows equal a full build's")
         // The age clock with the same lists: History's age moves with the clock, no build.
         m.now = { Self.now + 3600 }
@@ -74,7 +74,7 @@ final class AgentWindowSidebarReageTests: XCTestCase {
             XCTAssertEqual(m.sectionBuilds, builds + 1, why)
             builds = m.sectionBuilds
             let full = AgentSidebar.sections(sessions: list, history: [Self.record], sort: store.sort,
-                                             sidekickPattern: store.sidekickPattern, details: store.details, now: Self.now)
+                                             groups: store.sessionGroups, details: store.details, now: Self.now)
             XCTAssertTrue(m.sections == full, "a full build's rows: \(why)")
         }
         var l = Self.list()
@@ -113,7 +113,7 @@ final class AgentWindowSidebarReageTests: XCTestCase {
     @MainActor
     func testReagedRefusesAMissingSessionOrAnOrderTheActivityTurned() throws {
         let a = Self.session("a", .done, ago: 10), b = Self.session("b", .done, ago: 20)
-        let built = AgentSidebar.sections(sessions: [a, b], history: [], sort: .activity, sidekickPattern: "",
+        let built = AgentSidebar.sections(sessions: [a, b], history: [], sort: .activity, groups: SessionGroup.sidekicks(""),
                                           details: .all, now: Self.now)
         XCTAssertEqual(built.first?.title, AgentSidebar.needsYouTitle)
         XCTAssertTrue(AgentSidebar.reaged(built, sessions: [a, b], sort: .activity, now: Self.now) == built)
@@ -122,7 +122,7 @@ final class AgentWindowSidebarReageTests: XCTestCase {
         XCTAssertTrue(AgentSidebar.reaged(built, sessions: turned, sort: .activity, now: Self.now) == nil, "Needs you turned")
         let x = Self.session("x", .idle, ago: 10), y = Self.session("y", .idle, ago: 20)
         for sort in [AgentIslandSort.activity, .name] {
-            let idle = AgentSidebar.sections(sessions: [x, y], history: [], sort: sort, sidekickPattern: "",
+            let idle = AgentSidebar.sections(sessions: [x, y], history: [], sort: sort, groups: SessionGroup.sidekicks(""),
                                              details: .all, now: Self.now)
             let swapped = [Self.session("x", .idle, ago: 30), y]
             let r = AgentSidebar.reaged(idle, sessions: swapped, sort: sort, now: Self.now)

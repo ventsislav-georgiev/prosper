@@ -545,7 +545,7 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertEqual(other?.claudeReading, true)
         let split = AgentIsland.split(list, pattern: AgentIsland.sidekickDefault)
         XCTAssertEqual(split.primary.map(\.key.name), [edit], "never a sidekick, whatever the file's name")
-        XCTAssertEqual(split.sidekicks.map(\.key.name), ["api-qa"])
+        XCTAssertEqual(split.firstGroup.map(\.key.name), ["api-qa"])
     }
 
     // MARK: R7: who can set the editor command

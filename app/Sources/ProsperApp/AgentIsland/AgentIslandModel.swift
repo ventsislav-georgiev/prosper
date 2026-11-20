@@ -245,14 +245,35 @@ enum AgentIsland {
 
     static let sidekickDefault = "-qa"
 
-    typealias Split = (primary: [AgentSession], sidekicks: [AgentSession])
+    /// #1757: the main list and each group's sessions, in the groups' order (an empty group kept).
+    struct Split {
+        var primary: [AgentSession]
+        var groups: [(group: SessionGroup, sessions: [AgentSession])]
+        /// The first group's sessions: the island's one group tab until #1759 draws a section per group.
+        var firstGroup: [AgentSession] { groups.first?.sessions ?? [] }
+    }
+
+    /// #1757: a session goes into the first group whose pattern matches it (as `matching`), else the main list.
+    /// Each group searches only what the groups before it left; a pattern is compiled once (sidekickCache).
+    static func split(_ list: [AgentSession], groups: [SessionGroup]) -> Split {
+        var rest = list, out: [(group: SessionGroup, sessions: [AgentSession])] = []
+        for g in groups {
+            let m = matching(rest, pattern: g.pattern)
+            rest = m.rest
+            out.append((g, m.hits))
+        }
+        return Split(primary: rest, groups: out)
+    }
+
+    /// The one Sidekicks group with `pattern` ("" = no group).
+    static func split(_ list: [AgentSession], pattern: String) -> Split { split(list, groups: SessionGroup.sidekicks(pattern)) }
 
     /// A sidekick's name, alias or harness title matches `pattern` (trimmed), each one on its own as dch's
     /// picker does (pk_load, #1210), an ICU regex searched
     /// case-insensitively (#759). A pattern that is not a usable regex (see
     /// `SidekickMatch`) is matched as literal text, still ignoring case. An empty
-    /// pattern means no split. Order is kept in both halves.
-    static func split(_ list: [AgentSession], pattern: String) -> Split {
+    /// pattern matches nothing. Order is kept in both halves.
+    private static func matching(_ list: [AgentSession], pattern: String) -> (rest: [AgentSession], hits: [AgentSession]) {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty else { return (list, []) }
         let texts = list.map(sidekickTexts)
@@ -524,7 +545,7 @@ enum AgentIsland {
 
     /// Never without sidekicks; always when they are all there is; else the chosen tab.
     static func showsSidekicks(_ split: Split, tab: Bool) -> Bool {
-        !split.sidekicks.isEmpty && (tab || split.primary.isEmpty)
+        !split.firstGroup.isEmpty && (tab || split.primary.isEmpty)
     }
 
     /// now, 4m, 2h, 3d, 1y — whole units, rounded down; #1114: no seconds, "now" under a minute.
@@ -1304,5 +1325,37 @@ struct AgentPlanUsage: Equatable, Sendable {
         return (["Claude plan usage (account pool, current account)"]
                 + [line("Session limit", session, sessionReset), line("Weekly limit", week, weekReset)].compactMap { $0 })
             .joined(separator: "\n")
+    }
+}
+
+/// #1757 (#1755): one session group, a section of its own: a name (the title) and a pattern matched as the sidekick
+/// pattern always was. The default list is one "Sidekicks" group; an empty list puts every session in the main list.
+struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    var pattern: String
+
+    /// dch's caps (#1755 contract): lines after the 8th are ignored there, a name is 1-32 bytes.
+    static let maxCount = 8
+    static let maxNameBytes = 32
+    /// The default group's id, so the migrated group and `sidekicks(_:)` are the same group.
+    static let sidekicksID = "sidekicks"
+
+    /// The one Sidekicks group with `pattern`; none for a blank pattern (no split, as an empty pattern always was).
+    static func sidekicks(_ pattern: String) -> [SessionGroup] {
+        pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [SessionGroup(id: sidekicksID, name: "Sidekicks", pattern: pattern)]
+    }
+
+    /// A name dch keeps: 1-32 bytes once trimmed, no "=" (dch splits the line at the first one), no control character.
+    static func validName(_ name: String) -> Bool {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        return (1...maxNameBytes).contains(n.utf8.count) && !n.unicodeScalars.contains { $0 == "=" || $0.value < 0x20 || $0.value == 0x7F }
+    }
+
+    /// What is kept: the first `maxCount` groups whose name is valid, names trimmed.
+    static func normalized(_ list: [SessionGroup]) -> [SessionGroup] {
+        Array(list.filter { validName($0.name) }.prefix(maxCount)).map {
+            SessionGroup(id: $0.id, name: $0.name.trimmingCharacters(in: .whitespaces), pattern: $0.pattern)
+        }
     }
 }

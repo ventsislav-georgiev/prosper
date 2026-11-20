@@ -451,6 +451,7 @@ enum Preferences {
         static let agentIslandSidekickTabs = "agentIslandSidekickTabs"
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
+        static let agentIslandSessionGroups = "agentIslandSessionGroups"   // #1757: JSON [SessionGroup], per Mac
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
@@ -1323,11 +1324,35 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandSidekickTabs) }
     }
 
-    /// #571: the sidekick name pattern; unset reads as "-qa" (prosper-ios's default).
-    /// Empty is kept: it means no split.
+    /// #1757: the session groups in order. Until a list is stored it reads as the one Sidekicks group with the #571
+    /// pattern key (unset: "-qa", prosper-ios's default; empty kept: no split), so a read migrates nothing and the
+    /// `agentIslandSidekickPatternUpdated` stamp stays the phone sync's. A stored list that does not decode reads the
+    /// same way. Stored and read through SessionGroup.normalized (at most 8, valid names).
+    static var agentIslandSessionGroups: [SessionGroup] {
+        get {
+            if let d = defaults.data(forKey: Keys.agentIslandSessionGroups),
+               let list = try? JSONDecoder().decode([SessionGroup].self, from: d) { return SessionGroup.normalized(list) }
+            return [SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks",
+                                 pattern: defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault)]
+        }
+        set { defaults.set(try? JSONEncoder().encode(SessionGroup.normalized(newValue)), forKey: Keys.agentIslandSessionGroups) }
+    }
+
+    /// #571, #1757: the first group's pattern ("" with no groups): Settings' one field (until #1758) and the phone's
+    /// 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits the first group, and with no
+    /// group a non-empty pattern (the phone's adopt) adds the Sidekicks group back.
     static var agentIslandSidekickPattern: String {
-        get { defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault }
-        set { defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern) }
+        get { agentIslandSessionGroups.first?.pattern ?? "" }
+        set {
+            guard defaults.object(forKey: Keys.agentIslandSessionGroups) != nil else {
+                return defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern)
+            }
+            var list = agentIslandSessionGroups
+            if !list.isEmpty { list[0].pattern = newValue } else if !newValue.isEmpty {
+                list = [SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: newValue)]
+            }
+            agentIslandSessionGroups = list
+        }
     }
 
     /// #760: ms since epoch of the pattern's last edit here, or the adopted phone's;

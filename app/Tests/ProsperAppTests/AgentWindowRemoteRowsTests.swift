@@ -121,7 +121,7 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         XCTAssertEqual(other.rows.map { $0.remote?.host }, ["host-a", "host-a", "host-b"], "the host label's value")
         XCTAssertTrue(AgentSidebar.collapsible.contains(AgentSidebar.otherMachinesTitle))
         // The local row is the one the island's values alone build.
-        let alone = AgentSidebar.sections(sessions: [local], history: [], sort: store.sort, sidekickPattern: store.sidekickPattern,
+        let alone = AgentSidebar.sections(sessions: [local], history: [], sort: store.sort, groups: store.sessionGroups,
                                           details: store.details, now: AgentWindowD1Tests.now)
         XCTAssertEqual(m.sections.first, alone.first)
         XCTAssertEqual(store.sessions, [local], "remote rows never enter the island's store")

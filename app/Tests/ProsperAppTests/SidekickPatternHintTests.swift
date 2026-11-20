@@ -90,14 +90,14 @@ final class SidekickPatternHintTests: XCTestCase {
             let others = ["axb", "ab", "a\(c)\(c)b", "b\(c)a", "aab"]
             let list = ([text] + others).map(session)
             XCTAssertEqual(AgentIsland.sidekickMatch(escaped), .regex, "\(text): matched as a regex, not through the text fallback")
-            XCTAssertEqual(AgentIsland.split(list, pattern: escaped).sidekicks.map(\.key.name), [text], "\(text) via \(escaped): only the text")
+            XCTAssertEqual(AgentIsland.split(list, pattern: escaped).firstGroup.map(\.key.name), [text], "\(text) via \(escaped): only the text")
             if c != "-" { XCTAssertEqual(AgentIsland.sidekickHint(escaped), .exact, "\(escaped) is read as exact") }
             XCTAssertEqual(DchConfigWriter.sidekickValue(escaped), escaped, "\(escaped) goes to the dch line unchanged (R938-1)")
         }
         // The case folding is the matcher's, as for a plain pattern.
-        XCTAssertEqual(AgentIsland.split(["A.B", "axb"].map(session), pattern: AgentIsland.sidekickEscaped("a.b")).sidekicks.map(\.key.name), ["A.B"])
+        XCTAssertEqual(AgentIsland.split(["A.B", "axb"].map(session), pattern: AgentIsland.sidekickEscaped("a.b")).firstGroup.map(\.key.name), ["A.B"])
         // And the dot unescaped is the very difference the hint is about.
-        XCTAssertEqual(AgentIsland.split(["a.b", "axb"].map(session), pattern: "a.b").sidekicks.count, 2)
+        XCTAssertEqual(AgentIsland.split(["a.b", "axb"].map(session), pattern: "a.b").firstGroup.count, 2)
     }
 
     func testMatchExactlyOnlyChangesAPatternReadAsARegex() {

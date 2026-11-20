@@ -2915,12 +2915,12 @@ final class AgentIslandTests: XCTestCase {
                                   pattern: AgentIsland.sidekickDefault)
         XCTAssertEqual(AgentIsland.sidekickDefault, "-qa")
         XCTAssertEqual(names(r.primary), ["build", "notes"])
-        XCTAssertEqual(names(r.sidekicks), ["build-qa"])
+        XCTAssertEqual(names(r.firstGroup), ["build-qa"])
     }
 
     func testSplitCaseInsensitive() {
         let r = AgentIsland.split([session("build-QA", .idle), session("notes", .idle)], pattern: "-Qa")
-        XCTAssertEqual(names(r.sidekicks), ["build-QA"])
+        XCTAssertEqual(names(r.firstGroup), ["build-QA"])
         XCTAssertEqual(names(r.primary), ["notes"])
     }
 
@@ -2929,9 +2929,9 @@ final class AgentIslandTests: XCTestCase {
         for p in ["", "   ", "\n\t"] {
             let r = AgentIsland.split(list, pattern: p)
             XCTAssertEqual(names(r.primary), ["build", "build-qa"])
-            XCTAssertTrue(r.sidekicks.isEmpty)
+            XCTAssertTrue(r.firstGroup.isEmpty)
         }
-        XCTAssertEqual(names(AgentIsland.split(list, pattern: " -qa ").sidekicks), ["build-qa"], "the pattern is trimmed")
+        XCTAssertEqual(names(AgentIsland.split(list, pattern: " -qa ").firstGroup), ["build-qa"], "the pattern is trimmed")
     }
 
     /// A renamed session counts by its alias; a matching name still counts under a plain alias.
@@ -2939,12 +2939,12 @@ final class AgentIslandTests: XCTestCase {
         let r = AgentIsland.split([session("build", .idle, alias: "build-qa"), session("notes-qa", .idle, alias: "notes"),
                                    session("web", .idle, alias: "site"), session("api", .idle)], pattern: "-qa")
         XCTAssertEqual(names(r.primary), ["web", "api"])
-        XCTAssertEqual(names(r.sidekicks), ["build", "notes-qa"])
+        XCTAssertEqual(names(r.firstGroup), ["build", "notes-qa"])
     }
 
     func testSplitAliasCaseInsensitive() {
         let r = AgentIsland.split([session("build", .idle, alias: "Build-QA"), session("notes", .idle)], pattern: "-qa")
-        XCTAssertEqual(names(r.sidekicks), ["build"])
+        XCTAssertEqual(names(r.firstGroup), ["build"])
         XCTAssertEqual(names(r.primary), ["notes"])
     }
 
@@ -2952,7 +2952,7 @@ final class AgentIslandTests: XCTestCase {
         let r = AgentIsland.split([session("z-qa", .idle), session("b", .idle), session("a-qa", .idle), session("a", .idle)],
                                   pattern: "-qa")
         XCTAssertEqual(names(r.primary), ["b", "a"])
-        XCTAssertEqual(names(r.sidekicks), ["z-qa", "a-qa"])
+        XCTAssertEqual(names(r.firstGroup), ["z-qa", "a-qa"])
     }
 
     // #759: the pattern is a case-insensitive ICU regex, searched, in the name and the alias.
@@ -2960,21 +2960,21 @@ final class AgentIslandTests: XCTestCase {
     func testSplitRegexAlternation() {
         let r = AgentIsland.split([session("prosper-qa", .idle), session("infra-stats-reviewer", .idle),
                                    session("prosper-main", .idle), session("qa-notes", .idle)], pattern: "-(qa|reviewer)$")
-        XCTAssertEqual(names(r.sidekicks), ["prosper-qa", "infra-stats-reviewer"])
+        XCTAssertEqual(names(r.firstGroup), ["prosper-qa", "infra-stats-reviewer"])
         XCTAssertEqual(names(r.primary), ["prosper-main", "qa-notes"], "$ anchors the end; no leading dash, no match")
     }
 
     func testSplitRegexCaseInsensitive() {
         let r = AgentIsland.split([session("Prosper-QA", .idle), session("infra-Reviewer", .idle), session("main", .idle)],
                                   pattern: "-(qa|REVIEWER)$")
-        XCTAssertEqual(names(r.sidekicks), ["Prosper-QA", "infra-Reviewer"])
+        XCTAssertEqual(names(r.firstGroup), ["Prosper-QA", "infra-Reviewer"])
         XCTAssertEqual(names(r.primary), ["main"])
     }
 
     func testSplitRegexMatchesAlias() {
         let r = AgentIsland.split([session("build", .idle, alias: "build-reviewer"), session("notes", .idle, alias: "notes-rev")],
                                   pattern: "-(qa|reviewer)$")
-        XCTAssertEqual(names(r.sidekicks), ["build"])
+        XCTAssertEqual(names(r.firstGroup), ["build"])
         XCTAssertEqual(names(r.primary), ["notes"])
     }
 
@@ -2982,11 +2982,11 @@ final class AgentIslandTests: XCTestCase {
     func testSplitInvalidRegexFallsBackToText() {
         XCTAssertNil(AgentIsland.sidekickRegex("*-qa"))
         var r = AgentIsland.split([session("build*-QA", .idle), session("build-qa", .idle)], pattern: "*-qa")
-        XCTAssertEqual(names(r.sidekicks), ["build*-QA"])
+        XCTAssertEqual(names(r.firstGroup), ["build*-QA"])
         XCTAssertEqual(names(r.primary), ["build-qa"])
         r = AgentIsland.split([session("prosper-qa", .idle), session("infra-reviewer", .idle),
                                session("x", .idle, alias: "X*.?-(QA|reviewer)")], pattern: "*.?-(qa|reviewer)")
-        XCTAssertEqual(names(r.sidekicks), ["x"], "only the literal text matches")
+        XCTAssertEqual(names(r.firstGroup), ["x"], "only the literal text matches")
         XCTAssertEqual(names(r.primary), ["prosper-qa", "infra-reviewer"])
     }
 
@@ -3008,10 +3008,10 @@ final class AgentIslandTests: XCTestCase {
         let list = [session("infra-stats-weekly-report-x", .idle), session("abcdefghijklmnopqr", .idle)]
         let start = Date()
         for p in ["^(.*)*-qa$", "(.+)+x"] {
-            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.count, 0, p)
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.count, 0, p)
             XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote, p)
             let r = AgentIsland.split([session("z\(p)Z", .idle)] + list, pattern: p)
-            XCTAssertEqual(names(r.sidekicks), ["z\(p)Z"], "\(p): matched as text from now on")
+            XCTAssertEqual(names(r.firstGroup), ["z\(p)Z"], "\(p): matched as text from now on")
             // A tick re-splits several times a second: after the flip no call pays the deadline again
             // (400 calls at 10 ms would be 4 s).
             for _ in 0..<200 { _ = AgentIsland.split(list, pattern: p) }
@@ -3024,12 +3024,12 @@ final class AgentIslandTests: XCTestCase {
         let list = [session("build", .idle), session("notes-QA|x", .idle), session("a", .idle, alias: "x*y")]
         for (p, hit) in [("x*", "a"), ("-qa|", "notes-QA|x"), ("b|", "")] {
             XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Matches every session: matched as text" + "\n" + AgentIsland.sidekickDchNote, p)
-            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).sidekicks), hit.isEmpty ? [] : [hit], p)
+            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).firstGroup), hit.isEmpty ? [] : [hit], p)
         }
         // Zero-width patterns never match "" alone but match inside every name: a zero-width match is no hit.
         for p in ["\\b", "(?=build)", "(?<=a)"] {
             XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), AgentIsland.sidekickDchNote, p)   // #1172: not dch's
-            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).sidekicks), [], p)
+            XCTAssertEqual(names(AgentIsland.split(list, pattern: p).firstGroup), [], p)
         }
     }
 
@@ -3042,10 +3042,10 @@ final class AgentIslandTests: XCTestCase {
         AgentIsland.sidekickDeadline = .max
         AgentIsland.sidekickSlowCall = .max   // no call counts toward the tally, so even a zero total holds
         AgentIsland.sidekickSlowTotal = 0
-        XCTAssertEqual(AgentIsland.split(list, pattern: "-1\\d-tally$").sidekicks.count, 10)
+        XCTAssertEqual(AgentIsland.split(list, pattern: "-1\\d-tally$").firstGroup.count, 10)
         XCTAssertEqual(AgentIsland.sidekickCaption("-1\\d-tally$", tabs: true, names: []), AgentIsland.sidekickDchNote)
         AgentIsland.sidekickSlowCall = 0     // every call counts, and any tally is over the total
-        XCTAssertEqual(AgentIsland.split(list, pattern: "-2\\d-tally$").sidekicks.count, 0, "flipped: matched as text")
+        XCTAssertEqual(AgentIsland.split(list, pattern: "-2\\d-tally$").firstGroup.count, 0, "flipped: matched as text")
         XCTAssertEqual(AgentIsland.sidekickCaption("-2\\d-tally$", tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote)
     }
 
@@ -3057,7 +3057,7 @@ final class AgentIslandTests: XCTestCase {
         // QA #594 INFO-5: no session name was searched, so the caption names none.
         XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: []), "Too slow as a regex: matched as text" + "\n" + AgentIsland.sidekickDchNote)
         let r = AgentIsland.split([session("xy", .idle), session("z\(p)Z", .idle)], pattern: p)
-        XCTAssertEqual(names(r.sidekicks), ["z\(p)Z"], "matched as text")
+        XCTAssertEqual(names(r.firstGroup), ["z\(p)Z"], "matched as text")
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
     }
 
@@ -3082,7 +3082,7 @@ final class AgentIslandTests: XCTestCase {
         AgentIsland.sidekickSlowCall = 1_000_000
         AgentIsland.sidekickSlowTotal = 0   // any call that counts flips it
         AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
-        for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: "-(qa|reviewer|many-x)$").sidekicks.count, 800) }
+        for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: "-(qa|reviewer|many-x)$").firstGroup.count, 800) }
         XCTAssertNil(AgentIsland.sidekickCaption("-(qa|reviewer|many-x)$", tabs: true, names: []))
     }
 
@@ -3098,7 +3098,7 @@ final class AgentIslandTests: XCTestCase {
         AgentIsland.sidekickSlowTotal = 0
         AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
         // As a regex it takes all 32; as text, none.
-        XCTAssertEqual(AgentIsland.split(list, pattern: "^a$|^per16$").sidekicks.count, 0, "flipped: matched as text")
+        XCTAssertEqual(AgentIsland.split(list, pattern: "^a$|^per16$").firstGroup.count, 0, "flipped: matched as text")
         XCTAssertEqual(AgentIsland.sidekickCaption("^a$|^per16$", tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote)
     }
 
@@ -3114,7 +3114,7 @@ final class AgentIslandTests: XCTestCase {
         AgentIsland.sidekickDeadline = .max
         AgentIsland.sidekickSlowCall = 300_000
         AgentIsland.sidekickSlowTotal = 0
-        XCTAssertEqual(names(AgentIsland.split(list, pattern: "(x+x+)+y").sidekicks), ["z(x+x+)+yZ"], "flipped: matched as text")
+        XCTAssertEqual(names(AgentIsland.split(list, pattern: "(x+x+)+y").firstGroup), ["z(x+x+)+yZ"], "flipped: matched as text")
         XCTAssertEqual(AgentIsland.sidekickCaption("(x+x+)+y", tabs: true, names: []), "Too slow on a session name: matched as text" + "\n" + AgentIsland.sidekickDchNote)
     }
 
@@ -3145,13 +3145,13 @@ final class AgentIslandTests: XCTestCase {
         let list2 = [session("\(long)-bd2", .idle), session("api", .idle)]
         withSidekickBars(probing: ["-bd1$", "-bd2$"]) {
             AgentIsland.sidekickCPU = burstCPU(tick: 1_000, burst: 20_000_000, reads: 2...3)
-            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd1$").sidekicks.count, 1)
+            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd1$").firstGroup.count, 1)
             AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
             XCTAssertTrue(AgentIsland.sidekickMatch("-bd1$") == .regex, "the deadline burst did not flip it")
             AgentIsland.sidekickDeadline = .max
             AgentIsland.sidekickSlowTotal = 0
             AgentIsland.sidekickCPU = burstCPU(tick: 1_000, burst: 5_000_000, reads: 2...4)
-            XCTAssertEqual(AgentIsland.split(list2, pattern: "-bd2$").sidekicks.count, 1)
+            XCTAssertEqual(AgentIsland.split(list2, pattern: "-bd2$").firstGroup.count, 1)
             AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
             XCTAssertTrue(AgentIsland.sidekickMatch("-bd2$") == .regex, "the counted burst did not flip it")
         }
@@ -3164,12 +3164,12 @@ final class AgentIslandTests: XCTestCase {
         withSidekickBars(probing: ["-bd3$", "-bd4$"]) {
             AgentIsland.sidekickCPU = countingCPU(tick: 20_000_000)
             let r = AgentIsland.split([session("\(long)-bd3", .idle), session("z-bd3$Z", .idle)], pattern: "-bd3$")
-            XCTAssertEqual(names(r.sidekicks), ["z-bd3$Z"], "flipped at the deadline: matched as text")
+            XCTAssertEqual(names(r.firstGroup), ["z-bd3$Z"], "flipped at the deadline: matched as text")
             AgentIsland.sidekickDeadline = .max
             AgentIsland.sidekickSlowTotal = 0
             AgentIsland.sidekickCPU = countingCPU(tick: 2_000_000)
             let r2 = AgentIsland.split([session("\(long)-bd4", .idle), session("z-bd4$Z", .idle)], pattern: "-bd4$")
-            XCTAssertEqual(names(r2.sidekicks), ["z-bd4$Z"], "flipped on the tally: matched as text")
+            XCTAssertEqual(names(r2.firstGroup), ["z-bd4$Z"], "flipped on the tally: matched as text")
         }
     }
 
@@ -3185,7 +3185,7 @@ final class AgentIslandTests: XCTestCase {
             AgentIsland.sidekickSlowTotal = .max
             let reads = OSAllocatedUnfairLock(initialState: 0)
             AgentIsland.sidekickCPU = { reads.withLock { $0 += 1; return UInt64($0) * tick } }
-            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd5$").sidekicks.count, 1)
+            XCTAssertEqual(AgentIsland.split(list, pattern: "-bd5$").firstGroup.count, 1)
             let x = UInt64(max(1, reads.withLock { $0 } / 2 - 1)) * tick
             XCTAssertGreaterThan(x, AgentIsland.sidekickSlowCall, "a counted call costs more than the bar")
             AgentIsland.sidekickSlowTotal = x + x / 2
@@ -3218,9 +3218,9 @@ final class AgentIslandTests: XCTestCase {
                     titled("lit", alias: "Agent D", title: "x.*-BD8$y")]
         withSidekickBars(probing: [p]) {
             (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = (100_000, .max, 1)
-            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "doc"], "first call: titles a regex")
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["api", "doc"], "first call: titles a regex")
             for call in 0...AgentIsland.sidekickForget {
-                XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "lit"], "quiet call \(call): titles as text")
+                XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["api", "lit"], "quiet call \(call): titles as text")
             }
             XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "names and aliases stay a regex")
         }
@@ -3240,7 +3240,7 @@ final class AgentIslandTests: XCTestCase {
             AgentIsland.sidekickSlowTotal = 0
             let dry = burstCPU(tick: 1_000, burst: 20_000_000, reads: 2...2)
             AgentIsland.sidekickCPU = dry
-            XCTAssertEqual(AgentIsland.split(bare, pattern: p).sidekicks.map(\.name), ["api-bd9"])
+            XCTAssertEqual(AgentIsland.split(bare, pattern: p).firstGroup.map(\.name), ["api-bd9"])
             let n = Int((dry() - 20_000_000) / 1_000) - 1   // the dry call's reads (the read just made is n + 1)
             AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
             XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "dry call: the second search stood")
@@ -3248,7 +3248,7 @@ final class AgentIslandTests: XCTestCase {
             let reads = OSAllocatedUnfairLock(initialState: 0)
             // read n + 1 is the titles' start, n + 2 the title's own start: the 30 ms lands inside the second search's title.
             AgentIsland.sidekickCPU = { reads.withLock { $0 += 1; return UInt64($0) * 1_000 + ($0 >= 2 ? 20_000_000 : 0) + ($0 >= n + 2 ? 30_000_000 : 0) } }
-            XCTAssertEqual(AgentIsland.split(titled, pattern: p).sidekicks.map(\.name), ["api-bd9"], "still a regex: \"-bd9$\" as text is in no name")
+            XCTAssertEqual(AgentIsland.split(titled, pattern: p).firstGroup.map(\.name), ["api-bd9"], "still a regex: \"-bd9$\" as text is in no name")
             XCTAssertGreaterThan(reads.withLock { $0 }, n + 2, "the second search reached the title")
             AgentIsland.sidekickCPU = countingCPU(tick: 1_000)
             XCTAssertTrue(AgentIsland.sidekickMatch(p) == .regex, "the second search stood: no flip")
@@ -3259,7 +3259,7 @@ final class AgentIslandTests: XCTestCase {
     func testSplitRegexNonASCIIName() {
         let r = AgentIsland.split([session("Проспер-😀-qa", .idle), session("Проспер-😀-qa-x", .idle),
                                    session("бележки", .idle, alias: "ревю-👩‍💻-REVIEWER")], pattern: "😀-qa$|-reviewer$")
-        XCTAssertEqual(names(r.sidekicks), ["Проспер-😀-qa", "бележки"])
+        XCTAssertEqual(names(r.firstGroup), ["Проспер-😀-qa", "бележки"])
         XCTAssertEqual(names(r.primary), ["Проспер-😀-qa-x"])
     }
 

@@ -177,7 +177,7 @@ final class AgentWindowD1Tests: XCTestCase {
                         session("qa-797", .working, ago: 20), session("qa-798", .blocked, ago: 1),
                         session("asking-newer", .blocked, ago: 100)]
         let secs = AgentSidebar.sections(sessions: sessions, history: [record("old")], sort: .activity,
-                                         sidekickPattern: "qa-", details: .all, now: Self.now)
+                                         groups: SessionGroup.sidekicks("qa-"), details: .all, now: Self.now)
         XCTAssertEqual(secs.map(\.title), ["Needs you", "Sessions", "Sidekicks", "History"])
         XCTAssertEqual(secs[0].rows.map(\.title), ["qa-798", "asking-newer", "asking", "finished"],
                        "blocked before done, newest first; a sidekick that needs you is in Needs you")
@@ -188,11 +188,11 @@ final class AgentWindowD1Tests: XCTestCase {
         let ids = secs.flatMap(\.rows).map(\.id)
         XCTAssertEqual(Set(ids).count, ids.count, "no session shows twice")
 
-        let byName = AgentSidebar.sections(sessions: sessions, history: [], sort: .name, sidekickPattern: "",
+        let byName = AgentSidebar.sections(sessions: sessions, history: [], sort: .name, groups: SessionGroup.sidekicks(""),
                                            details: .all, now: Self.now)
         XCTAssertEqual(byName.map(\.title), ["Needs you", "Sessions"], "no sidekick pattern, no history: no empty groups")
         XCTAssertEqual(byName[1].rows.map(\.title), ["idle-one", "qa-797", "worker"])
-        XCTAssertEqual(AgentSidebar.sections(sessions: [], history: [], sort: .name, sidekickPattern: "", details: .all,
+        XCTAssertEqual(AgentSidebar.sections(sessions: [], history: [], sort: .name, groups: SessionGroup.sidekicks(""), details: .all,
                                              now: Self.now), [])
     }
 

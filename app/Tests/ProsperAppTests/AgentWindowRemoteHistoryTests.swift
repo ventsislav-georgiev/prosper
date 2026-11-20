@@ -134,7 +134,7 @@ final class AgentWindowRemoteHistoryTests: XCTestCase {
 
     private func history(local: [DchHistoryRecord] = [], remote: [AgentSidebar.Remote],
                          far: [AgentSidebar.RemoteRecord]) -> [AgentSidebar.Row] {
-        AgentSidebar.sections(sessions: [], history: local, sort: .name, sidekickPattern: "-qa", details: .all,
+        AgentSidebar.sections(sessions: [], history: local, sort: .name, groups: SessionGroup.sidekicks("-qa"), details: .all,
                               now: AgentWindowD1Tests.now, remote: remote, remoteHistory: far)
             .first { $0.title == "History" }?.rows ?? []
     }

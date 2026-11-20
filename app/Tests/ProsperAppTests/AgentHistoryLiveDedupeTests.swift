@@ -26,7 +26,7 @@ final class AgentHistoryLiveDedupeTests: XCTestCase {
 
     /// The window's History section: titles and pins.
     private func windowHistory(_ sessions: [AgentSession], _ history: [DchHistoryRecord]) -> [String: Bool] {
-        let rows = AgentSidebar.sections(sessions: sessions, history: history, sort: .name, sidekickPattern: "-qa",
+        let rows = AgentSidebar.sections(sessions: sessions, history: history, sort: .name, groups: SessionGroup.sidekicks("-qa"),
                                          details: .all, now: Self.now).first { $0.title == "History" }?.rows ?? []
         return Dictionary(rows.map { ($0.title, $0.record?.pinned ?? false) }, uniquingKeysWith: { a, _ in a })
     }

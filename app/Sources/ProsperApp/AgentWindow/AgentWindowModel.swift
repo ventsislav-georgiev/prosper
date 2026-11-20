@@ -264,17 +264,17 @@ enum AgentSidebar {
     /// one group only; empty groups are left out.
     /// #829 G0: `actions` are the island's row texts; a running one replaces the state word.
     static func sections(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
-                         sidekickPattern: String, details: AgentIslandRowDetails, now: TimeInterval,
+                         groups: [SessionGroup], details: AgentIslandRowDetails, now: TimeInterval,
                          actions: [AgentSessionKey: String] = [:], remote: [Remote] = [],
                          remoteHistory: [RemoteRecord] = []) -> [Section] {
         let needs = sessions.filter(needsYou).sorted(by: before)
-        let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), pattern: sidekickPattern)
+        let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), groups: groups)
         var out: [Section] = []
         func add(_ title: String, _ rows: [Row]) { if !rows.isEmpty { out.append(Section(title: title, rows: rows)) } }
         let live = { (s: AgentSession) in row(s, details: details, now: now, action: actions[s.key]) }
         add(needsYouTitle, needs.map(live))
         add("Sessions", rest.primary.map(live))
-        add("Sidekicks", rest.sidekicks.map(live))
+        for g in rest.groups { add(g.group.name, g.sessions.map(live)) }   // #1757: one section per group, in order
         // #836: grouped under their host (host, then name), after the local live rows.
         add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
         // #1324 (a): after the local records (unchanged), each host's, capped per host as dch's picker does (50 names).
@@ -1307,7 +1307,7 @@ final class AgentWindowModel: ObservableObject {
     private(set) var sectionBuilds = 0
     /// #1634: what the last refresh read, the sessions apart (only their activity may move without a build).
     private struct SidebarInputs: Equatable {
-        let history: [DchHistoryRecord], sort: AgentIslandSort, pattern: String, details: AgentIslandRowDetails
+        let history: [DchHistoryRecord], sort: AgentIslandSort, groups: [SessionGroup], details: AgentIslandRowDetails
         let actions: [AgentSessionKey: String], remote: [AgentSidebar.Remote], remoteHistory: [AgentSidebar.RemoteRecord]
     }
     private var built: (sessions: [AgentSession], inputs: SidebarInputs)?
@@ -1755,12 +1755,12 @@ final class AgentWindowModel: ObservableObject {
         if let saved = layouts?.activeLayout, saved != layout { parked = nil; adopt(saved) }
         offEmptied = nil
         // @Published sends on willSet with the new value, so the values are used as given.
-        subscription = store.$sessions.combineLatest(store.$history, store.$sort, store.$sidekickPattern)
+        subscription = store.$sessions.combineLatest(store.$history, store.$sort, store.$sessionGroups)
             .combineLatest(store.$details, store.$actions)
             .sink { [weak self] v, details, actions in
                 MainActor.assumeIsolated {
                     self?.seeSpawn(v.0)
-                    self?.refresh(sessions: v.0, history: v.1, sort: v.2, pattern: v.3, details: details, actions: actions)
+                    self?.refresh(sessions: v.0, history: v.1, sort: v.2, groups: v.3, details: details, actions: actions)
                     self?.pollRemote()
                     self?.feedPty(v.0)   // #896: after the refresh, so a terminal it just attached gets its row
                     self?.stampLastLive(v.0)   // after the refresh: a pane it just filled is stamped by this publish
@@ -1803,7 +1803,7 @@ final class AgentWindowModel: ObservableObject {
     /// Rebuilds the sidebar from the store's current values (the age clock's tick).
     func refresh() {
         guard let s = store else { return }
-        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, groups: s.sessionGroups, details: s.details,
                 actions: s.actions)
         pollRemote()
     }
@@ -1864,7 +1864,7 @@ final class AgentWindowModel: ObservableObject {
             remoteGap = min(remoteGap * 2, Self.remoteIdleMax)
         }
         guard changed, let s = store else { return }
-        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, groups: s.sessionGroups, details: s.details,
                 actions: s.actions)
     }
 
@@ -1910,7 +1910,7 @@ final class AgentWindowModel: ObservableObject {
             if let rows = AgentSidebar.parseRemote(line), rows != remoteSessions { remoteSessions = rows; changed = true }
         }
         guard changed, let s = store else { return }
-        refresh(sessions: s.sessions, history: s.history, sort: s.sort, pattern: s.sidekickPattern, details: s.details,
+        refresh(sessions: s.sessions, history: s.history, sort: s.sort, groups: s.sessionGroups, details: s.details,
                 actions: s.actions)
     }
 
@@ -1953,7 +1953,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     private func refresh(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
-                         pattern: String, details: AgentIslandRowDetails, actions: [AgentSessionKey: String]) {
+                         groups: [SessionGroup], details: AgentIslandRowDetails, actions: [AgentSessionKey: String]) {
         // Hidden or closed: nothing is rebuilt; showing again reads the store afresh.
         guard visible, !closed else { return }
         refreshes += 1
@@ -1965,7 +1965,7 @@ final class AgentWindowModel: ObservableObject {
         let w = AgentPaneLayout.splitsEnabled ? Set(sessions.lazy.filter { $0.state == .working }.map(\.key)) : nil
         if w != working { working = w }
         // #1324: a remote Resume's text by its record id ("@" + host: never a local key).
-        let inputs = SidebarInputs(history: history, sort: sort, pattern: pattern, details: details,
+        let inputs = SidebarInputs(history: history, sort: sort, groups: groups, details: details,
                                    actions: actions.merging(remoteResumeText) { a, _ in a }, remote: remoteSessions,
                                    remoteHistory: remoteHistory)
         let t = now()
@@ -1978,7 +1978,7 @@ final class AgentWindowModel: ObservableObject {
             new = aged.map(\.rows).map { $0.map(\.age) } == sections.map(\.rows).map { $0.map(\.age) } ? sections : aged
         } else {
             sectionBuilds += 1
-            new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, sidekickPattern: pattern,
+            new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, groups: groups,
                                         details: details, now: t, actions: inputs.actions, remote: remoteSessions,
                                         remoteHistory: remoteHistory)
         }

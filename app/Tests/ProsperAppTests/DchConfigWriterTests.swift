@@ -161,7 +161,7 @@ final class DchConfigWriterTests: XCTestCase {
             for n in names {
                 let s = AgentSession(key: AgentSessionKey(dir: "/d", name: n), alias: "", activity: 0, state: .idle, agents: 0)
                 let dch = regexec(&re, n, 0, nil, 0) == 0
-                let island = !AgentIsland.split([s], pattern: p).sidekicks.isEmpty
+                let island = !AgentIsland.split([s], pattern: p).firstGroup.isEmpty
                 XCTAssertEqual(island, dch, "\(p) on \(n)")
             }
         }
@@ -185,11 +185,11 @@ final class DchConfigWriterTests: XCTestCase {
         for (alias, hit) in table {
             XCTAssertEqual(Self.dchMatches("-qa$", alias), hit, "dch: \(alias.debugDescription)")
             let split = AgentIsland.split(Self.sessions([(name: "api", alias: alias)]), pattern: "-qa$")
-            XCTAssertEqual(!split.sidekicks.isEmpty, hit, "island: \(alias.debugDescription)")
+            XCTAssertEqual(!split.firstGroup.isEmpty, hit, "island: \(alias.debugDescription)")
         }
         // "^" at the other end: an alias starting with a separator is not "^qa"
         XCTAssertEqual(Self.dchMatches("^qa", "\u{2028}qa"), false)
-        XCTAssertTrue(AgentIsland.split(Self.sessions([(name: "api", alias: "\u{2028}qa")]), pattern: "^qa").sidekicks.isEmpty)
+        XCTAssertTrue(AgentIsland.split(Self.sessions([(name: "api", alias: "\u{2028}qa")]), pattern: "^qa").firstGroup.isEmpty)
     }
 
     /// #1210: dch's picker (pk_load) matches name, alias and harness title one by one, the title also when an
@@ -223,7 +223,7 @@ final class DchConfigWriterTests: XCTestCase {
             let list = AgentIsland.list(dirs: ["/d"], run: { args, _ in args == ["--ls-json"] ? json : nil })
             XCTAssertEqual(list.count, 1, what)
             guard let s = list.first else { continue }
-            XCTAssertEqual(!AgentIsland.split(list, pattern: p).sidekicks.isEmpty, island, "island: \(what)")
+            XCTAssertEqual(!AgentIsland.split(list, pattern: p).firstGroup.isEmpty, island, "island: \(what)")
             let kept = title.map { $0.utf8.count <= cap ? $0 : "" } ?? ""
             XCTAssertEqual(s.harness, kept, what)
             XCTAssertEqual(s.title, !alias.isEmpty ? alias : !kept.isEmpty ? kept : name, "label: \(what)")
@@ -296,7 +296,7 @@ final class DchConfigWriterTests: XCTestCase {
             for _ in 0..<3 {
                 let before = reads()
                 let r = AgentIsland.split(list, pattern: p)
-                XCTAssertEqual(r.sidekicks.map(\.name), ["api", "doc"], "the alias and the short title, as a regex")
+                XCTAssertEqual(r.firstGroup.map(\.name), ["api", "doc"], "the alias and the short title, as a regex")
                 XCTAssertEqual(r.primary.map(\.name), ["web"], "its title timed out: no hit")
                 XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex, "never flipped by a title")
                 // One call shares one deadline: about 105 reads (start, 101 to pass it, ICU's callbacks after the stop,
@@ -314,7 +314,7 @@ final class DchConfigWriterTests: XCTestCase {
         let p = ".*-qa1220b$"
         Self.withSeams(deadline: 100_000, slowCall: .max, slowTotal: 0) { _ in
             let r = AgentIsland.split([Self.session(Self.longTitle("1220b")), Self.session("api-qa1220b")], pattern: p)
-            XCTAssertEqual(r.sidekicks.map(\.name), [], "flipped: matched as text, and no name holds the pattern's text")
+            XCTAssertEqual(r.firstGroup.map(\.name), [], "flipped: matched as text, and no name holds the pattern's text")
             XCTAssertEqual(AgentIsland.sidekickMatch(p), .slow)
             XCTAssertEqual(AgentIsland.sidekickCaption(p, tabs: true, names: [])?.components(separatedBy: "\n").first,
                            "Too slow on a session name: matched as text")
@@ -337,7 +337,7 @@ final class DchConfigWriterTests: XCTestCase {
         let p = ".*-qa1220c$", q = ".*-qa1220e$"
         Self.withSeams(deadline: 5_000_000, slowCall: 50_000, slowTotal: 0) { _ in
             let list = [Self.session("api", alias: "Agent A", title: Self.longTitle("1220c")), Self.session("web", alias: "web-qa1220c")]
-            for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["web"]) }
+            for _ in 0..<3 { XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["web"]) }
             XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
             _ = AgentIsland.split([Self.session(Self.longTitle("1220e"))], pattern: q)
             XCTAssertEqual(AgentIsland.sidekickMatch(q), .slow, "the same search on a name counts")
@@ -358,11 +358,11 @@ final class DchConfigWriterTests: XCTestCase {
             XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex, "the probe on \"\" runs here, outside the counted calls")
             for call in 1...2 {
                 let before = reads()
-                XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "doc"], "call \(call): titles a regex")
+                XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["api", "doc"], "call \(call): titles a regex")
                 XCTAssertGreaterThan(reads() - before, 100, "call \(call): slow once, under the total: still searched")
             }
             let before = reads()
-            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["api", "lit"],
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["api", "lit"],
                            "titles as text; the alias still a regex")
             XCTAssertLessThan(reads() - before, 75, "no regex search of a title")
             XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
@@ -380,7 +380,7 @@ final class DchConfigWriterTests: XCTestCase {
             let caption = AgentIsland.sidekickCaption(p, tabs: true, sessions: list)
             XCTAssertFalse(caption?.contains("Too slow") == true, caption ?? "nil")
             XCTAssertEqual(AgentIsland.sidekickMatch(p), .regex)
-            XCTAssertEqual(AgentIsland.split(list, pattern: p).sidekicks.map(\.name), ["doc"], "the title-only match")
+            XCTAssertEqual(AgentIsland.split(list, pattern: p).firstGroup.map(\.name), ["doc"], "the title-only match")
             let named = AgentIsland.sidekickCaption(q, tabs: true, sessions: [Self.session(Self.longTitle("1220g"))])
             XCTAssertEqual(named?.components(separatedBy: "\n").first, "Too slow on a session name: matched as text")
             XCTAssertEqual(AgentIsland.sidekickMatch(q), .slow)
@@ -454,7 +454,7 @@ final class DchConfigWriterTests: XCTestCase {
         ]
         for (p, n, hit) in table {
             let split = AgentIsland.split(Self.sessions([(name: n, alias: "")]), pattern: p)
-            XCTAssertEqual(!split.sidekicks.isEmpty, hit, "\(p) on \(n)")
+            XCTAssertEqual(!split.firstGroup.isEmpty, hit, "\(p) on \(n)")
         }
         XCTAssertEqual(AgentIsland.sidekickMatch("(qa"), .invalid)
         XCTAssertEqual(AgentIsland.sidekickMatch("(qa)*"), .matchesEmpty)
@@ -885,7 +885,7 @@ final class DchConfigWriterTests: XCTestCase {
 
     private static func islandMatches(_ p: String, _ name: String) -> Bool {
         let s = AgentSession(key: AgentSessionKey(dir: "/d", name: name), alias: "", activity: 0, state: .idle, agents: 0)
-        return !AgentIsland.split([s], pattern: p).sidekicks.isEmpty
+        return !AgentIsland.split([s], pattern: p).firstGroup.isEmpty
     }
 
     /// dch never calls setlocale, so it compiles in the C locale; the test process may hold another (LuaLocaleTests
@@ -1357,5 +1357,71 @@ final class DchConfigWriterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: Data(at.utf8)))
         XCTAssertEqual(DchConfigWriter.write(path: path, autoAllow: false, pattern: "-qa"), .written)
         XCTAssertEqual(read(path), at + "auto_allow = false\nsidekick_pattern = -qa\n")
+    }
+}
+
+/// #1757 (#1755 contract): `group = <name> = <regex>` lines for dch 1.124.0+, sidekick_pattern = the first group's.
+extension DchConfigWriterTests {
+    private static func group(_ name: String, _ pattern: String) -> SessionGroup {
+        SessionGroup(id: name, name: name, pattern: pattern)
+    }
+
+    func testGroupLinesReplaceTheFilesOwnAtTheFirstPlaceAndNilKeepsThem() {
+        let old = Data("# mine\ngroup = Old = x\nauto_allow = false\n  group=Older=y\nsidekick_pattern = -qa\n".utf8)
+        let lines = DchConfigWriter.groupValues([Self.group("QA", "-qa$"), Self.group("Rev", "-rev$")])
+        XCTAssertEqual(lines, ["QA = -qa$", "Rev = -rev$"])
+        XCTAssertEqual(String(decoding: DchConfigWriter.render(old, autoAllow: false, pattern: "-qa$", groups: lines), as: UTF8.self),
+                       "# mine\ngroup = QA = -qa$\ngroup = Rev = -rev$\nauto_allow = false\nsidekick_pattern = -qa$\n")
+        XCTAssertEqual(String(decoding: DchConfigWriter.render(old, autoAllow: false, pattern: "-qa$"), as: UTF8.self),
+                       "# mine\ngroup = Old = x\nauto_allow = false\n  group=Older=y\nsidekick_pattern = -qa$\n", "an older dch: its lines kept")
+        XCTAssertEqual(String(decoding: DchConfigWriter.render(Data(), autoAllow: false, pattern: "-qa$", groups: lines), as: UTF8.self),
+                       "auto_allow = false\nsidekick_pattern = -qa$\ngroup = QA = -qa$\ngroup = Rev = -rev$\n", "appended in order")
+        XCTAssertEqual(String(decoding: DchConfigWriter.render(old, autoAllow: false, pattern: "", groups: []), as: UTF8.self),
+                       "# mine\nauto_allow = false\nsidekick_pattern = \n", "the empty list: no group line, sidekick_pattern empty")
+    }
+
+    func testGroupValuesSkipWhatDchWouldSkipAndStopAtEight() {
+        let bad = [Self.group("a=b", "-x"), Self.group(String(repeating: "n", count: 33), "-x"),
+                   Self.group("Dots", "a.b"), Self.group("Blank", " ")]
+        XCTAssertEqual(DchConfigWriter.groupValues(bad + [Self.group(" Ok ", "-ok$")]), ["Ok = -ok$"],
+                       "an \"=\" or a 33-byte name, a non-portable or an empty regex: no line")
+        let ten = (1...10).map { Self.group("g\($0)", "-p\($0)$") }
+        XCTAssertEqual(DchConfigWriter.groupValues(ten), (1...8).map { "g\($0) = -p\($0)$" })
+    }
+
+    func testTheGroupsGateIsDch1_124_0() {
+        let values = ["QA = -qa$"]
+        let bin = { (v: [Int]) in DchCommand.Binary(path: "/Users/example/bin/dch", version: v) }
+        XCTAssertNil(DchConfigWriter.groupLines(values, dch: bin([1, 123, 9])))
+        XCTAssertNil(DchConfigWriter.groupLines(values, dch: nil), "no dch found: the file's lines kept")
+        XCTAssertEqual(DchConfigWriter.groupLines(values, dch: bin([1, 124, 0])), values)
+        XCTAssertEqual(DchConfigWriter.groupLines(values, dch: bin([2, 0, 0])), values)
+    }
+
+    /// The controller writes the stored groups for dch 1.124.0 and only sidekick_pattern (the first group's) below it.
+    @MainActor func testTheControllerWritesGroupsOnlyForADchThatReadsThem() {
+        usePattern(tabs: true, "-qa")
+        let saved = Preferences.defaults.object(forKey: "agentIslandSessionGroups")
+        addTeardownBlock {
+            if let saved { Preferences.defaults.set(saved, forKey: "agentIslandSessionGroups") } else {
+                Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+            }
+        }
+        Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$"), Self.group("Blank", ""), Self.group("QA", "-qa$")]
+        for (v, want) in [([1, 123, 9], "auto_allow = false\nsidekick_pattern = -rev$\n"),
+                          ([1, 124, 0], "auto_allow = false\nsidekick_pattern = -rev$\ngroup = Rev = -rev$\ngroup = QA = -qa$\n")] {
+            let file = tempDir("groupsGate").appendingPathComponent("config").path
+            let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
+            c.syncDchConfig()
+            c.queue.sync {}
+            XCTAssertEqual(read(file), want, "dch \(v)")
+        }
+        Preferences.agentIslandSessionGroups = []
+        let file = tempDir("groupsEmpty").appendingPathComponent("config").path
+        FileManager.default.createFile(atPath: file, contents: Data("group = Old = x\n".utf8))
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        c.syncDchConfig()
+        c.queue.sync {}
+        XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \n", "the empty list: an empty key, never a missing one")
     }
 }

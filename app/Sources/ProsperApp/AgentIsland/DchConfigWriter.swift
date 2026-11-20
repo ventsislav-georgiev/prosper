@@ -20,6 +20,8 @@ enum DchConfigWriter {
     static let dchLineBytes = 1023
     /// #1172: masters 1.29.0 up to `handOffMinimum` read auto_allow but still answer hook and ask prompts.
     static let heldMinimum = [1, 29, 0]
+    /// #1757 (#1755 contract): dch 1.124.0 reads `group = <name> = <regex>` lines; an older one only sidekick_pattern.
+    static let groupsMinimum = [1, 124, 0]
     private static let log = Logger(subsystem: "eu.illegible.prosper", category: "agentisland")
 
     /// dch's own path rule (dch_config_path): $DCH_CONFIG, else $XDG_CONFIG_HOME/dch/config, else
@@ -48,6 +50,22 @@ enum DchConfigWriter {
         let p = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !p.isEmpty, p.utf8.count <= maxPatternBytes, portable(p), AgentIsland.sidekickMatch(p) == .regex else { return "" }
         return p
+    }
+
+    /// #1757: each group's line value, `<name> = <regex>`, in order: the regex as sidekickValue gives it, and a group
+    /// dch would skip (a name it does not keep, an empty regex) left out, so no line Prosper writes is one dch drops.
+    static func groupValues(_ groups: [SessionGroup]) -> [String] {
+        SessionGroup.normalized(groups).compactMap { g in
+            let v = sidekickValue(g.pattern)
+            return v.isEmpty ? nil : "\(g.name) = \(v)"
+        }
+    }
+
+    /// #1757: the group lines `render` owns for this dch: `values` at groupsMinimum, nil (the file's own group lines
+    /// kept, none added) below it or with no dch found.
+    static func groupLines(_ values: [String], dch: DchCommand.Binary?) -> [String]? {
+        guard let dch, DchCommand.isAtLeast(dch.version, groupsMinimum) else { return nil }
+        return values
     }
 
     /// #1172: what may stand inside a bracket set, alone or as a range of one kind (digits, a-z, A-Z), low to high.
@@ -194,14 +212,21 @@ enum DchConfigWriter {
     /// sees on the whole line (the bytes through "=" hold no NUL), so both find the same key lines.
     /// #1185 (QA 916): any other such line is cut at its first NUL (the bytes dch reads stay) and dropped when nothing
     /// is left: kept whole, it made mayAllow read the file as unknown at every later `--config` timeout (the island stood down).
-    static func render(_ old: Data, autoAllow: Bool, pattern: String) -> Data {
+    /// #1757: `groups` non-nil owns the `group` key too: every group line goes, these values stand at the first one's
+    /// place (else at the end), in order; [] leaves none, which with `sidekick_pattern =` empty is dch's empty list.
+    static func render(_ old: Data, autoAllow: Bool, pattern: String, groups: [String]? = nil) -> Data {
         let oneLine = pattern.utf8.count <= maxPatternBytes && pattern.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
         let owned = [("auto_allow", "auto_allow = \(autoAllow)"),
                      ("sidekick_pattern", "sidekick_pattern = \(oneLine ? pattern : "")")]
         var lines = old.split(separator: 0x0A, omittingEmptySubsequences: false)
         if old.isEmpty || old.last == 0x0A { _ = lines.popLast() }   // the final newline ends a line, it opens none
         var out = Data(), done = Set<String>()
+        let groupText = (groups ?? []).map { "group = \($0)\n" }.joined()
         for line in lines {
+            if groups != nil, setsKey(line, "group") {
+                if done.insert("group").inserted { out.append(contentsOf: Array(groupText.utf8)) }
+                continue
+            }
             if let o = owned.first(where: { setsKey(line, $0.0) }) {
                 if done.insert(o.0).inserted { out.append(contentsOf: Array((o.1 + "\n").utf8)) }
                 continue
@@ -213,6 +238,7 @@ enum DchConfigWriter {
             out.append(0x0A)
         }
         for (key, set) in owned where !done.contains(key) { out.append(contentsOf: Array((set + "\n").utf8)) }
+        if groups != nil, !done.contains("group") { out.append(contentsOf: Array(groupText.utf8)) }
         return out
     }
 
@@ -237,15 +263,15 @@ enum DchConfigWriter {
     /// shortcut: a write by dch or by hand between the read and the rename is lost, as with dch's own
     /// `--config`; add a compare-before-rename if both ever write at once.
     @discardableResult
-    static func write(path: String, autoAllow: Bool, pattern: String) -> Outcome {
-        let r = replace(path, autoAllow, pattern)
+    static func write(path: String, autoAllow: Bool, pattern: String, groups: [String]? = nil) -> Outcome {
+        let r = replace(path, autoAllow, pattern, groups)
         if case .refused(let why) = r {
             log.error("dch config not written (\(why, privacy: .public)): \(path, privacy: .private)")
         }
         return r
     }
 
-    private static func replace(_ path: String, _ autoAllow: Bool, _ pattern: String) -> Outcome {
+    private static func replace(_ path: String, _ autoAllow: Bool, _ pattern: String, _ groups: [String]?) -> Outcome {
         var target = path, st = stat()
         if lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFLNK {
             guard let real = realpath(path, nil) else { return .refused("a symbolic link to nothing") }
@@ -273,7 +299,7 @@ enum DchConfigWriter {
         } else {
             return .refused("stat: \(String(cString: strerror(errno)))")
         }
-        let new = render(old, autoAllow: autoAllow, pattern: pattern)
+        let new = render(old, autoAllow: autoAllow, pattern: pattern, groups: groups)
         guard new != old else { return .unchanged }
         let tmp = target + ".prosper-\(UUID().uuidString.prefix(8)).tmp"
         let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)

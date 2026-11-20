@@ -277,7 +277,13 @@ final class AgentIslandStore: ObservableObject {
     /// #571: the list order and the sidekick pattern ("" = tabs off), set like
     /// `details`; the chosen tab, in memory only.
     @Published var sort: AgentIslandSort
-    @Published var sidekickPattern: String { didSet { resetTab(); dropStaleQuestions() } }
+    /// #1757: the groups the list splits by ([] = tabs off); the controller gives only groups with a pattern.
+    @Published var sessionGroups: [SessionGroup] { didSet { resetTab(); dropStaleQuestions() } }
+    /// The one Sidekicks group's pattern, the #571 single-pattern form (rows and single-pattern callers).
+    var sidekickPattern: String {
+        get { sessionGroups.first?.pattern ?? "" }
+        set { sessionGroups = SessionGroup.sidekicks(newValue) }
+    }
     @Published var sidekickTab = false { didSet { dropStaleQuestions() } }
     /// #908: the pair suffix (Settings > Pairs) the groups are read with; "" (pairing by name off) until
     /// the controller sets it, so a store a test builds outright draws no group item.
@@ -355,13 +361,13 @@ final class AgentIslandStore: ObservableObject {
         self.geometry = geometry
         self.details = details
         self.sort = sort
-        self.sidekickPattern = sidekickPattern
+        self.sessionGroups = SessionGroup.sidekicks(sidekickPattern)
     }
 
     /// The last sidekick gone (or the tabs off): back to Sessions, so the next
     /// sidekick to appear does not switch the list.
     private func resetTab() {
-        if sidekickTab, AgentIsland.split(sessions, pattern: sidekickPattern).sidekicks.isEmpty { sidekickTab = false }
+        if sidekickTab, AgentIsland.split(sessions, groups: sessionGroups).firstGroup.isEmpty { sidekickTab = false }
         if historyTab, history.isEmpty { historyTab = false }
     }
 
@@ -370,9 +376,9 @@ final class AgentIslandStore: ObservableObject {
     var summary: AgentIsland.Summary { AgentIsland.summary(sessions) }
 
     /// Sorted, then split. No sidekicks = no tabs and the whole list.
-    var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), pattern: sidekickPattern) }
+    var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), groups: sessionGroups) }
     /// #578: sidekicks or history.
-    var showsTabs: Bool { !split.sidekicks.isEmpty || !history.isEmpty }
+    var showsTabs: Bool { !split.firstGroup.isEmpty || !history.isEmpty }
     /// #1537 (OQ-95): the Claude plan usage line (session and weekly limit); nil: none drawn.
     @Published var planUsage: AgentPlanUsage?
     /// #1537: the tab row is drawn for the tabs or for the plan usage at its right end.
@@ -390,7 +396,7 @@ final class AgentIslandStore: ObservableObject {
     /// one the list goes back to): its name and rows.
     var sessionTab: (label: String, sessions: [AgentSession]) {
         let s = split
-        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? ("Sidekicks", s.sidekicks) : ("Sessions", s.primary)
+        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? (s.groups.first?.group.name ?? "", s.firstGroup) : ("Sessions", s.primary)
     }
 
     /// #580: Stop all's rows, the session tab's (#744: or every tab's) whose master can
@@ -445,10 +451,10 @@ final class AgentIslandStore: ObservableObject {
     /// "every tab" only while the tabs are on.
     var stopAllQuestion: String {
         AgentIsland.stopAllQuestion(asked.keys.count, skipped: asked.skipped, dashed: asked.dashed, tab: asked.tab,
-                                    tabs: !sidekickPattern.isEmpty)
+                                    tabs: !sessionGroups.isEmpty)
     }
     var killAllQuestion: String {
-        AgentIsland.killAllQuestion(asked.keys.count, skipped: asked.skipped, tab: asked.tab, tabs: !sidekickPattern.isEmpty)
+        AgentIsland.killAllQuestion(asked.keys.count, skipped: asked.skipped, tab: asked.tab, tabs: !sessionGroups.isEmpty)
     }
 
     /// #744: the session the row Kill question names, while it is still live.
@@ -1044,8 +1050,8 @@ struct AgentIslandView: View {
         return HStack(spacing: 14) {
             if store.showsTabs {   // #1537: the row may be up for the plan usage alone
                 tab("Sessions (\(split.primary.count))", on: !history && !shows) { onTab(false) }
-                if !split.sidekicks.isEmpty {
-                    tab("Sidekicks (\(split.sidekicks.count))", on: !history && shows) { onTab(true) }
+                if let first = split.groups.first, !first.sessions.isEmpty {
+                    tab("\(first.group.name) (\(first.sessions.count))", on: !history && shows) { onTab(true) }
                 }
                 if !store.history.isEmpty {
                     tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }

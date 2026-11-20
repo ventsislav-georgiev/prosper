@@ -74,7 +74,7 @@ final class AgentHistorySortTests: XCTestCase {
         store.historyTab = true
         let want = ["beta", "Yak", "Alpha", "cost-2", "cost-10", "zeta"]
         XCTAssertEqual(store.shownHistory.map(\.name), want)
-        let rows = AgentSidebar.sections(sessions: [session], history: history, sort: .name, sidekickPattern: "-qa",
+        let rows = AgentSidebar.sections(sessions: [session], history: history, sort: .name, groups: SessionGroup.sidekicks("-qa"),
                                          details: .all, now: Self.now).first { $0.title == "History" }?.rows ?? []
         XCTAssertEqual(rows.map(\.title), want)
     }

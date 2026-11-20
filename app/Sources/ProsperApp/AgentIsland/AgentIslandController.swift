@@ -307,7 +307,8 @@ final class AgentIslandController {
         }
         guard timer == nil, let geometry = currentGeometry() else { return }
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
-                                 sort: Preferences.agentIslandSort, sidekickPattern: Self.sidekickPattern)
+                                 sort: Preferences.agentIslandSort)
+        store?.sessionGroups = Self.groups
         store?.pairSuffix = Preferences.agentIslandSidekickSuffix   // #908
         onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
@@ -415,15 +416,17 @@ final class AgentIslandController {
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
-        store.sidekickPattern = Self.sidekickPattern
+        store.sessionGroups = Self.groups
         store.pairSuffix = Preferences.agentIslandSidekickSuffix   // #908: Settings > Pairs regroups at once
         refreshCards()
         layout()
     }
 
-    /// #571: the pattern the store splits by; "" while the tabs are off.
-    private static var sidekickPattern: String {
-        Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSidekickPattern : ""
+    /// #571, #1757: the groups the store splits by and dch's config gets, the ones with a pattern; none while the
+    /// tabs are off. Read on a Settings or phone change only (Preferences decodes the list).
+    private static var groups: [SessionGroup] {
+        guard Preferences.agentIslandSidekickTabs else { return [] }
+        return Preferences.agentIslandSessionGroups.filter { !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     /// #571: a Sessions / Sidekicks tab click. Only the shown rows get cards.
@@ -1597,7 +1600,7 @@ final class AgentIslandController {
         guard let store else { return false }
         setExpanded(true)
         let s = store.split
-        let all = s.primary.map { ($0, false) } + s.sidekicks.map { ($0, true) }
+        let all = s.primary.map { ($0, false) } + s.firstGroup.map { ($0, true) }
         guard store.expanded, let hit = all.first(where: { $0.0.state == .blocked }) ?? all.first else { return true }
         store.historyTab = false
         store.sidekickTab = hit.1
@@ -1993,11 +1996,16 @@ final class AgentIslandController {
     /// meanwhile, and checkAutoAllow syncs again when the newest list's masters move in or out of that set.
     func syncDchConfig() {
         guard let path = dchConfigPath() else { return }
-        let toggle = autoAllowOn(), pattern = DchConfigWriter.sidekickValue(Self.sidekickPattern)
+        let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first?.pattern ?? "")
+        let lines = DchConfigWriter.groupValues(groups)
         let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
         queue.async {
             // #781 r2: false needs neither version nor build, so turning the toggle off always reaches the file.
-            guard toggle else { DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern); return }
+            // #1757: group lines only for a dch that reads them; with none found the file keeps its own.
+            guard toggle else {
+                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: DchConfigWriter.groupLines(lines, dch: probe()))
+                return
+            }
             guard let bin = probe() else { return }
             let build = Self.buildProbe(builds, run: run, env: AgentIsland.listEnv(dir: DchCommand.defaultSocketDir),
                                         t: t, retry: retry)
@@ -2006,7 +2014,7 @@ final class AgentIslandController {
             if allow, DchConfigWriter.holdsTrue(DchConfigWriter.masters(dirs().map {
                 run(bin.path, ["--ls-json"], AgentIsland.listEnv(dir: $0))
             })) { allow = false }
-            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern)
+            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern, groups: DchConfigWriter.groupLines(lines, dch: bin))
         }
     }
 
