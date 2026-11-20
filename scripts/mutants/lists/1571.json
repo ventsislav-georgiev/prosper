@@ -1,6 +1,6 @@
 {
  "entry": 1571,
- "filter": "CCPoolLeftoverTests/testCCPoolRemoveThenAddSameLabelKeepsNoSampleOfTheRemovedAccount|CCPoolLeftoverTests/testCCPoolRemoveThatFailsToSaveKeepsTheSample|CCPoolLeftoverTests/testCCPoolSecondStartWhileRunningKeepsTheListenerAndPort|CCPoolLeftoverTests/testCCPoolRestartKeepsAHealthyListenerAndBindsOnlyWhenItIsGone|CCPoolUsageReaderTests/testUtilization",
+ "filter": "CCPoolLeftoverTests/testCCPoolRemoveThenAddSameLabelKeepsNoSampleOfTheRemovedAccount|CCPoolLeftoverTests/testCCPoolRemoveThatFailsToSaveKeepsTheSample|CCPoolLeftoverTests/testCCPoolSecondStartWhileRunningKeepsTheListenerAndPort|CCPoolLeftoverTests/testCCPoolRestartKeepsAHealthyListenerAndBindsOnlyWhenItIsGone|CCPoolUsageReaderTests/testUtilization|CCPoolLeftoverTests/testCCPoolRestartBindsAnewWhenThePublishedListenerStoppedListening",
  "mutants": [
   {
    "name": "o8a",
@@ -29,7 +29,7 @@
    "old": "CCPoolListener.isListeningTCP(l.fd) else { return nil }",
    "new": "true else { return nil }",
    "expect": "killed",
-   "note": "#1672 re-anchor: Restart keeps a listener only while it still listens; the lost-listener step kills it"
+   "note": "#1672 re-anchor: killed by testCCPoolRestartBindsAnewWhenThePublishedListenerStoppedListening (#1678)"
   },
   {
    "name": "u12",
