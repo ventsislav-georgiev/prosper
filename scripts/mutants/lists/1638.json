@@ -12,8 +12,8 @@
   {
    "name": "no-pending-wait",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
-   "old": "{ XrayFollow.onQueue(b, b.pending.drain(), nil, f) }",
-   "new": "{ XrayFollow.onQueue(b, ls, nil, f) }",
+   "old": "{ XrayFollow.onQueue(b, b.pending.drain(), nil, g) }",
+   "new": "{ XrayFollow.onQueue(b, ls, nil, g) }",
    "expect": "killed"
   },
   {
