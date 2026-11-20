@@ -293,8 +293,9 @@ final class AgentTerminalController: ObservableObject {
     /// #1790: every terminal of this one's window (the model wires it): `keptCap` counts their kept clients together.
     var keptPeers: (() -> [AgentTerminalController])?
     /// #1793: one short `dch --passive|--active` per keep or restore, run in order on a utility queue, never on main and
-    /// never awaited; never under XCTest (rows record it here).
-    var passiveToggle: (AgentTerminalSpawn) -> Void = AgentTerminalController.runPassiveToggle
+    /// never awaited; never under XCTest (rows record it here). #1799: the second argument gets dch's exit status off main
+    /// (nil: timed out).
+    var passiveToggle: (AgentTerminalSpawn, @escaping @Sendable (Int32?) -> Void) -> Void = AgentTerminalController.runPassiveToggle
     var spawn: (AgentTerminalSpawn, AgentTerminalIO) throws -> AgentTerminalChild = AgentTerminalController.realSpawn
     var makeScreen: (AgentTerminalScreenEvents) -> AgentTerminalScreen = { AgentGhosttyScreen($0) }
     var request: (AgentSessionKey, Int, Int) -> AgentTerminalSpawn = { AgentTerminalSpawn.attach($0, cols: $1, rows: $2) }
@@ -471,7 +472,7 @@ final class AgentTerminalController: ObservableObject {
 
     /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
     private func restore(_ k: Kept) {
-        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793: active before the view comes back
+        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1799: the size is re-sent once --active exits 0
         generation += 1   // the timers of the attach before end
         screenGeneration = k.screenGeneration
         child = k.child
@@ -496,7 +497,9 @@ final class AgentTerminalController: ObservableObject {
     }
 
     /// #1793: a kept client goes passive, a restored one active again, when its client is dch >= 1.130.0 (the version
-    /// probed for this attach; unknown or older: nothing runs, as before). The size follows at the next focus-in/resize.
+    /// probed for this attach; unknown or older: nothing runs, as before). #1799: dch takes the size of an active client
+    /// only at its next focus-in or resize, and the view's focus-in reaches the master while the client is still passive,
+    /// so once `--active` exits 0 one main hop re-sends the size (redraw, as fitHere) if that client is still the shown one.
     private func setPassive(_ on: Bool, key: AgentSessionKey, child: AgentTerminalChild, version: [Int]?) {
         guard let pid = child.clientPid, let version,
               DchCommand.gate(.init(path: DchCommand.dchPath, version: version), masters: [], minimum: Self.passiveDch).isOK
@@ -504,7 +507,16 @@ final class AgentTerminalController: ObservableObject {
         let r = request(key, 1, 1)   // the attach's binary and env (DCH_SOCKET_DIR = the key's dir)
         passiveToggles += 1
         passiveToggle(AgentTerminalSpawn(exe: r.exe, args: [on ? "--passive" : "--active", key.name, "--pid", String(pid)],
-                                         env: r.env, cols: r.cols, rows: r.rows))
+                                         env: r.env, cols: r.cols, rows: r.rows)) { [weak self] status in
+            guard !on, status == 0 else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.activated(child) } }
+        }
+    }
+
+    /// #1799: `--active` exited 0: the still-shown client re-sends its size (a client kept or switched away meanwhile: nothing).
+    private func activated(_ c: AgentTerminalChild) {
+        guard child === c else { return }
+        c.redraw()
     }
 
     nonisolated private static let passiveQueue = DispatchQueue(label: "eu.illegible.prosper.dch-passive", qos: .utility)
@@ -512,12 +524,13 @@ final class AgentTerminalController: ObservableObject {
 
     /// One bounded dch call on a serial queue (a keep then a restore of the same client stay in order). A failure (no
     /// session, no such client, an older master, a timeout) logs its one reason line and changes nothing.
-    nonisolated static func runPassiveToggle(_ r: AgentTerminalSpawn) {
+    nonisolated static func runPassiveToggle(_ r: AgentTerminalSpawn, done: @escaping @Sendable (Int32?) -> Void) {
         guard NSClassFromString("XCTestCase") == nil else { return }
         passiveQueue.async {
             let out = DchCommand.bounded(DchCommand.islandTimeout) { onPid, onExit in
                 DchCommand.runCapturingBoth(args: r.args, env: r.env, path: r.exe, onPid: onPid, onExit: onExit)
             }
+            done(out?.status)
             guard out?.status != 0 else { return }
             let why = out.map { $0.err.split(separator: "\n").first.map(String.init) ?? "exit \($0.status)" } ?? "timed out"
             log.notice("dch \(r.args.first ?? "", privacy: .public): \(why, privacy: .public)")

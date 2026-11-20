@@ -327,7 +327,7 @@ final class AgentTerminalKeepTests: XCTestCase {
         let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
         var runs: [AgentTerminalSpawn] = []
         let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
-        c.passiveToggle = { runs.append($0) }
+        c.passiveToggle = { r, _ in runs.append(r) }
         c.attach(a)
         rig.grid(100, 30)
         XCTAssertTrue(runs.isEmpty, "the shown attach runs nothing")
@@ -355,7 +355,7 @@ final class AgentTerminalKeepTests: XCTestCase {
             let rig = AgentTerminalTests.Rig(version: version, keep: AgentTerminalController.keptSessions)
             var runs = 0
             let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
-            c.passiveToggle = { _ in runs += 1 }
+            c.passiveToggle = { _, _ in runs += 1 }
             c.attach(a)
             rig.grid(100, 30)
             if !pid { rig.children.last?.clientPid = nil }
@@ -368,5 +368,47 @@ final class AgentTerminalKeepTests: XCTestCase {
             XCTAssertEqual(rig.children.map(\.terminated), [0, 0])
             c.attach(nil)
         }
+    }
+
+    /// #1799: dch takes an active client's size only at its next focus-in or resize, so a recorded `--active` that exits 0
+    /// re-sends the size (one redraw) for the client still shown; none for one switched away before it completed, none on
+    /// a non-zero exit or a timeout, none for `--passive`. Counts redraws (the main hop runs in spin()).
+    @MainActor
+    func testActiveToggleExitZeroResendsTheSizeForTheStillShownClientOnly() {
+        let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
+        var runs: [(args: [String], done: @Sendable (Int32?) -> Void)] = []
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.passiveToggle = { r, done in runs.append((r.args, done)) }
+        c.attach(a)
+        rig.grid(100, 30)
+        c.attach(b)
+        guard let childA = rig.children.first, let childB = rig.children.last, childA !== childB
+        else { return XCTFail("two clients") }
+        let redrawsA = childA.redraws, redrawsB = childB.redraws
+        XCTAssertEqual(runs.last?.args, ["--passive", "api", "--pid", "4001"])
+        let passiveA = runs.last?.done
+        c.attach(a)   // --passive api-qa, --active api
+        XCTAssertEqual(runs.last?.args, ["--active", "api", "--pid", "4001"])
+        passiveA?(0)   // a's --passive exits 0 only once a is shown again (its main hop is late): still no re-send
+        spin()
+        XCTAssertEqual(childA.redraws, redrawsA, "--passive: no re-send")
+        let active = runs.last?.done
+        active?(1)
+        active?(nil)
+        spin()
+        XCTAssertEqual(childA.redraws, redrawsA, "exit 1 or timed out: no re-send")
+        active?(0)
+        spin()
+        XCTAssertEqual(childA.redraws, redrawsA + 1, "exit 0: the shown client re-sends its size once")
+        XCTAssertEqual(childB.redraws, redrawsB, "the kept one: nothing")
+        c.attach(b)   // --passive api, --active api-qa
+        let activeB = runs.last?.done
+        XCTAssertEqual(runs.last?.args, ["--active", "api-qa", "--pid", "4002"])
+        c.attach(a)   // b switched away before its --active completed
+        activeB?(0)
+        spin()
+        XCTAssertEqual(childB.redraws, redrawsB, "no longer shown: no re-send")
+        XCTAssertEqual(childA.redraws, redrawsA + 1, "nor for the client shown now")
+        c.attach(nil)
     }
 }

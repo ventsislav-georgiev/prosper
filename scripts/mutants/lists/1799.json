@@ -1,0 +1,34 @@
+{
+ "entry": "1799",
+ "filter": "AgentTerminalKeepTests/testActiveToggleExitZeroResendsTheSizeForTheStillShownClientOnly",
+ "mutants": [
+  {
+   "name": "redraw-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard child === c else { return }\n        c.redraw()\n",
+   "new": "        guard child === c else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "still-shown-guard-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard child === c else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "exit-check-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            guard !on, status == 0 else { return }\n",
+   "new": "            guard !on else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "passive-also-redraws",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            guard !on, status == 0 else { return }\n",
+   "new": "            guard status == 0 else { return }\n",
+   "expect": "killed"
+  }
+ ]
+}
