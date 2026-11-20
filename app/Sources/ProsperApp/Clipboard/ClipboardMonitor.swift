@@ -163,6 +163,8 @@ final class ClipboardMonitor {
         accessReads += 1
         let denied = access() == .denied
         if denied != accessDenied {
+            // A suppress armed while denied was never consumed; it must not eat the user's next copy.
+            if !denied { suppressNext = false }
             accessDenied = denied
             // Re-arm at the new cadence; applyPause arms it itself after its first poll.
             if timer != nil { scheduleTimer() }

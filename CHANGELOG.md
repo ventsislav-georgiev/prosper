@@ -2132,6 +2132,8 @@ tag from the now-released section and put it on the new top draft.
 - Snippet and autocomplete pastes now put back an image or copied files that were on your clipboard,
   not only text, and no longer overwrite something you copy in the moment right after the paste.
   (#1691)
+- Prosper's next copy after the system's paste-access permission returns is no longer skipped.
+  (#1692)
 
 ## v2.174.0
 
