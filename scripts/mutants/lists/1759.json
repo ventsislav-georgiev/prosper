@@ -1,0 +1,69 @@
+{
+ "entry": "1759",
+ "filter": "SessionGroupSectionsTests|AgentIslandTests/testLastSidekickGone|AgentWindowD1Tests/testAgentWindowFolded|AgentWindowSidebarReageTests",
+ "mutants": [
+  {
+   "name": "fold_by_title",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "add(g.group.name, g.sessions.map(live), id: groupFold(g.group.id))",
+   "new": "add(g.group.name, g.sessions.map(live))",
+   "expect": "killed"
+  },
+  {
+   "name": "group_not_foldable",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "collapsible.contains(id) || id.hasPrefix(\"group:\")",
+   "new": "collapsible.contains(id)",
+   "expect": "killed"
+  },
+  {
+   "name": "no_legacy_carry",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": ".map { $0 == \"Sidekicks\" ? AgentSidebar.groupFold(SessionGroup.sidekicksID) : $0 }",
+   "new": ".map { $0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "reaged_drops_id",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "out.append(Section(title: section.title, rows: rows, id: section.id))",
+   "new": "out.append(Section(title: section.title, rows: rows))",
+   "expect": "killed"
+  },
+  {
+   "name": "first_group_only",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "var shownGroups: [(group: SessionGroup, sessions: [AgentSession])] { groups.filter { !$0.sessions.isEmpty } }",
+   "new": "var shownGroups: [(group: SessionGroup, sessions: [AgentSession])] { Array(groups.prefix(1).filter { !$0.sessions.isEmpty }) }",
+   "expect": "killed"
+  },
+  {
+   "name": "shown_ignores_tab",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "if let tab, let g = live.first(where: { $0.group.id == tab }) { return g }",
+   "new": "if tab != nil, let g = live.first { return g }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_reset_on_removal",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "!AgentIsland.split(sessions, groups: sessionGroups).shownGroups.contains(where: { $0.group.id == id })",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "tab_row_no_scroll",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "ScrollView(.horizontal, showsIndicators: false) {",
+   "new": "Group {",
+   "expect": "killed"
+  },
+  {
+   "name": "empty_groups_shown",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "groups.filter { !$0.sessions.isEmpty } }",
+   "new": "groups }",
+   "expect": "killed"
+  }
+ ]
+}
