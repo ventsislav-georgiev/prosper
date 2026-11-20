@@ -1,0 +1,139 @@
+{
+ "entry": "1756",
+ "filter": "GroupsSyncTests|DchWatchStreamTests|DchControlFramesTests/testMachineInfoCarriesOps",
+ "mutants": [
+  {
+   "name": "ops_no_groups",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "\"groups\", \"create\",",
+   "new": "\"create\",",
+   "expect": "killed"
+  },
+  {
+   "name": "merge_tie_adopts",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "phone.updated > winner.updated",
+   "new": "phone.updated >= winner.updated",
+   "expect": "killed"
+  },
+  {
+   "name": "no_adopt_store",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "Preferences.adoptSessionGroups(phone.groups, updated: phone.updated)",
+   "new": "_ = phone",
+   "expect": "killed"
+  },
+  {
+   "name": "no_adopted_call",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "                    adopted()\n                }\n                reply(DchFrame.encode(DchFrame.ok, json: winner.json))",
+   "new": "                }\n                reply(DchFrame.encode(DchFrame.ok, json: winner.json))",
+   "expect": "killed"
+  },
+  {
+   "name": "no_count_cap",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if list.count > SessionGroup.maxCount",
+   "new": "if list.count > SessionGroup.maxCount + 1",
+   "expect": "killed"
+  },
+  {
+   "name": "no_name_check",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if !list.allSatisfy({ SessionGroup.validName($0.name) })",
+   "new": "if false",
+   "expect": "killed"
+  },
+  {
+   "name": "pattern_cap_off_by_one",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "$0.pattern.utf8.count <= DchSidekickOps.maxBytes",
+   "new": "$0.pattern.utf8.count <= DchSidekickOps.maxBytes + 1",
+   "expect": "killed"
+  },
+  {
+   "name": "no_dup_name",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": " || Set(list.map { SessionGroup.nameKey($0.name) }).count != list.count",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_dup_id",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "Set(list.map(\\.id)).count != list.count || ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "id_any",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "let id = g[\"id\"] as? String, validID(id),",
+   "new": "let id = g[\"id\"] as? String,",
+   "expect": "killed"
+  },
+  {
+   "name": "id_max_65",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "(1...maxIDBytes).contains(id.utf8.count)",
+   "new": "(1...maxIDBytes + 1).contains(id.utf8.count)",
+   "expect": "killed"
+  },
+  {
+   "name": "updated_optional",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "        guard let items = raw as? [Any],\n              let n = o[\"updated\"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),\n              let updated = n as? Int64 else { return .failure(Failure(malformed)) }",
+   "new": "        guard let items = raw as? [Any] else { return .failure(Failure(malformed)) }\n        let updated = (o[\"updated\"] as? NSNumber)?.int64Value ?? 0",
+   "expect": "killed"
+  },
+  {
+   "name": "watch_no_groups_key",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": ", \"groups\": groups.json])",
+   "new": "])",
+   "expect": "killed"
+  },
+  {
+   "name": "watch_ignores_groups_change",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "guard v != s.sidekick || g != s.groups else { return }",
+   "new": "guard v != s.sidekick else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "stamp_no_fallback",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "int64Value ?? agentIslandSidekickPatternUpdated }",
+   "new": "int64Value ?? 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "editor_no_stamp",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "        agentIslandSessionGroups = list\n        agentIslandSessionGroupsUpdated = stamp\n",
+   "new": "        agentIslandSessionGroups = list\n",
+   "expect": "killed"
+  },
+  {
+   "name": "adopt_stamp_now",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "        agentIslandSessionGroups = list\n        agentIslandSessionGroupsUpdated = updated\n",
+   "new": "        agentIslandSessionGroups = list\n        agentIslandSessionGroupsUpdated = Int64(Date().timeIntervalSince1970 * 1000)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "sidekick_adopt_no_groups_stamp",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "        agentIslandSessionGroupsUpdated = max(groups, updated)\n",
+   "new": "        _ = groups\n",
+   "expect": "killed"
+  },
+  {
+   "name": "sidekick_adopt_groups_stamp_back",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "agentIslandSessionGroupsUpdated = max(groups, updated)",
+   "new": "agentIslandSessionGroupsUpdated = updated",
+   "expect": "killed"
+  }
+ ]
+}
