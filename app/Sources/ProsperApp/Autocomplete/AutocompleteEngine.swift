@@ -2588,7 +2588,7 @@ final class AutocompleteEngine {
     /// knobs and stamps a self-marker onto the pasteboard write.
     private func pasteString(_ string: String, knobs: AppOverrideResolver.InsertionKnobs = .init()) {
         let pb = Pasteboard.general
-        let previous = pb.string(forType: .string)
+        let previous = Pasteboard.save(pb, access: Pasteboard.access())
         pb.clearContents()
         pb.setString(string, forType: .string)
         // Self-marker: our own bundle id under a private type. A host that watches
@@ -2617,12 +2617,10 @@ final class AutocompleteEngine {
             }
         }
 
-        // Restore the prior clipboard shortly after the paste lands.
-        if let previous {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                pb.clearContents()
-                pb.setString(previous, forType: .string)
-            }
+        // Restore the prior clipboard shortly after the paste lands; #1020: an unreadable one is
+        // cleared, as the snippet paths do, so the completion never stays on the clipboard.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            Pasteboard.restore(previous, to: pb)
         }
     }
 }

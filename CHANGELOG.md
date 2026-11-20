@@ -2117,6 +2117,9 @@ tag from the now-released section and put it on the new top draft.
 - ccpool: "Restart proxy" no longer cuts Claude Code sessions that are mid-reply and never leaves
   the port closed: the proxy keeps listening and running requests finish normally, while new
   requests start on fresh connections. (#1672)
+- Clipboard history no longer keeps reading the clipboard every second when macOS denies Prosper
+  access to it, and a snippet or autocomplete paste no longer leaves its text on your clipboard when
+  Prosper could not read what was there before. (#1020)
 
 ## v2.174.0
 

@@ -15,6 +15,19 @@ final class ClipboardMonitor {
     private var lastChangeCount: Int = Pasteboard.general.changeCount
     private let pollInterval: TimeInterval = 1.0
 
+    /// #1020 F1: while macOS denies Prosper the clipboard, every read is wasted (and its result
+    /// undocumented), so the monitor reads nothing and ticks this slowly, only to notice access is back.
+    static let deniedPollInterval: TimeInterval = 30
+
+    /// The macOS paste setting, read only when the change count moved; tests inject theirs.
+    var access: () -> ClipboardAccess = { Pasteboard.access() }
+
+    /// True while the last access read was `.denied`; the timer then runs at `deniedPollInterval`.
+    private(set) var accessDenied = false
+
+    /// Access reads made by `poll` (one per change-count delta, none on an idle tick).
+    private(set) var accessReads = 0
+
     /// #194: display asleep or screen locked → nothing can copy, so the timer is
     /// torn down until both clear (same pattern as `StatsController`, #186).
     /// The monitor is a process-lifetime singleton, so the observers are never removed.
@@ -122,7 +135,12 @@ final class ClipboardMonitor {
         case .resume: break
         }
         poll()
-        let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
+        scheduleTimer()
+    }
+
+    private func scheduleTimer() {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: accessDenied ? Self.deniedPollInterval : pollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
         // Capture latency is not precision-sensitive; tolerance lets macOS
@@ -142,6 +160,15 @@ final class ClipboardMonitor {
     /// own named pasteboard instead of the user's.
     func poll(_ pb: NSPasteboard = Pasteboard.general) {
         guard pb.changeCount != lastChangeCount else { return }
+        accessReads += 1
+        let denied = access() == .denied
+        if denied != accessDenied {
+            accessDenied = denied
+            // Re-arm at the new cadence; applyPause arms it itself after its first poll.
+            if timer != nil { scheduleTimer() }
+        }
+        // The change count is left unseen, so the clip on the pasteboard when access returns is captured.
+        guard !denied else { return }
         lastChangeCount = pb.changeCount
         let suppressed = suppressNext
         suppressNext = false
