@@ -502,7 +502,7 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
-    /// "Restart proxy": a listener restart off the main actor, with the brief bind retry. With a
+    /// "Restart proxy" off the main actor: the listener and in-flight relays are kept (#1672). With a
     /// life cycle it restarts only while the proxy should run (and stops it otherwise).
     @discardableResult
     func restartProxy() -> Task<Void, Never> { proxyTask(restart: true) }

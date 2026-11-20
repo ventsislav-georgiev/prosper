@@ -169,8 +169,9 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     /// Bind and serve. Blocks up to a few seconds (port probe + bind): call it off the main thread.
+    /// #1672 (R1665e n7): `stillWanted` is asked right before the bind; false leaves the status as it is and binds nothing.
     @discardableResult
-    func start() -> Status {
+    func start(stillWanted: @Sendable () -> Bool = { true }) -> Status {
         if case .running = status { return status }
         if let why = Self.refusalUnderTest(config) { return finishStart(.failed(why), note: why) }
         // #1676: a keeper holding the port (a relaunch) hands its socket over: the queued connections are served, no
@@ -189,6 +190,8 @@ final class CCPoolService: @unchecked Sendable {
                 return finishStart(.heldByOther, note: "port held by another program; not binding")
             }
         }
+        // A toggle-off or quit that came in during the probe: no bind lands after it.
+        guard stillWanted() else { return abandonedStart() }
         // #1675: a BSD socket on 127.0.0.1 with SO_REUSEADDR (CCPoolListener.open): past TIME_WAIT at once. EADDRINUSE beside an exact 127.0.0.1 listener; a 0.0.0.0 one is caught by the probe above (only the probe-to-bind race is open).
         switch CCPoolListener.open(port: config.port) {
         case .success(let l):
@@ -274,12 +277,15 @@ final class CCPoolService: @unchecked Sendable {
     /// P2a (d): start, and while the bind itself loses to a port the probe found free (P1 note 5:
     /// stop() then start() can meet TIME_WAIT; endpoint reuse stays off), retry for up to
     /// `bindRetry` seconds. A port held by a live listener is never retried. Blocks: off main only.
+    /// #1672 (R1665e n7): `stillWanted` (the life cycle's shouldRun, takeOver's) is asked on every tick and before
+    /// every bind, so a toggle-off or quit queued behind the retry never sees a bind land.
     @discardableResult
-    func start(bindRetry: TimeInterval) -> Status {
+    func start(bindRetry: TimeInterval, stillWanted: @Sendable () -> Bool = { true }) -> Status {
         let deadline = Date().addingTimeInterval(bindRetry)
         while true {
+            guard stillWanted() else { return abandonedStart() }
             lock.withLock { bindRaced = false; bindError = nil }
-            let s = start()
+            let s = start(stillWanted: stillWanted)
             guard case .heldByOther = s, lock.withLock({ bindRaced }), Date() < deadline else {
                 // #1665: the reason, once per start, not once per retry tick.
                 if let why = lock.withLock({ bindError }) { logger.note(nil, "bind failed: \(why)") }
@@ -328,7 +334,7 @@ final class CCPoolService: @unchecked Sendable {
         if case .running = status { return .started(status) }
         guard config.port != 0, Self.refusalUnderTest(config) == nil,
               case .ccpool(let pid?, _) = probeHolder(), wanted == nil || pid == wanted else {
-            return .started(start(bindRetry: bindRetry))
+            return .started(start(bindRetry: bindRetry, stillWanted: stillWanted))
         }
         guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid), config.ownedByUser(p),
               config.listensOn(p, config.port) else {
@@ -357,7 +363,7 @@ final class CCPoolService: @unchecked Sendable {
         }
         guard stillWanted() else { return abandoned() }
         // A new holder (another ccpool, another program) is reported by start()'s own probe.
-        return .started(start(bindRetry: bindRetry))
+        return .started(start(bindRetry: bindRetry, stillWanted: stillWanted))
     }
 
     private func abandoned() -> TakeOver {
@@ -484,17 +490,32 @@ final class CCPoolService: @unchecked Sendable {
         return args
     }
 
-    /// The Settings "Restart proxy": a listener restart (B25). Blocks: off main only.
+    /// The Settings "Restart proxy" (B25; #1672): a healthy listening socket is kept (no unbound gap, no bind, no
+    /// TIME_WAIT) and every in-flight relay runs to its end on what it holds. Idle upstream sessions are dropped (running
+    /// tasks finish) and the records flushed, so new requests start fresh. Without a live listener (stopped, failed,
+    /// lost) it is a plain start, with the TIME_WAIT backstop and `stillWanted` asked per tick. Blocks: off main only.
     @discardableResult
-    func restart(bindRetry: TimeInterval = 3) -> Status {
-        // Wait for the old listener to be gone: a probe racing its cancel would be answered by it
-        // (and read as "another ccpool holds the port") or reset (read as "something else").
-        let gone = DispatchSemaphore(value: 0)
-        let old = lock.withLock { listener }
-        old?.stateUpdateHandler = { if case .cancelled = $0 { gone.signal() } }
-        stop()
-        if old != nil { _ = gone.wait(timeout: .now() + 2) }
-        return start(bindRetry: bindRetry)
+    func restart(stillWanted: @Sendable () -> Bool = { true }) -> Status {
+        upstream.invalidateAll(graceful: true)
+        usageRecord.flush()
+        eventRecord.flush()
+        let kept = lock.withLock { () -> Status? in
+            guard case .running = _status, let l = listener, CCPoolListener.isListeningTCP(l.fd) else { return nil }
+            return _status
+        }
+        if let kept {
+            logger.note(nil, "proxy restarted; listener kept")
+            return kept
+        }
+        // A published listener that no longer listens is dropped like a lost one, then the plain start below.
+        if let stale = currentListener { listenerLost(nil, from: stale) }
+        return start(bindRetry: Self.timeWaitRetry, stillWanted: stillWanted)
+    }
+
+    /// #1672: a start whose `stillWanted` turned false before its bind. The status stays as it was (the queued stop sets it).
+    private func abandonedStart() -> Status {
+        logger.note(nil, "start abandoned: the proxy should no longer run")
+        return status
     }
 
     /// Remove an account and drop its upstream URLSession with it (P2a follow-up e). False when the

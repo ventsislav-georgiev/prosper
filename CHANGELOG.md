@@ -2114,6 +2114,9 @@ tag from the now-released section and put it on the new top draft.
   are, no account is paused for it, and VoiceOver reads the value. (#1670, #1677)
 - Claude Account Pool status line: each Claude Code session now shows the account its own
   conversation is pinned to, not just the pool's current one. (#1673)
+- ccpool: "Restart proxy" no longer cuts Claude Code sessions that are mid-reply and never leaves
+  the port closed: the proxy keeps listening and running requests finish normally, while new
+  requests start on fresh connections. (#1672)
 
 ## v2.174.0
 

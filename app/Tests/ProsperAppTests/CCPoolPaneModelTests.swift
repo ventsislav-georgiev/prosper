@@ -785,11 +785,11 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertTrue(blockMain(seconds: 10) { r.anthropic.get { $0.seen.count } >= seen + 2 && r.store.usageSample("one") != nil },
                       "the refresh probed every account with main blocked")
         let log = r.log, service = r.service
-        let binds = log.lines.filter { $0.contains("proxy listening") }.count
+        let restarts = log.lines.filter { $0.contains("proxy restarted") }.count
         let restart = r.model.restartProxy()
         XCTAssertTrue(blockMain(seconds: 10) {
             guard case .running = service.status else { return false }
-            return log.lines.filter { $0.contains("proxy listening") }.count > binds
+            return log.lines.filter { $0.contains("proxy restarted") }.count > restarts
         }, "restart finished with main blocked")
         await add.value
         await refresh?.value

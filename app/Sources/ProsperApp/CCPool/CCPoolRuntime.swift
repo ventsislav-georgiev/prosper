@@ -41,11 +41,12 @@ final class CCPoolLifecycle: @unchecked Sendable {
             if !relaunching { service.config.keeper?.exit() }
             return service.status
         }
-        if restart { return service.restart() }
+        // #1672 (R1665e n7): a toggle-off or quit queued behind a retry is seen per tick, before any bind.
+        if restart { return service.restart(stillWanted: { [self] in shouldRun }) }
         if case .running = service.status { return service.status }
         // A port another program holds is probed again on each event (an add, an enable, a click):
         // one GET of the health path, never a retry loop (the bind retry is for a free port only).
-        return service.start(bindRetry: CCPoolService.timeWaitRetry)
+        return service.start(bindRetry: CCPoolService.timeWaitRetry, stillWanted: { [self] in shouldRun })
     }
 
     /// Queue one settle and wait for it, off the caller's thread.

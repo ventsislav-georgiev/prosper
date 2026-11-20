@@ -9,8 +9,6 @@ private final class LeftoverCounter: @unchecked Sendable {
     var count: Int { lock.withLock { n } }
 }
 
-private final class LeftoverListenerBox: @unchecked Sendable { var l: CCPoolListener? }
-
 private final class LeftoverSwitch: @unchecked Sendable {
     private let lock = NSLock()
     private var _on = false
@@ -487,26 +485,27 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertEqual(binds.count, 1, "one bind")
     }
 
-    // #1571 O10, mutant r10: restart() binds again only after the old listener's cancel was seen (port 0: the new one
-    // takes another port, so the old listener's own state is the evidence).
-    nonisolated func testCCPoolRestartBindsOnlyAfterTheOldListenerIsCancelled() throws {
+    // #1571 O10 / #1672: restart() keeps a healthy listener (no bind, no unbound gap: same listener, same port); once the
+    // listener is lost, restart is a plain start that binds a new one.
+    nonisolated func testCCPoolRestartKeepsAHealthyListenerAndBindsOnlyWhenItIsGone() throws {
         let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
         let binds = LeftoverCounter()
-        let oldWasCancelled = LeftoverSwitch()
-        let oldBox = LeftoverListenerBox()
         var cfg = CCPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:9")!
-        cfg.afterReady = { l in
-            if binds.count == 0 { oldBox.l = l } else if case .cancelled = oldBox.l?.state { oldWasCancelled.on = true }
-            binds.bump()
-        }
+        cfg.afterReady = { _ in binds.bump() }
         let service = CCPoolService(config: cfg, store: store, secrets: CCPoolMemorySecrets(), logger: CCPoolCapturingLogger())
         defer { service.stop() }
-        guard case .running = service.start() else { return XCTFail("\(service.status)") }
+        guard case .running(let port) = service.start() else { return XCTFail("\(service.status)") }
+        let first = service.currentListener
+        XCTAssertEqual(service.restart(), .running(port: port), "the same port")
+        XCTAssertEqual(binds.count, 1, "no bind")
+        XCTAssertTrue(first != nil && service.currentListener === first, "the same listener")
+        XCTAssertTrue(first.map { CCPoolListener.isListeningTCP($0.fd) } ?? false, "still listening")
+
+        service.listenerLost(nil, from: first)
         guard case .running = service.restart() else { return XCTFail("\(service.status)") }
-        XCTAssertEqual(binds.count, 2)
-        XCTAssertTrue(oldWasCancelled.on, "the old listener was cancelled when the new one bound")
-        XCTAssertTrue(service.currentListener !== oldBox.l)
+        XCTAssertEqual(binds.count, 2, "a lost listener: restart is a plain start")
+        XCTAssertTrue(service.currentListener !== first)
     }
 }

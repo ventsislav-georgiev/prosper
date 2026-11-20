@@ -69,12 +69,14 @@ final class CCPoolUpstream: NSObject, URLSessionDataDelegate, @unchecked Sendabl
         lock.withLock { sessions.removeValue(forKey: accountID) }?.invalidateAndCancel()
     }
 
-    func invalidateAll() {
+    /// Stop and quit: every session goes, running tasks cancelled. `graceful` (#1672, Restart): running tasks finish on
+    /// the session they hold (finishTasksAndInvalidate); new requests get a fresh session.
+    func invalidateAll(graceful: Bool = false) {
         let all = lock.withLock { () -> [URLSession] in
             defer { sessions.removeAll() }
             return Array(sessions.values)
         }
-        all.forEach { $0.invalidateAndCancel() }
+        all.forEach { graceful ? $0.finishTasksAndInvalidate() : $0.invalidateAndCancel() }
     }
 
     private func handler(_ task: URLSessionTask) -> CCPoolUpstreamHandler? {

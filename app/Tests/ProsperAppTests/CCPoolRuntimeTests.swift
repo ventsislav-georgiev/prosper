@@ -147,9 +147,12 @@ final class CCPoolRuntimeTests: XCTestCase {
         await r.runtime.setLive(true)?.value
         XCTAssertNotNil(port(r))
         let binds = r.log.lines.filter { $0.contains("proxy listening") }.count
+        let before = port(r)
         await r.model.restartProxy().value
         XCTAssertNotNil(port(r), "\(r.service.status)")
-        XCTAssertEqual(r.log.lines.filter { $0.contains("proxy listening") }.count, binds + 1, "a new listener")
+        XCTAssertEqual(port(r), before, "#1672: the listener is kept, same port")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("proxy listening") }.count, binds, "#1672: no new bind")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("proxy restarted; listener kept") }.count, 1)
         let p = try XCTUnwrap(port(r))
         r.runtime.quit()
         XCTAssertEqual(r.service.status, stopped)
