@@ -1314,6 +1314,7 @@ struct SessionGroupsEditor: Equatable {
 
     /// Why the row is not saved, nil when it is. `stored` is the list the editor saves over.
     func reason(_ g: SessionGroup, stored st: [SessionGroup] = Preferences.agentIslandSessionGroups) -> String? {
+        if SessionGroup.isReserved(g.name) { return "dch uses this name for its own tab: not saved" }
         guard SessionGroup.validName(g.name) else { return "A name is 1-32 bytes, without \"=\": not saved" }
         let u = unsavedIDs(stored: st)
         if u.all.contains(g.id) && !u.own.contains(g.id) { return "Another group has this name: not saved" }

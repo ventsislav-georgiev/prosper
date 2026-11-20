@@ -79,6 +79,19 @@ final class SessionGroupsTests: XCTestCase {
         XCTAssertEqual(kept.map(\.name), (1...8).map { "g\($0)" }, "invalid names dropped, the first 8 kept, names trimmed")
     }
 
+    /// #1801: dch skips groups named Sessions or History (its own tabs), trimmed, any case; other names stay.
+    func testReservedNamesAreRefusedAndDroppedWithoutMovingTheRest() {
+        for bad in ["Sessions", "history", "  HISTORY\t", "SESSIONS", "\tSessions "] {
+            XCTAssertFalse(SessionGroup.validName(bad), bad.debugDescription)
+        }
+        for ok in ["History 2", "My sessions", "All", "Sidekicks", "Sessions1"] {
+            XCTAssertTrue(SessionGroup.validName(ok), ok)
+        }
+        let list = [Self.group("A", "-a$"), Self.group("History", "-h$"), Self.group("sessions", "-s$"), Self.group("B", "-b$")]
+        XCTAssertEqual(SessionGroup.normalized(list).map(\.name), ["A", "B"], "reserved dropped, B keeps its place")
+        XCTAssertEqual(DchConfigWriter.groupValues(list), ["A = -a$", "B = -b$"], "no stale line for a dropped group")
+    }
+
     /// #1758 (QA R1757 n86): the first of each id and of each name (trimmed, any case) is kept, stored and in dch's lines.
     func testNormalizedKeepsTheFirstOfEachIdAndEachName() {
         let list = [SessionGroup(id: "a", name: "QA", pattern: "-qa$"), SessionGroup(id: "a", name: "Other", pattern: "-o$"),

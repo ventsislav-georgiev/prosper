@@ -1351,10 +1351,15 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
         pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [SessionGroup(id: sidekicksID, name: "Sidekicks", pattern: pattern)]
     }
 
-    /// A name dch keeps: 1-32 bytes once trimmed, no "=" (dch splits the line at the first one), no control character.
+    /// #1801: dch 1.132.0 skips a group named like one of its own tabs (trimmed, any case).
+    static let reservedKeys: Set<String> = ["sessions", "history"]
+    static func isReserved(_ name: String) -> Bool { reservedKeys.contains(nameKey(name)) }
+
+    /// A name dch keeps: 1-32 bytes once trimmed, no "=" (dch splits the line at the first one), no control character,
+    /// not one of its own tab names.
     static func validName(_ name: String) -> Bool {
         let n = name.trimmingCharacters(in: .whitespaces)
-        return (1...maxNameBytes).contains(n.utf8.count) && !n.unicodeScalars.contains { $0 == "=" || $0.value < 0x20 || $0.value == 0x7F }
+        return (1...maxNameBytes).contains(n.utf8.count) && !isReserved(n) && !n.unicodeScalars.contains { $0 == "=" || $0.value < 0x20 || $0.value == 0x7F }
     }
 
     /// A name as dch and the editor compare it: trimmed, ignoring case.

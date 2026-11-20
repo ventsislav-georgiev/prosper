@@ -1,0 +1,34 @@
+{
+ "entry": "1801",
+ "filter": "SessionGroupsTests|SessionGroupsEditorTests",
+ "mutants": [
+  {
+   "name": "sessions-not-reserved",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "[\"sessions\", \"history\"]",
+   "new": "[\"history\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "history-not-reserved",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "[\"sessions\", \"history\"]",
+   "new": "[\"sessions\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "reserved-case-sensitive",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "reservedKeys.contains(nameKey(name))",
+   "new": "reservedKeys.contains(name.trimmingCharacters(in: .whitespaces))",
+   "expect": "killed"
+  },
+  {
+   "name": "reserved-untrimmed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "reservedKeys.contains(nameKey(name))",
+   "new": "reservedKeys.contains(name.lowercased())",
+   "expect": "killed"
+  }
+ ]
+}

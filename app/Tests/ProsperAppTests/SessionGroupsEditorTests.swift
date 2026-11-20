@@ -93,6 +93,8 @@ final class SessionGroupsEditorTests: XCTestCase {
             ("invalid regex", { g, _ in g.pattern = "a(" }, "Not a valid regex: not saved"),
             ("match everything", { g, _ in g.pattern = ".*" }, "Matches every session: not saved"),
             ("bad name", { g, _ in g.name = "a=b" }, "A name is 1-32 bytes, without \"=\": not saved"),
+            ("reserved name", { g, _ in g.name = " History\t" }, "dch uses this name for its own tab: not saved"),
+            ("reserved name Sessions", { g, _ in g.name = "SESSIONS" }, "dch uses this name for its own tab: not saved"),
             ("empty name", { g, _ in g.name = "  " }, "A name is 1-32 bytes, without \"=\": not saved"),
             ("duplicate name", { g, other in g.name = " \(other.uppercased()) " }, "Another group has this name: not saved"),
             ("no pattern", { g, _ in g.pattern = "" }, "No pattern yet: not saved"),

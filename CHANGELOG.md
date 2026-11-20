@@ -2244,6 +2244,8 @@ tag from the now-released section and put it on the new top draft.
   moved to it. (#1794)
 - Agent Sessions: switching sessions is snappier: the sidebar no longer rebuilds its rows, groups
   and Command-number shortcuts on every switch. (#1785)
+- Settings: a session group can no longer be named Sessions or History, the names dch uses for its
+  own tabs; a saved group with either name is dropped. (#1801)
 
 ## v2.174.0
 
