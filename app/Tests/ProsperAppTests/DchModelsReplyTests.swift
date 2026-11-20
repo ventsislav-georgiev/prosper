@@ -31,10 +31,10 @@ final class DchModelsReplyTests: XCTestCase {
         XCTAssertEqual(r?.rows.first?["loaded"] as? Bool, true)
     }
 
-    func testAnotherResidentModelIsNotLoaded() async {
+    func testAnotherResidentModelIsLoaded() async {
         let r = await reply(resident: "example-model-b")
         XCTAssertEqual(r?.rows.count, 1)
-        XCTAssertEqual(r?.rows.first?["loaded"] as? Bool, false)
+        XCTAssertEqual(r?.rows.first?["loaded"] as? Bool, true)
     }
 
     func testNoResidentModelIsNotLoaded() async {

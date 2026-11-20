@@ -2138,6 +2138,8 @@ tag from the now-released section and put it on the new top draft.
   only for a zoomed pane or when the window is too small for every pane. (#1697)
 - Clipboard history no longer makes macOS ask for paste permission on every copy while Prosper is
   set to Ask; it waits until you allow Prosper to paste from other apps. (#1702)
+- Phone chat: a request that names the model already loaded on the Mac is answered instead of
+  refused, and the phone no longer shows the cold-start hint while a model is loaded. (#1703)
 
 ## v2.174.0
 

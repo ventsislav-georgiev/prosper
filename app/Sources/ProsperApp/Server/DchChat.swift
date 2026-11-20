@@ -117,13 +117,14 @@ final class DchChat: @unchecked Sendable {
         return req
     }
 
-    /// 0x1e: modelsResp `[{id, name, loaded}]`, the agent model only when it is on disk.
+    /// 0x1e: modelsResp `[{id, name, loaded}]`, the agent model only when it is on disk. #1703: "loaded" is true
+    /// while ANY agent model is resident (a chat is answered by it at once, so the phone shows no cold hint).
     func models(_ payload: Data, reply: Reply) async {
         let o = payload.isEmpty ? [:] : (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
         guard o?.isEmpty == true else { return reply(Self.error("malformed models request: send nothing or {}")) }
         let id = modelId()
         guard isModelOnDisk(id) else { return reply(DchFrame.encode(DchFrame.modelsResp, json: [Any]())) }
-        let row: [String: Any] = ["id": id, "name": AgentModelRegistry.model(for: id).label, "loaded": await residentId() == id]
+        let row: [String: Any] = ["id": id, "name": AgentModelRegistry.model(for: id).label, "loaded": await residentId() != nil]
         reply(DchFrame.encode(DchFrame.modelsResp, json: [row]))
     }
 
@@ -136,7 +137,8 @@ final class DchChat: @unchecked Sendable {
         }
         let id = modelId()
         guard isModelOnDisk(id) else { return reply(Self.error("no local model")) }
-        guard req.model == nil || req.model == id else { return reply(Self.error("unknown model")) }
+        // #1703 (OQ-190): the id of the model the engine holds is answered too (it is loaded, the acquire returns it).
+        if let m = req.model, m != id, await residentId() != m { return reply(Self.error("unknown model")) }
         let claimed = lock.withLock { () -> Bool in
             guard !running else { return false }
             running = true

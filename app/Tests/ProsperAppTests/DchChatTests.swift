@@ -284,6 +284,24 @@ final class DchChatTests: XCTestCase {
         XCTAssertEqual(s.get { $0.acquires }, 0)
     }
 
+    /// #1703 (OQ-190): another model is resident (the setting names a different id): naming the resident id is answered.
+    func testTheResidentModelIdIsAnswered() async {
+        let s = State()
+        let r = connection({ let c = makeChat(s); c.residentId = { "example-model-b" }; return c }())
+        let f = await chat(r, Self.chatBody(extra: ["model": "example-model-b"]))
+        XCTAssertTrue(f.map { Self.type($0) } == DchFrame.chatDone, "answered, not refused")
+        XCTAssertEqual(s.get { $0.acquires }, 1)
+        XCTAssertEqual(deltas(r).count, 3)
+    }
+
+    func testAnIdThatIsNeitherTheSettingNorResidentIsStillRefused() async {
+        let s = State()
+        let r = connection({ let c = makeChat(s); c.residentId = { "example-model-b" }; return c }())
+        let f = await chat(r, Self.chatBody(extra: ["model": "example-model-c"]))
+        XCTAssertEqual(Self.message(f), "unknown model")
+        XCTAssertEqual(s.get { $0.acquires }, 0)
+    }
+
     func testNoLocalModelIsRefused() async {
         let s = State()
         s.set { $0.onDisk = false }
