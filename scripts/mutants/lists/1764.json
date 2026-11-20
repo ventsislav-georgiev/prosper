@@ -1,0 +1,97 @@
+{
+ "entry": "1764",
+ "filter": "XrayRecapTests|XrayChapterCardTests|XrayPanelTests",
+ "mutants": [
+  {
+   "name": "harness_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": ", !isHarness(c[\"turn_title\"] as? String) else",
+   "new": " else",
+   "expect": "killed"
+  },
+  {
+   "name": "interrupted_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "t.hasPrefix(\"[Request interrupted\") || ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "shape_filter_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "XrayRefs.Shape(rawValue: shape).map({ keptShapes.contains($0) }) == true",
+   "new": "true",
+   "expect": "killed"
+  },
+  {
+   "name": "sort_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": ".enumerated().sorted { ($0.element.count, $1.offset) > ($1.element.count, $0.offset) }.map(\\.element)",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "tie_order",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "($0.element.count, $1.offset) > ($1.element.count, $0.offset)",
+   "new": "($0.element.count, $0.offset) > ($1.element.count, $1.offset)",
+   "expect": "killed"
+  },
+  {
+   "name": "three_titles",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "static let shownChapters = 2",
+   "new": "static let shownChapters = 3",
+   "expect": "killed"
+  },
+  {
+   "name": "word_boundary_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "head.lastIndex(of: \" \").map { head[..<$0] }.flatMap { $0.count >= shortTitle / 2 ? $0 : nil } ?? head",
+   "new": "head",
+   "expect": "killed"
+  },
+  {
+   "name": "punct_kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "String(word).replacing(/[\\s\\p{P}]+$/, with: \"\")",
+   "new": "String(word)",
+   "expect": "killed"
+  },
+  {
+   "name": "singular_cap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "new prompt\\(n == 1 && !more ? \"\" : \"s\")",
+   "new": "new prompt\\(n == 1 ? \"\" : \"s\")",
+   "expect": "killed"
+  },
+  {
+   "name": "span_unclamped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "Int(min(max(t, 0), 1e12) / 60)",
+   "new": "Int(min(t, 1e12) / 60)",
+   "expect": "killed"
+  },
+  {
+   "name": "times_one",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "($0.count > 1 ? \" \\u{00D7}\\($0.count)\" : \"\")",
+   "new": "\" \\u{00D7}\\($0.count)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "partial_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
+   "old": "(partial ? \" \\u{00B7} newest only\" : \"\")",
+   "new": "\"\"",
+   "expect": "killed"
+  },
+  {
+   "name": "earlier_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "c.ordinal == XrayPanelModel.recapOrdinal ? \"Earlier prompt\" : ",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
