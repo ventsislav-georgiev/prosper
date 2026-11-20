@@ -1,0 +1,41 @@
+{
+ "entry": "1787",
+ "filter": "XrayTasksParseTests|XrayFollowTasksTests",
+ "mutants": [
+  {
+   "name": "no-cache-hit",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "if let t = kept[line] ?? cache.rows[line] {",
+   "new": "if let t = kept[line] ?? nil {",
+   "expect": "killed"
+  },
+  {
+   "name": "cache-keeps-all",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "defer { cache.rows = kept }",
+   "new": "defer { cache.rows.merge(kept) { $1 } }",
+   "expect": "killed"
+  },
+  {
+   "name": "follow-no-reuse",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "j.task.map { XrayTasks.parse($0.lines, reusing: &taskCache) }",
+   "new": "j.task.map { var c = XrayTasks.Cache(); defer { taskCache.parses &+= c.parses }; return XrayTasks.parse($0.lines, reusing: &c) }",
+   "expect": "killed"
+  },
+  {
+   "name": "reset-keeps-cache",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "taskCache.rows = [:]   // #1787",
+   "new": "_ = 0   // #1787",
+   "expect": "killed"
+  },
+  {
+   "name": "date-plain-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "(s.contains(\".\") ? fractionalISO : plainISO)",
+   "new": "plainISO",
+   "expect": "killed"
+  }
+ ]
+}
