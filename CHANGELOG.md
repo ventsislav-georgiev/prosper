@@ -2194,6 +2194,8 @@ tag from the now-released section and put it on the new top draft.
 - Kit settings that set an environment variable or switch off bypass permissions now work for kits
   only, and the consent sheet adds a plain line when a kit turns on auto mode or claude.ai
   connectors. (#1729)
+- Phone chat: a model the phone was shown that has since been unloaded is now answered by your
+  chosen model instead of failing with "unknown model". (#1728)
 
 ## v2.174.0
 

@@ -142,7 +142,10 @@ final class DchChat: @unchecked Sendable {
         let id = modelId()
         guard isModelOnDisk(id) else { return reply(Self.error("no local model")) }
         // #1703 (OQ-190): the id of the model the engine holds is answered too (it is loaded, the acquire returns it).
-        if let m = req.model, m != id, await residentId() != m { return reply(Self.error("unknown model")) }
+        // #1728: a known agent model id (the models row may have named it before it was released) is answered by the
+        // setting model, as the setting id would be; only an id no registry knows is refused.
+        if let m = req.model, m != id, await residentId() != m,
+           !AgentModelRegistry.all().contains(where: { $0.id == m }) { return reply(Self.error("unknown model")) }
         let claimed = lock.withLock { () -> Bool in
             guard !running else { return false }
             running = true

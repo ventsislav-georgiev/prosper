@@ -62,6 +62,7 @@ final class DchChatTests: XCTestCase {
         let lock = NSLock()
         var onDisk = true, resident = false, macBusy = false, windowOpen = false, holdRelease = false
         var acquires = 0, releases = 0, acquiring = 0
+        var acquiredIds: [String] = []
         var engine = FakeEngine(.chunks(["Hel", "", "lo", " world"]))
         var scheduled: [(delay: TimeInterval, fire: @Sendable () async -> Void)] = []
         func get<T>(_ f: (State) -> T) -> T { lock.withLock { f(self) } }
@@ -77,6 +78,7 @@ final class DchChatTests: XCTestCase {
         chat.acquire = { id in
             s.get { s in
                 s.acquires += 1
+                s.acquiredIds.append(id)
                 s.resident = true
                 return (s.engine, id)
             }
@@ -315,6 +317,20 @@ final class DchChatTests: XCTestCase {
         let f = await chat(r, Self.chatBody(extra: ["model": "example-model-c"]))
         XCTAssertEqual(Self.message(f), "unknown model")
         XCTAssertEqual(s.get { $0.acquires }, 0)
+    }
+
+    /// #1728: the models row named another model that was released before this chat (nothing resident now): a known
+    /// registry id is answered by the setting model (a cold load), not refused.
+    func testAKnownIdThatIsNoLongerResidentIsAnsweredBySettingModel() async {
+        let s = State()
+        let other = AgentModelRegistry.models[1].id
+        XCTAssertNotEqual(other, Self.modelId)
+        let r = connection(makeChat(s))
+        let f = await chat(r, Self.chatBody(extra: ["model": other]))
+        XCTAssertTrue(f.map { Self.type($0) } == DchFrame.chatDone, "answered, not refused")
+        XCTAssertEqual(s.get { $0.acquires }, 1)
+        XCTAssertEqual(s.get { $0.acquiredIds }, [Self.modelId], "the setting model answers")
+        XCTAssertEqual(deltas(r).count, 3)
     }
 
     func testNoLocalModelIsRefused() async {
