@@ -1,0 +1,83 @@
+{
+ "entry": 1704,
+ "filter": "ExtensionUpdatePermissionReviewTests|MarketKitRecheckTests/testKindChangeWithANewPermissionIsNotReviewedAndLandsUntrusted",
+ "mutants": [
+  {
+   "name": "no_review",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !added.isEmpty, !(review ?? reviewNewPermissions)(loaded.manifest.extension.title, added) {",
+   "new": "if false, !(review ?? reviewNewPermissions)(loaded.manifest.extension.title, added) {",
+   "expect": "killed"
+  },
+  {
+   "name": "always_review",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !added.isEmpty, !(review ?? reviewNewPermissions)(",
+   "new": "if !(review ?? reviewNewPermissions)(",
+   "expect": "killed"
+  },
+  {
+   "name": "ignore_answer",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if !added.isEmpty, !(review ?? reviewNewPermissions)(loaded.manifest.extension.title, added) {",
+   "new": "if !added.isEmpty, !(review ?? reviewNewPermissions)(loaded.manifest.extension.title, added) && false {",
+   "expect": "killed"
+  },
+  {
+   "name": "all_declared",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "let added = loaded.manifest.extension.declaredPermissions.filter { !had.contains($0) }",
+   "new": "let added = loaded.manifest.extension.declaredPermissions",
+   "expect": "killed"
+  },
+  {
+   "name": "untrusted_too",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if let old = record(id: loaded.id), old.trusted,",
+   "new": "if let old = record(id: loaded.id),",
+   "expect": "killed"
+  },
+  {
+   "name": "kind_ignored",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "           (old.manifest.contributes?.kit != nil) == (loaded.manifest.contributes?.kit != nil) {",
+   "new": "           true {",
+   "expect": "killed"
+  },
+  {
+   "name": "daily_asks",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }",
+   "new": "let review: PermissionReview = reviewNewPermissions",
+   "expect": "killed"
+  },
+  {
+   "name": "user_quiet",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }",
+   "new": "let review: PermissionReview = { @Sendable _, _ in false }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_hold",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "refusedUpdates.hold(id: cand.id, listed: tried?.listed, added: added)",
+   "new": "_ = added",
+   "expect": "killed"
+  },
+  {
+   "name": "declined_is_failure",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "            } catch ExtensionError.newPermissionsDeclined(_, let added) {",
+   "new": "            } catch ExtensionError.newPermissionsDeclined(_, let added) where false {",
+   "expect": "killed"
+  },
+  {
+   "name": "no_release",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "refusedUpdates.release(id: loaded.id)   // #1704",
+   "new": "_ = 0   // #1704",
+   "expect": "killed"
+  }
+ ]
+}
