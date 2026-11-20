@@ -1,0 +1,27 @@
+{
+ "entry": "1727",
+ "filter": "AgentIslandAutoAllowTests/testTheAllowedNoteHidesAfterTenSeconds|AgentIslandAutoAllowTests/testAnOlderNoteTimerClearsNothingNewer",
+ "mutants": [
+  {
+   "name": "noteLifeZero",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "static let noteLife: TimeInterval = 10",
+   "new": "static let noteLife: TimeInterval = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "noSeqCheck",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "guard let self, self.noteChain[key] == id else { return }",
+   "new": "guard let self else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "clearsAnyText",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if self.store?.actions[key] == AgentIsland.autoAllowedText { self.store?.actions[key] = nil; self.layout() }",
+   "new": "self.store?.actions[key] = nil; self.layout()",
+   "expect": "killed"
+  }
+ ]
+}
