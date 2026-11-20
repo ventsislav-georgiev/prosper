@@ -2186,7 +2186,8 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer settings can install a prosper command (like VS Code's code): type prosper FILE in a
   terminal to open files in Prosper, or pipe text into prosper - to view it. Prosper never replaces
   a command it did not install. (#1723)
-- The "Allowed automatically" note on an agent row now hides by itself after 10 seconds. (#1727)
+- Short notes on an agent row ("Allowed automatically", "Sent", "Attach command copied") now hide
+  by themselves after 10 seconds; error lines stay. (#1727, #1733)
 - Agent Sessions terminal: Command-hover now underlines and Command-click opens file paths
   (including bare names like CHANGELOG.md, resolved against the session's folder) and links even
   while the program in the pane uses the mouse, as Claude Code does; Shift is no longer needed, and
@@ -2201,19 +2202,13 @@ tag from the now-released section and put it on the new top draft.
   every window also gets a standard Window menu (Minimize, Zoom, Bring All to Front and the window
   list). (#1726)
 - The agents count is outlined in royal purple and the shells count in white, with no grey wash
-  behind either. (#1735)
+  behind either, on the Agent Island cards too. (#1735, #1739)
 - The New session form asks for a name (no generated default) and sits in the middle of the pane.
   (#1731)
 - Clicking a session on the Agent Island now opens it in Agent Sessions by default; opening a
   terminal or copying the attach command stay as choices in Settings. (#1736)
 - Clicking several file links quickly now opens only the last one, even if an earlier file was slow
   to check. (#1730)
-- Agent island: short notes on a row such as "Sent" or "Attach command copied" now hide by
-  themselves after 10 seconds; error lines stay. (#1733)
-- Kit env sheet: the auto mode and connectors warnings now show for any value except clearly off
-  ones (empty, 0, false, no, off). (#1742)
-- The count pills on Agent Island cards (Follow theme off) now keep white and purple outlines that
-  stay visible on every theme. (#1739)
 
 ## v2.174.0
 

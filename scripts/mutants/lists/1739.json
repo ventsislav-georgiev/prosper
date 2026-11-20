@@ -1,6 +1,6 @@
 {
  "entry": "1739",
- "filter": "AgentRowModelEffortTests/testCountPillStrokesOnTheFollowOffIslandCardClearThreeToOneOnEveryTheme",
+ "filter": "AgentRowSelectedTextTests/testCountPillStrokesOnTheFollowOffIslandCardClearThreeToOneOnEveryTheme",
  "mutants": [
   {
    "name": "island_ignores_surface",
