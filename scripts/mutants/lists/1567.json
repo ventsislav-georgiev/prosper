@@ -19,8 +19,8 @@
   {
    "name": "M-status",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "if r.status == 0 { cache?.put(key, r.out) }",
-   "new": "cache?.put(key, r.out)",
+   "old": "if r.status == 0 { cache?.put(key, r.out, parsed: parsed) }",
+   "new": "cache?.put(key, r.out, parsed: parsed)",
    "expect": "killed"
   },
   {

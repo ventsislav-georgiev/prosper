@@ -110,8 +110,8 @@
   {
    "name": "group_call_site",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
-   "old": "faint(Self.groupTitle(g.session, own: c.session, target: panel.target))",
-   "new": "faint(g.session)",
+   "old": "Text(verbatim: Self.groupTitle(g.session, own: c.session, target: panel.target))",
+   "new": "Text(verbatim: g.session)",
    "expect": "killed"
   },
   {
