@@ -1,0 +1,21 @@
+{
+ "entry": "1752",
+ "filter": "AgentTerminalColoursTests/testKeepsWindowColorspaceWithItsTwoValuesOnly|AgentTerminalTests/testMyGhosttyThemeCarriesWindowColorspaceToTheSurface",
+ "mutants": [
+  {
+   "name": "colorspace-key-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/GhosttyUserColours.swift",
+   "old": ", \"bold-color\", \"window-colorspace\"]",
+   "new": ", \"bold-color\"]",
+   "expect": "killed",
+   "filter": "AgentTerminalColoursTests/testKeepsWindowColorspaceWithItsTwoValuesOnly|AgentTerminalTests/testMyGhosttyThemeCarriesWindowColorspaceToTheSurface"
+  },
+  {
+   "name": "colorspace-any-value",
+   "file": "app/Sources/ProsperApp/AgentWindow/GhosttyUserColours.swift",
+   "old": "        case \"window-colorspace\": return value == \"srgb\" || value == \"display-p3\"\n",
+   "new": "        case \"window-colorspace\": return !value.isEmpty\n",
+   "expect": "killed"
+  }
+ ]
+}
