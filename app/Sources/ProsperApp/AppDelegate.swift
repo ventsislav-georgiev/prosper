@@ -656,7 +656,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
+        let windowItem = NSMenuItem()
+        mainMenu.addItem(windowItem)
+        let windowMenu = Self.makeWindowMenu()
+        windowItem.submenu = windowMenu
+
         NSApp.mainMenu = mainMenu
+        NSApp.windowsMenu = windowMenu   // #1726: AppKit adds the window list below the items
+    }
+
+    /// #1726: the standard Window menu, built once (the key window's own menus go before it). The first-responder
+    /// selectors with a nil target: AppKit runs and validates them on the key window (off when it cannot miniaturize or
+    /// zoom). No key equivalents: Command-M is a key only some windows handle today (AgentsNSWindow, #1378), so the menu
+    /// adds no chord.
+    static func makeWindowMenu() -> NSMenu {
+        let menu = NSMenu(title: "Window")
+        menu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        return menu
     }
 
     // App-menu actions (see installEditMenu). Thin wrappers so the menu items

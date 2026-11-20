@@ -206,7 +206,7 @@ final class AgentsNSWindow: NSWindow {
     override func performClose(_ sender: Any?) {
         style == .standard ? super.performClose(sender) : close()
     }
-    /// #1378: Command-M minimises in No title bar and Borderless (Prosper has no Window menu; Standard keeps today's keys). Rows put
+    /// #1378: Command-M minimises in No title bar and Borderless (#1726: the Window menu shows no Command-M; Standard keeps today's keys). Rows put
     /// a recorder here: the default is never run by a row.
     var minimize: (NSWindow) -> Void = { $0.miniaturize(nil) }
     static func isMinimizeChord(_ event: NSEvent) -> Bool {
@@ -229,10 +229,21 @@ final class AgentsNSWindow: NSWindow {
 
     /// R900-5a-1: the window stops being key while a divider drag is under way (its up may never come): the drag ends,
     /// saved once. No drag (always with the gate off): nothing.
-    override func resignKey() { super.resignKey(); Self.resignedKey(model); goMenu.remove(from: AgentGoMenu.mainMenu()) }
-    /// #1359: the Go menu after Edit while this window is key (resignKey above takes it out).
-    override func becomeKey() { super.becomeKey(); goMenu.install(in: AgentGoMenu.mainMenu()) }
+    override func resignKey() {
+        super.resignKey(); Self.resignedKey(model)
+        let main = AgentGoMenu.mainMenu()
+        for m in menus { m.remove(from: main) }
+    }
+    /// #1359: the Go menu after Edit while this window is key (resignKey above takes it out). #1726: Session, View and
+    /// Layout with it, installed in this order so each finds the ones it goes after.
+    override func becomeKey() {
+        super.becomeKey()
+        let main = AgentGoMenu.mainMenu()
+        for m in menus { m.install(in: main) }
+    }
     private(set) lazy var goMenu = AgentGoMenu(window: self)
+    private(set) lazy var menus = [AgentGoMenu(window: self, kind: .session), AgentGoMenu(window: self, kind: .view), goMenu,
+                                   AgentGoMenu(window: self, kind: .layout)]
     /// #1359 (tests): the last action `perform` ran, the key's or a Go menu item's.
     private(set) var lastPerformed: AgentGoMenu.Action?
     @MainActor static func resignedKey(_ m: AgentWindowModel?) { m?.dragEnded() }
@@ -453,6 +464,7 @@ final class AgentsNSWindow: NSWindow {
         lastPerformed = .pane(a)
         guard let model else { return false }
         if a == .nextNeedsYou { return model.nextNeedsYou() }
+        if case .layout(let n) = a { model.switchLayout(number: n); return true }   // #1726: the Layout menu's list, as ⌃N (layoutKey)
         return model.perform(a)   // #1659: a close of the form's pane cancels the form inside the model
     }
 

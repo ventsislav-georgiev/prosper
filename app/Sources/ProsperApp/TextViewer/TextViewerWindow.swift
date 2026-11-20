@@ -645,7 +645,7 @@ final class TextViewerWindows {
     }
 }
 
-/// D9 keys, routed by the window itself (the global main menu does not change): ⌘W closes;
+/// D9 keys, routed by the window itself (#1726: its menus only show them): ⌘W closes;
 /// ⌘F, ⌘G, ⇧⌘G drive the find bar; ⌘E puts the selection on the find pasteboard seam (R1).
 /// #1109: ⌘T switches Read and Edit. #1544: ⌘S saves the built-in editor's buffer.
 final class TextViewerNSWindow: NSWindow {
@@ -671,23 +671,57 @@ final class TextViewerNSWindow: NSWindow {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        switch Self.route(event) {
+        perform(Self.route(event)) || super.performKeyEquivalent(with: event)
+    }
+
+    /// #1726: what a routed key does, for the key (above) and the File / View / Find menus alike. False: not acted on now
+    /// (the key goes on to super).
+    @discardableResult func perform(_ r: KeyRoute) -> Bool {
+        guard enabled(.key(r)) else { return false }
+        switch r {
         case .close: performClose(nil)
-        case .find(let action):
-            guard let view = model?.textView else { return super.performKeyEquivalent(with: event) }
-            view.find(action)
-        case .useSelectionForFind:
-            guard let view = model?.textView else { return super.performKeyEquivalent(with: event) }
-            view.useSelectionForFind()
-        case .toggleMode:
-            guard let model, model.canEdit || model.mode != .read else { return super.performKeyEquivalent(with: event) }
-            model.toggleMode()
-        case .save:
-            guard let model, model.mode == .edit || model.isDirty else { return super.performKeyEquivalent(with: event) }
-            model.save()
-        case .pass: return super.performKeyEquivalent(with: event)
+        case .find(let action): model?.textView?.find(action)
+        case .useSelectionForFind: model?.textView?.useSelectionForFind()
+        case .toggleMode: model?.toggleMode()
+        case .save: model?.save()
+        case .pass: return false
         }
         return true
+    }
+
+    /// #1726: a menu item's run: its key's, or the header's Reveal in Finder and Open With.
+    func perform(_ a: TextViewerMenu.Action) {
+        switch a {
+        case .key(let r): perform(r)
+        case .reveal: model?.reveal()
+        case .openWith: model?.openInDefaultApp()
+        }
+    }
+
+    /// #1726: whether the key (or its menu item) acts now: the conditions the key route had before (#1544, #1109).
+    func enabled(_ a: TextViewerMenu.Action) -> Bool {
+        switch a {
+        case .key(.close): return true
+        case .key(.find), .key(.useSelectionForFind): return model?.textView != nil
+        case .key(.toggleMode): return model.map { $0.canEdit || $0.mode != .read } ?? false
+        case .key(.save): return model.map { $0.mode == .edit || $0.isDirty } ?? false
+        case .key(.pass): return false
+        case .reveal: return model != nil
+        case .openWith: return model?.defaultApp != nil
+        }
+    }
+
+    /// #1726: File, View and Find while this window is key (resignKey takes them out).
+    private(set) lazy var menus = TextViewerMenu.Kind.allCases.map { TextViewerMenu(window: self, kind: $0) }
+    override func becomeKey() {
+        super.becomeKey()
+        let main = AgentGoMenu.mainMenu()
+        for m in menus { m.install(in: main) }
+    }
+    override func resignKey() {
+        super.resignKey()
+        let main = AgentGoMenu.mainMenu()
+        for m in menus { m.remove(from: main) }
     }
 
     /// #1544 (D11): the close button and ⌘W. A dirty buffer asks first (the sheet seam); `close()` itself never asks.

@@ -56,25 +56,33 @@ final class AgentGoMenuTests: XCTestCase {
 
     /// Each built item targets the menu, runs the window's own `perform` with its entry's action, and never matches a
     /// key (the window's route keeps every key, so nothing fires twice).
+    /// #1726: the items are spread over Session, View, Go and Layout (each in one menu, none lost, none twice).
     func testEachItemRunsTheWindowsPerformAndMatchesNoKey() {
-        let win = window(), go = win.goMenu
+        let win = window()
         defer { win.close() }
+        XCTAssertEqual(win.menus.map(\.kind), [.session, .view, .go, .layout])
+        XCTAssertTrue(win.menus.contains { $0 === win.goMenu })
+        var all: [String] = []
+        for go in win.menus {
         guard let menu = go.item.submenu else { return XCTFail("a submenu") }
+        XCTAssertEqual(menu.title, go.kind.rawValue)
         go.menuNeedsUpdate(menu)
+        XCTAssertFalse(menu.items.first?.isSeparatorItem ?? true, "\(go.kind): no separator first")
+        XCTAssertFalse(menu.items.last?.isSeparatorItem ?? true, "\(go.kind): no separator last")
         let items = menu.items.filter { !$0.isSeparatorItem }
         XCTAssertEqual(items.count, go.shown.count)
-        XCTAssertEqual(items.count, 44, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
-        // #1586: the list itself, literal (no model: one pane, so #1367's Command-W item reads Close Window)
+        all += items.map(\.title)
         XCTAssertEqual(items.map(\.title), [
-            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
-            "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
-            "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
-            "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",
-            "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Bigger Text",
-            "Smaller Text", "Actual Size", "New Session", "New Shell", "Stop or Remove", "Close Window",
-            "Next Needs You", "Toggle Sidebar", "Split Right", "Split Down", "Next Pane", "Previous Pane", "Zoom Pane",
-            "Edit Layout", "Full Sidebar", "Mini Sidebar", "Slide-In Sidebar",
-        ])
+            AgentGoMenu.Kind.session: ["New Session", "New Shell", "Stop or Remove", "Close Window"],
+            .view: ["Bigger Text", "Smaller Text", "Actual Size", "Toggle Sidebar", "Zoom Pane", "Full Sidebar", "Mini Sidebar",
+                    "Slide-In Sidebar"],
+            .go: ["Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2",
+                  "Jump to Session 3", "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7",
+                  "Jump to Session 8", "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12",
+                  "Jump to Session 13", "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17",
+                  "Jump to Session 18", "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Next Needs You"],
+            .layout: ["Split Right", "Split Down", "Next Pane", "Previous Pane", "Edit Layout"],
+        ][go.kind], "\(go.kind)")
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
             XCTAssertEqual(item.action, #selector(AgentGoMenu.pick(_:)), item.title)
@@ -89,6 +97,77 @@ final class AgentGoMenuTests: XCTestCase {
             guard let e = AgentsNSWindow.keyEvent(c.key, c.mods, c.keyCode) else { return XCTFail("event") }
             XCTAssertFalse(go.menuHasKeyEquivalent(menu, for: e, target: &target, action: &action), "\(c.route)")
         }
+        }
+        XCTAssertEqual(all.count, 44, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
+        // #1586: the list itself, literal (no model: one pane, so #1367's Command-W item reads Close Window); #1726: as a set
+        XCTAssertEqual(all.count, Set(all).count, "no item in two menus")
+        XCTAssertEqual(Set(all), Set([
+            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
+            "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
+            "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
+            "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",
+            "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Bigger Text",
+            "Smaller Text", "Actual Size", "New Session", "New Shell", "Stop or Remove", "Close Window",
+            "Next Needs You", "Toggle Sidebar", "Split Right", "Split Down", "Next Pane", "Previous Pane", "Zoom Pane",
+            "Edit Layout", "Full Sidebar", "Mini Sidebar", "Slide-In Sidebar",
+        ]))
+    }
+
+    /// #1726: the Layout menu's list: one item per Layouts row, its Control-N what PaneKeys gives `.layout(n)` for, the
+    /// active row checked by menuNeedsUpdate; no rows: nothing (no separator either).
+    func testLayoutListItemsAreTheControlDigitKeys() {
+        XCTAssertTrue(AgentGoMenu.layoutListEntries(nil).isEmpty)
+        XCTAssertTrue(AgentGoMenu.layoutListEntries([]).isEmpty)
+        let rows = (1...9).map { AgentWindowModel.LayoutRow(id: UUID(), number: $0, name: "api \($0)", active: $0 == 2) }
+        let list = AgentGoMenu.layoutListEntries(rows)
+        XCTAssertTrue(list.first == .some(nil), "a separator first")
+        let entries = list.compactMap { $0 }
+        XCTAssertEqual(entries.map(\.title), rows.map(\.name))
+        let codes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]   // kVK_ANSI_1...9 (as keyTable)
+        let c = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 2, splitsEnabled: true)
+        for (e, code) in zip(entries, codes) {
+            XCTAssertEqual(AgentGoMenu.kind(of: e.action), .layout, e.title)
+            guard case .pane(let a) = e.action, let ev = AgentsNSWindow.keyEvent(e.key, e.mods, code) else { return XCTFail(e.title) }
+            XCTAssertEqual(PaneKeys.action(for: ev, context: c), a, "\(e.title): the shown chord is the handled key")
+        }
+        XCTAssertEqual(entries.count, codes.count)
+        // the list lands in Layout only, after Edit Layout
+        let all = AgentGoMenu.entries(splits: true) + AgentGoMenu.layoutEntries(splits: true) + list
+        XCTAssertEqual(AgentGoMenu.entries(all, in: .layout).compactMap { $0 }.map(\.title),
+                       ["Split Right", "Split Down", "Next Pane", "Previous Pane", "Edit Layout"] + rows.map(\.name))
+        for k in [AgentGoMenu.Kind.session, .view, .go] {
+            XCTAssertFalse(AgentGoMenu.entries(all, in: k).contains { $0.map { rows.map(\.name).contains($0.title) } ?? false }, "\(k)")
+        }
+    }
+
+    /// #1726: a Layout list item runs the window's perform with `.layout(n)` (the ⌃N action); no model: nothing, off.
+    func testLayoutListItemRunsTheWindowsPerform() {
+        let win = window()
+        defer { win.close() }
+        XCTAssertFalse(win.perform(pane: .layout(1)), "no model: false")
+        XCTAssertEqual(win.lastPerformed, .pane(.layout(1)))
+        XCTAssertFalse(win.enabled(.pane(.layout(1))), "no model: off")
+    }
+
+    /// #1726: the menus go in the macOS order: Session in the File place, then Edit, View, Go, Layout, then Window; each
+    /// once; resignKey's remove takes all four out.
+    func testWindowMenusGoInTheStandardOrder() {
+        XCTAssertEqual(AgentGoMenu.insertionIndex(["Prosper", "Edit", "Window"], after: nil), 1)
+        XCTAssertEqual(AgentGoMenu.insertionIndex([], after: nil), 0)
+        XCTAssertEqual(AgentGoMenu.insertionIndex(["Prosper", "Session", "Edit", "View", "Window"], after: ["Edit", "View"]), 4)
+        let main = NSMenu()
+        for t in ["Prosper", "Edit", "Window"] {
+            let i = NSMenuItem(title: t, action: nil, keyEquivalent: "")
+            i.submenu = NSMenu(title: t)
+            main.addItem(i)
+        }
+        let win = window()
+        defer { win.close() }
+        let titles = { main.items.map { $0.submenu?.title ?? $0.title } }
+        for _ in 0..<2 { for m in win.menus { m.install(in: main) } }
+        XCTAssertEqual(titles(), ["Prosper", "Session", "Edit", "View", "Go", "Layout", "Window"])
+        for m in win.menus { m.remove(from: main) }
+        XCTAssertEqual(titles(), ["Prosper", "Edit", "Window"])
     }
 
     /// Splits off (today): no pane item. On: each pane item's chord is PaneKeys' own action for it.

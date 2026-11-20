@@ -394,6 +394,36 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         XCTAssertTrue(AgentGoMenu.layoutEntries(splits: false).isEmpty)
     }
 
+    /// #1726: the Layout menu's list item for layout 1 does what Control-1 does: from the single-pane view the saved layout
+    /// comes back, nothing written; the item is on (gate on, no rename, no form) and checked while that layout is active.
+    @MainActor
+    func testAgentWindowLayoutMenuListItemSwitchesAsControlDigit() throws {
+        try withGate(true) {
+            let (m, d, two, bytes) = try locked()
+            defer { m.close() }
+            let win = AgentsNSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 680), styleMask: [.titled, .closable],
+                                     backing: .buffered, defer: true)
+            win.isReleasedWhenClosed = false
+            win.model = m
+            defer { win.model = nil; win.close() }
+            m.click(row("docs"))
+            XCTAssertTrue(m.parked != nil, "control: the single-pane view")
+            XCTAssertTrue(win.enabled(.pane(.layout(1))))
+            XCTAssertTrue(win.perform(pane: .layout(1)))
+            XCTAssertEqual(m.layout.id, two.id, "the Layout menu's layout 1, as Control-1")
+            XCTAssertTrue(m.parked == nil)
+            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes, "never written")
+            guard let layoutMenu = win.menus.last, let menu = layoutMenu.item.submenu else { return XCTFail("the Layout menu") }
+            XCTAssertEqual(layoutMenu.kind, .layout)
+            layoutMenu.menuNeedsUpdate(menu)
+            let listed = menu.items.filter { item in layoutMenu.shown.indices.contains(item.tag) && !item.isSeparatorItem
+                && layoutMenu.shown[item.tag].action == .pane(.layout(1)) }
+            XCTAssertEqual(listed.count, 1, "layout 1 listed once")
+            XCTAssertTrue(listed.first?.state == .on, "the active layout checked")
+            XCTAssertTrue(listed.first?.keyEquivalent == "1" && listed.first?.keyEquivalentModifierMask == .control)
+        }
+    }
+
     /// Supervisor rider (operator 2026-11-18, "a lot of empty space in the top?"): one layout of one pane, no band
     /// height and the pane area from y 0; #1646: two layouts of one pane the same; two panes zoomed, the band and the area
     /// under it.

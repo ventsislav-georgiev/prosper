@@ -2196,6 +2196,10 @@ tag from the now-released section and put it on the new top draft.
   connectors. (#1729)
 - Phone chat: a model the phone was shown that has since been unloaded is now answered by your
   chosen model instead of failing with "unknown model". (#1728)
+- The Text Viewer now shows its own File, View and Find menus, and Agent Sessions shows Session,
+  View, Go and Layout menus (with your saved layouts), in the menu bar while the window is in front;
+  every window also gets a standard Window menu (Minimize, Zoom, Bring All to Front and the window
+  list). (#1726)
 
 ## v2.174.0
 

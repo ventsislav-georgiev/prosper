@@ -8,6 +8,48 @@ import AppKit
 final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     static let title = "Go"
 
+    /// #1726: the window's four menus. Session takes the File place (right after the app menu); View, Go and Layout go
+    /// after Edit in that order. Each entry of `entries` lands in exactly one of them (`kind(of:)`).
+    enum Kind: String, CaseIterable {
+        case session = "Session", view = "View", go = "Go", layout = "Layout"
+        /// The menus this one goes after (the last of them present); nil: right after the app menu.
+        var after: [String]? {
+            switch self {
+            case .session: nil
+            case .view: ["Edit"]
+            case .go: ["Edit", "View"]
+            case .layout: ["Edit", "View", "Go"]
+            }
+        }
+    }
+
+    /// #1726: which menu an entry is in.
+    static func kind(of a: Action) -> Kind {
+        switch a {
+        case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close), .pane(.closePane): .session
+        case .pane(.split), .pane(.cycle), .pane(.layout), .editLayout: .layout
+        case .pane(.toggleSidebar), .pane(.zoom), .sidebarMode, .key(.font): .view
+        default: .go
+        }
+    }
+
+    /// #1726: the Layout menu's list, one item per Layouts row with its own Control-N (PaneKeys' `.layout(n)`).
+    static func layoutListEntries(_ rows: [AgentWindowModel.LayoutRow]?) -> [Entry?] {
+        guard let rows, !rows.isEmpty else { return [] }
+        return [nil] + rows.map { Entry($0.name, "\($0.number)", .control, .pane(.layout($0.number))) }
+    }
+
+    /// #1726: `list` filtered to one menu, with no separator first, last or twice.
+    static func entries(_ list: [Entry?], in kind: Kind) -> [Entry?] {
+        var out: [Entry?] = []
+        for e in list where e.map({ Self.kind(of: $0.action) == kind }) ?? true {
+            if e == nil, out.last ?? nil == nil { continue }
+            out.append(e)
+        }
+        if let last = out.last, last == nil { out.removeLast() }
+        return out
+    }
+
     enum Action: Equatable {
         case key(AgentsNSWindow.KeyRoute)
         case pane(PaneAction)
@@ -80,27 +122,31 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     /// The main menu, read only outside XCTest (as `AgentsNSWindow.inputSourceID`): no row ever changes the app's.
     static var mainMenu: @MainActor () -> NSMenu? = { NSClassFromString("XCTestCase") == nil ? NSApp.mainMenu : nil }
 
-    /// Right after the menu titled Edit; no Edit: last.
-    static func insertionIndex(_ titles: [String]) -> Int {
-        titles.firstIndex(of: "Edit").map { $0 + 1 } ?? titles.count
+    /// Right after the last of the menus titled `after`; none of them: last. #1726: `after` nil: right after the app menu.
+    static func insertionIndex(_ titles: [String], after: [String]? = ["Edit"]) -> Int {
+        guard let after else { return min(1, titles.count) }
+        return titles.lastIndex(where: after.contains).map { $0 + 1 } ?? titles.count
     }
 
     weak var window: AgentsNSWindow?
-    let item = NSMenuItem(title: AgentGoMenu.title, action: nil, keyEquivalent: "")
+    let kind: Kind
+    let item: NSMenuItem
     /// The entries behind the built items, by tag.
     private(set) var shown: [Entry] = []
 
-    init(window: AgentsNSWindow) {
+    init(window: AgentsNSWindow, kind: Kind = .go) {
         self.window = window
+        self.kind = kind
+        item = NSMenuItem(title: kind.rawValue, action: nil, keyEquivalent: "")
         super.init()
-        let menu = NSMenu(title: Self.title)
+        let menu = NSMenu(title: kind.rawValue)
         menu.delegate = self
         item.submenu = menu
     }
 
     func install(in main: NSMenu?) {
         guard let main, main.index(of: item) < 0 else { return }
-        main.insertItem(item, at: Self.insertionIndex(main.items.map { $0.submenu?.title ?? $0.title }))
+        main.insertItem(item, at: Self.insertionIndex(main.items.map { $0.submenu?.title ?? $0.title }, after: kind.after))
     }
 
     func remove(from main: NSMenu?) {
@@ -109,8 +155,9 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let list = Self.entries(splits: AgentPaneLayout.splitsEnabled, panes: window?.model?.layout.panes.count ?? 1) + Self.layoutEntries(splits: AgentPaneLayout.splitsEnabled)
-            + Self.modeEntries
+        let all = Self.entries(splits: AgentPaneLayout.splitsEnabled, panes: window?.model?.layout.panes.count ?? 1) + Self.layoutEntries(splits: AgentPaneLayout.splitsEnabled)
+            + Self.modeEntries + Self.layoutListEntries(window?.model?.layoutRows)
+        let list = Self.entries(all, in: kind)
         let mode = window?.model?.sidebarMode
         shown = list.compactMap { $0 }
         var tag = 0
@@ -122,6 +169,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             i.tag = tag
             if case .sidebarMode(let m) = e.action { i.state = m == mode ? .on : .off }
             if e.action == .editLayout { i.state = window?.model?.layoutEditing == true ? .on : .off }
+            if case .pane(.layout(let n)) = e.action { i.state = window?.model?.layoutRows?.first { $0.number == n }?.active == true ? .on : .off }
             tag += 1
             return i
         }
