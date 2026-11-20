@@ -5,15 +5,15 @@
   {
    "name": "nolog",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "if found.count < had.count { replaced(",
-   "new": "if false { replaced(",
+   "old": "if had != g, found.count < had.count { replaced(",
+   "new": "if had != g, false { replaced(",
    "expect": "killed"
   },
   {
    "name": "emptyonly",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "if found.count < had.count { replaced(",
-   "new": "if found.isEmpty && !had.isEmpty { replaced(",
+   "old": "if had != g, found.count < had.count { replaced(",
+   "new": "if had != g, found.isEmpty && !had.isEmpty { replaced(",
    "expect": "killed"
   }
  ]

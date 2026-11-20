@@ -5,22 +5,22 @@
   {
    "name": "adopt-never",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "let adopt = !Preferences.agentIslandSessionGroupsStored, replaced",
-   "new": "let adopt = false, replaced",
+   "old": "let adopt = !Preferences.agentIslandSessionGroupsStored && !Preferences.agentIslandDchGroupsAdoptChecked",
+   "new": "let adopt = false",
    "expect": "killed"
   },
   {
    "name": "adopt-always",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "let adopt = !Preferences.agentIslandSessionGroupsStored, replaced",
-   "new": "let adopt = true, replaced",
+   "old": "let adopt = !Preferences.agentIslandSessionGroupsStored && !Preferences.agentIslandDchGroupsAdoptChecked",
+   "new": "let adopt = true",
    "expect": "killed"
   },
   {
    "name": "adopt-overwrites",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "self?.adoptDchGroups(found) } }\n                        return nil",
-   "new": "self?.adoptDchGroups(found) } }\n                        return g",
+   "old": "guard found.isEmpty else { return nil }",
+   "new": "guard found.isEmpty else { return g }",
    "expect": "killed"
   },
   {
@@ -33,8 +33,8 @@
   {
    "name": "adopt-over-stored",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "    func adoptDchGroups(_ list: [SessionGroup]) {\n        guard !Preferences.agentIslandSessionGroupsStored else { return }\n",
-   "new": "    func adoptDchGroups(_ list: [SessionGroup]) {\n",
+   "old": "guard !list.isEmpty, !Preferences.agentIslandSessionGroupsStored else { return }",
+   "new": "guard !list.isEmpty else { return }",
    "expect": "killed"
   },
   {

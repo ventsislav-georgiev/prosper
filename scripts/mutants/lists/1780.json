@@ -5,8 +5,8 @@
   {
    "name": "readopt-own",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "if adopt, had == g {",
-   "new": "if false, had == g {",
+   "old": "let found = had == g ? [] : DchConfigWriter.adoptable(had)",
+   "new": "let found = DchConfigWriter.adoptable(had)",
    "expect": "killed"
   }
  ]
