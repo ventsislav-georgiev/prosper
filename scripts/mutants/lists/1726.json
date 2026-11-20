@@ -1,0 +1,94 @@
+{
+ "entry": "1726",
+ "filter": "AgentGoMenuTests|TextViewerMenuTests|AgentWindowLayoutEditTests",
+ "mutants": [
+  {
+   "name": "kind-close-to-go",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close), .pane(.closePane): .session",
+   "new": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .pane(.closePane): .session",
+   "expect": "killed",
+   "filter": "AgentGoMenuTests/testEachItemRunsTheWindowsPerformAndMatchesNoKey"
+  },
+  {
+   "name": "sep-leading-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "            if e == nil, out.last ?? nil == nil { continue }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentGoMenuTests/testEachItemRunsTheWindowsPerformAndMatchesNoKey"
+  },
+  {
+   "name": "sep-trailing-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "        if let last = out.last, last == nil { out.removeLast() }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentGoMenuTests/testEachItemRunsTheWindowsPerformAndMatchesNoKey"
+  },
+  {
+   "name": "layout-list-command",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "Entry($0.name, \"\\($0.number)\", .control, .pane(.layout($0.number)))",
+   "new": "Entry($0.name, \"\\($0.number)\", .command, .pane(.layout($0.number)))",
+   "expect": "killed",
+   "filter": "AgentGoMenuTests/testLayoutListItemsAreTheControlDigitKeys|AgentWindowLayoutEditTests/testAgentWindowLayoutMenuListItemSwitchesAsControlDigit"
+  },
+  {
+   "name": "session-index-last",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "guard let after else { return min(1, titles.count) }",
+   "new": "guard let after else { return titles.count }",
+   "expect": "killed",
+   "filter": "AgentGoMenuTests/testWindowMenusGoInTheStandardOrder|TextViewerMenuTests/testMenusGoInTheStandardOrder"
+  },
+  {
+   "name": "perform-pane-layout-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if case .layout(let n) = a { model.switchLayout(number: n); return true }",
+   "new": "        if case .layout = a { return true }",
+   "expect": "killed",
+   "filter": "AgentWindowLayoutEditTests/testAgentWindowLayoutMenuListItemSwitchesAsControlDigit"
+  },
+  {
+   "name": "tv-close-chord",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerMenu.swift",
+   "old": "(\"Close\", \"w\", c, .key(.close))",
+   "new": "(\"Close\", \"w\", [.command, .shift], .key(.close))",
+   "expect": "killed",
+   "filter": "TextViewerMenuTests/testShownShortcutsAreTheHandledKeys"
+  },
+  {
+   "name": "tv-menu-matches-key",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerMenu.swift",
+   "old": "action: UnsafeMutablePointer<Selector?>) -> Bool { false }",
+   "new": "action: UnsafeMutablePointer<Selector?>) -> Bool { true }",
+   "expect": "killed",
+   "filter": "TextViewerMenuTests/testEachItemTargetsAnExistingActionAndMatchesNoKey"
+  },
+  {
+   "name": "tv-find-always-on",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "case .key(.find), .key(.useSelectionForFind): return model?.textView != nil",
+   "new": "case .key(.find), .key(.useSelectionForFind): return true",
+   "expect": "killed",
+   "filter": "TextViewerMenuTests"
+  },
+  {
+   "name": "tv-reveal-noop",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "        case .reveal: model?.reveal()",
+   "new": "        case .reveal: break",
+   "expect": "killed",
+   "filter": "TextViewerMenuTests/testEachItemTargetsAnExistingActionAndMatchesNoKey"
+  },
+  {
+   "name": "window-minimize-cmd-m",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "menu.addItem(withTitle: \"Minimize\", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: \"\")",
+   "new": "menu.addItem(withTitle: \"Minimize\", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: \"m\")",
+   "expect": "killed",
+   "filter": "TextViewerMenuTests/testWindowMenuIsTheStandardOneWithNoNewChord"
+  }
+ ]
+}
