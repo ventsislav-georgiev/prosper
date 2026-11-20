@@ -1,0 +1,20 @@
+{
+ "entry": "1739",
+ "filter": "AgentRowModelEffortTests/testCountPillStrokesOnTheFollowOffIslandCardClearThreeToOneOnEveryTheme",
+ "mutants": [
+  {
+   "name": "island_ignores_surface",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "case .shells: return ownCard ? .white :",
+   "new": "case .shells: return false ? .white :",
+   "expect": "killed"
+  },
+  {
+   "name": "agents_island_dark_purple",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "case .agents: return ownCard ? AgentSidebarRowView.purpleLight :",
+   "new": "case .agents: return ownCard ? AgentSidebarRowView.purpleDark :",
+   "expect": "killed"
+  }
+ ]
+}
