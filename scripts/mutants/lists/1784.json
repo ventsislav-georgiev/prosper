@@ -61,7 +61,7 @@
   {
    "name": "grace-60s",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "static let hideGrace: TimeInterval = 600",
+   "old": "static let hideGrace: TimeInterval = 1800",
    "new": "static let hideGrace: TimeInterval = 60",
    "expect": "killed"
   }

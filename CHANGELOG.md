@@ -2236,7 +2236,7 @@ tag from the now-released section and put it on the new top draft.
   plain `dch` in a terminal starts a new one beside it; `dch -f` joins it. (#1782)
 - Agent Sessions: the sidebar scrolls with less work: the Command-number column is measured once,
   not drawn as 18 hidden chips in every row. (#1783)
-- Agent Sessions: closing the window keeps it hidden for 10 minutes, so reopening it within that
+- Agent Sessions: closing the window keeps it hidden for 30 minutes, so reopening it within that
   time is instant. (#1784)
 
 ## v2.174.0

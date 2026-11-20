@@ -20,7 +20,7 @@ final class AgentsWindow {
     let lastLive = AgentLastLiveHome()
     private var observers: [NSObjectProtocol] = []
     /// #1784: how long a closed window is kept hidden before its teardown (the one place to change it).
-    static let hideGrace: TimeInterval = 600
+    static let hideGrace: TimeInterval = 1800   // operator 2026-11-20: 30 minutes (3.4 MiB, zero CPU hidden)
     /// #1784: the one timer while the window is hidden; nil while shown and after the teardown. Rows fire it.
     private(set) var grace: Timer?
     /// Open for the person: shown (a hidden kept window is closed to them).

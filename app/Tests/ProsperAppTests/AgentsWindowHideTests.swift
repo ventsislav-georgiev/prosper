@@ -62,7 +62,7 @@ extension AgentWindowD1Tests {
         win.close()
         let g = try XCTUnwrap(w.grace, "one grace timer while hidden")
         XCTAssertTrue(g.isValid)
-        XCTAssertEqual(AgentsWindow.hideGrace, 600, "the operator's 10 minutes")
+        XCTAssertEqual(AgentsWindow.hideGrace, 1800, "the operator's 30 minutes")
         XCTAssertEqual(g.fireDate.timeIntervalSinceNow, AgentsWindow.hideGrace, accuracy: 5)
         XCTAssertFalse(w.isOpen, "closed for the person")
         XCTAssertTrue(w.window === win && w.model === m, "kept")
