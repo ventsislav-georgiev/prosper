@@ -35,7 +35,7 @@ export function apnsSender(env: Bindings, fetchFn: FetchFn = (url, init) => fetc
       console.warn("apns: APNS_KEY_P8, APNS_KEY_ID or APNS_TEAM_ID unset; push skipped");
       return "error";
     }
-    const r = await sendApns(fetchFn, { jwt, topic }, p);
+    const r = await sendApns(fetchFn, { jwt, topic, log: console.log }, p);
     if (r === "auth") cached = null; // the next push signs a fresh token
     if (r === "error") console.warn(`apns: ${p.pushType} push failed`);
     return r;

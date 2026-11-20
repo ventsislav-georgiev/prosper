@@ -771,6 +771,33 @@ test("sendApns: a stalled APNs aborts at the bound and is an error (QA #431 L1)"
   assert.equal(APNS_TIMEOUT_MS, 5000, "under the iOS client's 10 s, with room for the delete batch");
 });
 
+test("sendApns: a liveactivity answer logs status, reason, result and a token id, never the token", async () => {
+  const lines = [];
+  const auth = { jwt: "JWT-SECRET", topic: "t", log: (l) => lines.push(l) };
+  const p = { row: { token: HEX, env: "production" }, pushType: "liveactivity", priority: 5, payload: { secret: "PAYLOAD" } };
+  const id = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(HEX)))]
+    .slice(0, 4)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  assert.equal(await sendApns(fakeFetch(() => ({ status: 200 })).fn, auth, p), "ok");
+  assert.equal(await sendApns(fakeFetch(() => ({ status: 410, reason: "Unregistered" })).fn, auth, p), "drop");
+  assert.equal(await sendApns(fakeFetch(() => ({ throws: true })).fn, auth, p), "error");
+  assert.deepEqual(lines, [
+    `apns: liveactivity status=200 reason=- result=ok token=${id}`,
+    `apns: liveactivity status=410 reason=Unregistered result=drop token=${id}`,
+    `apns: liveactivity status=none reason=- result=error token=${id}`,
+  ]);
+  const all = lines.join("\n");
+  for (const secret of [HEX, "JWT-SECRET", "PAYLOAD"]) assert.equal(all.includes(secret), false);
+});
+
+test("sendApns: alert pushes log nothing", async () => {
+  const lines = [];
+  const p = { row: { token: HEX, env: "production" }, pushType: "alert", priority: 10, payload: {} };
+  await sendApns(fakeFetch(() => ({ status: 410, reason: "Unregistered" })).fn, { jwt: "J", topic: "t", log: (l) => lines.push(l) }, p);
+  assert.deepEqual(lines, []);
+});
+
 // ---- provider JWT -----------------------------------------------------------
 
 const b64urlDecode = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));

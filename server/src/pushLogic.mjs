@@ -460,7 +460,7 @@ export const apnsHost = (env) => (env === "sandbox" ? "api.sandbox.push.apple.co
  * ends cards before its delete still deletes inside the iOS client's 10 s.
  */
 export const APNS_TIMEOUT_MS = 5000;
-export async function sendApns(fetchFn, { jwt, topic, timeoutMs = APNS_TIMEOUT_MS }, p) {
+export async function sendApns(fetchFn, { jwt, topic, timeoutMs = APNS_TIMEOUT_MS, log }, p) {
   const headers = {
     authorization: `bearer ${jwt}`,
     "apns-topic": p.pushType === "liveactivity" ? `${topic}.push-type.liveactivity` : topic,
@@ -478,14 +478,28 @@ export async function sendApns(fetchFn, { jwt, topic, timeoutMs = APNS_TIMEOUT_M
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
+    await logLiveActivity(log, p, "none", "", "error");
     return "error";
   }
-  if (res.status === 200) return "ok";
-  const reason = await res
-    .json()
-    .then((j) => (typeof j?.reason === "string" ? j.reason : ""))
-    .catch(() => "");
-  return classifyApns(res.status, reason);
+  const reason =
+    res.status === 200
+      ? ""
+      : await res
+          .json()
+          .then((j) => (typeof j?.reason === "string" ? j.reason : ""))
+          .catch(() => "");
+  const r = classifyApns(res.status, reason);
+  await logLiveActivity(log, p, res.status, reason, r);
+  return r;
+}
+
+// One line per liveactivity push (OQ-168 probe): status, APNs reason, classify result and the
+// first 8 hex of SHA-256(token) to follow one card. Never the token, JWT or payload.
+async function logLiveActivity(log, p, status, reason, result) {
+  if (!log || p.pushType !== "liveactivity") return;
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(p.row.token));
+  const id = [...new Uint8Array(d).slice(0, 4)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  log(`apns: liveactivity status=${status} reason=${reason || "-"} result=${result} token=${id}`);
 }
 
 const b64url = (bytes) => {

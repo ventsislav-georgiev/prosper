@@ -122,6 +122,6 @@ export function alertPayload(macId: string, macName: string, alerts: { name: str
 export function collapseId(macId: string, name?: string): Promise<string>;
 export function classifyApns(status: number, reason: string): ApnsResult;
 export function apnsHost(env: ApnsEnv): string;
-export function sendApns(fetchFn: FetchFn, auth: { jwt: string; topic: string }, p: ApnsPush): Promise<ApnsResult>;
+export function sendApns(fetchFn: FetchFn, auth: { jwt: string; topic: string; timeoutMs?: number; log?: (line: string) => void }, p: ApnsPush): Promise<ApnsResult>;
 export function importP8(pem: string): Promise<CryptoKey>;
 export function signApnsJwt(key: CryptoKey, keyId: string, teamId: string, iat: number): Promise<string>;
