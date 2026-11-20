@@ -12,7 +12,7 @@ final class SidekickSyncTests: XCTestCase {
         var adopts = 0
     }
 
-    private static let keys = ["agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated"]
+    private static let keys = ["agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandSessionGroupsUpdated"]
 
     override func setUp() {
         super.setUp()

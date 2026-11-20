@@ -8,7 +8,7 @@ import XCTest
 /// never-shown window and read on its accessibility tree. Nothing is clicked, no event is posted; each row puts the keys back.
 final class SessionGroupsEditorTests: XCTestCase {
     private static let keys = ["agentIslandSessionGroups", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated",
-                               "agentIslandSidekickTabs"]
+                               "agentIslandSidekickTabs", "agentIslandSessionGroupsUpdated"]
 
     override func setUp() {
         super.setUp()

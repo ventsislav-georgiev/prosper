@@ -1303,12 +1303,12 @@ struct SessionGroupsEditor: Equatable {
 
     /// Stores `saved` when it differs (an unchanged editor stores nothing: the migration stays lazy). The first group's
     /// pattern goes through editSidekickPattern first, so the phone's stamp moves as a pattern edit's did; the list is
-    /// stored after it, so both agree. Then the island regroups and syncDchConfig writes dch's lines.
+    /// stored after it, so both agree, and (#1756) the groups stamp moves. Then the island regroups and syncDchConfig
+    /// writes dch's lines.
     @MainActor static func save(_ editor: SessionGroupsEditor, now: Date = Date()) {
         let stored = Preferences.agentIslandSessionGroups, list = editor.saved(stored: stored)
         guard list != stored else { return }
-        Preferences.editSidekickPattern(list.first?.pattern ?? "", now: now)
-        Preferences.agentIslandSessionGroups = list
+        Preferences.editSessionGroups(list, now: now)
         AgentIslandController.shared.rowDetailsChanged()
     }
 }

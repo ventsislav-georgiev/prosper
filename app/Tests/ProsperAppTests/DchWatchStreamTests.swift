@@ -47,7 +47,10 @@ final class DchWatchStreamTests: XCTestCase {
 
     private final class Value: @unchecked Sendable {
         var sidekick = DchSidekickOps.Value(pattern: "-qa", updated: 0)
+        var groups = DchGroupsOps.Value(groups: [], updated: 0)
     }
+
+    private static var noGroups: NSDictionary { ["groups": [], "updated": 0] }
 
     private static let dir = "/tmp/dch-test-remote"
 
@@ -55,6 +58,7 @@ final class DchWatchStreamTests: XCTestCase {
         let h = DchWatchHub(now: { [timers] in timers.t }, schedule: timers.schedule)
         h.remoteDir = { Self.dir }
         h.sidekick = { [value] in value.sidekick }
+        h.groups = { [value] in value.groups }
         return h
     }
 
@@ -92,7 +96,7 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(Self.body(sink[0]), Self.payload([Self.session("a", .blocked), Self.session("b")]))
         XCTAssertEqual(Self.type(sink[1]), DchFrame.ok)
         XCTAssertEqual(Self.json(sink[1]) as? NSDictionary,
-                       ["sidekick": ["pattern": "-(qa|rev)$", "updated": 1_784_995_200_000]] as NSDictionary,
+                       ["sidekick": ["pattern": "-(qa|rev)$", "updated": 1_784_995_200_000], "groups": Self.noGroups] as NSDictionary,
                        "the same pattern and updated 0x2d answers, under \"sidekick\"")
         XCTAssertEqual(DchFrame.watch, 0x2e)
     }
@@ -186,8 +190,26 @@ final class DchWatchStreamTests: XCTestCase {
         h.sidekickChanged()
         XCTAssertEqual(sink.frames.count, 3)
         XCTAssertEqual(Self.type(sink[2]), DchFrame.ok)
-        XCTAssertEqual(Self.body(sink[2]), Self.body(DchSidekickOps.watchFrame(value.sidekick)))
-        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary, ["sidekick": ["pattern": "-qa$", "updated": 7]] as NSDictionary)
+        // #1756: two keys now, and JSONSerialization's key order is not stable: compare parsed objects.
+        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary, Self.json(DchSidekickOps.watchFrame(value.sidekick, groups: value.groups)) as? NSDictionary)
+        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary, ["sidekick": ["pattern": "-qa$", "updated": 7], "groups": Self.noGroups] as NSDictionary)
+    }
+
+    /// #1756: a groups save that leaves group 0's pattern alone still sends the frame, carrying both keys.
+    func testGroupsChangeSendsTheFrameWithBothKeys() {
+        let timers = Timers(), value = Value(), h = hub(timers, value), sink = Sink()
+        h.island(Self.cache([]))
+        _ = open(h, sink)
+        timers.advance(to: 1)
+        value.groups = .init(groups: [SessionGroup(id: "r1", name: "Reviews", pattern: "-rev$")], updated: 9)
+        h.sidekickChanged()
+        XCTAssertEqual(sink.frames.count, 3)
+        XCTAssertEqual(Self.type(sink[2]), DchFrame.ok)
+        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary,
+                       ["sidekick": ["pattern": "-qa", "updated": 0],
+                        "groups": ["groups": [["id": "r1", "name": "Reviews", "pattern": "-rev$"]], "updated": 9]] as NSDictionary)
+        h.sidekickChanged()
+        XCTAssertEqual(sink.frames.count, 3, "unchanged: nothing")
     }
 
     /// QA #606 INFO-5: Settings posts a change per keystroke; the phone gets one sidekick frame a
@@ -206,7 +228,7 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(sink.frames.count, 2)
         timers.advance(to: 1)
         XCTAssertEqual(sink.frames.count, 3, "one frame for the three edits")
-        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary, ["sidekick": ["pattern": "-qa$", "updated": 7]] as NSDictionary,
+        XCTAssertEqual(Self.json(sink[2]) as? NSDictionary, ["sidekick": ["pattern": "-qa$", "updated": 7], "groups": Self.noGroups] as NSDictionary,
                        "the last edit, read when the gap ends")
         // An edit typed back to what the phone has before the gap ends sends nothing.
         timers.advance(to: 1.5)

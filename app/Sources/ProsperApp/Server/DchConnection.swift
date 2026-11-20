@@ -55,7 +55,9 @@ enum DchFrame {
     static let sidekickSync: UInt8 = 0x2d  // {pattern, updated} → ok {pattern, updated} (the winner) | error
     // #765: the phone's push stream instead of its list poll (5-30 s live, 15-120 s in battery saver;
     // DchWatchHub), only while "watch" is in ops.
-    static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick}, then listResp | ok {sidekick} | ok {} … | error
+    static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick, groups}, then listResp | ok {sidekick, groups} | ok {} … | error
+    // #1756: the session groups of the Mac (DchGroupsOps), only while "groups" is in ops (always). One reply.
+    static let groupsSync: UInt8 = 0x2f  // {} | {groups: [{id, name, pattern}], updated} → ok {groups, updated} (the winner) | error
     // #838: dch's control verbs run by this Mac's dch (DchCtl), only while "ctl" is in ops (always).
     static let ctl: UInt8 = 0x30  // {argv: [verb, name, …]} → ctlStdout…/ctlStderr…, then ctlExit | error
     // both directions
@@ -106,7 +108,7 @@ enum DchFrame {
     /// gates them on these names for a server that may not (dch serve).
     /// #838: "ctl" (0x30) too, always, and "ctl-cancel" (0x34).
     static let ops = ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put", "sidekick",
-                      "create", "paste_image", "ctl", "ctl-cancel"]
+                      "groups", "create", "paste_image", "ctl", "ctl-cancel"]
 
     /// The identity handshake's payload. Read-only, no secret: the wake config itself
     /// comes authenticated from the server. wakeId is nil until remote wake was set
@@ -312,6 +314,8 @@ final class DchConnection: @unchecked Sendable {
     var library = DchLibraryOps()
     /// #760: sidekickSync's merge; its adopt runs on main.
     var sidekick = DchSidekickOps()
+    /// #1756: groupsSync's merge; its adopt runs on main.
+    var groups = DchGroupsOps()
     /// #617: the clipboard requests' store, folders and gate.
     var clipboard = DchClipboardOps()
     /// #617: this connection's clipboardUpload, which its data frames feed. On `queue`.
@@ -694,7 +698,7 @@ final class DchConnection: @unchecked Sendable {
         case DchFrame.ctlCancel:
             ctlJob?.cancelRequest()   // a 0x34 with no ctl running, or after its 0x33: ignored, no frame
         case DchFrame.history, DchFrame.revive, DchFrame.restart, DchFrame.stop, DchFrame.library,
-             DchFrame.putPhoneSnippets, DchFrame.sidekickSync, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
+             DchFrame.putPhoneSnippets, DchFrame.sidekickSync, DchFrame.groupsSync, DchFrame.pin, DchFrame.forget, DchFrame.forgetAll,
              DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
             // #591: off this queue, unlike kill: the reads fork dch and a restart can
             // take minutes, while every connection (and each attached pty's send
@@ -711,7 +715,7 @@ final class DchConnection: @unchecked Sendable {
             }
             guard !inFlight else { return send(DchControlOps.error("busy with an earlier request")) }
             inFlight = true
-            let ops = ops, library = library, clipboard = clipboard, sidekick = sidekick
+            let ops = ops, library = library, clipboard = clipboard, sidekick = sidekick, groups = groups
             let changes = DchFrame.listChanging.contains(type)
             DispatchQueue.global(qos: .userInitiated).async {
                 let reply: DchControlOps.Reply = { self.finalReply($0, listChanged: changes) }
@@ -719,6 +723,7 @@ final class DchConnection: @unchecked Sendable {
                 case DchFrame.library: library.handle(payload, reply: reply)
                 case DchFrame.putPhoneSnippets: library.put(payload, reply: reply)
                 case DchFrame.sidekickSync: sidekick.handle(payload, reply: reply)
+                case DchFrame.groupsSync: groups.handle(payload, reply: reply)
                 case DchFrame.clipboardList, DchFrame.clipboardItem, DchFrame.addClipboardHistory:
                     clipboard.handle(type, payload, send: { self.sendStreamed($0) }, reply: reply)
                 default: ops.handle(type, payload, reply: reply)
@@ -1151,9 +1156,9 @@ struct DchSidekickOps: Sendable {
         Value(pattern: Preferences.agentIslandSidekickPattern, updated: Preferences.agentIslandSidekickPatternUpdated)
     }
 
-    /// #765: the watch stream's sidekick frame, ok {"sidekick": <what 0x2d answers>}.
-    static func watchFrame(_ v: Value) -> Data {
-        DchFrame.encode(DchFrame.ok, json: ["sidekick": ["pattern": v.pattern, "updated": v.updated]])
+    /// #765: the watch stream's sidekick frame, ok {"sidekick": <what 0x2d answers>}; #1756: and "groups", what 0x2f answers.
+    static func watchFrame(_ v: Value, groups: DchGroupsOps.Value) -> Data {
+        DchFrame.encode(DchFrame.ok, json: ["sidekick": ["pattern": v.pattern, "updated": v.updated], "groups": groups.json])
     }
 
     func handle(_ payload: Data, reply: @escaping DchControlOps.Reply) {
@@ -1181,12 +1186,109 @@ struct DchSidekickOps: Sendable {
     }
 }
 
+// MARK: - Session groups sync (#1756)
+
+/// #1756: 0x2f groupsSync, agreed with prosper-ios 2026-11-20. {} reads the Mac's list; {groups, updated} writes it,
+/// the newer `updated` winning as 0x2d (DchSidekickOps.merge; a tie keeps the Mac's). Exactly one reply: ok {groups,
+/// updated} carrying the winner, or error {message}. Unlike 0x2d's cap, every write is checked against the limits
+/// whoever wins: the phone never writes, so no echo of the Mac's own list can wedge on them.
+struct DchGroupsOps: Sendable {
+    static let maxIDBytes = 64
+    static let malformed = "malformed groupsSync request: send {} to read, or {\"groups\": [...], \"updated\": <ms>}"
+    static let tooMany = "more than \(SessionGroup.maxCount) groups"
+    static let badName = "group name must be 1-32 UTF-8 bytes without = or control characters"
+    static let duplicate = "duplicate group id or name"
+    static let longPattern = "group pattern over \(DchSidekickOps.maxBytes) UTF-8 bytes"
+
+    struct Value: Equatable, Sendable {
+        /// In match order; [] = no split.
+        var groups: [SessionGroup]
+        /// Ms since epoch of the last save; 0 = never edited.
+        var updated: Int64
+
+        var json: [String: Any] {
+            ["groups": groups.map { ["id": $0.id, "name": $0.name, "pattern": $0.pattern] }, "updated": updated]
+        }
+    }
+
+    enum Request: Equatable {
+        case read
+        case write(Value)
+    }
+
+    /// {} (no "groups" key) reads; {"groups": [{id, name, pattern}], "updated": integer} writes, unknown keys ignored.
+    /// .failure carries the error's message: the malformed one, else the first limit the list breaks.
+    static func parse(_ payload: Data) -> Result<Request, Failure> {
+        guard let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else { return .failure(Failure(malformed)) }
+        guard let raw = o["groups"] else { return .success(.read) }
+        guard let items = raw as? [Any],
+              let n = o["updated"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
+              let updated = n as? Int64 else { return .failure(Failure(malformed)) }
+        var list: [SessionGroup] = []
+        for item in items {
+            guard let g = item as? [String: Any], let id = g["id"] as? String, validID(id),
+                  let name = g["name"] as? String, let pattern = g["pattern"] as? String else { return .failure(Failure(malformed)) }
+            list.append(SessionGroup(id: id, name: name, pattern: pattern))
+        }
+        if list.count > SessionGroup.maxCount { return .failure(Failure(tooMany)) }
+        if !list.allSatisfy({ SessionGroup.validName($0.name) }) { return .failure(Failure(badName)) }
+        if !list.allSatisfy({ $0.pattern.utf8.count <= DchSidekickOps.maxBytes }) { return .failure(Failure(longPattern)) }
+        if Set(list.map(\.id)).count != list.count || Set(list.map { SessionGroup.nameKey($0.name) }).count != list.count {
+            return .failure(Failure(duplicate))
+        }
+        return .success(.write(Value(groups: SessionGroup.normalized(list), updated: updated)))
+    }
+
+    struct Failure: Error, Equatable {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    /// 1-64 ASCII letters, digits, "_" or "-".
+    static func validID(_ id: String) -> Bool {
+        (1...maxIDBytes).contains(id.utf8.count)
+            && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) || $0 == 0x5F || $0 == 0x2D }
+    }
+
+    /// The Mac's list and stamp now (UserDefaults, any thread).
+    static func current() -> Value {
+        Value(groups: Preferences.agentIslandSessionGroups, updated: Preferences.agentIslandSessionGroupsUpdated)
+    }
+
+    /// After an adopt, on main: the island regroups and an open Settings editor reloads. Tests swap it.
+    var adopted: @MainActor @Sendable () -> Void = {
+        AgentIslandController.shared.rowDetailsChanged()
+        NotificationCenter.default.post(name: .sidekickPatternChangedExternally, object: nil)
+    }
+
+    func handle(_ payload: Data, reply: @escaping DchControlOps.Reply) {
+        let request: Request
+        switch Self.parse(payload) {
+        case .failure(let f): return reply(DchControlOps.error(f.message))
+        case .success(let r): request = r
+        }
+        let adopted = adopted
+        // Read, merge and write on main, where Settings saves it, so no save lands between.
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                var winner = Self.current()
+                if case .write(let phone) = request, phone.updated > winner.updated {
+                    winner = phone
+                    Preferences.adoptSessionGroups(phone.groups, updated: phone.updated)
+                    adopted()
+                }
+                reply(DchFrame.encode(DchFrame.ok, json: winner.json))
+            }
+        }
+    }
+}
+
 // MARK: - Watch stream (#765)
 
 /// #765: the phone's push stream (0x2e) and the island's list cache behind it. The island's
 /// poller (AgentIslandController.onSessions) feeds `island`; nothing here forks dch or polls:
 /// the only timers are a stream's 1 s trailing flush and its 25 s heartbeat. One stream:
-///   listResp (the list snapshot), ok {"sidekick": {pattern, updated}}, then
+///   listResp (the list snapshot), ok {"sidekick": {pattern, updated}, "groups": {groups, updated}} (#1756), then
 ///   listResp when the payload differs from the last one sent, at most 1 per second, the
 ///   trailing change always sent; the sidekick frame when the Mac's pattern changes, on
 ///   the same 1 s gap (a pattern typed in Settings is one frame per second, not per key);
@@ -1220,7 +1322,7 @@ final class DchWatchHub: @unchecked Sendable {
         let id: ObjectIdentifier, device: String
         let send: Send, close: () -> Void
         var sent = Data(), pending: Data?, listAt: TimeInterval = 0
-        var sidekick: DchSidekickOps.Value?, sidekickAt: TimeInterval = 0
+        var sidekick: DchSidekickOps.Value?, groups: DchGroupsOps.Value?, sidekickAt: TimeInterval = 0
         var backlog = 0
         var cancelFlush: (() -> Void)?, cancelBeat: (() -> Void)?, cancelSidekick: (() -> Void)?
 
@@ -1234,6 +1336,8 @@ final class DchWatchHub: @unchecked Sendable {
     /// Remote Terminal's dir now: a cache for another dir (isolation toggled since) is no cache.
     var remoteDir: @Sendable () -> String = { DchCommand.remoteSocketDir() }
     var sidekick: @Sendable () -> DchSidekickOps.Value = { DchSidekickOps.current() }
+    /// #1756: the groups the frame carries beside the sidekick.
+    var groups: @Sendable () -> DchGroupsOps.Value = { DchGroupsOps.current() }
     private var cache: Cache?
     /// QA #606 F1: when a list-changing request last ran (DchFrame.listChanging, a session's exit).
     /// dch has the change at once, the island a tick later: within ~3 s (a 1 s tick, then a
@@ -1328,9 +1432,9 @@ final class DchWatchHub: @unchecked Sendable {
         streams.append(s)
         (s.sent, s.listAt) = (payload, now())
         emit(s, DchFrame.encode(DchFrame.listResp, [UInt8](payload)))
-        let v = sidekick()
-        (s.sidekick, s.sidekickAt) = (v, now())
-        emit(s, DchSidekickOps.watchFrame(v))
+        let v = sidekick(), g = groups()
+        (s.sidekick, s.groups, s.sidekickAt) = (v, g, now())
+        emit(s, DchSidekickOps.watchFrame(v, groups: g))
         return true
     }
 
@@ -1342,17 +1446,17 @@ final class DchWatchHub: @unchecked Sendable {
         s.cancelFlush = nil; s.cancelBeat = nil; s.cancelSidekick = nil
     }
 
-    /// The Mac's pattern may have changed (AgentIslandController.rowDetailsChanged).
+    /// The Mac's pattern or (#1756) groups may have changed (AgentIslandController.rowDetailsChanged).
     func sidekickChanged() {
         streams.forEach(offerSidekick)
     }
 
-    /// A pattern that differs from the phone's goes at once, or `minGap` after the last
-    /// sidekick frame; the timer re-reads it then, so the trailing edit is the one sent.
+    /// A pattern or (#1756) groups that differ from the phone's go at once, or `minGap` after the last
+    /// sidekick frame; the timer re-reads them then, so the trailing edit is the one sent.
     private func offerSidekick(_ s: Stream) {
         guard s.cancelSidekick == nil else { return }
-        let v = sidekick()
-        guard v != s.sidekick else { return }
+        let v = sidekick(), g = groups()
+        guard v != s.sidekick || g != s.groups else { return }
         let wait = s.sidekickAt + Self.minGap - now()
         guard wait <= 0 else {
             s.cancelSidekick = schedule(wait) { [weak self, weak s] in
@@ -1362,8 +1466,8 @@ final class DchWatchHub: @unchecked Sendable {
             }
             return
         }
-        (s.sidekick, s.sidekickAt) = (v, now())
-        emit(s, DchSidekickOps.watchFrame(v))
+        (s.sidekick, s.groups, s.sidekickAt) = (v, g, now())
+        emit(s, DchSidekickOps.watchFrame(v, groups: g))
     }
 
     private func drop(_ s: Stream) {

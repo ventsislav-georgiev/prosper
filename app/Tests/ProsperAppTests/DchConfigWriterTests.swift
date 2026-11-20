@@ -685,7 +685,8 @@ final class DchConfigWriterTests: XCTestCase {
 
     /// The pattern the island splits by, in the XCTest store, put back after the row.
     private func usePattern(tabs: Bool, _ pattern: String) {
-        let keys = ["agentIslandSidekickTabs", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandAutoAllow"]
+        let keys = ["agentIslandSidekickTabs", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandAutoAllow",
+                    "agentIslandSessionGroupsUpdated"]
         let saved = keys.map { Preferences.defaults.object(forKey: $0) }
         addTeardownBlock {
             for (k, v) in zip(keys, saved) {

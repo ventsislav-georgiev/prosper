@@ -452,6 +452,7 @@ enum Preferences {
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandSessionGroups = "agentIslandSessionGroups"   // #1757: JSON [SessionGroup], per Mac
+        static let agentIslandSessionGroupsUpdated = "agentIslandSessionGroupsUpdated"   // #1756: ms, per Mac
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
@@ -1373,15 +1374,45 @@ enum Preferences {
     /// re-stamped.
     static func editSidekickPattern(_ pattern: String, now: Date = Date()) {
         guard pattern != agentIslandSidekickPattern else { return }
-        let stamp = max(Int64((now.timeIntervalSince1970 * 1000).rounded()), agentIslandSidekickPatternUpdated.addingReportingOverflow(1).overflow ? .max : agentIslandSidekickPatternUpdated + 1)
+        let stamp = editStamp(now: now, after: agentIslandSidekickPatternUpdated)
         agentIslandSidekickPattern = pattern
         agentIslandSidekickPatternUpdated = stamp
     }
 
-    /// #760: a phone's winning pattern and its stamp, both verbatim.
+    /// #760: now in ms, or one past `after` when that is later, saturating at Int64.max (QA #597 INFO-1, INFO-9).
+    static func editStamp(now: Date, after: Int64) -> Int64 {
+        max(Int64((now.timeIntervalSince1970 * 1000).rounded()), after.addingReportingOverflow(1).overflow ? .max : after + 1)
+    }
+
+    /// #760: a phone's winning pattern and its stamp, both verbatim. #1756: it edits group 0, so the groups stamp moves
+    /// to it too (never back: a later groups edit keeps winning).
     static func adoptSidekickPattern(_ pattern: String, updated: Int64) {
+        let groups = agentIslandSessionGroupsUpdated
         agentIslandSidekickPattern = pattern
         agentIslandSidekickPatternUpdated = updated
+        agentIslandSessionGroupsUpdated = max(groups, updated)
+    }
+
+    /// #1756: ms since epoch of the groups list's last save here, or the adopted phone's; the phone's 0x2f syncs it.
+    /// Unset (no list saved since #1756) it reads the sidekick stamp, which stamped the one pattern before. Per Mac.
+    static var agentIslandSessionGroupsUpdated: Int64 {
+        get { (defaults.object(forKey: Keys.agentIslandSessionGroupsUpdated) as? NSNumber)?.int64Value ?? agentIslandSidekickPatternUpdated }
+        set { defaults.set(NSNumber(value: newValue), forKey: Keys.agentIslandSessionGroupsUpdated) }
+    }
+
+    /// #1756: a Settings save of the list: group 0's pattern through editSidekickPattern (0x2d's stamp moves only when
+    /// it changed), then the list, stamped as an edit.
+    static func editSessionGroups(_ list: [SessionGroup], now: Date = Date()) {
+        editSidekickPattern(list.first?.pattern ?? "", now: now)
+        let stamp = editStamp(now: now, after: agentIslandSessionGroupsUpdated)
+        agentIslandSessionGroups = list
+        agentIslandSessionGroupsUpdated = stamp
+    }
+
+    /// #1756: a phone's winning list and its stamp, verbatim (0x2f). The sidekick stamp is 0x2d's and stays.
+    static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64) {
+        agentIslandSessionGroups = list
+        agentIslandSessionGroupsUpdated = updated
     }
 
     /// #606: what New session runs, as typed; "" = unset (inferred, else claude).

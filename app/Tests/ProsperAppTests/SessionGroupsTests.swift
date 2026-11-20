@@ -5,7 +5,8 @@ import XCTest
 /// first-match splitting, dch's caps (8 groups, 1-32 byte names) and the phone's 0x2d carrying the first group's pattern.
 /// Preferences is the in-memory XCTest store; each row puts the keys back.
 final class SessionGroupsTests: XCTestCase {
-    private static let keys = ["agentIslandSessionGroups", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated"]
+    private static let keys = ["agentIslandSessionGroups", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated",
+                               "agentIslandSessionGroupsUpdated"]
 
     override func setUp() {
         super.setUp()
@@ -120,8 +121,9 @@ final class SessionGroupsTests: XCTestCase {
         Preferences.agentIslandSessionGroups = [Self.group("Reviews", "-rev$"), Self.group("QA", "-qa$")]
         Preferences.agentIslandSidekickPatternUpdated = 5
         XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-rev$", updated: 5))
-        let frame = String(decoding: DchSidekickOps.watchFrame(DchSidekickOps.current()), as: UTF8.self)
-        XCTAssertTrue(frame.contains("-rev$") && !frame.contains("-qa$"), frame)
+        let frame = DchSidekickOps.watchFrame(DchSidekickOps.current(), groups: DchGroupsOps.current())
+        let sidekick = ((try? JSONSerialization.jsonObject(with: frame.dropFirst(5))) as? [String: Any])?["sidekick"] as? [String: Any]
+        XCTAssertEqual(sidekick?["pattern"] as? String, "-rev$", "the first group's pattern only")
         let adopted = expectation(description: "the phone's reply")
         DchSidekickOps().handle(Data(#"{"pattern":"-n$","updated":4102444800000}"#.utf8)) { _ in adopted.fulfill() }
         wait(for: [adopted], timeout: 5)
