@@ -5,7 +5,7 @@
   {
    "name": "m1737a-always",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "if on, let line",
+   "old": "if !off, let line",
    "new": "if true, let line",
    "expect": "killed"
   },

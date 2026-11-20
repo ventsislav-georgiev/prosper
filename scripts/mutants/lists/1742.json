@@ -1,0 +1,41 @@
+{
+ "entry": "1742",
+ "filter": "KitEnvPieceTests",
+ "mutants": [
+  {
+   "name": "invert-back",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "if !off, let line",
+   "new": "if off, let line",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-off-no",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "[\"\", \"0\", \"false\", \"no\", \"off\"]",
+   "new": "[\"\", \"0\", \"false\", \"no\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-trim",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())\n            if !off",
+   "new": "s.lowercased())\n            if !off",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-lowercase",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": ".whitespacesAndNewlines).lowercased())\n            if !off",
+   "new": ".whitespacesAndNewlines))\n            if !off",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-empty",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "[\"\", \"0\", \"false\"",
+   "new": "[\"0\", \"false\"",
+   "expect": "killed"
+  }
+ ]
+}
