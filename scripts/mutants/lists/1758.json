@@ -1,0 +1,146 @@
+{
+ "entry": "1758",
+ "filter": "SessionGroupsEditorTests|SessionGroupsTests|SettingsSearchTests|SidekickSyncTests",
+ "mutants": [
+  {
+   "name": "add-no-cap",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "guard canAdd else { return }\n        let names",
+   "new": "let names",
+   "expect": "killed"
+  },
+  {
+   "name": "canadd-off-by-one",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "rows.count < SessionGroup.maxCount",
+   "new": "rows.count <= SessionGroup.maxCount",
+   "expect": "killed"
+  },
+  {
+   "name": "add-reuses-name",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "while names.contains(SessionGroup.nameKey(\"Group \\(n)\")) { n += 1 }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "add-sidekicks-id",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name:",
+   "new": "SessionGroup(id: SessionGroup.sidekicksID, name:",
+   "expect": "killed"
+  },
+  {
+   "name": "no-name-check",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "guard SessionGroup.validName(g.name) else { return \"A name is 1-32 bytes, without \\\"=\\\": not saved\" }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-dup-check",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if rows.contains(where: { $0.id != g.id && SessionGroup.nameKey($0.name) == key }) { return \"Another group has this name: not saved\" }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-empty-check",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if p.isEmpty { return \"No pattern yet: not saved\" }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-invalid-check",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "case .invalid: return \"Not a valid regex: not saved\"",
+   "new": "case .invalid: return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "no-matchall-check",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "case .matchesEmpty: return \"Matches every session: not saved\"",
+   "new": "case .matchesEmpty: return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "saved-drops-fallback",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "reason(g) == nil ? g : stored.first { $0.id == g.id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }",
+   "new": "reason(g) == nil ? g : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "save-always-stores",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "guard list != stored else { return }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "save-no-stamp",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "save-stamp-after-list",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n        Preferences.agentIslandSessionGroups = list",
+   "new": "Preferences.agentIslandSessionGroups = list\n        Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)",
+   "expect": "killed"
+  },
+  {
+   "name": "move-no-swap",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "rows.swapAt(i, i + step)",
+   "new": "rows.swapAt(i, i)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-reload",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "            editor = SessionGroupsEditor()\n        }",
+   "new": "        }",
+   "expect": "killed"
+  },
+  {
+   "name": "a11y-remove-label",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "\"Remove group \\(title)\"",
+   "new": "\"Remove group\"",
+   "expect": "killed"
+  },
+  {
+   "name": "normalized-no-id-dedupe",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "validName($0.name) && ids.insert($0.id).inserted && names",
+   "new": "validName($0.name) && names",
+   "expect": "killed"
+  },
+  {
+   "name": "normalized-no-name-dedupe",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "&& names.insert(nameKey($0.name)).inserted",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "namekey-case",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "name.trimmingCharacters(in: .whitespaces).lowercased() }",
+   "new": "name.trimmingCharacters(in: .whitespaces) }",
+   "expect": "killed"
+  },
+  {
+   "name": "search-no-terms",
+   "file": "app/Sources/ProsperApp/SettingsSearch.swift",
+   "old": "\"ext:com.prosper.agentisland|agentisland\": [\"session groups\", \"group pattern\", \"group tabs\", \"sidekick\"],",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
