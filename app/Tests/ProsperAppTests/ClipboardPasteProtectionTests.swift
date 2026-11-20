@@ -62,6 +62,25 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         XCTAssertEqual(m.timer?.timeInterval, 1.0)
     }
 
+    /// #1702: Ask holds the read like Deny (no alert per copy); Allow then reads the held change.
+    func testAsksHoldsTheReadUntilAllowThenCapturesIt() {
+        let box = Box()
+        box.access = .asks
+        let m = monitor(box)
+        m.start()
+        copySomething()
+        m.poll()
+        XCTAssertEqual(box.payloads.count, 0, "asks: the pasteboard is not read")
+        XCTAssertTrue(m.accessDenied)
+        XCTAssertEqual(m.timer?.timeInterval, ClipboardMonitor.deniedPollInterval)
+
+        box.access = .allowed
+        m.poll()
+        XCTAssertEqual(box.payloads.count, 1, "Allow: the held change is read")
+        XCTAssertFalse(m.accessDenied)
+        XCTAssertEqual(m.timer?.timeInterval, 1.0)
+    }
+
     /// An idle tick (change count unchanged) reads neither the pasteboard nor the access state.
     func testIdleTicksReadNoAccessState() {
         let box = Box()
@@ -77,7 +96,7 @@ final class ClipboardPasteProtectionTests: XCTestCase {
 
     /// Allow (and every state that is not denied): a copy is captured at once on the 1 s timer, as before.
     func testNotDeniedCapturesAsBefore() {
-        for state in [ClipboardAccess.allowed, .asks, .systemDefault, .unknown] {
+        for state in [ClipboardAccess.allowed, .systemDefault, .unknown] {
             let box = Box()
             box.access = state
             let m = monitor(box)

@@ -2136,6 +2136,8 @@ tag from the now-released section and put it on the new top draft.
   clipboard access back. (#1692)
 - Agent Sessions: a layout no longer leaves an empty strip above the pane headers; the strip shows
   only for a zoomed pane or when the window is too small for every pane. (#1697)
+- Clipboard history no longer makes macOS ask for paste permission on every copy while Prosper is
+  set to Ask; it waits until you allow Prosper to paste from other apps. (#1702)
 
 ## v2.174.0
 

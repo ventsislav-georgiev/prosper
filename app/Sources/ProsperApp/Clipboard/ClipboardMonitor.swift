@@ -161,7 +161,10 @@ final class ClipboardMonitor {
     func poll(_ pb: NSPasteboard = Pasteboard.general) {
         guard pb.changeCount != lastChangeCount else { return }
         accessReads += 1
-        let denied = access() == .denied
+        // #1702 (OQ-202 B): under Ask every read raises a macOS alert, so Ask holds reads like Deny;
+        // `.systemDefault` still reads once, which raises the first alert and moves the app to Ask.
+        let state = access()
+        let denied = state == .denied || state == .asks
         if denied != accessDenied {
             // A suppress armed while denied was never consumed; it must not eat the user's next copy.
             if !denied { suppressNext = false }
