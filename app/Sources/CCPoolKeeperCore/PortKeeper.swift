@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Security
+import os
 
 /// #1676: the ccpool port keeper's core, shared by the keeper executable (Sources/CCPoolKeeper) and the app's link
 /// (CCPool/CCPoolKeeperLink.swift). It holds a dup of the proxy's listening socket across a Prosper relaunch and hands it
@@ -16,9 +17,13 @@ public final class PortKeeper: @unchecked Sendable {
     public static let exit: UInt8 = 0x58    // "X"
     public static let reply: UInt8 = 0x4B   // "K"
     /// No app connected for this long after a disconnect: the keeper exits (a crashed or removed app never leaves it).
-    public static let idleLimit: DispatchTimeInterval = .seconds(15 * 60)
+    /// Operator 2026-11-19: 60 s, so clients of a crashed app hang at most a minute; an update relaunch is back sooner.
+    public static let idleLimit: DispatchTimeInterval = .seconds(60)
     /// The bundle identifier a peer must be signed as (with this keeper's team).
     public static let appIdentifier = "eu.illegible.prosper"
+    /// R1676 n18: after an accept error that leaves the connection queued (EMFILE, ENFILE ...), the control socket's
+    /// source is suspended this long, then resumed once: never spun.
+    public static let fdPause: DispatchTimeInterval = .milliseconds(100)
 
     public let port: UInt16
     public let queue = DispatchQueue(label: "eu.illegible.prosper.ccpool-keeper")
@@ -30,6 +35,8 @@ public final class PortKeeper: @unchecked Sendable {
     private var clients: [Int32: DispatchSourceRead] = [:]
     private var idle: DispatchSourceTimer?
     private var done = false
+    private var paused = false
+    private var exhausted = false
 
     // Seams (tests): the peer's uid and audit token, the code-sign check, the own team, the idle limit, what exit does.
     public var peerUID: @Sendable (Int32) -> uid_t? = PortKeeper.systemPeerUID
@@ -39,6 +46,11 @@ public final class PortKeeper: @unchecked Sendable {
     /// This keeper's own team identifier; nil (ad-hoc or self-signed build): the socket goes to nobody (fail closed).
     public var ownTeam: @Sendable () -> String? = { PortKeeper.systemOwnTeam }
     public var idleAfter: DispatchTimeInterval = PortKeeper.idleLimit
+    /// accept(2) on the control socket: the fd, or -1 and its errno.
+    public var acceptCall: @Sendable (Int32) -> (fd: Int32, err: Int32) = { s in
+        let c = accept(s, nil, nil)
+        return (c, c >= 0 ? 0 : errno)
+    }
     private let onExit: @Sendable () -> Void
 
     /// Counters a test reads (on `queue`): idle timers armed and fired, fds handed out, peers refused.
@@ -46,6 +58,8 @@ public final class PortKeeper: @unchecked Sendable {
     public private(set) var idleFired = 0
     public private(set) var handedOut = 0
     public private(set) var refused = 0
+    /// R1676 n18: accept pauses taken (one per error, each one 100 ms resume).
+    public private(set) var pauses = 0
 
     /// Takes ownership of `listening`.
     public init(listening: Int32, port: UInt16, onExit: @escaping @Sendable () -> Void) {
@@ -91,7 +105,7 @@ public final class PortKeeper: @unchecked Sendable {
     /// goes through the same peer check). False, nothing started, when the held fd is not bound to `port` or the socket
     /// cannot be made. Call once, off `queue`.
     public func start(socketPath path: String, control: Int32?) -> Bool {
-        guard Self.boundPort(listenFD) == port, path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else { return false }
+        guard Self.boundPort(listenFD) == port, Self.fitsUnixAddr(path) else { return false }
         let s = socket(AF_UNIX, SOCK_STREAM, 0)
         guard s >= 0 else { return false }
         _ = fcntl(s, F_SETFD, FD_CLOEXEC)
@@ -118,10 +132,30 @@ public final class PortKeeper: @unchecked Sendable {
 
     private func acceptAll() {
         while !done {
-            let c = accept(serverFD, nil, nil)
-            if c >= 0 { admit(c); continue }
-            if errno == EINTR || errno == ECONNABORTED { continue }
+            let (c, e) = acceptCall(serverFD)
+            if c >= 0 { exhausted = false; admit(c); continue }
+            if e == EINTR || e == ECONNABORTED { continue }
+            // R1676 n18: EMFILE, ENFILE, ENOBUFS ...: the connection stays queued and the source level-triggered.
+            if e != EAGAIN { pause(e) }
             return
+        }
+    }
+
+    /// Suspend the control source and resume it once after `fdPause`, unless the keeper is done by then. Logged once
+    /// per episode (until an accept succeeds). On `queue`.
+    private func pause(_ e: Int32) {
+        guard !paused, !done, let server else { return }
+        paused = true
+        pauses += 1
+        if !exhausted {
+            exhausted = true
+            Logger(subsystem: "eu.illegible.prosper", category: "ccpool-keeper").error("control accept failed (errno \(e)); pausing")
+        }
+        server.suspend()
+        queue.asyncAfter(deadline: .now() + Self.fdPause) { [weak self] in
+            guard let self, paused, !done, let server = self.server else { return }
+            paused = false
+            server.resume()
         }
     }
 
@@ -197,6 +231,8 @@ public final class PortKeeper: @unchecked Sendable {
             let fd = serverFD
             server.setCancelHandler { close(fd) }
             server.cancel()
+            // A suspended source runs its cancel handler only once resumed.
+            if paused { paused = false; server.resume() }
         }
         server = nil
         if let socketPath { unlink(socketPath) }
@@ -293,13 +329,20 @@ public final class PortKeeper: @unchecked Sendable {
             }
         }
         guard n == 1 else { return nil }
-        let got = Int(msg.msg_controllen)
-        let h = ctl.load(as: cmsghdr.self)
+        // R1676 n17: walk every cmsg (CMSG_NXTHDR), so a second SCM_RIGHTS message's fds are closed too, not leaked.
+        let got = min(Int(msg.msg_controllen), cap)
         var fds: [Int32] = []
-        if got >= cmsgSpace, h.cmsg_level == SOL_SOCKET, h.cmsg_type == SCM_RIGHTS, Int(h.cmsg_len) >= cmsgSpace,
-           Int(h.cmsg_len) <= got {
-            let count = (Int(h.cmsg_len) - cmsgHeader) / MemoryLayout<Int32>.size
-            fds = (0..<count).map { ctl.load(fromByteOffset: cmsgHeader + $0 * 4, as: Int32.self) }
+        var off = 0
+        while off + cmsgHeader <= got {
+            let h = ctl.load(fromByteOffset: off, as: cmsghdr.self)
+            let len = Int(h.cmsg_len)
+            guard len >= cmsgHeader, len <= got - off else { break }
+            if h.cmsg_level == SOL_SOCKET, h.cmsg_type == SCM_RIGHTS {
+                for i in 0..<(len - cmsgHeader) / MemoryLayout<Int32>.size {
+                    fds.append(ctl.load(fromByteOffset: off + cmsgHeader + i * 4, as: Int32.self))
+                }
+            }
+            off += (len + 3) & ~3   // Darwin aligns cmsgs to 4 bytes
         }
         guard byte == reply, fds.count == 1, msg.msg_flags & MSG_CTRUNC == 0 else {
             fds.forEach { close($0) }
@@ -309,6 +352,10 @@ public final class PortKeeper: @unchecked Sendable {
         return fds[0]
     }
 
+    /// R1676 n19: whether `path` fits sun_path with its NUL; a longer one would be truncated by `withUnixAddr`.
+    public static func fitsUnixAddr(_ path: String) -> Bool { path.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) }
+
+    /// Callers check `fitsUnixAddr` first: a longer path is truncated here.
     public static func withUnixAddr<T>(_ path: String, _ body: (UnsafePointer<sockaddr>, socklen_t) -> T) -> T {
         var a = sockaddr_un()
         a.sun_family = sa_family_t(AF_UNIX)

@@ -9,8 +9,9 @@ import Foundation
 
 signal(SIGPIPE, SIG_IGN)
 signal(SIGHUP, SIG_IGN)
-// Cheap and contained: a handful of fds is all it ever needs (lock, listening, control socket, a few apps).
-var files = rlimit(rlim_cur: 16, rlim_max: 16)
+// Cheap and contained: a handful of fds (lock, listening, control socket, a few apps), plus room for what Security's
+// code-sign check opens (R1676 n18: 16 was tight).
+var files = rlimit(rlim_cur: 64, rlim_max: 64)
 setrlimit(RLIMIT_NOFILE, &files)
 
 let args = CommandLine.arguments

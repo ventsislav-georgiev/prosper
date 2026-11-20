@@ -5,7 +5,11 @@ import Foundation
 /// #1676: the app's side of the ccpool port keeper (Sources/CCPoolKeeper). The service asks a running keeper for the
 /// listening fd before it binds its own (`fetch`), spawns one with a dup of a fresh listener (`spawn`), and tells it to
 /// exit when ccpool is turned off or the app quits for good (`exit`). The one connection it keeps open while the app
-/// runs is the control link: the keeper idle-exits 15 min after the last one closes.
+/// runs is the control link: the keeper idle-exits 60 s after the last one closes.
+///
+/// R1676 n14: only an app signed with a team gets a link (the keeper admits only a peer of its team, so an ad-hoc or
+/// self-signed build could neither fetch from nor stop one): with none, `init` is nil and the service runs as with no
+/// keeper.
 ///
 /// Isolation: none; every call runs on the service's caller (the life cycle's queue), state behind `lock`.
 final class CCPoolKeeperLink: @unchecked Sendable {
@@ -16,7 +20,10 @@ final class CCPoolKeeperLink: @unchecked Sendable {
     private let lock = NSLock()
     private var control: Int32 = -1
 
-    init(directory: URL, port: UInt16, spawner: @escaping @Sendable (_ listening: Int32, _ control: Int32) -> pid_t?) {
+    /// nil when the app has no team (`team` nil): no keeper is spawned, fetched from or told to exit.
+    init?(directory: URL, port: UInt16, spawner: @escaping @Sendable (_ listening: Int32, _ control: Int32) -> pid_t?,
+          team: String? = PortKeeper.systemOwnTeam) {
+        guard team != nil else { return nil }
         self.directory = directory
         self.port = port
         self.spawner = spawner
@@ -77,9 +84,13 @@ final class CCPoolKeeperLink: @unchecked Sendable {
         control = -1
     }
 
-    /// The held link, or a new connection to the keeper's socket (same uid only; 2 s send and receive timeouts).
+    /// The held link, or a new connection to the keeper's socket (same uid only; 2 s send and receive timeouts). A path
+    /// too long for sun_path is refused, never connected truncated (R1676 n19). The keeper's code is not checked: after
+    /// an update its file on disk is the new bundle's, so a static check of the running (old) keeper fails and would
+    /// refuse the hand-off; and a same-uid process able to plant this socket could as well bind the port first.
     private func connected() -> Int32? {
         if control >= 0 { return control }
+        guard PortKeeper.fitsUnixAddr(socketPath) else { return nil }
         let s = socket(AF_UNIX, SOCK_STREAM, 0)
         guard s >= 0 else { return nil }
         _ = fcntl(s, F_SETFD, FD_CLOEXEC)
