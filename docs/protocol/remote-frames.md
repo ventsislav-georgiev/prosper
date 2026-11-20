@@ -822,14 +822,18 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 
 #### 0x2f groupsSync limits (#1756)
 
-Checked on every write, whoever wins. At most 8 groups; `id` 1-64 ASCII `[A-Za-z0-9_-]`; `name`
-1-32 UTF-8 bytes (trimmed), no `=` or control characters, unique case-insensitively; `pattern` at
-most 512 UTF-8 bytes; `id` unique. Exactly one reply: 0x14, or 0x13 `{"message"}` with one of:
+Every write must be well formed, with at most 8 groups (the Mac stops reading at the 9th) and each
+`id` 1-64 ASCII `[A-Za-z0-9_-]`: a bad `id`, a wrong type or a missing key gets the malformed
+message. The other limits are checked only when the phone's write wins (a newer `updated`), as
+0x2d's cap, so an echo of the Mac's own list never fails on them (#1777): `name` 1-32 UTF-8 bytes
+(trimmed), no `=` or control characters, unique case-insensitively; `pattern` at most 512 UTF-8
+bytes and not blank; `id` unique. Exactly one reply: 0x14, or 0x13 `{"message"}` with one of:
 
 - `malformed groupsSync request: send {} to read, or {"groups": [...], "updated": <ms>}`
 - `more than 8 groups`
 - `group name must be 1-32 UTF-8 bytes without = or control characters`
 - `group pattern over 512 UTF-8 bytes`
+- `group pattern must not be blank`
 - `duplicate group id or name`
 
 A 0x14 with `"message"` is a partial success: done, with a line for the user. 0x25 forget sends one

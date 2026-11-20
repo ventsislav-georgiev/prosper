@@ -1388,12 +1388,13 @@ enum Preferences {
     }
 
     /// #760: a phone's winning pattern and its stamp, both verbatim. #1756: it edits group 0, so the groups stamp moves
-    /// to it too (never back: a later groups edit keeps winning).
-    static func adoptSidekickPattern(_ pattern: String, updated: Int64) {
-        let groups = agentIslandSessionGroupsUpdated
+    /// to it too (never back: a later groups edit keeps winning). #1777 (QA n95): when it rewrites group 0 under a groups
+    /// stamp at or past `updated`, the groups stamp moves as an edit (editStamp after both), so the phone re-reads 0x2f.
+    static func adoptSidekickPattern(_ pattern: String, updated: Int64, now: Date = Date()) {
+        let groups = agentIslandSessionGroupsUpdated, changed = pattern != agentIslandSidekickPattern
         agentIslandSidekickPattern = pattern
         agentIslandSidekickPatternUpdated = updated
-        agentIslandSessionGroupsUpdated = max(groups, updated)
+        agentIslandSessionGroupsUpdated = changed && groups >= updated ? editStamp(now: now, after: groups) : max(groups, updated)
     }
 
     /// #1756: ms since epoch of the groups list's last save here, or the adopted phone's; the phone's 0x2f syncs it.
@@ -1412,10 +1413,17 @@ enum Preferences {
         agentIslandSessionGroupsUpdated = stamp
     }
 
-    /// #1756: a phone's winning list and its stamp, verbatim (0x2f). The sidekick stamp is 0x2d's and stays.
+    /// #1756: a phone's winning list and its stamp, verbatim (0x2f). #1777 (QA b1): when group 0's pattern changes, the
+    /// sidekick stamp moves to max(itself, updated), else an older 0x2d write would win against the newer list.
+    ///
+    /// Invariant (#1777): after any edit or adopt, 0x2d's (pattern, stamp) and 0x2f's (groups, stamp) never disagree under
+    /// one stamp: a change of group 0 moves the sidekick stamp to >= the groups stamp it came with, and a 0x2d adopt that
+    /// rewrites group 0 moves the groups stamp (adoptSidekickPattern), so the phone re-reads.
     static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64) {
+        let pattern = agentIslandSidekickPattern
         agentIslandSessionGroups = list
         agentIslandSessionGroupsUpdated = updated
+        if agentIslandSidekickPattern != pattern { agentIslandSidekickPatternUpdated = max(agentIslandSidekickPatternUpdated, updated) }
     }
 
     /// #606: what New session runs, as typed; "" = unset (inferred, else claude).

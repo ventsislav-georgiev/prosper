@@ -1190,8 +1190,9 @@ struct DchSidekickOps: Sendable {
 
 /// #1756: 0x2f groupsSync, agreed with prosper-ios 2026-11-20. {} reads the Mac's list; {groups, updated} writes it,
 /// the newer `updated` winning as 0x2d (DchSidekickOps.merge; a tie keeps the Mac's). Exactly one reply: ok {groups,
-/// updated} carrying the winner, or error {message}. Unlike 0x2d's cap, every write is checked against the limits
-/// whoever wins: the phone never writes, so no echo of the Mac's own list can wedge on them.
+/// updated} carrying the winner, or error {message}. As 0x2d's cap (QA #597 F1), the limits guard the adopt only: parse()
+/// refuses what is malformed (and more than 8 groups, the Mac's own cap), and the rest are checked only when the phone's
+/// write wins the merge, so an echo of the Mac's own list never wedges on them (#1777, QA n96).
 struct DchGroupsOps: Sendable {
     static let maxIDBytes = 64
     static let malformed = "malformed groupsSync request: send {} to read, or {\"groups\": [...], \"updated\": <ms>}"
@@ -1199,6 +1200,7 @@ struct DchGroupsOps: Sendable {
     static let badName = "group name must be 1-32 UTF-8 bytes without = or control characters"
     static let duplicate = "duplicate group id or name"
     static let longPattern = "group pattern over \(DchSidekickOps.maxBytes) UTF-8 bytes"
+    static let blankPattern = "group pattern must not be blank"
 
     struct Value: Equatable, Sendable {
         /// In match order; [] = no split.
@@ -1217,7 +1219,8 @@ struct DchGroupsOps: Sendable {
     }
 
     /// {} (no "groups" key) reads; {"groups": [{id, name, pattern}], "updated": integer} writes, unknown keys ignored.
-    /// .failure carries the error's message: the malformed one, else the first limit the list breaks.
+    /// .failure carries the malformed message, or tooMany as soon as a 9th item is reached (#1777 n99: nothing past it is
+    /// walked). The write's groups are as sent: `limitFailure` checks them once the write wins, then they are normalized.
     static func parse(_ payload: Data) -> Result<Request, Failure> {
         guard let o = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else { return .failure(Failure(malformed)) }
         guard let raw = o["groups"] else { return .success(.read) }
@@ -1226,17 +1229,24 @@ struct DchGroupsOps: Sendable {
               let updated = n as? Int64 else { return .failure(Failure(malformed)) }
         var list: [SessionGroup] = []
         for item in items {
+            if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }
             guard let g = item as? [String: Any], let id = g["id"] as? String, validID(id),
                   let name = g["name"] as? String, let pattern = g["pattern"] as? String else { return .failure(Failure(malformed)) }
             list.append(SessionGroup(id: id, name: name, pattern: pattern))
         }
-        if list.count > SessionGroup.maxCount { return .failure(Failure(tooMany)) }
-        if !list.allSatisfy({ SessionGroup.validName($0.name) }) { return .failure(Failure(badName)) }
-        if !list.allSatisfy({ $0.pattern.utf8.count <= DchSidekickOps.maxBytes }) { return .failure(Failure(longPattern)) }
+        return .success(.write(Value(groups: list, updated: updated)))
+    }
+
+    /// The first limit a winning list breaks, nil when it keeps them all. #1777 (QA n97): a blank pattern is refused, as
+    /// the Settings editor would drop it on the next save and push the deletion back.
+    static func limitFailure(_ list: [SessionGroup]) -> String? {
+        if !list.allSatisfy({ SessionGroup.validName($0.name) }) { return badName }
+        if !list.allSatisfy({ $0.pattern.utf8.count <= DchSidekickOps.maxBytes }) { return longPattern }
+        if list.contains(where: { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }
         if Set(list.map(\.id)).count != list.count || Set(list.map { SessionGroup.nameKey($0.name) }).count != list.count {
-            return .failure(Failure(duplicate))
+            return duplicate
         }
-        return .success(.write(Value(groups: SessionGroup.normalized(list), updated: updated)))
+        return nil
     }
 
     struct Failure: Error, Equatable {
@@ -1273,8 +1283,9 @@ struct DchGroupsOps: Sendable {
             MainActor.assumeIsolated {
                 var winner = Self.current()
                 if case .write(let phone) = request, phone.updated > winner.updated {
-                    winner = phone
-                    Preferences.adoptSessionGroups(phone.groups, updated: phone.updated)
+                    if let message = Self.limitFailure(phone.groups) { return reply(DchControlOps.error(message)) }
+                    winner = Value(groups: SessionGroup.normalized(phone.groups), updated: phone.updated)
+                    Preferences.adoptSessionGroups(winner.groups, updated: winner.updated)
                     adopted()
                 }
                 reply(DchFrame.encode(DchFrame.ok, json: winner.json))

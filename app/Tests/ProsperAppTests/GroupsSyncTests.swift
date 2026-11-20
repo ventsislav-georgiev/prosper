@@ -129,9 +129,39 @@ final class GroupsSyncTests: XCTestCase {
         XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-phone$", updated: 99))
         XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 99)
         Preferences.agentIslandSessionGroupsUpdated = 500
-        Preferences.adoptSidekickPattern("-p2$", updated: 120)
-        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 500, "a later groups save keeps its stamp")
+        Preferences.adoptSidekickPattern("-p2$", updated: 120, now: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 501,
+                       "#1777 n95: group 0 rewritten under a later groups stamp: it moves as an edit, so the phone re-reads")
         XCTAssertEqual(Preferences.agentIslandSidekickPatternUpdated, 120)
+        Preferences.adoptSidekickPattern("-p2$", updated: 130, now: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 501, "the same pattern rewrites nothing: the stamp stays")
+        Preferences.adoptSidekickPattern("-p3$", updated: 501, now: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 502, "a tie moves it too")
+    }
+
+    /// #1777 (QA b1): a 0x2f adopt that changes group 0 moves the sidekick stamp, so a 0x2d write stamped between the
+    /// two stamps loses against the newer list instead of rewriting its group 0.
+    func testGroupsAdoptChangingGroupZeroMovesTheSidekickStampSoAnOlderSidekickWriteLoses() {
+        Preferences.agentIslandSessionGroups = Self.macList
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        Preferences.agentIslandSidekickPatternUpdated = 50
+        XCTAssertEqual(call(Self.body(#"{"groups":[{"id":"q","name":"QA","pattern":"-qa$"}],"updated":101}"#)).adopts, 1)
+        XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-qa$", updated: 101))
+        let box = Box(), replied = expectation(description: "reply")
+        var ops = DchSidekickOps()
+        ops.adopted = { box.lock.withLock { box.adopts += 1 } }
+        ops.handle(Self.body(#"{"pattern":"-old$","updated":70}"#)) { f in box.lock.withLock { box.frames.append(f) }; replied.fulfill() }
+        wait(for: [replied], timeout: 5)
+        let r = Self.decode(box.lock.withLock { box.frames.first ?? Data() })
+        XCTAssertEqual(r.json, Self.object(#"{"pattern":"-qa$","updated":101}"#), "the newer list's group 0 wins")
+        XCTAssertEqual(box.lock.withLock { box.adopts }, 0)
+        XCTAssertEqual(stored(), .init(groups: [Self.g("q", "QA", "-qa$")], updated: 101), "the list is untouched")
+        // A list whose group 0 is unchanged leaves the sidekick stamp alone; it never moves back.
+        XCTAssertEqual(call(Self.body(#"{"groups":[{"id":"q","name":"QA","pattern":"-qa$"},{"id":"r","name":"R","pattern":"-r"}],"updated":102}"#)).adopts, 1)
+        XCTAssertEqual(Preferences.agentIslandSidekickPatternUpdated, 101)
+        Preferences.agentIslandSidekickPatternUpdated = 900
+        XCTAssertEqual(call(Self.body(#"{"groups":[{"id":"q","name":"QA","pattern":"-new$"}],"updated":103}"#)).adopts, 1)
+        XCTAssertEqual(Preferences.agentIslandSidekickPatternUpdated, 900, "max(itself, updated)")
     }
 
     // MARK: - Merge
@@ -146,7 +176,7 @@ final class GroupsSyncTests: XCTestCase {
                        "the winner, name trimmed, unknown keys ignored")
         XCTAssertEqual(r.adopts, 1)
         XCTAssertEqual(stored(), .init(groups: [Self.g("q", "QA", "-qa$")], updated: 101), "the phone's list and stamp, never now")
-        XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-qa$", updated: 50), "0x2d mirrors group 0; its stamp stays")
+        XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-qa$", updated: 101), "0x2d mirrors group 0; #1777 b1: its stamp moves")
         let empty = call(Self.body(#"{"groups":[],"updated":102}"#))
         XCTAssertEqual(empty.json, Self.object(#"{"groups":[],"updated":102}"#))
         XCTAssertEqual(stored(), .init(groups: [], updated: 102))
@@ -198,6 +228,11 @@ final class GroupsSyncTests: XCTestCase {
             (Self.body(["groups": [grp("a", "A"), grp("a", "B")], "updated": 200]), "duplicate group id or name"),
             (Self.body(["groups": [grp("a", "QA"), grp("b", " qa ")], "updated": 200]), "duplicate group id or name"),
             (Self.body(["groups": [grp("a", "A", long)], "updated": 200]), "group pattern over 512 UTF-8 bytes"),
+            (Self.body(["groups": [grp("a", "A", "")], "updated": 200]), "group pattern must not be blank"),
+            (Self.body(["groups": [grp("a", "A", "-a"), grp("b", "B", " \n ")], "updated": 200]), "group pattern must not be blank"),
+            // #1777 n99: the 9th item ends the walk: the malformed ones after it are never read.
+            (Self.body(["groups": (1...8).map { grp("g\($0)", "G\($0)") as Any } + Array(repeating: "x" as Any, count: 10_000), "updated": 200]),
+             "more than 8 groups"),
             // An older write is checked too.
             (Self.body(["groups": (1...9).map { grp("g\($0)", "G\($0)") }, "updated": 1]), "more than 8 groups"),
         ]
@@ -215,6 +250,27 @@ final class GroupsSyncTests: XCTestCase {
         XCTAssertEqual(ok.type, DchFrame.ok)
         XCTAssertEqual(stored().groups.count, 8)
         XCTAssertEqual(stored().updated, 300)
+    }
+
+    /// #1777 (QA n96): the limits guard the adopt only. An echo of a Mac list over them (a tie or an older write) is
+    /// answered with the Mac's list; the same list winning is refused.
+    func testLimitsAreCheckedOnlyWhenThePhoneWins() {
+        let big = String(repeating: "p", count: 600)
+        Preferences.agentIslandSessionGroups = [Self.g("a", "A", big)]
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        let mac = DchGroupsOps.Value(groups: [Self.g("a", "A", big)], updated: 100).json as NSDictionary
+        for t in [100, 99] {
+            let echo = call(Self.body(["groups": [["id": "a", "name": "A", "pattern": big]], "updated": t]))
+            XCTAssertEqual(echo.type, DchFrame.ok, "\(t)")
+            XCTAssertEqual(echo.json, mac, "\(t)")
+            let older = call(Self.body(["groups": [["id": "a", "name": "a=b", "pattern": ""], ["id": "b", "name": "A", "pattern": "-b"]], "updated": t]))
+            XCTAssertEqual(older.json, mac, "an older write over every limit: the Mac's list, \(t)")
+        }
+        let win = call(Self.body(["groups": [["id": "a", "name": "A", "pattern": big]], "updated": 101]))
+        XCTAssertEqual(win.type, DchFrame.error)
+        XCTAssertEqual(win.json, ["message": "group pattern over 512 UTF-8 bytes"] as NSDictionary)
+        XCTAssertEqual(win.adopts, 0)
+        XCTAssertEqual(stored().updated, 100)
     }
 
     /// The contract's error example, byte for byte once parsed.

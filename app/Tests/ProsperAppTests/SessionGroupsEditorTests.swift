@@ -96,6 +96,8 @@ final class SessionGroupsEditorTests: XCTestCase {
             ("empty name", { g, _ in g.name = "  " }, "A name is 1-32 bytes, without \"=\": not saved"),
             ("duplicate name", { g, other in g.name = " \(other.uppercased()) " }, "Another group has this name: not saved"),
             ("no pattern", { g, _ in g.pattern = "" }, "No pattern yet: not saved"),
+            // #1777 (QA n96): 513 bytes, more than the phone can echo.
+            ("long pattern", { g, _ in g.pattern = String(repeating: "é", count: 256) + "x" }, "Pattern over 512 bytes: not saved"),
         ]
         for c in cases {
             for i in [0, 1] {
@@ -110,6 +112,7 @@ final class SessionGroupsEditorTests: XCTestCase {
                 XCTAssertEqual(Preferences.agentIslandSidekickPatternUpdated, 7, "\(c.what) on row \(i): no stamp")
             }
         }
+        XCTAssertTrue(SessionGroupsEditor().reason(Self.g("e", "Edge", String(repeating: "é", count: 256))) == nil, "512 bytes is saved")
         // A new row that is not valid is kept in the editor and not saved; a valid edit beside it is.
         var e = SessionGroupsEditor()
         e.add()

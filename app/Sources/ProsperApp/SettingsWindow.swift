@@ -1282,6 +1282,8 @@ struct SessionGroupsEditor: Equatable {
     private func patternReason(_ g: SessionGroup) -> String? {
         let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         if p.isEmpty { return "No pattern yet: not saved" }
+        // #1777 (QA n96): never store a pattern the phone's 0x2d/0x2f cannot echo.
+        if g.pattern.utf8.count > DchSidekickOps.maxBytes { return "Pattern over \(DchSidekickOps.maxBytes) bytes: not saved" }
         switch AgentIsland.sidekickMatch(p) {
         case .invalid: return "Not a valid regex: not saved"
         case .matchesEmpty: return "Matches every session: not saved"
