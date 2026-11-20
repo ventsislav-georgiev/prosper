@@ -2223,7 +2223,7 @@ tag from the now-released section and put it on the new top draft.
 - The "while you were away" strip in Agent Sessions is shorter and clearer: how long you were away
   and how many new prompts, two short titles and the ticket and PR references, without system
   messages. (#1764)
-- Session groups sync to the Prosper phone app, one section per group there (#1756)
+- Session groups sync to the Prosper phone app, one section per group there. (#1756)
 
 ## v2.174.0
 
