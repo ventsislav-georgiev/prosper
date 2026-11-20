@@ -71,6 +71,15 @@ final class AgentTerminalColoursTests: XCTestCase {
                        ["theme=light:Example Light,dark:Example Dark", "palette=255=#00ff00", "bold-color=dark slate gray"])
     }
 
+    /// #1752: Ghostty's `window-colorspace` decides how every colour value is drawn, so "My Ghostty theme" keeps it;
+    /// only its two values pass. Red on the parent: the key was not in the allowlist ([]).
+    func testKeepsWindowColorspaceWithItsTwoValuesOnly() {
+        XCTAssertEqual(pairs(GhosttyUserColours.lines("window-colorspace = display-p3\nwindow-colorspace = \"srgb\"\n")),
+                       ["window-colorspace=display-p3", "window-colorspace=srgb"])
+        XCTAssertEqual(pairs(GhosttyUserColours.lines("window-colorspace = rec2020\nwindow-colorspace = display-p3;x\n"
+                                                      + "window-colorspace = red\n")), [], "anything else is refused")
+    }
+
     @MainActor
     func testAMissingFileGivesTheProsperLook() {
         let home = tempDir()

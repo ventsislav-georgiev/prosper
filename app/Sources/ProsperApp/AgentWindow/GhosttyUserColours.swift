@@ -7,7 +7,7 @@ import Foundation
 /// downloaded): Prosper resolves the theme by its checked name and keeps only that file's colour lines.
 enum GhosttyUserColours {
     static let keys: Set<String> = ["theme", "palette", "background", "foreground", "cursor-color", "cursor-text",
-                                    "selection-background", "selection-foreground", "bold-color"]
+                                    "selection-background", "selection-foreground", "bold-color", "window-colorspace"]
     static let maxBytes = 256 * 1024, maxLines = 5000, maxKept = 512
 
     /// Where Ghostty looks on macOS, in its load order (a later file wins): the XDG file, then Application Support.
@@ -88,6 +88,8 @@ enum GhosttyUserColours {
     static func valid(_ key: String, _ value: String) -> Bool {
         switch key {
         case "theme": return isThemeName(value) || isLightDarkThemes(value)
+        // #1752: how Ghostty reads every colour value (display-p3 draws them as P3, more saturated than sRGB).
+        case "window-colorspace": return value == "srgb" || value == "display-p3"
         case "palette":
             let parts = value.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2, (1...3).contains(parts[0].count), parts[0].allSatisfy(\.isASCIIDigit),
