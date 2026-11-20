@@ -29,6 +29,13 @@
    "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
    "new": "shown && (m.layout.zoomed != nil || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
    "expect": "survives"
+  },
+  {
+   "name": "unmeasured-too-small",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let t = if paneArea.isEmpty { false } else if case .tooSmall",
+   "new": "let t = if case .tooSmall",
+   "expect": "killed"
   }
  ]
 }
