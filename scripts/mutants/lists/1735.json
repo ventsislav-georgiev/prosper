@@ -1,0 +1,41 @@
+{
+ "entry": "1735",
+ "filter": "AgentRowModelEffortTests/testAgentsCountOutlineOnTheLadderAtFiveAnd128|AgentRowModelEffortTests/testAgentsCountStrokeIsPurple|AgentRowModelEffortTests/testShellsCountDraws|AgentRowSelectedTextTests/testCountPillStrokes|AgentRowModelEffortTests/testRobot1453",
+ "mutants": [
+  {
+   "name": "shells-always-white",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "ThemeRuntime.contrastRatio(.white, Neon.sidebar) >= 3 ? .white : Neon.textPrimary",
+   "new": ".white",
+   "expect": "killed"
+  },
+  {
+   "name": "agents-always-light",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "ThemeRuntime.contrastRatio(purpleLight, Neon.sidebar) >= ThemeRuntime.contrastRatio(purpleDark, Neon.sidebar) ? purpleLight : purpleDark",
+   "new": "purpleLight",
+   "expect": "killed"
+  },
+  {
+   "name": "stroke-becomes-fill",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Capsule().strokeBorder(pill, lineWidth: 1)",
+   "new": "Capsule().fill(pill)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-stroke",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Capsule().strokeBorder(pill, lineWidth: 1)",
+   "new": "Capsule().strokeBorder(Color.clear, lineWidth: 1)",
+   "expect": "killed"
+  },
+  {
+   "name": "row-not-outlined",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "open: ink(.blue), outlined: true,",
+   "new": "open: ink(.blue), outlined: false,",
+   "expect": "killed"
+  }
+ ]
+}
