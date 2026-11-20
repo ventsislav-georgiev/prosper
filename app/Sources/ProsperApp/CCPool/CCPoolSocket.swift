@@ -3,7 +3,9 @@ import Network
 
 /// #1675: the proxy's listening socket, a BSD socket on 127.0.0.1. NWListener with endpoint reuse behaves like
 /// SO_REUSEPORT and still refuses a port in TIME_WAIT (a restart or a takeover waited up to 30 s); SO_REUSEADDR
-/// binds past TIME_WAIT and still gets EADDRINUSE beside a live listener. SO_REUSEPORT is never set.
+/// binds past TIME_WAIT. Beside a live listener on exactly 127.0.0.1:P it gets EADDRINUSE, but it DOES bind beside a
+/// live 0.0.0.0:P one; there the real port probe (a connect to 127.0.0.1) finds the wildcard listener first, so only
+/// the probe-to-bind race is exposed. SO_REUSEPORT is never set.
 /// The surface the service and its rows use (port, state, stateUpdateHandler, cancel) keeps NWListener's shapes.
 final class CCPoolListener: @unchecked Sendable {
     enum Failure: Error, Equatable {
@@ -21,9 +23,9 @@ final class CCPoolListener: @unchecked Sendable {
     private var _handler: (@Sendable (NWListener.State) -> Void)?
     private var source: DispatchSourceRead?
     private var cancelled = false
-    /// The accept source is suspended for `fdPause` after EMFILE/ENFILE (one resume is scheduled).
+    /// The accept source is suspended for `fdPause` after such an error (one resume is scheduled).
     private var paused = false
-    /// Confined to the start queue: an EMFILE/ENFILE episode was already reported (reset by the next accept).
+    /// Confined to the start queue: an accept-error episode was already reported (reset by the next accept).
     private var exhausted = false
     static let fdPause: DispatchTimeInterval = .milliseconds(100)
     /// accept(2) as (fd, errno): a test seam, set before start().
@@ -102,7 +104,7 @@ final class CCPoolListener: @unchecked Sendable {
     static func code(_ e: Int32) -> POSIXErrorCode { POSIXErrorCode(rawValue: e) ?? .EIO }
 
     /// Accept on `queue` until EAGAIN, each connected fd handed to `accept` (which owns it). No-op once cancelled.
-    /// Out of fds (EMFILE/ENFILE) the source is suspended for `fdPause`, never spun; `exhausted` runs once per episode.
+    /// After any error but EAGAIN/EINTR/ECONNABORTED (EMFILE, ENOBUFS ...) the source is suspended for `fdPause`, never spun; `exhausted` runs once per episode.
     func start(queue: DispatchQueue, accept: @escaping @Sendable (Int32) -> Void, exhausted onExhausted: (@Sendable () -> Void)? = nil) {
         lock.withLock {
             guard !cancelled, source == nil else { return }
@@ -114,11 +116,11 @@ final class CCPoolListener: @unchecked Sendable {
                     let (c, e) = call(fd)
                     if c >= 0 { self?.exhausted = false; accept(c); continue }
                     if e == EINTR || e == ECONNABORTED { continue }
-                    if e == EMFILE || e == ENFILE, let self {
+                    if e != EAGAIN, let self {   // EMFILE, ENFILE, ENOBUFS, ENOMEM ...: the backlog stays non-empty
                         self.pause(queue)
                         if !self.exhausted { self.exhausted = true; onExhausted?() }
                     }
-                    return   // EAGAIN: drained
+                    return
                 }
             }
             // The fd is closed here even when the listener itself is gone by then.
@@ -216,6 +218,8 @@ final class CCPoolFDTransport: CCPoolTransport, @unchecked Sendable {
     private var pending: [Chunk] = []
     private var head = 0
     private var finishing: (@Sendable () -> Void)?
+    /// One read buffer for every read() of this transport (queue-confined); chunks are copies of exactly n bytes.
+    private let readBuf = UnsafeMutableRawPointer.allocate(byteCount: CCPoolFDTransport.maxRead, alignment: 16)
     private var closedFD = false
     private var live = 0
     /// Counts for the per-chunk work row: read() and write() calls made.
@@ -226,6 +230,8 @@ final class CCPoolFDTransport: CCPoolTransport, @unchecked Sendable {
         self.fd = fd
         _ = CCPoolListener.configure(fd)
     }
+
+    deinit { readBuf.deallocate() }
 
     private var isCancelled: Bool { lock.withLock { cancelled } }
 
@@ -261,14 +267,13 @@ final class CCPoolFDTransport: CCPoolTransport, @unchecked Sendable {
 
     private func readable() {
         guard !isCancelled, let h = onRead else { return disarmRead() }
-        var buf = Data(count: Self.maxRead)
         reads += 1
-        let n = buf.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, Self.maxRead) }
+        let n = Darwin.read(fd, readBuf, Self.maxRead)
         if n < 0, errno == EAGAIN || errno == EINTR { return }
         let e = errno
         onRead = nil
         disarmRead()
-        if n > 0 { buf.count = n; h(buf, false, nil) } else if n == 0 { h(nil, true, nil) } else { h(nil, false, POSIXError(CCPoolListener.code(e))) }
+        if n > 0 { h(Data(bytes: readBuf, count: n), false, nil) } else if n == 0 { h(nil, true, nil) } else { h(nil, false, POSIXError(CCPoolListener.code(e))) }
     }
 
     private func disarmRead() {

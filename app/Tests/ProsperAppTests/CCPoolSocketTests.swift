@@ -58,12 +58,15 @@ final class CCPoolSocketTests: XCTestCase {
     }
 
     /// A raw listener on 127.0.0.1:`port` with the given options, or the bind's errno as a negative number.
-    private static func rawListener(port: UInt16, options: [Int32]) -> Int32 {
+    private static func rawListener(port: UInt16, options: [Int32], wildcard: Bool = false) -> Int32 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return -errno }
         var one: Int32 = 1
         for o in options { setsockopt(fd, SOL_SOCKET, o, &one, socklen_t(MemoryLayout<Int32>.size)) }
-        guard withAddr(port, { Darwin.bind(fd, $0, $1) }) == 0, Darwin.listen(fd, 8) == 0 else {
+        var any = loopback(port)
+        if wildcard { any.sin_addr.s_addr = 0 }
+        let bound = withUnsafePointer(to: &any) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        guard bound == 0, Darwin.listen(fd, 8) == 0 else {
             let e = errno
             close(fd)
             return -e
@@ -118,6 +121,22 @@ final class CCPoolSocketTests: XCTestCase {
         XCTAssertEqual(s.start(bindRetry: 0.5), .heldByOther)
         XCTAssertTrue(s.currentListener == nil)
         XCTAssertEqual(log.lines.filter { $0.contains("bind failed: EADDRINUSE") }.count, 1, "\(log.lines)")
+    }
+
+    // R1675 n8: a 0.0.0.0:P listener does not stop a SO_REUSEADDR bind of 127.0.0.1:P, so the REAL probe (a connect
+    // to 127.0.0.1, which the wildcard listener answers) is what keeps start from binding: heldByOther, no listener.
+    func testWildcardListenerIsCaughtByTheRealProbe() throws {
+        let foreign = Self.rawListener(port: 0, options: [SO_REUSEADDR], wildcard: true)
+        XCTAssertGreaterThanOrEqual(foreign, 0)
+        guard foreign >= 0 else { return }
+        defer { close(foreign) }
+        let port = Self.boundPort(foreign)
+        let log = CCPoolCapturingLogger()
+        let s = service(port: port, log: log)   // portProbe stays CCPoolPortProbe.probe
+        defer { s.stop() }
+        XCTAssertEqual(s.start(), .heldByOther)
+        XCTAssertTrue(s.currentListener == nil)
+        XCTAssertEqual(log.lines.filter { $0.contains("bind failed") }.count, 0, "nothing was bound: \(log.lines)")
     }
 
     // #1676's seam: a listening fd made elsewhere is served as given (no probe, no bind); a socket that is not
@@ -227,6 +246,54 @@ final class CCPoolSocketTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(times[2] - times[1], 0.09, "suspended between the attempts")
         }
         XCTAssertEqual(reports.count, 1, "one report per episode")
+    }
+
+    // R1675 n9: ENOBUFS (not an fd error) pauses too: two failures >= ~100 ms apart, then the connection; one report.
+    func testAcceptENOBUFSPausesInsteadOfSpinning() throws {
+        let l = try CCPoolListener.open(port: 0).get()
+        defer { l.cancel() }
+        let calls = CCPoolCallLog()
+        l.acceptCall = { fd in
+            calls.add()
+            return calls.count <= 2 ? (-1, ENOBUFS) : CCPoolListener.systemAccept(fd)
+        }
+        let reports = CCPoolCounterBox()
+        let accepted = expectation(description: "the connection is accepted")
+        let q = DispatchQueue(label: "test.ccpool.accept.enobufs")
+        l.start(queue: q, accept: { fd in close(fd); accepted.fulfill() }, exhausted: { reports.bump() })
+        let client = socket(AF_INET, SOCK_STREAM, 0)
+        defer { close(client) }
+        XCTAssertEqual(Self.withAddr(l.port?.rawValue ?? 0, { connect(client, $0, $1) }), 0)
+        wait(for: [accepted], timeout: 5)
+        Thread.sleep(forTimeInterval: 0.3)
+        let times = calls.times
+        XCTAssertEqual(times.count, 4, "ENOBUFS, ENOBUFS, the connection, EAGAIN")
+        if times.count >= 3 {
+            XCTAssertGreaterThanOrEqual(times[1] - times[0], 0.09)
+            XCTAssertGreaterThanOrEqual(times[2] - times[1], 0.09)
+        }
+        XCTAssertEqual(reports.count, 1, "one report per episode")
+    }
+
+    // R1675 n13: the one read buffer is reused, so a short chunk after a long one carries only its own n bytes.
+    func testFDTransportChunksAreExactlyTheBytesRead() throws {
+        var pair: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        let peer = pair[1]
+        defer { close(peer) }
+        let t = CCPoolFDTransport(fd: pair[0])
+        defer { t.cancel() }
+        let q = DispatchQueue(label: "test.ccpool.transport.buf")
+        q.sync { t.start(queue: q) {} }
+        for payload in [Data(repeating: 0x61, count: 4000), Data("hi".utf8), Data(repeating: 0x62, count: 1)] {
+            let got = expectation(description: "chunk")
+            q.sync { t.receive { data, _, _ in
+                XCTAssertEqual(data, payload)
+                got.fulfill()
+            } }
+            _ = payload.withUnsafeBytes { write(peer, $0.baseAddress, $0.count) }
+            wait(for: [got], timeout: 5)
+        }
     }
 
     // A cancel while the source is paused closes the listener (.cancelled) and the scheduled resume never runs it.

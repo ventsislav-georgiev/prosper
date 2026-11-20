@@ -174,7 +174,7 @@ final class CCPoolService: @unchecked Sendable {
                 return finishStart(.heldByOther, note: "port held by another program; not binding")
             }
         }
-        // #1675: a BSD socket on 127.0.0.1 with SO_REUSEADDR (CCPoolListener.open): past TIME_WAIT at once, never beside a live listener.
+        // #1675: a BSD socket on 127.0.0.1 with SO_REUSEADDR (CCPoolListener.open): past TIME_WAIT at once. EADDRINUSE beside an exact 127.0.0.1 listener; a 0.0.0.0 one is caught by the probe above (only the probe-to-bind race is open).
         switch CCPoolListener.open(port: config.port) {
         case .success(let l):
             let s = serve(l)
@@ -239,8 +239,8 @@ final class CCPoolService: @unchecked Sendable {
             guard !outcome.lost else { return false }
             lock.withLock { listener = l }
             // Accepted connections carry the bound port for the Host check.
-            l.start(queue: queue, accept: { [weak self] fd in self?.accept(fd, port: port) },
-                    exhausted: { [logger] in logger.note(nil, "accept paused: out of file descriptors") })
+            l.start(queue: queue, accept: { [weak self] fd in if let self { self.accept(fd, port: port) } else { Darwin.close(fd) } },
+                    exhausted: { [logger] in logger.note(nil, "accept paused after an error") })
             return true
         }
         guard published else {
