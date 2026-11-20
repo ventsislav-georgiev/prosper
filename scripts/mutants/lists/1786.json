@@ -1,0 +1,97 @@
+{
+ "entry": "1786",
+ "filter": "AgentWindowD1Tests/(testSessionSwitchRedrawsOnlyTheTwoRowsWhoseSelectionChanged|testEveryDrawnChangeStillRedrawsItsRow|testEveryRowInputBreaksEquality|testARowsPRChipOpensThroughItsModel)",
+ "mutants": [
+  {
+   "name": "no-equatable",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            .equatable()   // #1786",
+   "new": "            // .equatable()   // #1786",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-row",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        l.row == r.row && l.selected",
+   "new": "        true && l.selected",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-selected",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "l.selected == r.selected && l.number",
+   "new": "true && l.number",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-number",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "l.number == r.number && l.inView",
+   "new": "true && l.inView",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-inview",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "l.inView == r.inView && l.mini == r.mini",
+   "new": "true && l.mini == r.mini",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-mini",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "&& l.mini == r.mini\n",
+   "new": "&& true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-inks",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "&& l.inks == r.inks &&",
+   "new": "&& true &&",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-show",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "&& l.show == r.show &&",
+   "new": "&& true &&",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-tip",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "&& l.tip === r.tip &&",
+   "new": "&& true &&",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-drops-model",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "&& l.model === r.model\n",
+   "new": "&& true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "eq-always-false",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        l.row == r.row && l.selected",
+   "new": "        false && l.row == r.row && l.selected",
+   "expect": "killed"
+  },
+  {
+   "name": "pr-action-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "{ model?.openPR(row.prLinks[i]) }",
+   "new": "{ }",
+   "expect": "killed"
+  },
+  {
+   "name": "callsite-no-model",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "model: model, mini: mini, show: details,",
+   "new": "mini: mini, show: details,",
+   "expect": "killed"
+  }
+ ]
+}

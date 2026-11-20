@@ -1125,8 +1125,9 @@ struct AgentSidebarView: View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: number, inView: inView.contains(row.id),
-                                openPR: model.openPR, mini: mini, show: details,   // #1455
+                                model: model, mini: mini, show: details,   // #1455
                                 tip: mini ? model.miniTip : nil)   // #1457
+            .equatable()   // #1786: redrawn only when one of its inputs changed (a switch: the two rows whose selection did)
         }
         .buttonStyle(.plain)
         .modifier(AgentRowDrag(token: AgentWindowModel.dragToken(row.id)))   // #1492: onto a pane
@@ -1600,7 +1601,11 @@ struct AgentSectionHeader: View {
     }
 }
 
-struct AgentSidebarRowView: View {
+/// #1786 (#1778 R5): Equatable over every value the row draws, so the sidebar's `.equatable()` skips a row whose inputs
+/// are unchanged (a switch redraws the old and the new selected rows only). The theme, accent and UI size reach the row
+/// through its own `liveTheme`, which redraws it whatever `==` says; `AgentPaneLayout.splitsEnabled` is a constant in the
+/// product (tests set it before drawing).
+struct AgentSidebarRowView: View, Equatable {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentSidebar.Row
     let selected: Bool
@@ -1608,19 +1613,28 @@ struct AgentSidebarRowView: View {
     var number: Int?
     /// #900 B2 step 4b (7.2): the session is shown in another pane of the active layout (AgentWindowModel.inViewRows).
     var inView = false
-    /// #1289 (G5): a URL chip's click, the model's openURL seam (nothing opens from a row itself).
-    var openPR: @MainActor (AgentIsland.PRChip) -> Void = { _ in }
+    /// #1289 (G5): a URL chip's click goes to this model's openPR, its openURL seam (nothing opens from a row itself); nil,
+    /// the chip opens nothing. #1786: the model, not a closure, so the row stays comparable (by identity).
+    var model: AgentWindowModel? = nil
     /// Tests: a row part's frame in the row, by kind and row title (nil in the product). Main actor.
     static var probe: ((String, String, CGRect) -> Void)?
+    /// #1786 tests: called with the row's title on every body evaluation (nil in the product).
+    static var bodyProbe: ((String) -> Void)?
     /// #1379: Mini's rail row.
     var mini = false
     /// #1452 b: the island's own inks (Agent Island > Follow theme off); nil, the theme's. The Agent Sessions rows never set it.
     var inks: Inks? = nil
-    struct Inks { var primary, quiet, blue, blocked, mark: Color; var badges: ThemePalette }
+    struct Inks: Equatable { var primary, quiet, blue, blocked, mark: Color; var badges: ThemePalette }
     /// #1455: the Row details shown (Settings > Agent Island > Row details); the agents, merged and open PRs are the Row's.
     var show: AgentIslandRowDetails = .all
     /// #1457: Mini's quick full-name tooltip (the window model's); nil, none.
     var tip: AgentMiniTip? = nil
+
+    /// #1786: every stored input but `liveTheme` (it redraws the row itself). A new input must be added here.
+    nonisolated static func == (l: Self, r: Self) -> Bool {
+        l.row == r.row && l.selected == r.selected && l.number == r.number && l.inView == r.inView && l.mini == r.mini
+            && l.inks == r.inks && l.show == r.show && l.tip === r.tip && l.model === r.model
+    }
 
     /// #1457: Mini's pointer entering (true) or leaving the row.
     func hover(_ inside: Bool) { tip?.hover(row, inside) }
@@ -1636,6 +1650,7 @@ struct AgentSidebarRowView: View {
     var shownNumber: Int? { show.shortcut ? number : nil }
 
     @ViewBuilder var body: some View {
+        let _ = Self.bodyProbe?(row.title)
         if mini { miniBody } else { fullBody }
     }
 
@@ -1651,7 +1666,7 @@ struct AgentSidebarRowView: View {
     var prActions: some View {
         ForEach(row.prLinks.indices, id: \.self) { i in
             if row.prLinks[i].url != nil {
-                Button(AgentWindowControls.openPRLabel(row.prLinks[i])) { openPR(row.prLinks[i]) }
+                Button(AgentWindowControls.openPRLabel(row.prLinks[i])) { model?.openPR(row.prLinks[i]) }
             }
         }
     }
@@ -2253,7 +2268,7 @@ extension AgentSidebarRowView {
                     .fixedSize()
                 // #1289 (G5): a chip whose URL passed the allowlist is a button (the island's help); else text, as before.
                 if let link = entry.link {
-                    Button { openPR(link) } label: { chip }
+                    Button { model?.openPR(link) } label: { chip }
                         .buttonStyle(.plain).help(link.help).accessibilityLabel(AgentWindowControls.openPRLabel(link))
                 } else {
                     chip
