@@ -153,6 +153,14 @@ final class AgentIslandController {
     /// #500 seams: the click setting, the chosen terminal, and the launcher
     /// (tests record; no test starts a terminal).
     var clickAction: @MainActor () -> AgentIslandClick = { AgentIslandClick(raw: Preferences.agentIslandClick) }
+    /// #1736 seam: the Agent Sessions window shown with that session selected (its sidebar's own select); false when the
+    /// window has no model to select in (the click then falls back to the terminal path). Tests record; none shows a window.
+    var showInSessions: @MainActor (AgentSessionKey) -> Bool = { key in
+        AgentsWindow.shared.show()
+        guard let model = AgentsWindow.shared.model else { return false }
+        model.select(.live(key))
+        return true
+    }
     var terminal: @MainActor () -> AgentTerminal = {
         AgentTerminal.resolve(raw: Preferences.agentIslandTerminal, installed: AgentTerminal.isInstalled)
     }
@@ -2315,13 +2323,20 @@ final class AgentIslandController {
 
     // MARK: - Jump
 
-    func jump(_ s: AgentSession) {
+    /// #1736: `fromWindow` is the window's own Open in terminal, which must not come back to the window.
+    func jump(_ s: AgentSession, fromWindow: Bool = false) {
         guard let store else { return }
+        var click = clickAction()
+        if click == .sessions {
+            // Every island row is a live row of the window's sidebar (same store), so only a missing window model falls through.
+            if !fromWindow, showInSessions(s.key) { return setExpanded(false) }
+            click = .open
+        }
         switch jumpTarget(s.key) {
         case .app(let pid):
             setExpanded(false)
             focusApp(pid, [s.title, s.name])
-        case _ where clickAction() == .open:
+        case _ where click == .open:
             // #500: no local terminal window, so open one attached to the session.
             open(s)
         case .attachedElsewhere where store.notices[s.key] == nil:

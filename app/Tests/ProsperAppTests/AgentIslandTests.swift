@@ -1102,6 +1102,7 @@ final class AgentIslandTests: XCTestCase {
         var done: [@Sendable (Bool) -> Void] = []
         var focused: [pid_t] = []
         var events: [NSAppleEventDescriptor] = []
+        var shown: [AgentSessionKey] = []   // #1736: the Agent Sessions window seam
     }
 
     /// A controller with a recording launcher (never a real terminal), Kitty picked
@@ -1123,17 +1124,55 @@ final class AgentIslandTests: XCTestCase {
             if let ok { done(ok) } else { l.done.append(done) }
         }
         c.sendGhostty = { e, done in l.events.append(e); done(event) }
+        c.showInSessions = { l.shown.append($0); return true }
         DchCommand.dchPathOverride = "/opt/fake/dch"
         addTeardownBlock { DchCommand.dchPathOverride = nil }
         Pasteboard.general.clearContents()
         return (c, l)
     }
 
-    func testClickSettingDefaultsToOpen() {
-        XCTAssertEqual(AgentIslandClick(raw: nil), .open)
-        XCTAssertEqual(AgentIslandClick(raw: "bogus"), .open)
+    func testClickSettingDefaultsToAgentSessions() {
+        XCTAssertEqual(AgentIslandClick(raw: nil), .sessions)
+        XCTAssertEqual(AgentIslandClick(raw: "bogus"), .sessions)
+        XCTAssertEqual(AgentIslandClick(raw: "sessions"), .sessions)
         XCTAssertEqual(AgentIslandClick(raw: "copy"), .copy)
-        XCTAssertEqual(AgentIslandClick(raw: "open"), .open)
+        XCTAssertEqual(AgentIslandClick(raw: "open"), .open, "an explicit stored open keeps working")
+    }
+
+    /// The Settings picker lists AgentIslandClick.allCases: three options, Agent Sessions first.
+    func testClickSettingListsThreeOptionsInOrder() {
+        XCTAssertEqual(AgentIslandClick.allCases, [.sessions, .open, .copy])
+        XCTAssertEqual(AgentIslandClick.allCases.map(\.label),
+                       ["Open in Agent Sessions", "Open in terminal", "Copy attach command"])
+    }
+
+    /// #1736: the new choice opens the window on that session for every jump target (a local terminal window too),
+    /// collapses, starts no terminal and copies nothing.
+    @MainActor func testSessionsSettingOpensTheWindowOnTheSessionUnderEveryTarget() {
+        for target in [AgentJumpTarget.app(4242), .notAttached, .attachedElsewhere] {
+            let s = session("api", .idle, dir: "/x/other dir")
+            let (c, l) = clickController(target, .sessions, s)
+            c.jump(s)
+            XCTAssertEqual(l.shown, [s.key], "\(target)")
+            XCTAssertTrue(l.calls.isEmpty && l.events.isEmpty && l.focused.isEmpty, "\(target): no terminal, no focus")
+            XCTAssertNil(Pasteboard.general.string(forType: .string), "\(target): nothing copied")
+            XCTAssertNil(c.store?.notices[s.key], "\(target)")
+            XCTAssertEqual(c.store?.expanded, false, "\(target)")
+        }
+    }
+
+    /// No window model to select in: today's terminal path. The window's own Open in terminal never comes back to it.
+    @MainActor func testSessionsSettingFallsBackToTheTerminalPath() {
+        let s = session("api", .idle, dir: "/x/other dir")
+        let (c, l) = clickController(.notAttached, .sessions, s)
+        c.showInSessions = { l.shown.append($0); return false }
+        c.jump(s)
+        XCTAssertEqual(l.shown, [s.key])
+        XCTAssertEqual(l.calls.count, 1, "the window could not show it: a terminal opens")
+        let (c2, l2) = clickController(.notAttached, .sessions, s)
+        c2.jump(s, fromWindow: true)
+        XCTAssertTrue(l2.shown.isEmpty, "Open in terminal from the window does not loop back")
+        XCTAssertEqual(l2.calls.count, 1)
     }
 
     /// The controller reads the app's store on every click.
@@ -1142,6 +1181,8 @@ final class AgentIslandTests: XCTestCase {
         defer { Preferences.agentIslandClick = was.0; Preferences.agentIslandTerminal = was.1 }
         let c = AgentIslandController()
         Preferences.agentIslandClick = nil
+        XCTAssertEqual(c.clickAction(), .sessions)
+        Preferences.agentIslandClick = "open"
         XCTAssertEqual(c.clickAction(), .open)
         Preferences.agentIslandClick = "copy"
         XCTAssertEqual(c.clickAction(), .copy)
@@ -1207,7 +1248,7 @@ final class AgentIslandTests: XCTestCase {
     }
 
     @MainActor func testAppTargetJumpsUnderEitherSetting() {
-        for click in AgentIslandClick.allCases {
+        for click in [AgentIslandClick.open, .copy] {
             let s = session("s", .idle)
             let (c, l) = clickController(.app(4242), click, s)
             c.jump(s)

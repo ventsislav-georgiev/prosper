@@ -160,7 +160,7 @@ struct AgentIslandPane: View {
             }
             NeonDivider()
             NeonRow("Click on a session",
-                    subtitle: "When it is not open in a terminal window on this Mac") {
+                    subtitle: "Where a click on a session opens it") {
                 Picker("", selection: $click) {
                     ForEach(AgentIslandClick.allCases, id: \.self) { Text($0.label).tag($0) }
                 }

@@ -1141,7 +1141,7 @@ final class AgentWindowModel: ObservableObject {
     var onNewRuntime: (AgentPaneRuntime) -> Void = { _ in }
     /// Open in terminal: the island's row click (focus the attached terminal, else
     /// open one, else copy the attach command).
-    var openSession: (AgentSession) -> Void = { AgentIslandController.shared.jump($0) }
+    var openSession: (AgentSession) -> Void = { AgentIslandController.shared.jump($0, fromWindow: true) }
     /// The island controller the History verbs go to (tests: one with a fake runner).
     var island: () -> AgentIslandController = { .shared }
     /// A History row's Resume: the island's.

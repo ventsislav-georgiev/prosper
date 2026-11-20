@@ -1187,7 +1187,7 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandSessions) }
     }
 
-    /// Agent Island's row-click raw value (`AgentIslandClick`); unset reads as open.
+    /// Agent Island's row-click raw value (`AgentIslandClick`); unset reads as sessions (#1736).
     static var agentIslandClick: String? {
         get { defaults.string(forKey: Keys.agentIslandClick) }
         set { defaults.set(newValue, forKey: Keys.agentIslandClick) }

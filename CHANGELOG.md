@@ -2206,6 +2206,8 @@ tag from the now-released section and put it on the new top draft.
   (#1731)
 - The prosper command installs without the administrator step ever reading a file you can write, and
   opens Prosper by its app id. (#1732)
+- Clicking a session on the Agent Island now opens it in Agent Sessions by default; opening a
+  terminal or copying the attach command stay as choices in Settings. (#1736)
 
 ## v2.174.0
 

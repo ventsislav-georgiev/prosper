@@ -874,15 +874,17 @@ enum AgentIsland {
 
 // MARK: - Click setting (#500)
 
-/// What a row click does with a session that has no local terminal window.
+/// What a row click does. #1736: `sessions` (the default) opens the Agent Sessions window on the session; `open` and
+/// `copy` apply to a session with no local terminal window (one with a window is focused, as before).
 enum AgentIslandClick: String, CaseIterable {
-    case open, copy
+    case sessions, open, copy
 
-    /// Unset or unknown = open.
-    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .open }
+    /// Unset or unknown = sessions.
+    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .sessions }
 
     var label: String {
         switch self {
+        case .sessions: "Open in Agent Sessions"
         case .open: "Open in terminal"
         case .copy: "Copy attach command"
         }
