@@ -203,7 +203,9 @@ extension AgentWindowD1Tests {
         let row = CGRect(x: screen.minX + AgentWindowModel.fullSidebarWidth + 1, y: screen.maxY - AgentWindowBand.height,
                          width: size.width - AgentWindowModel.fullSidebarWidth - 1, height: AgentWindowBand.height)
         let inBand = tree.filter { !$0.names.isEmpty && $0.frame.width > 0 && row.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
-        XCTAssertTrue(inBand.isEmpty, "nothing is read in the band: \(inBand.map(\.names))")
+        // #1697: bandTwoPanes zooms, so the chip's own words are read there (testZoomViewChipIsReadByAccessibilityInTheBand)
+        let other = inBand.filter { !$0.names.allSatisfy { $0.hasPrefix("Zoomed · ") } }
+        XCTAssertTrue(other.isEmpty, "nothing but the chip is read in the band: \(other.map(\.names))")
     }
 
     /// #1470 a2: the full sidebar's width at the current scale: TIP's sz(290), plus how much wider the full row's chip
@@ -282,9 +284,11 @@ extension AgentWindowD1Tests {
     }
 
     /// #1538: a second, empty pane beside the first (its target kept), so the band has something to show (the chip slot).
+    /// #1697: two panes alone show no band; zoomed (the focused pane), the chip's words keep it.
     @MainActor
     func bandTwoPanes(_ m: AgentWindowModel) {
-        m.adopt(paneLayout([m.layout.panes.first?.target, nil]))
+        m.adopt(paneLayout([m.layout.panes.first?.target, nil]).toggleZoom())
+        XCTAssertTrue(m.layout.zoomed != nil && AgentWindowBand.shows(m), "#1697: zoomed, the band shows")
     }
 
     /// An AX client's walk: the names it is shown (AXDescription, AXTitle, AXValue; none for an ignored node) and the frame.

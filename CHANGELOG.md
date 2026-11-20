@@ -2134,6 +2134,8 @@ tag from the now-released section and put it on the new top draft.
   (#1691)
 - Extensions that watch the clipboard no longer miss your first copy after macOS gives Prosper
   clipboard access back. (#1692)
+- Agent Sessions: a layout no longer leaves an empty strip above the pane headers; the strip shows
+  only for a zoomed pane or when the window is too small for every pane. (#1697)
 
 ## v2.174.0
 

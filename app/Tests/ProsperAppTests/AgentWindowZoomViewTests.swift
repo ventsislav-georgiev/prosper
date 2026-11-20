@@ -37,7 +37,9 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.select(.live(paneKey("api")))
             let size = CGSize(width: 1600, height: 900), area = zoomViewArea(size)
-            m.paneArea = area
+            // #1697: unzoomed, no band: the tiling is the whole column's; zoomed, the band's chip, the area under it.
+            let full = CGRect(origin: .zero, size: CGSize(width: area.width, height: size.height))
+            m.paneArea = full
             // 2: A | B. 3: B over C. 6: C over D, then A over E, E over F (each at least 300 x 200 in 1309 x 870).
             let steps: [(count: Int, actions: [PaneAction])] = [
                 (2, [.split(.columns)]),
@@ -48,7 +50,7 @@ extension AgentWindowD1Tests {
                 for a in step.actions { XCTAssertTrue(m.perform(a), "\(a) acted (\(step.count))") }
                 XCTAssertEqual(m.layout.panes.count, step.count)
                 XCTAssertTrue(m.paneRefusal == nil, "no refusal (\(step.count))")
-                let tiling = m.paneFrames(in: area)
+                let tiling = m.paneFrames(in: full)
                 XCTAssertEqual(tiling.count, step.count, "tiled, not too small (\(step.count))")
                 let before = paneSnapshot(m, size)
                 XCTAssertEqual(zoomViewPanes(before).count, step.count, "every pane drawn (\(step.count))")
@@ -59,7 +61,7 @@ extension AgentWindowD1Tests {
                 XCTAssertTrue(m.perform(.zoom))
                 let z = try XCTUnwrap(m.layout.zoomed), zi = try XCTUnwrap(m.layout.order.firstIndex(of: z))
                 XCTAssertEqual(z, m.layout.focused)
-                XCTAssertEqual(m.paneFrames(in: area), tiling, "the model's tiling is untouched by the zoom (\(step.count))")
+                XCTAssertEqual(m.paneFrames(in: full), tiling, "the model's tiling is untouched by the zoom (\(step.count))")
                 XCTAssertEqual(AgentPaneArea.drawn(m, in: area), [z: area], "the zoomed pane over the area (\(step.count))")
                 let during = paneSnapshot(m, size)
                 XCTAssertEqual(zoomViewPanes(during), ["pane \(zi)"], "exactly one pane drawn (\(step.count))")
@@ -98,7 +100,11 @@ extension AgentWindowD1Tests {
                 let wide = CGSize(width: 1600, height: 900), area = zoomViewArea(wide)
                 XCTAssertEqual(m.paneFrames(in: area).count, 3, "tiled in the wide window (\(scale))")
                 XCTAssertTrue(AgentWindowBand.chip(m, in: area) == nil, "no chip (\(scale))")
-                let base = bandSnapshot(m, wide)
+                XCTAssertTrue(bandSnapshot(m, wide).isEmpty, "#1697: tiled, no chip: no band (\(scale))")
+                m.adopt(try m.layout.focus(try XCTUnwrap(m.layout.order.dropFirst().first)).get())
+                XCTAssertTrue(m.perform(.zoom))
+                XCTAssertEqual(AgentWindowBand.chip(m, in: area), "Zoomed · 2 of 3")
+                let base = bandSnapshot(m, wide)   // #1697: the band shows for the chip's words, zoomed
                 XCTAssertNotNil(base["chip"], "the wide band has the chip slot (\(scale))")
                 // #1510: the band was drawn at this scale, and the chip slot is sized by it (after the layout slot, within a
                 // point of its widest text measured at this scale).
@@ -113,11 +119,6 @@ extension AgentWindowD1Tests {
                 }
                 let slots = ["band", "layout", "chip", "all"]   // #1471: the band's "picker" slot went with the detail level
 
-                m.adopt(try m.layout.focus(try XCTUnwrap(m.layout.order.dropFirst().first)).get())
-                XCTAssertTrue(m.perform(.zoom))
-                XCTAssertEqual(AgentWindowBand.chip(m, in: area), "Zoomed · 2 of 3")
-                same(bandSnapshot(m, wide), slots, "zoomed 2 of 3")
-
                 XCTAssertTrue(m.perform(.cycle(1)))   // ⌘] while zoomed: the zoom moves (7.4)
                 XCTAssertEqual(m.layout.zoomed, m.layout.order.last)
                 XCTAssertEqual(AgentWindowBand.chip(m, in: area), "Zoomed · 3 of 3")
@@ -125,7 +126,7 @@ extension AgentWindowD1Tests {
 
                 XCTAssertTrue(m.perform(.zoom))
                 XCTAssertTrue(AgentWindowBand.chip(m, in: area) == nil, "unzoomed: no chip (\(scale))")
-                same(bandSnapshot(m, wide), slots, "unzoomed")
+                XCTAssertTrue(bandSnapshot(m, wide).isEmpty, "#1697: unzoomed, no band (\(scale))")
 
                 // Too small: three columns of a pane area 880·s wide are under 300·s each.
                 let narrow = CGSize(width: AgentWindowModel.fullSidebarWidth + 1 + sz(880), height: sz(700)), small = zoomViewArea(narrow)

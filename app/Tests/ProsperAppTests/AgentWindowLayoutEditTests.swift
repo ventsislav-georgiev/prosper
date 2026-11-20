@@ -332,9 +332,10 @@ final class AgentWindowLayoutEditTests: XCTestCase {
                 let (m, _, _, _) = try locked()
                 defer { m.close() }
                 XCTAssertEqual(m.sidebarShown, !sidebarHidden, "the preference read (\(sidebarHidden))")
-                XCTAssertTrue(AgentWindowBand.shows(m), "two panes: the band (\(sidebarHidden))")
+                // #1697: two panes alone: no band but for the hidden sidebar's show glyph
+                XCTAssertEqual(AgentWindowBand.shows(m), sidebarHidden, "two panes: the band only for the glyph (\(sidebarHidden))")
                 let onLayout = base.bandSnapshot(m, size)
-                XCTAssertTrue(onLayout["band"] != nil, "\(sidebarHidden)")
+                XCTAssertEqual(onLayout["band"] != nil, sidebarHidden, "\(sidebarHidden)")
                 XCTAssertTrue(onLayout["edit"] == nil && onLayout["layoutName"] == nil, "no name, no Edit (\(sidebarHidden)): \(onLayout.keys.sorted())")
                 m.click(row("docs"))
                 XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, a saved layout present")

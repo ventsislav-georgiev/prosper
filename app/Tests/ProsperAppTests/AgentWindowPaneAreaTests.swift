@@ -122,8 +122,8 @@ extension AgentWindowD1Tests {
             // Two panes, columns.
             AgentPaneLayout.splitsEnabled = true
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
-            // #1224: with the gate on the band shows, so the pane area is the column less it.
-            let frames = m.paneFrames(in: CGRect(x: 0, y: 0, width: area.width, height: area.height - AgentWindowBand.height))
+            // #1697: two panes alone show no band, so the pane area is the whole column.
+            let frames = m.paneFrames(in: area)
             let base = paneSnapshot(m, size)
             for i in 0..<2 {
                 let id = m.layout.order[i]
@@ -242,5 +242,39 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(AgentPanePlaceholder.title(.removed(.history(dir: "/tmp/dch-test", id: "old", seen: nil))),
                        "old was removed from History")
         XCTAssertTrue(AgentPanePlaceholder.title(nil) == nil, "no target: the empty pane's own state")
+    }
+
+    /// #1697 (operator 2026-11-20, "empty row on layouts"): in a two-pane layout (sidebar shown, not zoomed, wide
+    /// enough) the pane headers' top is the single-session header's top in the same window, and no band row of bare
+    /// backdrop sits above them: the view's pane area is the whole column and no band part is laid out.
+    @MainActor
+    func testAgentWindowPaneAreaLayoutHeaderTopIsTheSingleSessionHeaderTop() throws {
+        let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
+        let saved = ThemeRuntime.scale
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { ThemeRuntime.scale = saved; restoreModes() }
+        ThemeRuntime.scale = 1.0
+        try withTreeGate(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            m.setVisible(true)
+            defer { m.close() }
+            m.select(.live(paneKey("api")))
+            let size = CGSize(width: 1600, height: 900)
+            let one = paneSnapshot(m, size)
+            let single = try XCTUnwrap(one["header 0"], "the single-session header")
+            let singleTop = try XCTUnwrap(m.paneAreaFrame(in: size)).minY + single.minY
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            XCTAssertEqual(m.layout.panes.count, 2)
+            XCTAssertTrue(m.layout.zoomed == nil && m.sidebarShown, "a plain two-pane layout")
+            XCTAssertFalse(AgentWindowBand.shows(m), "nothing for the band to show: no band")
+            let two = paneSnapshot(m, size)
+            let top = try XCTUnwrap(m.paneAreaFrame(in: size)).minY
+            for i in 0..<2 {
+                let h = try XCTUnwrap(two["header \(i)"], "pane \(i)'s header")
+                XCTAssertEqual(top + h.minY, singleTop, accuracy: pixel, "pane \(i)'s header top is the single-session header's")
+            }
+            XCTAssertEqual(m.paneArea.height, size.height, accuracy: pixel, "the view's pane area is the whole column: no row above it")
+            XCTAssertTrue(bandSnapshot(m, size).isEmpty, "no band part is laid out")
+        }
     }
 }
