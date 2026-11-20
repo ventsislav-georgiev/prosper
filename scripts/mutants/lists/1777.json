@@ -1,0 +1,97 @@
+{
+ "entry": "1777",
+ "filter": "GroupsSyncTests|SessionGroupsEditorTests|SidekickSyncTests",
+ "mutants": [
+  {
+   "name": "b1-no-sidekick-move",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if agentIslandSidekickPattern != pattern { agentIslandSidekickPatternUpdated = max(agentIslandSidekickPatternUpdated, updated) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "b1-no-max",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "agentIslandSidekickPatternUpdated = max(agentIslandSidekickPatternUpdated, updated) }",
+   "new": "agentIslandSidekickPatternUpdated = updated }",
+   "expect": "killed"
+  },
+  {
+   "name": "b1-always",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if agentIslandSidekickPattern != pattern { agentIslandSidekickPatternUpdated",
+   "new": "if true { agentIslandSidekickPatternUpdated",
+   "expect": "killed"
+  },
+  {
+   "name": "n95-no-editstamp",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "changed && groups >= updated ? editStamp(now: now, after: groups) : max(groups, updated)",
+   "new": "max(groups, updated)",
+   "expect": "killed"
+  },
+  {
+   "name": "n95-ignore-changed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "changed && groups >= updated ? editStamp",
+   "new": "groups >= updated ? editStamp",
+   "expect": "killed"
+  },
+  {
+   "name": "n95-strict",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "changed && groups >= updated ?",
+   "new": "changed && groups > updated ?",
+   "expect": "killed"
+  },
+  {
+   "name": "n96-limits-in-parse",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "        return .success(.write(Value(groups: list, updated: updated)))",
+   "new": "        if let m = limitFailure(list) { return .failure(Failure(m)) }\n        return .success(.write(Value(groups: list, updated: updated)))",
+   "expect": "killed"
+  },
+  {
+   "name": "n96-no-limits",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if let message = Self.limitFailure(phone.groups) { return reply(DchControlOps.error(message)) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "n96-editor-no-cap",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if g.pattern.utf8.count > DchSidekickOps.maxBytes {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "n96-editor-ge",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if g.pattern.utf8.count > DchSidekickOps.maxBytes {",
+   "new": "if g.pattern.utf8.count >= DchSidekickOps.maxBytes {",
+   "expect": "killed"
+  },
+  {
+   "name": "n97-blank-ok",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if list.contains(where: { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "n97-no-trim",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }",
+   "new": "$0.pattern.isEmpty }) { return blankPattern }",
+   "expect": "killed"
+  },
+  {
+   "name": "n99-no-early",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "            if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
