@@ -106,7 +106,8 @@ final class XrayFollow: ObservableObject {
         { [weak f] ls in
             guard offMain else { return MainActor.assumeIsolated { f?.land(b.take(ls, b.next())) } }
             guard b.pending.add(ls) else { return }
-            b.queue.asyncAfter(deadline: .now() + XrayPendingLines.wait) { XrayFollow.onQueue(b, b.pending.drain(), nil, f) }
+            let g = f   // a weak var cannot be captured by the queue's closure; this holds the follow for one wait at most
+            b.queue.asyncAfter(deadline: .now() + XrayPendingLines.wait) { XrayFollow.onQueue(b, b.pending.drain(), nil, g) }
         }
     }
 
