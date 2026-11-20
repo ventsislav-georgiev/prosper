@@ -658,6 +658,44 @@ final class AgentIslandAutoAllowTests: XCTestCase {
         XCTAssertTrue(c.store?.actions[key] == nil, "the stale note is gone")
     }
 
+    /// #1727: "Allowed automatically" hides itself 10 s after it was set: there before, gone after (scheduler seam, no sleeps).
+    @MainActor func testTheAllowedNoteHidesAfterTenSeconds() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        var waits: [(TimeInterval, @MainActor @Sendable () -> Void)] = []
+        c.noteAfter = { d, fire in waits.append((d, fire)) }
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText)
+        XCTAssertEqual(waits.map(\.0), [10], "one clear armed, no polling")
+        XCTAssertEqual(AgentIslandController.noteLife, 10)
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText, "before the timer fires: still there")
+        waits.last?.1()
+        XCTAssertTrue(c.store?.actions[key] == nil, "gone after")
+    }
+
+    /// #1727: the older timer never clears a newer text, an error line or a newer set of the same note.
+    @MainActor func testAnOlderNoteTimerClearsNothingNewer() {
+        let f = FakeIO(Self.bash3), (c, _) = controller(f)
+        var waits: [@MainActor @Sendable () -> Void] = []
+        c.noteAfter = { _, fire in waits.append(fire) }
+        tick(c, .blocked)
+        drain(c)
+        c.store?.actions[key] = "Restart failed: example"   // an error line replaced it
+        waits.last?()
+        XCTAssertEqual(c.store?.actions[key], "Restart failed: example", "an error line never auto-clears")
+        c.store?.actions[key] = AgentIsland.autoAllowedText   // set again: its own newer timer
+        let old = waits.last
+        c.store?.actions[key] = nil
+        tick(c, .working)
+        tick(c, .blocked)
+        drain(c)
+        XCTAssertEqual(waits.count, 2, "each set arms its own clear")
+        old?()
+        XCTAssertEqual(c.store?.actions[key], AgentIsland.autoAllowedText, "the older timer is a no-op")
+        waits.last?()
+        XCTAssertTrue(c.store?.actions[key] == nil, "the newer one clears it")
+    }
+
     // MARK: - QA #581 fixes
 
     /// F1: dch wedged after the answer (read and status time out to ""): Needs input goes out.

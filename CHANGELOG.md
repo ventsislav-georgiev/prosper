@@ -2186,6 +2186,7 @@ tag from the now-released section and put it on the new top draft.
 - Text Viewer settings can install a pv command (like VS Code's code): type pv FILE in a terminal to
   open files in Prosper, or pipe text into pv - to view it. Prosper never replaces a pv it did not
   install. (#1723)
+- The "Allowed automatically" note on an agent row now hides by itself after 10 seconds. (#1727)
 
 ## v2.174.0
 

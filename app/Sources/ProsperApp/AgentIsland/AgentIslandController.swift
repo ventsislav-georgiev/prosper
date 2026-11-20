@@ -2108,7 +2108,23 @@ final class AgentIslandController {
     private func noteAllowed(_ key: AgentSessionKey) {
         guard !runner.isBusy(key), [nil, AgentIsland.autoAllowedText].contains(store?.actions[key]) else { return }
         store?.actions[key] = AgentIsland.autoAllowedText
+        // #1727: an info line hides by itself; one timer per set, and only its own text goes (a newer text, an error line, stays).
+        noteSeq += 1
+        let id = noteSeq
+        noteChain[key] = id
+        noteAfter(Self.noteLife) { [weak self] in
+            guard let self, self.noteChain[key] == id else { return }
+            self.noteChain[key] = nil
+            if self.store?.actions[key] == AgentIsland.autoAllowedText { self.store?.actions[key] = nil; self.layout() }
+        }
     }
+
+    /// #1727: how long an info note ("Allowed automatically") stays; the seam is the row tests' clock.
+    static let noteLife: TimeInterval = 10
+    var noteAfter: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, fire in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
+    }
+    private var noteChain: [AgentSessionKey: Int] = [:], noteSeq = 0
 
     /// #1436: a dropped answer's line goes once the session reads input again; any other text stays.
     private func dropNotDelivered(_ key: AgentSessionKey) {
