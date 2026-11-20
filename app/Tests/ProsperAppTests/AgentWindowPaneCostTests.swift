@@ -225,10 +225,15 @@ extension AgentWindowD1Tests {
             }
             let column = m.paneMinimum.height + band / 2
             XCTAssertTrue(fits(column) && !fits(column - band), "the column is inside the strip")
-            for _ in 0..<2 {   // the view feeds the column less the band
-                m.paneArea = CGRect(x: 0, y: 0, width: width, height: column - band)
-                XCTAssertTrue(m.paneTooSmall, "the pane area is 30 pt short: too small, not lifted")
-                XCTAssertTrue(AgentWindowBand.shows(m), "the band stays")
+            // The view feeds the column less the band. The tier is read before the lift, so the second feed (a new size,
+            // still inside the strip: paneArea syncs only on a change) is the one that would lift it to fit.
+            let changes = m.paneAreaChanges
+            for (i, h) in [column - band, column - band + 1].enumerated() {
+                m.paneArea = CGRect(x: 0, y: 0, width: width, height: h)
+                XCTAssertEqual(m.paneAreaChanges, changes + i + 1, "feed \(i + 1) reached the tier")
+                XCTAssertTrue(!fits(h) && fits(h + band), "\(h) is inside the strip")
+                XCTAssertTrue(m.paneTooSmall, "the pane area at \(h) is short: too small, not lifted")
+                XCTAssertTrue(AgentWindowBand.shows(m), "the band stays at \(h)")
             }
         }
     }
