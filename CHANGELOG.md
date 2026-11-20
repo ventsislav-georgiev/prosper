@@ -2232,7 +2232,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray uses less battery while following a session: its task list now reads only the tasks that
   changed. (#1787)
 - Agent Sessions: switching back to one of your last few sessions is instant: it stays connected in
-  the background instead of reconnecting and replaying its history (#1782).
+  the background instead of reconnecting and replaying its history. While Prosper keeps a session,
+  plain `dch` in a terminal starts a new one beside it; `dch -f` joins it. (#1782)
 - Agent Sessions: the sidebar scrolls with less work: the Command-number column is measured once,
   not drawn as 18 hidden chips in every row. (#1783)
 - Agent Sessions: closing the window keeps it hidden for 10 minutes, so reopening it within that
