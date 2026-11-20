@@ -52,6 +52,7 @@ final class CCPoolKeeperLink: @unchecked Sendable {
         var pair: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0 else { return false }
         pair.forEach { _ = fcntl($0, F_SETFD, FD_CLOEXEC); Self.noSigPipe($0) }
+        Self.setTimeouts(pair[0])
         let pid = spawner(fd, pair[1])
         close(pair[1])
         guard pid != nil else {
@@ -73,7 +74,7 @@ final class CCPoolKeeperLink: @unchecked Sendable {
             var b = PortKeeper.exit
             _ = Darwin.write(c, &b, 1)
             // The keeper admits a fresh link only while its peer is still connected: wait for it to close ours (EOF, or the
-            // 2 s receive timeout) before closing, or the byte is lost.
+            // 2 s receive timeout both link kinds carry) before closing, or the byte is lost.
             var r: UInt8 = 0
             while Darwin.read(c, &r, 1) > 0 {}
             dropLocked()
@@ -88,6 +89,13 @@ final class CCPoolKeeperLink: @unchecked Sendable {
         control = -1
     }
 
+    /// 2 s send and receive timeouts on a control fd, spawned or connected, so no read or write on it blocks forever.
+    private static func setTimeouts(_ s: Int32) {
+        var tv = timeval(tv_sec: 2, tv_usec: 0)
+        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     /// The held link, or a new connection to the keeper's socket (same uid only; 2 s send and receive timeouts). A path
     /// too long for sun_path is refused, never connected truncated (R1676 n19). The keeper's code is not checked: after
     /// an update its file on disk is the new bundle's, so a static check of the running (old) keeper fails and would
@@ -99,9 +107,7 @@ final class CCPoolKeeperLink: @unchecked Sendable {
         guard s >= 0 else { return nil }
         _ = fcntl(s, F_SETFD, FD_CLOEXEC)
         Self.noSigPipe(s)
-        var tv = timeval(tv_sec: 2, tv_usec: 0)
-        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        Self.setTimeouts(s)
         guard PortKeeper.withUnixAddr(socketPath, { Darwin.connect(s, $0, $1) }) == 0, PortKeeper.systemPeerUID(s) == getuid() else {
             close(s)
             return nil

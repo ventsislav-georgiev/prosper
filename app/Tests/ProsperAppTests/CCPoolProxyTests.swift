@@ -876,7 +876,7 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertEqual(r.cooldown("one"), [:])
         XCTAssertEqual(Set(obj.keys), ["label", "state", "until"], "never a token, key or Keychain id")
         XCTAssertFalse(resp.text.contains("tok-"), resp.text)
-        XCTAssertEqual(r.log.lines.filter { $0.contains("loopback") }, ["two: held for 2.0 h by a loopback request"])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("by a loopback request") }, ["two: held for 2.0 h by a loopback request"])
         XCTAssertEqual(r.anthropic.get { $0.seen }.count, 0)
         XCTAssertEqual(r.up.accepted, 0, "never relayed")
         // Health still answers beside the new routes.
@@ -899,7 +899,7 @@ final class CCPoolProxyTests: XCTestCase {
         XCTAssertTrue(obj["until"] == nil, "no until once released")
         XCTAssertEqual(r.cooldown("one"), [:])
         XCTAssertTrue(r.store.snapshot.accounts["one"]?.held == nil)
-        XCTAssertEqual(r.log.lines.filter { $0.contains("loopback") }, ["one: released by a loopback request"])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("by a loopback request") }, ["one: released by a loopback request"])
         XCTAssertEqual(r.up.accepted, 0, "never relayed")
     }
 

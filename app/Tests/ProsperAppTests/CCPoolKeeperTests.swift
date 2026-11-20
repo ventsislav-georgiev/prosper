@@ -316,6 +316,23 @@ final class CCPoolKeeperTests: XCTestCase {
         wait(for: [exited], timeout: 5)
     }
 
+    // R1676 n25: a spawned link whose keeper is alive but never answers: exit() is bounded by the 2 s receive timeout.
+    func testExitOverASpawnedLinkWhoseKeeperNeverAnswersReturns() throws {
+        final class Peer: @unchecked Sendable { var fd: Int32 = -1 }
+        let peer = Peer()
+        let link = keeperLink(keeperDir()) { _, control in peer.fd = dup(control); return 1 }
+        XCTAssertTrue(link.spawn(listening: -1))
+        defer { close(peer.fd) }
+        let done = expectation(description: "exit returned")
+        let start = Date()
+        DispatchQueue.global().async { link.exit(); done.fulfill() }
+        wait(for: [done], timeout: 4)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        var b: UInt8 = 0
+        XCTAssertEqual(read(peer.fd, &b, 1), 1, "the keeper end got the exit byte")
+        XCTAssertEqual(read(peer.fd, &b, 1), 0, "the link dropped its control fd")
+    }
+
     // The service: no keeper answers, so it binds and spawns one with its listener; a second service (the relaunch)
     // fetches that socket with no probe, no bind and no spawn.
     func testServiceFetchesFromAKeeperAndSpawnsOneOnlyWhenNoneAnswers() throws {
