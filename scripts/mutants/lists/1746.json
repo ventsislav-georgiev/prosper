@@ -1,0 +1,13 @@
+{
+ "entry": "1746",
+ "filter": "AgentIslandMessageTests/testKillSuccessHidesAfterTenSecondsAndAFailedKillStays",
+ "mutants": [
+  {
+   "name": "killNoArm",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "                self.store?.actions[key] = text\n                self.noteInfo(key)\n",
+   "new": "                self.store?.actions[key] = text\n",
+   "expect": "killed"
+  }
+ ]
+}
