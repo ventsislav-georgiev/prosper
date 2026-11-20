@@ -279,7 +279,7 @@ final class DchShellsTests: XCTestCase {
     // MARK: Small-scale crowding (#1681)
 
     /// The island card at the smallest UI scale with every count at its widest (99 shells, 999 agents, 999 merged), a
-    /// notice in the state word's place or not: the shells chip is drawn as the agents' pill, in order between the agents
+    /// notice in the state word's place or not: the shells chip is drawn as the agents' group (#1776: no pill), in order between the agents
     /// and merged groups, below the title and left of the age, never past the card. Offscreen in a never-shown window.
     @MainActor
     func testShellsChipDoesNotOverlapTheRowTextAtTheSmallestScale() throws {
@@ -303,7 +303,7 @@ final class DchShellsTests: XCTestCase {
             let (win, host) = AXTreeSupport.hosted(
                 AgentIslandRow(session: s, now: 1_000_000, notice: notice, show: .all) {}.frame(width: width), CGSize(width: width, height: 120))
             let end = Date().addingTimeInterval(2)
-            while ["title", "age", "count.shells", "capsule.shells", "count.merged"].contains(where: { box.seen[$0] == nil }) && Date() < end {
+            while ["title", "age", "count.shells", "count.merged"].contains(where: { box.seen[$0] == nil }) && Date() < end {
                 host.layoutSubtreeIfNeeded()
                 RunLoop.current.run(until: Date().addingTimeInterval(0.02))
             }
@@ -311,7 +311,7 @@ final class DchShellsTests: XCTestCase {
             win.contentView = nil
             win.close()
             let f = box.seen, tag = notice ?? "no notice"
-            guard let chip = f["count.shells"], let pill = f["capsule.shells"], let agents = f["count.agents"],
+            guard let chip = f["count.shells"], let agents = f["count.agents"],
                   let merged = f["count.merged"], let age = f["age"], let title = f["title"] else {
                 return XCTFail("a part is not drawn at 0.7: \(f.keys.sorted()) \(tag)")
             }
@@ -321,7 +321,7 @@ final class DchShellsTests: XCTestCase {
             XCTAssertLessThanOrEqual(merged.maxX, age.minX + pixel, "the age is clear of every group: \(tag)")
             XCTAssertLessThanOrEqual(age.maxX, width + pixel, "inside the card: \(tag)")
             XCTAssertGreaterThan(chip.width, 0, tag)
-            XCTAssertTrue(pill.intersects(chip), "the chip wears the pill: \(tag)")
+            XCTAssertTrue(f["capsule.shells"] == nil, "#1776: the chip wears no pill: \(tag)")
         }
     }
 }

@@ -2041,16 +2041,18 @@ extension AgentSidebarRowView {
     static func prChipInk(selected: Bool) -> Color { ink(.blocked, selected: selected) }
     static let prChipFillOpacity = 0.14
     static var prChipFill: Color { agentStateColor(.blocked).opacity(prChipFillOpacity) }
-    /// #1735 (operator 2026-11-20): the count pills (agents, shells) have no fill (#1531's grey wash is gone, the row shows
-    /// through) and a 1 pt stroke instead: the shells' is white, or the theme's textPrimary where white misses 3:1 over the
-    /// sidebar (the light themes); the agents' is one royal purple, the lighter #9D7BEA or the darker #7851A9, whichever
-    /// contrasts more with the sidebar. Over the sidebar and the selected row each clears 3:1 on all 22 themes (AgentCountOutlineTests).
+    /// #1776 (operator 2026-11-20, "it should have been borderless and the icon itself to be purle and its number, same way
+    /// merges uses the colour of our theme"; replaces #1735's outline): the count groups (agents, shells) have no stroke and no
+    /// fill; their glyph and number draw in their ink, as the open PRs' count draws in the theme blue. The shells' ink is white,
+    /// or the theme's textPrimary where white misses 3:1 over the sidebar (the light themes); the agents' is one royal purple,
+    /// the lighter #9D7BEA or the darker #7851A9, whichever contrasts more with the sidebar. Over the sidebar and the selected
+    /// row each clears 3:1 on all 22 themes (AgentCountOutlineTests).
     static let purpleLight = Color(red: 0x9D / 255, green: 0x7B / 255, blue: 0xEA / 255)
     static let purpleDark = Color(red: 0x78 / 255, green: 0x51 / 255, blue: 0xA9 / 255)
-    static var agentsStroke: Color {
+    static var agentsInk: Color {
         ThemeRuntime.contrastRatio(purpleLight, Neon.sidebar) >= ThemeRuntime.contrastRatio(purpleDark, Neon.sidebar) ? purpleLight : purpleDark
     }
-    static var shellsStroke: Color { ThemeRuntime.contrastRatio(.white, Neon.sidebar) >= 3 ? .white : Neon.textPrimary }
+    static var shellsInk: Color { ThemeRuntime.contrastRatio(.white, Neon.sidebar) >= 3 ? .white : Neon.textPrimary }
 
     /// #1203: the model slot's width. #1268: the widest known short name and the widest effort word, each in its badge
     /// (not a model id); a longer name is cut in the middle inside its badge.
@@ -2165,7 +2167,7 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), outlined: true, ownCard: inks != nil,
+                             quiet: ink(.quiet), open: ink(.blue), tinted: true, ownCard: inks != nil,
                              help: row.countHelp)
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
@@ -2305,45 +2307,38 @@ struct AgentCountGroups: View {
     /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
     var quiet = Neon.textSecondary
     var open = Neon.blue
-    /// #1735: the agents and shells groups are outlined pills (a 1 pt stroke inside, no fill, the padding in the group's width); false: none (the header).
-    var outlined = false
-    /// #1739: drawn on the island's own dark card (Follow theme off): white shells and #9D7BEA agents strokes, whatever the theme (the sidebar's choice is made against Neon.sidebar).
+    /// #1776: the agents and shells groups draw their glyph and number in their own ink (`tint`), no stroke, no fill; false: `quiet` (the header).
+    var tinted = false
+    /// #1739: drawn on the island's own dark card (Follow theme off): white shells and #9D7BEA agents inks, whatever the theme (the sidebar's choice is made against Neon.sidebar).
     var ownCard = false
     /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
     var help: [AgentSidebar.Count: String] = [:]
 
-    /// #1739: the pill stroke of a group (nil: none), chosen against the surface the row draws on.
-    static func stroke(_ c: AgentSidebar.Count, ownCard: Bool) -> Color? {
+    /// #1739, #1776: the ink of a group's glyph and number (nil: the caller's), chosen against the surface the row draws on.
+    static func tint(_ c: AgentSidebar.Count, ownCard: Bool) -> Color? {
         switch c {
-        case .agents: return ownCard ? AgentSidebarRowView.purpleLight : AgentSidebarRowView.agentsStroke
-        case .shells: return ownCard ? .white : AgentSidebarRowView.shellsStroke
+        case .agents: return ownCard ? AgentSidebarRowView.purpleLight : AgentSidebarRowView.agentsInk
+        case .shells: return ownCard ? .white : AgentSidebarRowView.shellsInk
         default: return nil
         }
     }
 
-    /// #1745: test-only hook, nil in the product (one nil check per group): reports the stroke each group draws, so a row proves the wiring from the caller's `ownCard`.
-    @MainActor static var strokeProbe: ((AgentSidebar.Count, Color?) -> Void)?
+    /// #1745: test-only hook, nil in the product (one nil check per group): reports the tint each group draws, so a row proves the wiring from the caller's `ownCard`.
+    @MainActor static var tintProbe: ((AgentSidebar.Count, Color?) -> Void)?
 
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
-                    let pill = outlined ? Self.stroke(g.0, ownCard: ownCard) : nil   // #1558: the shells chip is a pill too
-                    let _ = Self.strokeProbe?(g.0, pill)
+                    let tint = tinted ? Self.tint(g.0, ownCard: ownCard) : nil
+                    let _ = Self.tintProbe?(g.0, tint)
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
                     }
-                    .padding(.horizontal, pill == nil ? 0 : sz(4))
-                    .background {   // no vertical padding: the line's height stays (31/39/45)
-                        if let pill {
-                            Capsule().strokeBorder(pill, lineWidth: 1)   // inside: the frame is unchanged
-                                .modifier(AgentSidebarRowProbe(kind: "capsule.\(g.0)", title: g.0.words(g.1)))
-                        }
-                    }
                     .modifier(AgentSidebarRowProbe(kind: "count.\(g.0)", title: g.0.words(g.1)))
-                    .foregroundStyle(g.0 == .open ? open : quiet)
+                    .foregroundStyle(g.0 == .open ? open : tint ?? quiet)
                     .fixedSize()
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(g.0.words(g.1))

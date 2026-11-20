@@ -78,7 +78,7 @@ final class AgentIslandRowStyleTests: XCTestCase {
             XCTAssertEqual(age.maxX, width - AgentIslandGeometry.rowTrail, accuracy: pixel, "age at the trailing inset at \(scale)")
             XCTAssertGreaterThanOrEqual(age.minY, title.maxY - pixel, "the age is on line two at \(scale)")
             XCTAssertNotNil(f["count.agents"], "the agents count pill is drawn at \(scale)")
-            XCTAssertTrue(f["capsule.agents"] != nil, "with its fill capsule at \(scale)")
+            XCTAssertTrue(f["capsule.agents"] == nil, "#1776: no capsule around it at \(scale)")
         }
     }
 
