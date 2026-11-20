@@ -554,12 +554,15 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     /// The local health answer: names the proxy, never relayed upstream (B9). `current` is a label,
-    /// returned to loopback only (errata C6).
+    /// returned to loopback only (errata C6). #1673: `sessions` maps a live pin's session id to its account label
+    /// (labels only, one snapshot) so the statusline shows the session's own account.
     func healthBody() -> Data { Self.healthBody(store: store) }
 
     static func healthBody(store: CCPoolStore) -> Data {
         var obj: [String: Any] = ["service": Self.serviceName, "pid": Int(getpid()), "impl": "prosper"]
-        obj["current"] = store.snapshot.current.map { $0 as Any } ?? NSNull()
+        let state = store.snapshot
+        obj["current"] = state.current.map { $0 as Any } ?? NSNull()
+        obj["sessions"] = state.sessionLabels(now: store.now)
         return (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data()
     }
 }

@@ -2111,6 +2111,8 @@ tag from the now-released section and put it on the new top draft.
   this request. (#1674)
 - ccpool: new setting "Move off an account at" (50-100 %, default 100 %) moves new requests to
   another account before the current one hits its limit. (#1670)
+- Claude Account Pool status line: each Claude Code session now shows the account its own
+  conversation is pinned to, not just the pool's current one. (#1673)
 
 ## v2.174.0
 

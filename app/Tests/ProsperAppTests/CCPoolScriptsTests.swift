@@ -294,6 +294,27 @@ final class CCPoolScriptsTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 10)
     }
 
+    // #1673: the statusline reads session_id from stdin and shows that session's account; else the current one.
+    func testStatuslineShowsTheSessionsOwnAccountAndFallsBack() throws {
+        let port = try listener([("Server", "ccpool"), ("Content-Type", "application/json")],
+                                #"{"current":"alpha","service":"ccpool-proxy","sessions":{"api":"beta","api-qa":"gam%s"}}"#)
+        func shown(_ stdin: String) throws -> String {
+            let input = Pipe()
+            defer { try? input.fileHandleForWriting.close() }
+            input.fileHandleForWriting.write(Data(stdin.utf8))   // left open: the script never waits for EOF
+            return try run("ccpool-statusline", env: ["CCPOOL_PORT": "\(port)", "ANTHROPIC_BASE_URL": "http://127.0.0.1:\(port)"],
+                           stdin: input.fileHandleForReading, timeout: 10).out
+        }
+        let green = "\u{1B}[32m", plain = "\u{1B}[0m"
+        XCTAssertEqual(try shown(#"{"model":{},"session_id":"api","cwd":"/x"}"#), "\(green)ccpool beta\(plain)")
+        XCTAssertEqual(try shown(#"{"session_id": "api-qa"}"#), "\(green)ccpool gam%s\(plain)")
+        XCTAssertEqual(try shown(#"{"session_id":"unknown"}"#), "\(green)ccpool alpha\(plain)", "unknown sid: current")
+        XCTAssertEqual(try shown(#"{"session_id":"a.b"}"#), "\(green)ccpool alpha\(plain)", "a dotted id is never looked up")
+        XCTAssertEqual(try shown(#"{"session_id":"api/../x"}"#), "\(green)ccpool alpha\(plain)")
+        XCTAssertEqual(try shown(#"{"model":{}}"#), "\(green)ccpool alpha\(plain)", "no session_id: current")
+        XCTAssertEqual(try shown("not json"), "\(green)ccpool alpha\(plain)")
+    }
+
     // MARK: Terminal use (spec 3.5)
 
     // The pane names the launcher inside the app bundle (Contents/Resources/extensions/ccpool/bin), and that path

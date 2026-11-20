@@ -497,6 +497,24 @@ extension CCPoolState {
         return account
     }
 
+    /// #1673: session id -> account label for the live pins, read-only (no expiry written). A key is "<sid>/<agent>"
+    /// (first "/" splits it); a sid with several agents shows the main agent's pin (empty agent id), else the most
+    /// recently seen (ties: the smaller key). Live = `expirePins`' rule; a pin whose account left the pool is skipped.
+    func sessionLabels(now: Double) -> [String: String] {
+        guard now.isFinite else { return [:] }
+        var best: [String: (rank: Int, seen: Double, key: String, label: String)] = [:]
+        for (key, p) in pins where accounts[p.account] != nil {
+            let seen = (!p.seen.isFinite || p.seen < 0 || p.seen > now) ? now : p.seen
+            guard now - seen <= CCPoolState.pinIdle else { continue }
+            let parts = key.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+            let sid = String(parts[0])
+            let rank = parts.count < 2 || parts[1].isEmpty ? 1 : 0
+            if let b = best[sid], !(rank > b.rank || (rank == b.rank && (seen > b.seen || (seen == b.seen && key < b.key)))) { continue }
+            best[sid] = (rank, seen, key, p.account)
+        }
+        return best.mapValues(\.label)
+    }
+
     /// Re-stamp a live pin (Python re-pins on every request that follows it).
     mutating func touchPin(_ key: String, now: Double) {
         guard now.isFinite, now >= 0, pins[key] != nil else { return }

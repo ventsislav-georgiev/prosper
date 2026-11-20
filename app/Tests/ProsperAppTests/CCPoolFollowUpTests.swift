@@ -188,6 +188,33 @@ final class CCPoolFollowUpTests: XCTestCase {
         XCTAssertNil(store.snapshot.current, "a new account under the old label is not current at once")
     }
 
+    // #1673: health "sessions" = session id -> label of the live pins; main agent first, removed accounts skipped.
+    func testHealthSessionsMapsLivePinsToLabels() throws {
+        let store = CCPoolStore(directory: tempDir())
+        let secrets = CCPoolMemorySecrets()
+        for l in ["a", "b", "gone"] { try store.addAccount(label: l, token: "tok-\(l)", secrets: secrets) }
+        let now = store.now
+        store.mutate {
+            $0.pin("api/", to: "a", now: now)
+            $0.pin("two/agent1", to: "a", now: now)
+            $0.pin("two/", to: "b", now: now - 100)   // the main agent wins though older
+            $0.pin("sub/x", to: "a", now: now - 10)
+            $0.pin("sub/y", to: "b", now: now - 5)     // no main: the most recent
+            $0.pin("old/", to: "a", now: now - CCPoolState.pinIdle - 5)   // idle: not live
+            $0.pin("dead/", to: "gone", now: now)
+        }
+        try store.removeAccount(label: "gone", secrets: secrets)
+        func sessions() throws -> [String: String] {
+            let h = try XCTUnwrap(JSONSerialization.jsonObject(with: CCPoolService.healthBody(store: store)) as? [String: Any])
+            XCTAssertEqual(h["service"] as? String, CCPoolService.serviceName)
+            return try XCTUnwrap(h["sessions"] as? [String: String])
+        }
+        XCTAssertEqual(try sessions(), ["api": "a", "two": "b", "sub": "b"])
+        let fresh = CCPoolStore(directory: tempDir())
+        let h = try XCTUnwrap(JSONSerialization.jsonObject(with: CCPoolService.healthBody(store: fresh)) as? [String: Any])
+        XCTAssertTrue((h["sessions"] as? [String: String]) == [:], "no pins: an empty map: \(h)")
+    }
+
     // QA #734 INFO-4: a state.json that exists but cannot be read is never replaced, and account
     // changes are refused with the reason.
     func testCCPoolUnreadableStateIsNeverOverwritten() throws {
