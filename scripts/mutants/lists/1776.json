@@ -1,0 +1,55 @@
+{
+ "entry": "1776",
+ "filter": "AgentRowModelEffortTests|AgentRowSelectedTextTests|AgentIslandRowStyleTests|DchShellsTests|AgentCountOutlineTests|AgentRobotCountTests",
+ "mutants": [
+  {
+   "name": "tint_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".foregroundStyle(g.0 == .open ? open : tint ?? quiet)",
+   "new": ".foregroundStyle(g.0 == .open ? open : quiet)",
+   "expect": "killed"
+  },
+  {
+   "name": "stroke_back",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "new": "                    .background { if let tint { Capsule().strokeBorder(tint, lineWidth: 1) } }\n                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "expect": "killed"
+  },
+  {
+   "name": "padding_back",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "new": "                    .padding(.horizontal, tint == nil ? 0 : sz(4))\n                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "expect": "killed"
+  },
+  {
+   "name": "fill_back",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "new": "                    .background { if let tint { Capsule().fill(tint.opacity(0.14)) } }\n                    .modifier(AgentSidebarRowProbe(kind: \"count.\\(g.0)\", title: g.0.words(g.1)))\n",
+   "expect": "killed"
+  },
+  {
+   "name": "owncard_false",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "tinted: true, ownCard: inks != nil",
+   "new": "tinted: true, ownCard: false",
+   "expect": "killed"
+  },
+  {
+   "name": "shells_untinted",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "case .shells: return ownCard ? .white : AgentSidebarRowView.shellsInk",
+   "new": "case .shells: return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "agents_dark_only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "ThemeRuntime.contrastRatio(purpleLight, Neon.sidebar) >= ThemeRuntime.contrastRatio(purpleDark, Neon.sidebar) ? purpleLight : purpleDark",
+   "new": "purpleDark",
+   "expect": "killed"
+  }
+ ]
+}
