@@ -40,7 +40,7 @@ enum ClipboardAccess: Equatable {
     var settingsNote: String? {
         switch self {
         case .denied: "Clipboard history can't see what other apps copy. Open \(Self.paneName) to allow Prosper."
-        case .asks: "macOS asks before Prosper reads what other apps copy. Allow Prosper in \(Self.paneName) to stop the prompts."
+        case .asks: "Clipboard history waits until Prosper is allowed to paste from other apps. Allow Prosper in \(Self.paneName)."
         case .allowed, .systemDefault, .unknown: nil
         }
     }

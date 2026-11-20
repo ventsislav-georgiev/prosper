@@ -75,7 +75,7 @@ final class ClipboardAccessTests: XCTestCase {
         XCTAssertTrue(denied.contains("can't see what other apps copy"), denied)
         XCTAssertTrue(denied.contains("Privacy & Security › Paste from Other Apps"), denied)
         let asks = try XCTUnwrap(ClipboardAccess.asks.settingsNote)
-        XCTAssertTrue(asks.contains("macOS asks before Prosper reads"), asks)
+        XCTAssertTrue(asks.contains("Clipboard history waits until Prosper is allowed"), asks)
         XCTAssertTrue(asks.contains("Paste from Other Apps"), asks)
         for quiet in [ClipboardAccess.allowed, .systemDefault, .unknown] {
             XCTAssertTrue(quiet.settingsNote == nil, "\(quiet) shows nothing")
@@ -141,7 +141,7 @@ final class ClipboardAccessTests: XCTestCase {
             let (win, view) = AXTreeSupport.hosted(ClipboardSettingsSection(model: SettingsModel(), readAccess: { reader.value },
                                                                             activationCenter: activation), CGSize(width: 520, height: 600))
             defer { win.close() }
-            let want = state == .allowed ? "" : (state == .denied ? "macOS blocks clipboard reading" : "macOS asks before Prosper reads")
+            let want = state == .allowed ? "" : (state == .denied ? "macOS blocks clipboard reading" : "Clipboard history waits until Prosper is allowed")
             let tree = AXTreeSupport.poll(view) { t in
                 want.isEmpty || t.contains { $0.role == "AXButton" && $0.names.contains { $0.contains(want) } }
             }
@@ -149,7 +149,7 @@ final class ClipboardAccessTests: XCTestCase {
             return tree.filter { $0.role == "AXButton" }.flatMap(\.names)
         }
         XCTAssertTrue(buttons(.denied).contains { $0.contains("macOS blocks clipboard reading") }, "control: the denied row is a button")
-        XCTAssertTrue(buttons(.asks).contains { $0.contains("macOS asks before Prosper reads") }, "the asks line is a button")
-        XCTAssertFalse(buttons(.allowed).contains { $0.contains("macOS asks before Prosper reads") || $0.contains("macOS blocks") })
+        XCTAssertTrue(buttons(.asks).contains { $0.contains("Clipboard history waits until Prosper is allowed") }, "the asks line is a button")
+        XCTAssertFalse(buttons(.allowed).contains { $0.contains("Clipboard history waits until Prosper is allowed") || $0.contains("macOS blocks") })
     }
 }

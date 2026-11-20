@@ -2160,6 +2160,8 @@ tag from the now-released section and put it on the new top draft.
   check holds it and its row in Settings › Extensions says so, and clicking Check for Updates asks
   you before any of its files are copied. Updates that ask for nothing new still install quietly.
   (#1704)
+- Clipboard settings now say that clipboard history waits until Prosper is allowed to paste from
+  other apps. (#1715)
 
 ## v2.174.0
 
