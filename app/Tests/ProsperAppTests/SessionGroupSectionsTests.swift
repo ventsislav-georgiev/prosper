@@ -74,6 +74,20 @@ final class SessionGroupSectionsTests: XCTestCase {
         XCTAssertFalse(AgentSidebar.folds("Reviews"), "a group's name is never a fold key")
     }
 
+    /// #1775: a group NAMED "History" is not the History section: its live sessions stay in the pane switcher and the header's
+    /// count source. Red at base: both filters compared the title.
+    func testAGroupNamedHistoryKeepsItsLiveSessionsInTheSwitcherAndTheCount() {
+        let store = storeWith([SessionGroup(id: "g-hist", name: "History", pattern: "-h$")], ["api", "api-h"])
+        let m = d1.windowModel(store)
+        m.setVisible(true)
+        defer { m.close() }
+        XCTAssertEqual(m.sections.map(\.id), ["Sessions", "group:g-hist"], "control: the group section is titled History, id differs")
+        XCTAssertEqual(m.sections.map(\.title), ["Sessions", "History"])
+        let pane = UUID()
+        XCTAssertEqual(Set(m.switcherRows(for: pane).map(\.row.title)), ["api", "api-h"], "the switcher keeps the group's session")
+        XCTAssertEqual(m.sections.filter { $0.id != "History" }.flatMap(\.rows).count, 2, "the header's count source")
+    }
+
     func testTheLegacySidekicksFoldCarriesToTheSidekicksGroup() {
         Preferences.defaults.set(["History", "Sidekicks"], forKey: Self.pref)
         XCTAssertEqual(Preferences.agentWindowCollapsedSections, ["History", "group:sidekicks"])

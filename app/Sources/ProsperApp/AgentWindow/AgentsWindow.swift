@@ -1230,7 +1230,7 @@ struct AgentSidebarTitleRow: View {
                 .foregroundStyle(Neon.textPrimary).lineLimit(1)
                 .allowsHitTesting(false)   // #1378: a press on the name drags the window, as on a title bar
             Spacer(minLength: 0)
-            let rows = model.sections.filter { $0.title != "History" }.flatMap(\.rows)
+            let rows = model.sections.filter { $0.id != "History" }.flatMap(\.rows)
             if !rows.isEmpty {
                 // #1467: "6/17 active \u{B7} <robot glyph> 9" (#1546: the drawn RobotGlyph, inline); a header too narrow for it drops the word "active" first.
                 let t = Self.countText(rows.map { (state: $0.state, agents: max(0, $0.session?.agents ?? 0)) })

@@ -310,7 +310,7 @@ enum AgentSidebar {
         let live = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         var out: [Section] = []
         for section in sections {
-            let ordered = section.title == needsYouTitle || sort == .activity
+            let ordered = section.id == needsYouTitle || sort == .activity
             var rows: [Row] = []
             for var r in section.rows {
                 if let k = r.session?.key {
@@ -1570,7 +1570,7 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func nextNeedsYou(switching: ((UUID, UUID) -> PaneRefusal?)? = nil) -> Bool {
         guard AgentPaneLayout.splitsEnabled, !closed else { return false }
-        let rows = sections.first { $0.title == AgentSidebar.needsYouTitle }?.rows ?? []
+        let rows = sections.first { $0.id == AgentSidebar.needsYouTitle }?.rows ?? []
         let mine = layout.panes.first { $0.id == layout.focused }?.target
         let after = rows.firstIndex { target($0.id) == mine }.map { Array(rows[($0 + 1)...] + rows[..<$0]) } ?? rows
         guard let next = after.first(where: { $0.state == .blocked }) ?? after.first, case .live = next.id else { return false }
@@ -2229,7 +2229,7 @@ final class AgentWindowModel: ObservableObject {
     /// number (1-based, layout order) of ANOTHER pane that shows its session, nil when none does.
     func switcherRows(for pane: UUID) -> [(row: AgentSidebar.Row, inPane: Int?)] {
         let order = layout.order
-        return sections.filter { $0.title != "History" }.flatMap(\.rows).map { r in
+        return sections.filter { $0.id != "History" }.flatMap(\.rows).map { r in
             let shown = layout.pane(showing: target(r.id)).flatMap { $0 == pane ? nil : order.firstIndex(of: $0) }
             return (r, shown.map { $0 + 1 })
         }

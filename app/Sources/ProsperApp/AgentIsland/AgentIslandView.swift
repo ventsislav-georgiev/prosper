@@ -1056,8 +1056,7 @@ struct AgentIslandView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         tab("Sessions (\(split.primary.count))", on: !history && shown == nil) { onTab(nil) }
-                        ForEach(groups.indices, id: \.self) { i in
-                            let g = groups[i]
+                        ForEach(groups, id: \.group.id) { g in
                             tab("\(g.group.name) (\(g.sessions.count))", on: !history && shown == g.group.id) { onTab(g.group.id) }
                         }
                         if !store.history.isEmpty {
