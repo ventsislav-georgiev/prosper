@@ -429,12 +429,12 @@ final class AgentIslandController {
         return Preferences.agentIslandSessionGroups.filter { !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
-    /// #571: a Sessions / Sidekicks tab click. Only the shown rows get cards.
-    func showSidekicks(_ on: Bool) {
+    /// #571: a Sessions or group tab click (#1759: the group's id; nil: Sessions). Only the shown rows get cards.
+    func showGroup(_ id: String?) {
         guard let store else { return }
         store.historyTab = false
         store.confirmingClear = false   // #605: History's question goes with its tab
-        store.sidekickTab = on
+        store.groupTab = id
         refreshCards()
         layout()
     }
@@ -1512,7 +1512,7 @@ final class AgentIslandController {
             onToggle: { [weak self] in self?.setExpanded(!(self?.store?.expanded ?? true)) },
             onRow: { [weak self] in self?.jump($0) },
             onAnswer: { [weak self] in self?.answer($0, $1, $2) },
-            onTab: { [weak self] in self?.showSidekicks($0) },
+            onTab: { [weak self] in self?.showGroup($0) },
             onHistory: { [weak self] in self?.showHistory() },
             onResume: { [weak self] in self?.resume($0) },
             onResumeAll: { [weak self] in self?.resumeCrashed() },
@@ -1593,17 +1593,17 @@ final class AgentIslandController {
 
     /// #1536 (OQ-95): the launcher's Open Agent Island command and its optional shortcut. Opens the island
     /// expanded (setExpanded's gates hold: nothing live and no history keeps it hidden) and focuses the first
-    /// session that needs input in drawn order, Sessions then Sidekicks (its tab is shown), else the first
+    /// session that needs input in drawn order, Sessions then each group in list order (its tab is shown), else the first
     /// session drawn. False only with no store (the extension off or untrusted), so the caller can open Settings.
     @discardableResult
     func openFocused() -> Bool {
         guard let store else { return false }
         setExpanded(true)
         let s = store.split
-        let all = s.primary.map { ($0, false) } + s.firstGroup.map { ($0, true) }
+        let all = s.primary.map { ($0, String?.none) } + s.groups.flatMap { g in g.sessions.map { ($0, Optional(g.group.id)) } }
         guard store.expanded, let hit = all.first(where: { $0.0.state == .blocked }) ?? all.first else { return true }
         store.historyTab = false
-        store.sidekickTab = hit.1
+        store.groupTab = hit.1
         store.focusKey = hit.0.key
         refreshCards()   // the tab may have changed: read the shown tab's blocked screens
         return true

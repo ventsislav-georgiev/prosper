@@ -27,13 +27,13 @@ extension AgentWindowD1Tests {
         Preferences.defaults.removeObject(forKey: pref)
         XCTAssertEqual(windowModel(nil).collapsed, [], "unset: nothing folded")
         let m = windowModel(nil)
-        m.toggleCollapsed("Sidekicks")
+        m.toggleCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID))
         m.setCollapsed("History", true)
-        XCTAssertEqual(Preferences.defaults.stringArray(forKey: pref), ["History", "Sidekicks"], "written through Preferences.defaults")
+        XCTAssertEqual(Preferences.defaults.stringArray(forKey: pref), ["History", "group:sidekicks"], "written through Preferences.defaults")
         let next = windowModel(nil)
-        XCTAssertTrue(next.isCollapsed("Sidekicks") && next.isCollapsed("History"), "a new window (or a relaunch) reads it back")
+        XCTAssertTrue(next.isCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID)) && next.isCollapsed("History"), "a new window (or a relaunch) reads it back")
         XCTAssertFalse(next.isCollapsed("Sessions"))
-        next.toggleCollapsed("Sidekicks")
+        next.toggleCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID))
         XCTAssertEqual(windowModel(nil).collapsed, ["History"], "unfolding is remembered too")
         m.setCollapsed(AgentSidebar.needsYouTitle, true)
         XCTAssertFalse(windowModel(nil).isCollapsed(AgentSidebar.needsYouTitle), "Needs you never folds")
@@ -53,7 +53,7 @@ extension AgentWindowD1Tests {
         defer { m.close() }
         XCTAssertEqual(m.sections.map(\.title), ["Sessions", "Sidekicks", "History"])
         m.select(live("qa-1"))
-        m.setCollapsed("Sidekicks", true)
+        m.setCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID), true)
         XCTAssertEqual(m.selection, live("qa-1"), "folding its section keeps the selection")
         XCTAssertEqual(m.selectedRow?.session?.key.name, "qa-1", "and its conversation")
         XCTAssertEqual(m.sections.first { $0.title == "Sidekicks" }?.rows.count, 2, "the count stays")
@@ -83,7 +83,7 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(m.isCollapsed("Sessions"), "right unfolds")
         XCTAssertFalse(win.isVisible, "never shown")
         // The selection ending while folded: nothing selected, no crash.
-        m.setCollapsed("Sidekicks", true)
+        m.setCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID), true)
         m.select(live("qa-2"))
         m.store?.sessions.removeAll { $0.key.name == "qa-2" }
         XCTAssertNil(m.selection)
@@ -124,12 +124,12 @@ extension AgentWindowD1Tests {
             let size = CGSize(width: AgentWindowModel.fullSidebarWidth, height: 420 * scale)
             let open = try render(AgentSidebarView(model: m).background(Neon.sidebar), size: size, dark: true)
             try save(open, "828-sidebar-open-\(scale)")
-            m.setCollapsed("Sidekicks", true)
+            m.setCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID), true)
             let rep = try render(AgentSidebarView(model: m).background(Neon.sidebar), size: size, dark: true)
             try save(rep, "828-sidebar-folded-\(scale)")
             XCTAssertLessThan(ink(rep), ink(open) - 40, "folding hides the two Sidekick rows at \(scale)")
             XCTAssertEqual(overflow(rep, content: size, canvas: CGSize(width: size.width + 24, height: size.height + 24)), 0)
-            m.setCollapsed("Sidekicks", false)
+            m.setCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID), false)
         }
     }
 

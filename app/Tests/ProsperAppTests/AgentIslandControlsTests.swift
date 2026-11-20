@@ -1040,11 +1040,11 @@ final class AgentIslandControlsTests: XCTestCase {
         c.store?.history = [record("x")]
         c.showHistory()
         XCTAssertEqual(c.store?.historyTab, true)
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         XCTAssertEqual(c.store?.historyTab, false)
         XCTAssertEqual(c.store?.visible.map(\.name), ["a-qa"])
         c.showHistory()
-        c.showSidekicks(false)
+        c.showGroup(nil)
         XCTAssertEqual(c.store?.visible.map(\.name), ["a"])
     }
 
@@ -1110,7 +1110,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let c = controller(f, reads, dirs: ["/d", "/e"])
         c.store?.sessions = [session("a")]
         c.rowDetailsChanged()
-        c.showSidekicks(false)
+        c.showGroup(nil)
         c.refreshCards()
         settle(c)
         XCTAssertEqual(reads.count, 0, "closed: no read")
@@ -1223,7 +1223,7 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { c.store?.history.count == 2 }
         c.rowDetailsChanged()
         c.showHistory()
-        c.showSidekicks(false)
+        c.showGroup(nil)
         c.setExpanded(false)
         c.setExpanded(true)
         settle(c)
@@ -3037,7 +3037,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertFalse(store.confirmingStopAll)
         XCTAssertEqual(f.launched.wait(timeout: .now() + 0.3), .timedOut)
         XCTAssertEqual(f.args, [], "Cancel: no verb")
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         menu = c.makeControlsMenu()
         XCTAssertEqual(menu.items[3].title, "Stop all in Sidekicks…")
         f.progress = #"{"name":"x-qa","phase":"ending"}"# + "\n"
@@ -3410,7 +3410,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertTrue(store.confirmingKillAll)
         XCTAssertEqual(store.asked.tab, "Sessions")
         XCTAssertEqual(questions(store), 1)
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         XCTAssertFalse(store.confirmingKillAll, "a tab switch drops the tab's Kill all")
         menu = c.makeControlsMenu()
         XCTAssertEqual(menu.items[5].title, "End all in Sidekicks\u{2026}")
@@ -3421,7 +3421,7 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(f.args, [], "Cancel: nothing runs")
         press(menu.items[6])
         XCTAssertNil(store.asked.tab)
-        c.showSidekicks(false)
+        c.showGroup(nil)
         XCTAssertTrue(store.confirmingKillAll, "the global question stays across tabs")
         XCTAssertEqual(store.killAllTargets.count, 4)
         XCTAssertEqual(store.asked.skipped, 1)
@@ -3461,7 +3461,7 @@ final class AgentIslandControlsTests: XCTestCase {
         let c = opened(f, [session("main"), session("x-qa"), session("y-qa")])
         let store = try XCTUnwrap(c.store)
         store.sidekickPattern = "-qa"
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         press(c.makeControlsMenu().items[5])
         XCTAssertEqual(AgentIsland.killAllQuestion(store.asked.keys.count, skipped: store.asked.skipped, tab: store.asked.tab),
                        "End 2 sessions in Sidekicks? No pause message first.")
@@ -3517,16 +3517,16 @@ final class AgentIslandControlsTests: XCTestCase {
             let confirm = { kill ? c.confirmKillAll(true) : c.confirmStopAll(true) }
             let up = { kill ? store.confirmingKillAll : store.confirmingStopAll }
             // A click.
-            c.showSidekicks(true)
+            c.showGroup(SessionGroup.sidekicksID)
             ask()
             XCTAssertEqual(store.asked, .init(keys: [xqa.key], skipped: 0, tab: "Sidekicks"), what)
-            c.showSidekicks(true)
+            c.showGroup(SessionGroup.sidekicksID)
             XCTAssertTrue(up(), "\(what): the same tab clicked keeps it")
-            c.showSidekicks(false)
+            c.showGroup(nil)
             XCTAssertFalse(up(), "\(what): a tab click drops it")
             confirm()
             // The fallback: x-qa ends, Sidekicks empties, Sessions shows with no click.
-            c.showSidekicks(true)
+            c.showGroup(SessionGroup.sidekicksID)
             ask()
             store.sessions = [main, w]
             XCTAssertEqual(store.sessionTab.label, "Sessions", "the shown tab flipped by itself")
@@ -3534,7 +3534,7 @@ final class AgentIslandControlsTests: XCTestCase {
             confirm()
             // The other way: every Sessions row ends, Sidekicks shows with no click.
             store.sessions = rows
-            c.showSidekicks(false)
+            c.showGroup(nil)
             ask()
             XCTAssertEqual(store.asked.keys, [main.key, w.key], what)
             store.sessions = [xqa]
@@ -3543,7 +3543,7 @@ final class AgentIslandControlsTests: XCTestCase {
             confirm()
             // A Settings pattern change: no sidekicks left, x-qa now under Sessions.
             store.sessions = rows
-            c.showSidekicks(true)
+            c.showGroup(SessionGroup.sidekicksID)
             ask()
             store.sidekickPattern = "zzz"
             XCTAssertEqual(store.sessionTab.sessions.count, 3)
@@ -3551,7 +3551,7 @@ final class AgentIslandControlsTests: XCTestCase {
             confirm()
             store.sidekickPattern = "-qa"
             // A pattern change on the shown tab: main turns sidekick, Sessions keeps w only.
-            c.showSidekicks(false)
+            c.showGroup(nil)
             ask()
             store.sidekickPattern = "ma"
             XCTAssertEqual(store.sessionTab.label, "Sessions")
@@ -3559,9 +3559,9 @@ final class AgentIslandControlsTests: XCTestCase {
             confirm()
             store.sidekickPattern = "-qa"
             // The answer alone, the drop bypassed: the asked tab is not the shown one, so no row.
-            c.showSidekicks(true)
+            c.showGroup(SessionGroup.sidekicksID)
             ask()
-            c.showSidekicks(false)
+            c.showGroup(nil)
             if kill { store.confirmingKillAll = true } else { store.confirmingStopAll = true }
             XCTAssertEqual(kill ? store.killAllTargets : store.stopAllTargets, [], what)
             confirm()
@@ -3639,7 +3639,7 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { c.store?.sessions.count == 3 && c.store?.controlDch != nil }
         let store = try XCTUnwrap(c.store)
         XCTAssertEqual(store.sidekickPattern, "-qa")
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         c.askKillAll()
         XCTAssertTrue(store.confirmingKillAll)
         XCTAssertEqual(store.asked.tab, "Sidekicks")
@@ -3650,7 +3650,7 @@ final class AgentIslandControlsTests: XCTestCase {
         c.confirmKillAll(true)
         FileManager.default.createFile(atPath: sock("x-qa"), contents: nil)
         settle(c) { store.sessions.count == 3 }
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         c.askKillAll()
         XCTAssertTrue(store.confirmingKillAll)
         Preferences.agentIslandSidekickTabs = false

@@ -207,10 +207,10 @@ final class AgentWindowSidebarRedrawTests: XCTestCase {
             t = AXTreeSupport.poll(host, until: fresh)
             check("after the move")
 
-            m.toggleCollapsed("Sidekicks")
+            m.toggleCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID))
             t = AXTreeSupport.poll(host) { Self.node($0, "api-qa, ") == nil }
             XCTAssertTrue(Self.node(t, "api-qa, ") == nil, "folded: no api-qa row: \(names(t))", line: line)
-            m.toggleCollapsed("Sidekicks")
+            m.toggleCollapsed(AgentSidebar.groupFold(SessionGroup.sidekicksID))
             t = AXTreeSupport.poll(host, until: fresh)
             check("folded and unfolded")
         }

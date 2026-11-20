@@ -332,7 +332,7 @@ final class AgentIslandMessageTests: XCTestCase {
         let p = Proc()
         let c = controller(p, [session("api"), session("api-qa"), session("web-qa")], pattern: "-qa$")
         let store = try XCTUnwrap(c.store)
-        store.sidekickTab = true
+        store.groupTab = SessionGroup.sidekicksID
         store.history = [DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "old"), cwd: "/src", updated: 1, ended: 1, end: "exit 0")]
         store.historyTab = true
         let item = c.makeControlsMenu().items.first { $0.title.hasPrefix("Message all") }

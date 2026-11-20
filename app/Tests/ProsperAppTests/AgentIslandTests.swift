@@ -3279,15 +3279,15 @@ final class AgentIslandTests: XCTestCase {
 
     func testShowsSidekicksAllThreeCases() {
         let all = AgentIsland.split([session("a-qa", .idle), session("b-qa", .idle)], pattern: "-qa")
-        XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: false), "sidekicks are all there is")
-        XCTAssertTrue(AgentIsland.showsSidekicks(all, tab: true))
+        XCTAssertTrue((AgentIsland.shownGroup(all, tab: nil) != nil), "sidekicks are all there is")
+        XCTAssertTrue((AgentIsland.shownGroup(all, tab: SessionGroup.sidekicksID) != nil))
         let both = AgentIsland.split([session("a", .idle), session("a-qa", .idle)], pattern: "-qa")
-        XCTAssertFalse(AgentIsland.showsSidekicks(both, tab: false), "both halves: the chosen tab")
-        XCTAssertTrue(AgentIsland.showsSidekicks(both, tab: true))
+        XCTAssertFalse((AgentIsland.shownGroup(both, tab: nil) != nil), "both halves: the chosen tab")
+        XCTAssertTrue((AgentIsland.shownGroup(both, tab: SessionGroup.sidekicksID) != nil))
         let none = AgentIsland.split([session("a", .idle), session("b", .idle)], pattern: "-qa")
-        XCTAssertFalse(AgentIsland.showsSidekicks(none, tab: false), "never without sidekicks")
-        XCTAssertFalse(AgentIsland.showsSidekicks(none, tab: true))
-        XCTAssertFalse(AgentIsland.showsSidekicks(AgentIsland.split([], pattern: "-qa"), tab: true))
+        XCTAssertFalse((AgentIsland.shownGroup(none, tab: nil) != nil), "never without sidekicks")
+        XCTAssertFalse((AgentIsland.shownGroup(none, tab: SessionGroup.sidekicksID) != nil))
+        XCTAssertFalse((AgentIsland.shownGroup(AgentIsland.split([], pattern: "-qa"), tab: SessionGroup.sidekicksID) != nil))
     }
 
     /// The list, its row heights, cards and the size follow the shown tab; the
@@ -3312,7 +3312,7 @@ final class AgentIslandTests: XCTestCase {
         store.cards[qa.key] = .changed
         XCTAssertEqual(store.cardsHeight, 0, "a hidden row's card adds nothing")
         let card = AgentIslandGeometry.cardHeight(.changed)
-        store.sidekickTab = true
+        store.groupTab = SessionGroup.sidekicksID
         XCTAssertEqual(names(store.visible), ["main-qa"])
         XCTAssertEqual(store.rowHeights, [three])
         XCTAssertEqual(store.cardsHeight, card)
@@ -3320,7 +3320,7 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(store.summary.total, 3)
         // Tabs off: no tab row, the whole list, back to Sessions.
         store.sidekickPattern = ""
-        XCTAssertFalse(store.sidekickTab, "tabs off: back to Sessions")
+        XCTAssertTrue(store.groupTab == nil, "tabs off: back to Sessions")
         XCTAssertFalse(store.showsTabs)
         XCTAssertEqual(names(store.visible), ["main-qa", "main", "other"])
         XCTAssertEqual(store.size, g.expandedSize(rows: [three, two, two], cards: card))
@@ -3353,12 +3353,12 @@ final class AgentIslandTests: XCTestCase {
         let store = AgentIslandStore(geometry: notched, sidekickPattern: "-qa")
         let a = session("a", .idle), aqa = session("a-qa", .idle), bqa = session("b-qa", .idle)
         store.sessions = [a, aqa]
-        store.sidekickTab = true
+        store.groupTab = SessionGroup.sidekicksID
         XCTAssertEqual(names(store.visible), ["a-qa"])
         store.sessions = [a, aqa, bqa]
-        XCTAssertTrue(store.sidekickTab, "sidekicks remain: the tab stays")
+        XCTAssertTrue(store.groupTab == SessionGroup.sidekicksID, "sidekicks remain: the tab stays")
         store.sessions = [a]
-        XCTAssertFalse(store.sidekickTab)
+        XCTAssertTrue(store.groupTab == nil)
         XCTAssertFalse(store.showsTabs)
         store.sessions = [a, bqa]
         XCTAssertEqual(names(store.visible), ["a"], "a new sidekick does not switch the list")
@@ -3426,12 +3426,12 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(c.store?.sidekickPattern, "-qa")
         XCTAssertEqual(c.store.map { names($0.visible) }, ["b", "c"])
         XCTAssertEqual(c.store?.size, notched.expandedSize(rows: Array(repeating: AgentIslandGeometry.rowHeight, count: 2), tabs: true))
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa"])
         XCTAssertEqual(c.store?.size, notched.expandedSize(rows: Array(repeating: AgentIslandGeometry.rowHeight, count: 1), tabs: true))
         Preferences.agentIslandSidekickPattern = "  "
         c.rowDetailsChanged()
-        XCTAssertEqual(c.store?.sidekickTab, false, "no sidekicks: back to Sessions")
+        XCTAssertTrue(c.store != nil && c.store?.groupTab == nil, "no sidekicks: back to Sessions")
         XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa", "b", "c"])
         XCTAssertEqual(c.store?.size, notched.expandedSize(rows: 3))
         Preferences.agentIslandSidekickPattern = "-QA"
@@ -3455,11 +3455,11 @@ final class AgentIslandTests: XCTestCase {
         drain(c)
         XCTAssertEqual(f.reads, 1, "the sidekick under the other tab is never read")
         XCTAssertEqual(c.store.map { Set($0.cards.keys) }, [s.key])
-        c.showSidekicks(true)
+        c.showGroup(SessionGroup.sidekicksID)
         drain(c)
         XCTAssertEqual(f.reads, 2)
         XCTAssertEqual(c.store.map { Set($0.cards.keys) }, [qa.key])
-        c.showSidekicks(true)   // already shown: nothing new to read
+        c.showGroup(SessionGroup.sidekicksID)   // already shown: nothing new to read
         drain(c)
         XCTAssertEqual(f.reads, 2)
         // Tabs off in Settings (unset keys): both rows show and the other one is read at once.
@@ -3537,9 +3537,9 @@ final class AgentIslandTests: XCTestCase {
         try island("agent-island-tabs-off")
         store.sidekickPattern = "-qa"
         try island("agent-island-tabs-sessions")
-        store.sidekickTab = true
+        store.groupTab = SessionGroup.sidekicksID
         try island("agent-island-tabs-sidekicks")
-        store.sidekickTab = false
+        store.groupTab = nil
         store.sort = .name
         try island("agent-island-tabs-sessions-name-sort")
         store.expanded = false
@@ -3596,7 +3596,7 @@ final class AgentIslandTests: XCTestCase {
         rows = []
         drawn[1].answer(prompt, yes)
         XCTAssertEqual(answers, ["mid 1"], "the card's answer carries the drawn session")
-        store.sidekickTab = true
+        store.groupTab = SessionGroup.sidekicksID
         let qa = view.drawn
         XCTAssertEqual(names(qa.map(\.session)), ["b-qa"])
         XCTAssertEqual(qa.map(\.card), [.changed])

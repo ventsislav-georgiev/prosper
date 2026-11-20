@@ -1194,9 +1194,13 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandClick) }
     }
 
-    /// #828: the sidebar sections collapsed in the Agent Sessions window; unset reads as none.
+    /// #828: the sidebar sections collapsed in the Agent Sessions window; unset reads as none. #1759: a stored "Sidekicks"
+    /// (the title before groups) reads as the Sidekicks group's fold key; the next fold write stores the key instead.
     static var agentWindowCollapsedSections: Set<String> {
-        get { Set(defaults.stringArray(forKey: Keys.agentWindowCollapsedSections) ?? []) }
+        get {
+            Set((defaults.stringArray(forKey: Keys.agentWindowCollapsedSections) ?? [])
+                .map { $0 == "Sidekicks" ? AgentSidebar.groupFold(SessionGroup.sidekicksID) : $0 })
+        }
         set { defaults.set(newValue.sorted(), forKey: Keys.agentWindowCollapsedSections) }
     }
 

@@ -173,7 +173,9 @@ enum AgentSidebar {
     struct Section: Identifiable, Equatable {
         let title: String
         let rows: [Row]
-        var id: String { title }
+        /// #1759: the fold and drawn-items key: the title, a group's `groupFold(id)` (a rename keeps it, two groups never share it).
+        let id: String
+        init(title: String, rows: [Row], id: String? = nil) { self.title = title; self.rows = rows; self.id = id ?? title }
     }
 
     /// #1342: one drawn sidebar row: a row alone, or a group's live members (two or more) in group order, drawn as one row.
@@ -185,7 +187,7 @@ enum AgentSidebar {
         var stem: String?
     }
 
-    /// #1342 (S7, D5): the drawn rows of each section, by title. `compute` (the groups) is called once (R909-1: never per row). A group
+    /// #1342 (S7, D5): the drawn rows of each section, by id (#1759: a group section's is its fold key). `compute` (the groups) is called once (R909-1: never per row). A group
     /// with two live members or more is one item at its first member's place in the list (Needs you, Sessions, Sidekicks),
     /// its live members in group order, each taken from its own place; a group with one live member, a row in no group,
     /// History and other machines: each row its own item. No groups: one item per row, the rows `sections` holds. The
@@ -207,7 +209,7 @@ enum AgentSidebar {
         }
         var placed = Set<Int>(), out: [String: [Item]] = [:]
         for s in sections {
-            out[s.title] = s.rows.compactMap { r in
+            out[s.id] = s.rows.compactMap { r in
                 guard let i = at[r.id] else { return Item(id: r.id, rows: [r]) }
                 guard placed.insert(i).inserted, let first = members[i].rows.first else { return nil }
                 return Item(id: first.id, rows: members[i].rows, stem: members[i].stem)
@@ -253,7 +255,11 @@ enum AgentSidebar {
     static let otherMachinesTitle = "Other machines"   // #836
     /// #828: the sections a header click folds away. Needs you never folds: it is the list of
     /// sessions waiting on the human.
-    static let collapsible: Set<String> = ["Sessions", "Sidekicks", "Other machines", "History", "Layouts"]   // #901 B3 step 4b: Layouts
+    static let collapsible: Set<String> = ["Sessions", "Other machines", "History", "Layouts"]   // #901 B3 step 4b: Layouts
+    /// #1759: a session group's section folds by its id, never its name; the stored fold set keeps this string form.
+    static func groupFold(_ id: String) -> String { "group:" + id }
+    /// #1759: what a header click folds: a fixed title above or any group's section.
+    static func folds(_ id: String) -> Bool { collapsible.contains(id) || id.hasPrefix("group:") }
 
     /// Waiting for the human: blocked on a prompt, or done (the turn is over and the
     /// next message is theirs). Working and idle sessions are not.
@@ -270,11 +276,11 @@ enum AgentSidebar {
         let needs = sessions.filter(needsYou).sorted(by: before)
         let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), groups: groups)
         var out: [Section] = []
-        func add(_ title: String, _ rows: [Row]) { if !rows.isEmpty { out.append(Section(title: title, rows: rows)) } }
+        func add(_ title: String, _ rows: [Row], id: String? = nil) { if !rows.isEmpty { out.append(Section(title: title, rows: rows, id: id)) } }
         let live = { (s: AgentSession) in row(s, details: details, now: now, action: actions[s.key]) }
         add(needsYouTitle, needs.map(live))
         add("Sessions", rest.primary.map(live))
-        for g in rest.groups { add(g.group.name, g.sessions.map(live)) }   // #1757: one section per group, in order
+        for g in rest.groups { add(g.group.name, g.sessions.map(live), id: groupFold(g.group.id)) }   // #1757: one section per group, in order
         // #836: grouped under their host (host, then name), after the local live rows.
         add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
         // #1324 (a): after the local records (unchanged), each host's, capped per host as dch's picker does (50 names).
@@ -317,7 +323,7 @@ enum AgentSidebar {
                 }
                 rows.append(r)
             }
-            out.append(Section(title: section.title, rows: rows))
+            out.append(Section(title: section.title, rows: rows, id: section.id))
         }
         return out
     }
@@ -2111,19 +2117,19 @@ final class AgentWindowModel: ObservableObject {
     /// first History row left; nil when History is empty.
     static func neighbour(of id: AgentSessionKey, old: [AgentSidebar.Section],
                           new: [AgentSidebar.Section]) -> AgentSidebar.RowID? {
-        let was = old.first { $0.title == "History" }?.rows.map(\.id) ?? []
-        let now = new.first { $0.title == "History" }?.rows.map(\.id) ?? []
+        let was = old.first { $0.id == "History" }?.rows.map(\.id) ?? []
+        let now = new.first { $0.id == "History" }?.rows.map(\.id) ?? []
         guard let i = was.firstIndex(of: .history(id)) else { return now.first }
         return was[(i + 1)...].first { now.contains($0) } ?? was[..<i].reversed().first { now.contains($0) } ?? now.first
     }
 
     func isCollapsed(_ title: String) -> Bool {
-        sidebarMode != .mini && AgentSidebar.collapsible.contains(title) && collapsed.contains(title)   // #1383: Mini's rail draws no headers, so no fold
+        sidebarMode != .mini && AgentSidebar.folds(title) && collapsed.contains(title)   // #1383: Mini's rail draws no headers, so no fold
     }
 
     /// Folds or unfolds `title` (a header click); a section that never folds is left alone.
     func setCollapsed(_ title: String, _ on: Bool) {
-        guard sidebarMode != .mini, AgentSidebar.collapsible.contains(title) else { return }   // #1383: Mini never writes Full's fold
+        guard sidebarMode != .mini, AgentSidebar.folds(title) else { return }   // #1383: Mini never writes Full's fold
         if on { collapsed.insert(title) } else { collapsed.remove(title) }
     }
 
@@ -2135,18 +2141,18 @@ final class AgentWindowModel: ObservableObject {
             // QA #660 note 1: Right with nothing selected and nothing shown unfolds the first
             // folded section; then (or when rows show) it selects the first shown row.
             if !on, selection == nil {
-                if navigableIDs.isEmpty, let s = sections.first(where: { isCollapsed($0.title) }) { setCollapsed(s.title, false) }
+                if navigableIDs.isEmpty, let s = sections.first(where: { isCollapsed($0.id) }) { setCollapsed(s.id, false) }
                 move(1)
             }
             return
         }
-        setCollapsed(s.title, on)
+        setCollapsed(s.id, on)
     }
 
     /// The rows up/down walk: the shown ones, plus the selection where it sits when its
     /// section is folded (so a move goes to its neighbour, never into a folded section).
     var navigableIDs: [AgentSidebar.RowID] {
-        sections.flatMap { s in isCollapsed(s.title) ? s.rows.filter { $0.id == selection } : s.rows }.map(\.id)
+        sections.flatMap { s in isCollapsed(s.id) ? s.rows.filter { $0.id == selection } : s.rows }.map(\.id)
     }
 
     /// `manual`: the human's pick (a click, a key, a menu); it drops a pending follow-to-History.
@@ -2178,7 +2184,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// #845: the selection sits in a folded section (Right unfolds it before it moves in).
     var selectionFolded: Bool {
-        sections.first { $0.rows.contains { $0.id == selection } }.map { isCollapsed($0.title) } ?? false
+        sections.first { $0.rows.contains { $0.id == selection } }.map { isCollapsed($0.id) } ?? false
     }
 
     /// #845: a row click, Return or Right: the keyboard into the selected live session's terminal (once its client
@@ -2364,7 +2370,7 @@ final class AgentWindowModel: ObservableObject {
     /// view's own `drawnItems` (once per draw), the default reads it afresh.
     func numberedItems(_ drawn: [String: [AgentSidebar.Item]]? = nil) -> [AgentSidebar.Item] {
         let drawn = drawn ?? drawnItems
-        return Array(sections.filter { !isCollapsed($0.title) }.flatMap { drawn[$0.title] ?? [] }
+        return Array(sections.filter { !isCollapsed($0.id) }.flatMap { drawn[$0.id] ?? [] }
             .filter { $0.rows.first?.session != nil }.prefix(18))
     }
 

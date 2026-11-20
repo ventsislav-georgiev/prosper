@@ -1029,14 +1029,14 @@ struct AgentSidebarView: View {
                             ForEach(model.sections) { section in
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
-                                let folded = !mini && model.isCollapsed(section.title), inView = model.inViewRows
+                                let folded = !mini && model.isCollapsed(section.id), inView = model.inViewRows
                                 // #1342: a section whose rows all joined a group drawn above draws nothing.
-                                let items = drawn[section.title] ?? []
+                                let items = drawn[section.id] ?? []
                                 if !mini && !items.isEmpty {
                                     AgentSectionHeader(title: section.title, count: items.reduce(0) { $0 + $1.rows.count },
                                                        collapsed: folded,
-                                                       toggle: AgentSidebar.collapsible.contains(section.title)
-                                                           ? { model.toggleCollapsed(section.title) } : nil)
+                                                       toggle: AgentSidebar.folds(section.id)
+                                                           ? { model.toggleCollapsed(section.id) } : nil)
                                 }
                                 if !folded {
                                     ForEach(items) { item in
@@ -1053,7 +1053,7 @@ struct AgentSidebarView: View {
                                                 line(row, number: numbers[row.id], mini: mini, inView: inView, groups: groups)
                                             }
                                         }
-                                        .id(ItemID(section: section.title, row: item.id))
+                                        .id(ItemID(section: section.id, row: item.id))
                                     }
                                 }
                             }
@@ -1084,7 +1084,7 @@ struct AgentSidebarView: View {
     /// is its group's row.
     func item(_ id: AgentSidebar.RowID, _ drawn: [String: [AgentSidebar.Item]]) -> ItemID? {
         for s in model.sections {
-            if let i = drawn[s.title]?.first(where: { $0.rows.contains { $0.id == id } }) { return ItemID(section: s.title, row: i.id) }
+            if let i = drawn[s.id]?.first(where: { $0.rows.contains { $0.id == id } }) { return ItemID(section: s.id, row: i.id) }
         }
         return nil
     }

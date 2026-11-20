@@ -284,12 +284,13 @@ final class AgentIslandStore: ObservableObject {
         get { sessionGroups.first?.pattern ?? "" }
         set { sessionGroups = SessionGroup.sidekicks(newValue) }
     }
-    @Published var sidekickTab = false { didSet { dropStaleQuestions() } }
+    /// #1759: the chosen group tab's id; nil: Sessions.
+    @Published var groupTab: String? = nil { didSet { dropStaleQuestions() } }
     /// #908: the pair suffix (Settings > Pairs) the groups are read with; "" (pairing by name off) until
     /// the controller sets it, so a store a test builds outright draws no group item.
     @Published var pairSuffix = ""
     /// #578: `dch --history --json`'s records, newest first, read on open and
-    /// after an action; the History tab is chosen (it wins over `sidekickTab`).
+    /// after an action; the History tab is chosen (it wins over `groupTab`).
     @Published var history: [DchHistoryRecord] = [] { didSet { resetTab() } }
     @Published var historyTab = false
     /// #1536: the row the launcher command or its shortcut opened on (lit and scrolled to); nil once the island closes.
@@ -364,10 +365,12 @@ final class AgentIslandStore: ObservableObject {
         self.sessionGroups = SessionGroup.sidekicks(sidekickPattern)
     }
 
-    /// The last sidekick gone (or the tabs off): back to Sessions, so the next
-    /// sidekick to appear does not switch the list.
+    /// The chosen group's last session gone, or the group removed (or the tabs off): back to Sessions, so the
+    /// next session of that group to appear does not switch the list.
     private func resetTab() {
-        if sidekickTab, AgentIsland.split(sessions, groups: sessionGroups).firstGroup.isEmpty { sidekickTab = false }
+        if let id = groupTab, !AgentIsland.split(sessions, groups: sessionGroups).shownGroups.contains(where: { $0.group.id == id }) {
+            groupTab = nil
+        }
         if historyTab, history.isEmpty { historyTab = false }
     }
 
@@ -377,8 +380,8 @@ final class AgentIslandStore: ObservableObject {
 
     /// Sorted, then split. No sidekicks = no tabs and the whole list.
     var split: AgentIsland.Split { AgentIsland.split(AgentIsland.sorted(sessions, by: sort), groups: sessionGroups) }
-    /// #578: sidekicks or history.
-    var showsTabs: Bool { !split.firstGroup.isEmpty || !history.isEmpty }
+    /// #578: a group with sessions (#1759: any) or history.
+    var showsTabs: Bool { !split.shownGroups.isEmpty || !history.isEmpty }
     /// #1537 (OQ-95): the Claude plan usage line (session and weekly limit); nil: none drawn.
     @Published var planUsage: AgentPlanUsage?
     /// #1537: the tab row is drawn for the tabs or for the plan usage at its right end.
@@ -392,11 +395,11 @@ final class AgentIslandStore: ObservableObject {
     /// The session rows the list draws: the shown tab's half; none under History.
     var visible: [AgentSession] { historyTab ? [] : sessionTab.sessions }
 
-    /// #580: the Sessions or Sidekicks tab, the one shown (under History, the
+    /// #580: the Sessions or group tab, the one shown (under History, the
     /// one the list goes back to): its name and rows.
     var sessionTab: (label: String, sessions: [AgentSession]) {
         let s = split
-        return AgentIsland.showsSidekicks(s, tab: sidekickTab) ? (s.groups.first?.group.name ?? "", s.firstGroup) : ("Sessions", s.primary)
+        return AgentIsland.shownGroup(s, tab: groupTab).map { ($0.group.name, $0.sessions) } ?? ("Sessions", s.primary)
     }
 
     /// #580: Stop all's rows, the session tab's (#744: or every tab's) whose master can
@@ -595,7 +598,7 @@ struct AgentIslandView: View {
     var onRow: (AgentSession) -> Void = { _ in }
     var onAnswer: (AgentSession, AgentPrompt, AgentPromptOption) -> Void = { _, _, _ in }
     /// #571: a tab click, true = Sidekicks.
-    var onTab: (Bool) -> Void = { _ in }
+    var onTab: (String?) -> Void = { _ in }
     /// #578: the History tab, a history row's Resume, and Resume interrupted.
     var onHistory: () -> Void = {}
     var onResume: (DchHistoryRecord) -> Void = { _ in }
@@ -1043,19 +1046,26 @@ struct AgentIslandView: View {
     }
 
     /// #571: "Sessions (n)  Sidekicks (n)", plain text buttons; the shown one bright.
-    /// #578: "History (n)" after them; Sidekicks only when there are some.
-    private var tabRow: some View {
+    /// #578: "History (n)" after them. #1759: one "Name (n)" tab per group with sessions, in list order.
+    /// Many groups (8 names of up to 32 bytes) scroll sideways: every tab one line at its full width, none wraps or spills.
+    var tabRow: some View {
         let split = store.split, history = store.historyTab
-        let shows = AgentIsland.showsSidekicks(split, tab: store.sidekickTab)
+        let shown = AgentIsland.shownGroup(split, tab: store.groupTab)?.group.id, groups = split.shownGroups
         return HStack(spacing: 14) {
             if store.showsTabs {   // #1537: the row may be up for the plan usage alone
-                tab("Sessions (\(split.primary.count))", on: !history && !shows) { onTab(false) }
-                if let first = split.groups.first, !first.sessions.isEmpty {
-                    tab("\(first.group.name) (\(first.sessions.count))", on: !history && shows) { onTab(true) }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        tab("Sessions (\(split.primary.count))", on: !history && shown == nil) { onTab(nil) }
+                        ForEach(groups.indices, id: \.self) { i in
+                            let g = groups[i]
+                            tab("\(g.group.name) (\(g.sessions.count))", on: !history && shown == g.group.id) { onTab(g.group.id) }
+                        }
+                        if !store.history.isEmpty {
+                            tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }
+                        }
+                    }
                 }
-                if !store.history.isEmpty {
-                    tab("History (\(store.cappedHistory.count))", on: history) { onHistory() }
-                }
+                .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             if let u = store.planUsage {   // #1537 (OQ-95): the plan's session and weekly limit, dim like the header counts
@@ -1077,6 +1087,8 @@ struct AgentIslandView: View {
             Text(verbatim: title)
                 .font(.system(size: 11, weight: on ? .semibold : .regular))
                 .foregroundStyle(on ? AgentIslandInk.selectedTab : Color.white.opacity(0.45))
+                .lineLimit(1)
+                .fixedSize()   // #1759: never squeezed or wrapped; the row scrolls instead
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

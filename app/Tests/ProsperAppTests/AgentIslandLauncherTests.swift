@@ -73,7 +73,7 @@ final class AgentIslandLauncherTests: XCTestCase {
         XCTAssertTrue(c.openFocused())
         let store = try XCTUnwrap(c.store)
         XCTAssertEqual(store.focusKey?.name, "api-helper")
-        XCTAssertTrue(store.sidekickTab, "the sidekick's tab is shown")
+        XCTAssertTrue(store.groupTab == SessionGroup.sidekicksID, "the sidekick's tab is shown")
         XCTAssertEqual(store.visible.map(\.name), ["api-helper"])
     }
 

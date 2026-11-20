@@ -71,7 +71,7 @@ final class AgentSidebarGroupRowTests: XCTestCase {
                 let drawn = AgentSidebar.items(m.sections) { st.groups }
                 XCTAssertEqual(drawn.count, m.sections.count)
                 for s in m.sections {
-                    let items = drawn[s.title] ?? []
+                    let items = drawn[s.id] ?? []
                     XCTAssertEqual(items.map(\.rows), s.rows.map { [$0] }, "\(s.title): the rows, one per item")
                     XCTAssertEqual(items.map(\.id), s.rows.map(\.id))
                     XCTAssertTrue(items.allSatisfy { $0.stem == nil })

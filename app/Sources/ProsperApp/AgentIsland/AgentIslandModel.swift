@@ -249,8 +249,10 @@ enum AgentIsland {
     struct Split {
         var primary: [AgentSession]
         var groups: [(group: SessionGroup, sessions: [AgentSession])]
-        /// The first group's sessions: the island's one group tab until #1759 draws a section per group.
+        /// The first group's sessions (rows and the single-pattern callers).
         var firstGroup: [AgentSession] { groups.first?.sessions ?? [] }
+        /// #1759: the groups with sessions, in list order: one island tab and one sidebar section each.
+        var shownGroups: [(group: SessionGroup, sessions: [AgentSession])] { groups.filter { !$0.sessions.isEmpty } }
     }
 
     /// #1757: a session goes into the first group whose pattern matches it (as `matching`), else the main list.
@@ -543,9 +545,12 @@ enum AgentIsland {
         return sidekickEscaped(pattern.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Never without sidekicks; always when they are all there is; else the chosen tab.
-    static func showsSidekicks(_ split: Split, tab: Bool) -> Bool {
-        !split.firstGroup.isEmpty && (tab || split.primary.isEmpty)
+    /// #1759: the group tab shown: never without a group with sessions; the chosen one (by id) while it has sessions;
+    /// else, when the groups are all there is, the first with sessions; else none (Sessions).
+    static func shownGroup(_ split: Split, tab: String?) -> (group: SessionGroup, sessions: [AgentSession])? {
+        let live = split.shownGroups
+        if let tab, let g = live.first(where: { $0.group.id == tab }) { return g }
+        return split.primary.isEmpty ? live.first : nil
     }
 
     /// now, 4m, 2h, 3d, 1y — whole units, rounded down; #1114: no seconds, "now" under a minute.
