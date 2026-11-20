@@ -1,0 +1,13 @@
+{
+ "entry": "1745",
+ "filter": "AgentRowSelectedTextTests/testCountPillStrokesComeThroughDetailLineWiring",
+ "mutants": [
+  {
+   "name": "ownCardFalse",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "outlined: true, ownCard: inks != nil,",
+   "new": "outlined: true, ownCard: false,",
+   "expect": "killed"
+  }
+ ]
+}
