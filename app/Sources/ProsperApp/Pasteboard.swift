@@ -45,13 +45,16 @@ enum Pasteboard {
     }
 
     /// #1694: the read loop, over the items (a seam for the call-counting row). `dyn.*` types are conversions
-    /// macOS synthesizes on each read and the restore re-synthesizes them, so they are never read; every
-    /// concrete type is read exactly once.
+    /// macOS synthesizes on each read and the restore re-synthesizes them, so they are never read beside a
+    /// concrete type (#1695: an item of only dyn.* types is read as it is); every type read is read once.
     static func save(items: [NSPasteboardItem], cap: Int = saveByteCap) -> SavedClip {
         var saved = SavedClip()
         for item in items {
             var reps: [SavedClip.Representation] = []
-            for type in item.types where !type.rawValue.hasPrefix("dyn.") {
+            let all = item.types
+            // #1695: an item of only dyn.* types (an app type with no UTI) is kept; dyn.* is skipped beside a concrete type.
+            let concrete = all.filter { !$0.rawValue.hasPrefix("dyn.") }
+            for type in concrete.isEmpty ? all : concrete {
                 guard let data = item.data(forType: type) else { continue }
                 saved.bytesRead += data.count
                 guard saved.bytesRead <= cap else {

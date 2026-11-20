@@ -223,6 +223,31 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         XCTAssertEqual(saved.bytesRead, 20)
     }
 
+    /// #1695: an item whose only types are dyn.* (an app type with no UTI) is kept, each type read once.
+    func testSaveKeepsAnItemOfOnlyDynTypes() {
+        final class DynItem: NSPasteboardItem {
+            nonisolated(unsafe) var reads: [NSPasteboard.PasteboardType] = []
+            nonisolated(unsafe) var declared: [NSPasteboard.PasteboardType] = []
+            override var types: [NSPasteboard.PasteboardType] { declared }
+            override func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+                reads.append(type)
+                return Data(count: 10)
+            }
+        }
+        let only = DynItem()
+        let a = NSPasteboard.PasteboardType("dyn.age80g55"), b = NSPasteboard.PasteboardType("dyn.ah62d4rv4ge80e5pe")
+        only.declared = [a, b]
+        let mixed = DynItem()
+        mixed.declared = [a, .png]
+        let saved = Pasteboard.save(items: [only, mixed])
+        XCTAssertEqual(only.reads, [a, b])
+        XCTAssertEqual(mixed.reads, [.png], "beside a concrete type the dyn type is not read")
+        XCTAssertEqual(saved.items.count, 2)
+        XCTAssertEqual(saved.items.first?.map(\.type), [a, b])
+        XCTAssertEqual(saved.items.last?.map(\.type), [.png])
+        XCTAssertEqual(saved.bytesRead, 30)
+    }
+
     /// The snippet (plain and rich) and autocomplete paste paths all save and restore through the seam,
     /// so the three agree on the end state.
     func testEveryPastePathSavesAndRestoresThroughTheSeam() throws {
