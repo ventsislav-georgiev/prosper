@@ -18,4 +18,12 @@ enum KitSessionEnv {
             return out
         }
     }
+
+    /// #1684: the same PATH change as `--env PATH=<path>` for a local --revive (dch 1.94.0, applied after its login-shell
+    /// env, so an rc file cannot reorder the kit bins). `env` is the control env the spawn path starts from. Nothing to
+    /// add, or no PATH: no flag.
+    static func reviveFlags(kitBins: [String], env: [String: String]) -> [String] {
+        guard let path = contributor(kitBins: { kitBins })([], env)["PATH"], path != env["PATH"] else { return [] }
+        return ["--env", "PATH=\(path)"]
+    }
 }

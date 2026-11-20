@@ -21,6 +21,15 @@ final class KitSessionEnvTests: XCTestCase {
         XCTAssertEqual(rest, Self.base, "only PATH changes")
     }
 
+    /// #1684: the --revive flag is the contributor's PATH, once; nothing to add (or no PATH) gives no flag.
+    func testReviveFlagIsTheContributorsPath() {
+        XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: [Self.binA, Self.binB], env: Self.base),
+                       ["--env", "PATH=/Users/example/bin:/usr/bin:" + Self.binA + ":" + Self.binB])
+        XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: [], env: Self.base), [])
+        XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: ["/usr/bin"], env: Self.base), [])
+        XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: [Self.binA], env: ["DCH_SOCKET_DIR": "/d"]), [])
+    }
+
     func testNoKitAddsNothing() {
         XCTAssertEqual(run([]), Self.base, "no bins: byte-identical")
         XCTAssertEqual(run([], ["DCH_SOCKET_DIR": "/d"]), ["DCH_SOCKET_DIR": "/d"], "no bins, no PATH: still none")

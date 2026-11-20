@@ -234,6 +234,8 @@ final class AgentIslandController {
     /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
     /// and run on the runner's queue like a contributor. No runtime: none.
     var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
+    /// #1684: the live kits' bins for a Resume's `--env PATH=`, read on main like the spawn's (none while KitRuntimes is unset, as under XCTest).
+    var reviveKitBins: @MainActor () -> [String] = { KitRuntimes.shared?.liveBins() ?? [] }
     /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
     /// (the ccpool extension off, or under XCTest): none.
     var planUsage: @MainActor (_ now: Double) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0) }
@@ -501,9 +503,12 @@ final class AgentIslandController {
         // #1499: dch runs a login shell for --revive and takes its env, so an rc file's ANTHROPIC_* would win over the
         // routing above; 1.94.0's --env/--unset apply after it. Local only (dch refuses host:name); built on the runner's queue.
         var prepare: (@Sendable () -> (args: [String]?, out: Data))?
-        if let command, let args, store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.reviveEnvMinimum) }) == true,
-           let flags = reviveEnvFlags() {
-            prepare = { (args + flags(command), Data()) }
+        if let command, let args, store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.reviveEnvMinimum) }) == true {
+            let flags = reviveEnvFlags(), bins = reviveKitBins(), env = controlEnv, dir = r.key.dir
+            // #1684: PATH goes the way a spawn builds it (control env + kit bins appended), after the pool's flags.
+            if flags != nil || !bins.isEmpty {
+                prepare = { (args + (flags?(command) ?? []) + KitSessionEnv.reviveFlags(kitBins: bins, env: env(dir)), Data()) }
+            }
         }
         return run(key, alias: alias, dch: dch, args: args,
                    running: AgentIsland.resumingText, spawn: command,

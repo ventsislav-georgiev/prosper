@@ -534,6 +534,40 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         return rec.args.last
     }
 
+    private static let kitBin = "/Users/example/kits/com.example.kit-a/bin"
+
+    /// #1684: one single Resume with kit bins live; the argv it was handed. `pool` nil: no routing seam (the kit alone).
+    private func resumedWithKits(_ r: DchHistoryRecord, version: [Int], bins: [String], pool: Pool?) -> [String]? {
+        let rec = Recorder()
+        let c = controller(rec, routing: pool?.routing, version: version)
+        c.reviveKitBins = { bins }
+        c.store?.history = [r]
+        _ = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
+        return rec.args.last
+    }
+
+    /// Mutant kit-path-dropped: a local routed Resume on 1.94.0 passes the kit bins as --env PATH (control PATH first, bins appended),
+    /// after the pool's flags; with no routing the PATH flag stands alone.
+    func testResumeOnDch194PassesTheKitBinsAsEnvPath() {
+        let path = ["--env", "PATH=/Users/example/bin:/usr/bin:" + Self.kitBin]
+        XCTAssertEqual(resumedWithKits(record("api", argv: ["claude"]), version: [1, 94, 0], bins: [Self.kitBin], pool: Pool()),
+                       ["--revive", "api", "--json"] + Self.poolFlags + path)
+        XCTAssertEqual(resumedWithKits(record("api", argv: ["claude"]), version: [1, 94, 0], bins: [Self.kitBin], pool: nil),
+                       ["--revive", "api", "--json"] + path)
+    }
+
+    /// Mutants kit-path-below-gate and kit-path-remote: no PATH flag below 1.94.0, none for another machine's record, none
+    /// without a live kit bin or when the bin is already on PATH.
+    func testResumeKitPathFlagIsLocalAnd194Only() {
+        XCTAssertEqual(resumedWithKits(record("api", argv: ["claude"]), version: [1, 93, 9], bins: [Self.kitBin], pool: nil),
+                       ["--revive", "api", "--json"])
+        XCTAssertEqual(resumedWithKits(record("api", dir: "@example-host", argv: ["claude"]), version: [1, 94, 0], bins: [Self.kitBin], pool: Pool()),
+                       ["--revive", "api", "--json"])
+        XCTAssertEqual(resumedWithKits(record("api", argv: ["claude"]), version: [1, 94, 0], bins: [], pool: nil), ["--revive", "api", "--json"])
+        XCTAssertEqual(resumedWithKits(record("api", argv: ["claude"]), version: [1, 94, 0], bins: ["/usr/bin"], pool: nil),
+                       ["--revive", "api", "--json"])
+    }
+
     /// Mutant version-gate-off: below dch 1.94.0 the argv is as before (dch would refuse the flags).
     func testCCPoolResumeOnDch193HasNoEnvFlags() {
         let pool = Pool()

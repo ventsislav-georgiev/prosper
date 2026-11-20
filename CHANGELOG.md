@@ -2122,6 +2122,9 @@ tag from the now-released section and put it on the new top draft.
   Prosper could not read what was there before. (#1020)
 - Remote Terminal's live view (xray follow) now retries once, a second later, when dch is
   momentarily out of subscriber slots, instead of ending with 'dch: busy'. (#1680)
+- Resume now keeps the tools of your enabled kits on the resumed session's PATH, in the same order a
+  new session gets, even when your shell startup files reorder PATH (needs dch 1.94.0; resuming
+  another machine's session is unchanged). (#1684)
 
 ## v2.174.0
 
