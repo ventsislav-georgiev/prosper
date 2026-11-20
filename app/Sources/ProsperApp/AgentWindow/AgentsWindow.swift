@@ -250,6 +250,13 @@ final class AgentsNSWindow: NSWindow {
         return frames.first { $0.key != focused && $0.value.contains(p) }?.key
     }
 
+    /// #1707 (OQ-170 b), pure: `p` (the pane area's coordinates) lies in the one-line header at the top of `frame`
+    /// (AgentCompactHeader.height; the 1 pt line under it is the body's). nil frame: false.
+    static func inHeader(_ p: CGPoint, _ frame: CGRect?) -> Bool {
+        guard let f = frame else { return false }
+        return f.contains(p) && p.y < f.minY + AgentCompactHeader.height
+    }
+
     /// #900 B2 step 6b2b (R1196-1), pure: the focusing down (swallowed, so super.sendEvent never sees it) asks for key and
     /// front only while the window is not key; `isKey` is the window's isKeyWindow (rows pass a built value).
     static func asksKey(focusing: Bool, isKey: Bool) -> Bool { focusing && !isKey }
@@ -3101,13 +3108,16 @@ struct AgentPaneTerminalColumn: View {
     @ViewBuilder var header: some View {
         switch shown {
         case let .local(row, s, ended):
-            if focused {
+            if focused && !compact {
                 detail.header(row, s)
             } else {
+                // #1707: one header view, focused or not (detail.header's compact one, same arguments): the click on an
+                // unfocused pane's header focuses it, and the control under it keeps its identity to act on its up.
                 AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
-                                      ask: { model.ask($0, s) }, open: { model.openSession(s) },
+                                      ask: { model.ask($0, s) }, open: open,
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
-                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
+                                      panes: (focused ? [AgentWindowMenuEntry.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 } : [])
+                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
                                       xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))

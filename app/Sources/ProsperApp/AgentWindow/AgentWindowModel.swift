@@ -929,7 +929,8 @@ final class AgentWindowModel: ObservableObject {
     /// 7.2 / 7.6: a left mouse-down at `p` in the content of `size` (top-left origin). Outside data: a point or size that
     /// is not finite changes nothing. In the sidebar: the sidebar takes the keys. In a pane frame: the panes do, and an
     /// unfocused pane is focused (`AgentsNSWindow.firstClick`). Elsewhere (the 1 pt line, the band): nothing changes.
-    /// True: the click only focused a pane, so the window swallows it with its drags and its up.
+    /// True: the click only focused a pane, so the window swallows it with its drags and its up. #1707: a down in the
+    /// unfocused pane's header focuses it and passes (false), so the header control under it acts on that click.
     /// #900 B2 step 4b (7.4, N900-f): zoomed, the view draws the zoomed pane over the whole pane area and no other
     /// (AgentPaneArea.drawn), so a down anywhere in the area is that pane's: the panes take the keys and the click
     /// passes (never a hidden pane's tile). Checked after the finiteness guard, so it never reads a non-finite frame.
@@ -947,7 +948,8 @@ final class AgentWindowModel: ObservableObject {
         keyFocus = .pane
         guard let id = AgentsNSWindow.firstClick(at: local, frames: frames, focused: layout.focused) else { return false }
         focusPane(id)
-        return true
+        // #1707 (OQ-170 b): in the pane's header (X-ray, "...", the title chip) the same click acts too; the body only focuses.
+        return !AgentsNSWindow.inHeader(local, frames[id])
     }
 
     // MARK: 7.5 Dividers (#900 B2 step 5a; split gate on only)

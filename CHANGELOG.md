@@ -2164,6 +2164,9 @@ tag from the now-released section and put it on the new top draft.
   other apps. (#1715)
 - Phone chat: the model list now shows the model that actually answers while another model is
   loaded. (#1716)
+- Agent Sessions: with several panes, a click on a pane header's X-ray button, "..." menu or title
+  now works on the first click, even when that pane was not focused (it focuses the pane too); a
+  click in a pane's body still only focuses it. (#1707)
 
 ## v2.174.0
 

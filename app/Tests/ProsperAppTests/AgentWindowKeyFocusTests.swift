@@ -153,8 +153,9 @@ extension AgentWindowD1Tests {
     }
 
     /// 7.6 through the window's sendEvent, with built events handed to it (never posted; the window is never shown): a
-    /// down on the unfocused pane focuses it and starts the swallow, its up ends it; a sidebar down gives the sidebar
-    /// the keys. Window coordinates (bottom-left origin) reach the model's top-left frames.
+    /// down in the unfocused pane's BODY focuses it and starts the swallow, its up ends it; a sidebar down gives the
+    /// sidebar the keys. Window coordinates (bottom-left origin) reach the model's top-left frames. #1707 (OQ-170 b): a
+    /// down in its header focuses and passes instead (AgentWindowHeaderFirstClickTests).
     @MainActor
     func testAgentWindowSendEventSwallowsTheFocusingClick() throws {
         let gate = AgentPaneLayout.splitsEnabled
@@ -180,6 +181,7 @@ extension AgentWindowD1Tests {
         let area = try XCTUnwrap(m.paneAreaFrame(in: size))
         let f = try XCTUnwrap(m.paneFrames(in: CGRect(origin: .zero, size: area.size))[second])
         m.keyFocus = .sidebar
+        XCTAssertGreaterThanOrEqual(40 - area.minY - f.minY, AgentCompactHeader.height, "#1707 control: y 40 is the body's")
         win.sendEvent(mouse(.leftMouseDown, area.minX + f.midX, 40))
         XCTAssertEqual(m.layout.focused, second, "the first click focused the pane")
         XCTAssertTrue(win.focusClick.swallowing, "its down was swallowed")
