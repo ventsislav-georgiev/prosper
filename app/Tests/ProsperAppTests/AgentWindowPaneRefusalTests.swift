@@ -578,7 +578,8 @@ extension AgentWindowD1Tests {
         let listed: Set<String> = ["AgentWindowKeyFocusTests.swift",
                                    "AgentWindowSplitTerminalBTests.swift",   // #1477 b2 (R1477b-m1): right / middle clicks
                                    "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift",
-                                   "AgentWindowGroupChordTests.swift"]   // #1111: Control-Tab through sendEvent, gate on
+                                   "AgentWindowGroupChordTests.swift",   // #1111: Control-Tab through sendEvent, gate on
+                                   "AgentWindowHeaderFirstClickTests.swift"]   // #1707: header clicks through sendEvent, gate on
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil)
         var found: Set<String> = [], raises: [String: Bool] = [:], read = 0
