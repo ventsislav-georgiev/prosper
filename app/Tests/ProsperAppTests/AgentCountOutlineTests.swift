@@ -155,4 +155,28 @@ extension AgentRowSelectedTextTests {
         }
         XCTAssertEqual(pairs, 22 * 4)
     }
+
+    /// #1745 (QA r1733-stack n74): the wiring, not the static choice. The row's real detailLine draws its count groups; the probe reports
+    /// the stroke each group chose. The island card (inks set, as AgentIslandRow.inks builds them with Follow theme off) is white shells and
+    /// #9D7BEA agents; the sidebar (inks nil) keeps #1735's choice. `ownCard: inks != nil` -> `ownCard: false` turns the card's rows red.
+    @MainActor
+    func testCountPillStrokesComeThroughDetailLineWiring() throws {
+        var s = AgentSidebar.Row(id: .live(AgentSessionKey(dir: "/Users/example/work", name: "api")), title: "sec-1", state: .working,
+                                 detail: "Working", age: "", prs: [], prCount: 0, agents: 3, merged: 0)
+        s.shells = [DchShell(id: "1", pid: 1, started: 0, command: "make")]
+        let inks = AgentSidebarRowView.Inks(primary: .white, quiet: .white, blue: .blue, blocked: .orange, mark: .gray, badges: .default)
+        func strokes(_ inks: AgentSidebarRowView.Inks?) throws -> [String: String] {
+            var got: [String: String] = [:]
+            AgentCountGroups.strokeProbe = { [self] c, col in got["\(c)"] = col.map { "\(self.rgba($0))" } ?? "none" }
+            defer { AgentCountGroups.strokeProbe = nil }
+            let r = ImageRenderer(content: AgentSidebarRowView(row: s, selected: false, inks: inks).detailLine([]))
+            _ = try XCTUnwrap(r.cgImage)
+            return got
+        }
+        let card = try strokes(inks), side = try strokes(nil)
+        XCTAssertEqual(card["shells"], "\(rgba(.white))", "card shells stroke is white")
+        XCTAssertEqual(card["agents"], "\(rgba(AgentSidebarRowView.purpleLight))", "card agents stroke is #9D7BEA")
+        XCTAssertEqual(side["shells"], "\(rgba(AgentSidebarRowView.shellsStroke))", "sidebar shells unchanged")
+        XCTAssertEqual(side["agents"], "\(rgba(AgentSidebarRowView.agentsStroke))", "sidebar agents unchanged")
+    }
 }

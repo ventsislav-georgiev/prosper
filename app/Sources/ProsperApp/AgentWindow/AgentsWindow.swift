@@ -2321,11 +2321,15 @@ struct AgentCountGroups: View {
         }
     }
 
+    /// #1745: test-only hook, nil in the product (one nil check per group): reports the stroke each group draws, so a row proves the wiring from the caller's `ownCard`.
+    @MainActor static var strokeProbe: ((AgentSidebar.Count, Color?) -> Void)?
+
     var body: some View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
                     let pill = outlined ? Self.stroke(g.0, ownCard: ownCard) : nil   // #1558: the shells chip is a pill too
+                    let _ = Self.strokeProbe?(g.0, pill)
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
