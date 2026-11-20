@@ -1,0 +1,34 @@
+{
+ "entry": 1714,
+ "filter": "CCPoolTakeOverTests",
+ "mutants": [
+  {
+   "name": "other-ends-wait",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "                case .other, .ccpool: break\n",
+   "new": "                case .other, .ccpool: break wait\n",
+   "expect": "killed"
+  },
+  {
+   "name": "skip-port-wait",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "            if !listening {\n                switch",
+   "new": "            if !listening { break wait }\n            if false {\n                switch",
+   "expect": "killed"
+  },
+  {
+   "name": "new-ccpool-waits",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "case .ccpool(let q?, _) where q != pid: break wait",
+   "new": "case .ccpool(let q?, _) where q != pid && false: break wait",
+   "expect": "killed"
+  },
+  {
+   "name": "ceiling-binds-anyway",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "                guard listening else {\n",
+   "new": "                guard false else {\n",
+   "expect": "killed"
+  }
+ ]
+}
