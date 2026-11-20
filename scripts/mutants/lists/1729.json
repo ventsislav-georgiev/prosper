@@ -1,0 +1,41 @@
+{
+ "entry": "1729",
+ "filter": "KitEnvPieceTests|KitRenderTests",
+ "mutants": [
+  {
+   "name": "m1-owner-ignored",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "(kit && isEnvSlot(path)), !(",
+   "new": "isEnvSlot(path), !(",
+   "expect": "killed"
+  },
+  {
+   "name": "m2-bypass-open",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "(kit && (path == bypassPath || isEnvSlot(path)))",
+   "new": "(path == bypassPath || (kit && isEnvSlot(path)))",
+   "expect": "killed"
+  },
+  {
+   "name": "m3-owner-not-passed",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "kit: owner.isKit)",
+   "new": "kit: true)",
+   "expect": "killed"
+  },
+  {
+   "name": "m4-kit-flag-dropped",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "extensionDir: kitDir, isKit: true)",
+   "new": "extensionDir: kitDir)",
+   "expect": "killed"
+  },
+  {
+   "name": "m5-warning-always",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+   "old": "ManagedConfigPlanner.envWarnings[key]",
+   "new": "ManagedConfigPlanner.envWarnings.values.first",
+   "expect": "killed"
+  }
+ ]
+}
