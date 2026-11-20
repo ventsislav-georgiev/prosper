@@ -1,0 +1,111 @@
+{
+ "entry": "1760",
+ "filter": "XrayRichTextTests|XrayCardPresenterTests|XrayRefContextTests",
+ "mutants": [
+  {
+   "name": "M1-no-untag",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "AttributedString(markdown: untag(l), options: opts)",
+   "new": "AttributedString(markdown: l, options: opts)",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-no-clean-after-parse",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "if OutsideText.isUnseen(u) { continue }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-no-hit-split",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "if u == hitOpen || u == hitClose {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-no-markdown-parse",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "(try? AttributedString(markdown: untag(l), options: opts)) ?? AttributedString(l)",
+   "new": "AttributedString(untag(l))",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-escape-closes-at-once",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "if filter.isEmpty { close() } else { filter = \"\" }",
+   "new": "close()",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-filter-ignores-speaker",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": " || speaker(m)?.lowercased().contains(q) == true",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-definition-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "@State var tab: Tab = .mentions",
+   "new": "@State var tab: Tab = .definition",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-no-resign-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "if let self, let p, self.panel === p { self.close() }",
+   "new": "_ = (self, p)",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-no-escape-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "override func cancelOperation(_ sender: Any?) { onCancel?() }",
+   "new": "override func cancelOperation(_ sender: Any?) {}",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-drawer-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "        if let d = drawer {",
+   "new": "        if let d = drawer, false {",
+   "expect": "killed"
+  },
+  {
+   "name": "M11-no-size-clamp",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "let w = min(size.width, max(1, screen.width - 2 * m)), h = min(size.height, max(1, screen.height - 2 * m))",
+   "new": "let w = size.width, h = size.height",
+   "expect": "killed"
+  },
+  {
+   "name": "M12-parse-per-draw",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "        var out = AttributedString()\n",
+   "new": "        _ = XrayRich.runs(\"x\", max: 1)\n        var out = AttributedString()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M13-hover-takes-key",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "order(p, win, key ? .showKey : .showQuiet)",
+   "new": "order(p, win, .showKey)",
+   "expect": "killed"
+  },
+  {
+   "name": "M14-no-promote",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "        quiet = false\n        onPromote?()\n",
+   "new": "        quiet = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M15-cache-hit-parses-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "m.takeRef((0, hit.out), parsed: hit.parsed, text:",
+   "new": "m.takeRef((0, hit.out), parsed: nil, text:",
+   "expect": "killed"
+  }
+ ]
+}
