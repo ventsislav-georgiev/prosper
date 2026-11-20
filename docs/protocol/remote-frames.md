@@ -140,7 +140,7 @@ Every frame, in both directions:
     next frame is read; 0x02 gets no reply (its session's output follows).
   - The phone sends one request per connection.
 - **One in flight.** These Mac-only requests allow one in flight per connection: 0x0b-0x0f,
-  0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d. Another of them while one is in
+  0x15, 0x16, 0x1e, 0x1f, 0x22-0x26, 0x28, 0x29, 0x2c, 0x2d, 0x2f. Another of them while one is in
   flight gets `0x13 {"message": "busy with an earlier request"}` at once, ahead of the first
   one's reply. 0x30 ctl allows one in flight per connection too, answered with `dch serve`'s coded
   busy instead (see [0x30 ctl](#0x30-ctl-gate-ctl)); a 0x30 while a Mac-only request is in flight
@@ -252,6 +252,7 @@ Prosper's ops and their frames:
 | `forget` | 0x25, 0x26 | always |
 | `snippets_put` | 0x2c | always |
 | `sidekick` | 0x2d (and the 0x2e stream's sidekick frame) | always |
+| `groups` | 0x2f (and the 0x2e stream's groups key) | always (#1756) |
 | `clipboard` | 0x15, 0x16, 0x17, 0x22, 0x23 | while clipboard sync is on |
 | `clipboard_max_side` | 0x16's `max_side` | only beside `clipboard` |
 | `chat` | 0x1e, 0x1f | while the agent model is on disk |
@@ -292,7 +293,7 @@ A **dch server** serves the core subset; everything else is Mac-only and absent 
 | 0x33 | ctlExit | S→C | yes (1.1) | |
 | 0x34 | ctlCancel | C→S | yes (1.1) | `ctl-cancel` |
 | 0x0a | putClipboard | C→S | no (Mac) | `paste_image` (or `server` `"prosper"`/absent) |
-| 0x0b-0x0f, 0x15-0x17, 0x1a-0x1f, 0x20-0x2d | see below | | no (Mac) | per `ops` |
+| 0x0b-0x0f, 0x15-0x17, 0x1a-0x1f, 0x20-0x2d, 0x2f | see below | | no (Mac) | per `ops` |
 
 ## Core frames
 
@@ -319,7 +320,7 @@ Example (Prosper, clipboard sync off, no model, commands off, no watch):
 {"device_id": "3f9a…", "hostname": "Studio", "name": "Studio", "server": "prosper",
  "os": "macOS 27.0", "proto": "1.1",
  "ops": ["history", "revive", "restart", "stop", "library", "pin", "forget", "snippets_put",
-         "sidekick", "create", "paste_image", "ctl"]}
+         "sidekick", "groups", "create", "paste_image", "ctl"]}
 ```
 
 A `dch serve` without `--allow-create` does not list `create`; it lists `paste_image` only once
@@ -372,8 +373,9 @@ A second 0x2e on a connection that is already a stream is ignored: no reply, the
 
 Stream, all server to client, until either side closes:
 1. **Snapshot first**: one 0x11 listResp with the whole list.
-2. If `sidekick` is in ops: `0x14 {"sidekick": {"pattern": string, "updated": int}}`, then again
-   whenever the pattern changes, at most one per second (the trailing value always sent).
+2. If `sidekick` is in ops: `0x14 {"sidekick": {"pattern": string, "updated": int}, "groups": {"groups": [{id, name, pattern}], "updated": int}}`
+   (the `groups` value is what 0x2f answers, #1756; `sidekick` mirrors group 0's pattern, "" with none), then again
+   whenever the pattern or the groups change, at most one per second (the trailing value always sent).
 3. **Changes**: a 0x11 whenever the payload differs from the last one sent, **coalesced** to at
    most one per second; the trailing change is always sent. A change back to what the client
    has sends nothing.
@@ -807,6 +809,7 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 | 0x26 | forgetAll | empty or `{}` | 0x14 `{cleared, skipped, failed}` | `forget` |
 | 0x2c | putPhoneSnippets | `{device_id, device_name?, hash, snippets}` | 0x14 `{count, hash}` | `snippets_put` |
 | 0x2d | sidekickSync | `{"pattern": string, "updated": int ms}` | 0x14 `{pattern, updated}` (the newer wins) | `sidekick` |
+| 0x2f | groupsSync | `{}` reads; `{"groups": [{id, name, pattern}], "updated": int ms}` writes (unknown keys ignored) | 0x14 `{groups, updated}` (the winner: the newer `updated` wins, a tie keeps the Mac's; `groups` in match order, `[]` = no split, `updated` 0 = never edited) | `groups` |
 | 0x15 | clipboardList | `{limit?: 1-100, before?: id, since?: ISO8601}` | 0x1d `[{id, date, kind, source, size, text?, thumb?, name?}]` | `clipboard` |
 | 0x16 | clipboardItem | `{id, offset?, max_side?}` | 0x1a `{id, date, kind, source, size, sha256, name?, mime?}`, 0x10 chunks (≤1 MiB), then 0x14 | `clipboard` |
 | 0x17 | putClipboardText | `{"text"}` | 0x14 | `clipboard` |
@@ -816,6 +819,18 @@ bytes as an image (see [M11](#known-gaps)); its gate is `paste_image` or a Prosp
 | 0x1f | chat | `{model?, messages: [{role, content}], max_tokens?}` | 0x20 `{text}` deltas, then 0x21 `{stop}` | `chat` |
 | 0x28 | commands | empty or `{}` | 0x2a `[{id, title, subtitle?, ext, argument?, icon?}]` | `commands` |
 | 0x29 | runCommand | `{id, argument?}` | 0x2b `{text, detail?}` | `commands` |
+
+#### 0x2f groupsSync limits (#1756)
+
+Checked on every write, whoever wins. At most 8 groups; `id` 1-64 ASCII `[A-Za-z0-9_-]`; `name`
+1-32 UTF-8 bytes (trimmed), no `=` or control characters, unique case-insensitively; `pattern` at
+most 512 UTF-8 bytes; `id` unique. Exactly one reply: 0x14, or 0x13 `{"message"}` with one of:
+
+- `malformed groupsSync request: send {} to read, or {"groups": [...], "updated": <ms>}`
+- `more than 8 groups`
+- `group name must be 1-32 UTF-8 bytes without = or control characters`
+- `group pattern over 512 UTF-8 bytes`
+- `duplicate group id or name`
 
 A 0x14 with `"message"` is a partial success: done, with a line for the user. 0x25 forget sends one
 when it kept pinned records. 0x0c revive sends one (#861) when dch revived a session but did not
@@ -998,7 +1013,8 @@ rules above; each item is either a known limit of the code or a decision still o
   so fixture 08 accepts either.
 - **M6. The watch stream's sidekick frame.** Prosper sends `0x14 {"sidekick"}` on every stream
   (it always lists `sidekick`). This spec makes it conditional on `sidekick` in `ops`, so a dch
-  server need not invent one.
+  server need not invent one. Since #1756 the same frame also carries `"groups"` (what 0x2f
+  answers); a phone sends 0x2f only when `groups` is in `ops`, else 0x2d.
 - **M7. Any tailnet peer is trusted** (resolved, #777). Prosper checked only the peer's
   address, so every device on the tailnet, nodes shared into it included, could connect. Since
   #777 it runs the owner check on every connection; see
