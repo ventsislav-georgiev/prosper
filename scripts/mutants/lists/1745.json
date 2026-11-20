@@ -1,6 +1,6 @@
 {
  "entry": "1745",
- "filter": "AgentRowSelectedTextTests/testCountPillStrokesComeThroughDetailLineWiring",
+ "filter": "AgentRowSelectedTextTests/testCountInksComeThroughDetailLineWiring",
  "mutants": [
   {
    "name": "ownCardFalse",

@@ -85,6 +85,17 @@ class FilterRegex(unittest.TestCase):
         p = self.problems("FooTests|(FooTests|FooTests)|FooTests)")
         self.assertEqual(len([e for e in p if e.startswith("filter is not a valid regex: ")]), 1)
 
+    def test_file_name_removed_row_and_live_extension_row(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "app", "Tests"))
+            with open(os.path.join(d, "app", "Tests", "AgentFocusTests.swift"), "w") as fh:
+                fh.write("extension FooTests {\n    func testLive() {}\n}\n")
+            with open(os.path.join(d, "app", "Tests", "A.swift"), "w") as fh:
+                fh.write("final class FooTests {\n    func testOther() {}\n}\n")
+            self.assertEqual(run.filter_problems("FooTests/testLive", d), [])  # live extension row
+            self.assertEqual(run.filter_problems("AgentFocusTests", d), ["filter class AgentFocusTests not found"])  # file name
+            self.assertEqual(run.filter_problems("FooTests/testGone", d), ["filter test FooTests/testGone not found"])  # removed row
+
     def test_valid_filter_has_no_problem(self):
         self.assertEqual(self.problems("FooTests|(FooTests)"), [])
 

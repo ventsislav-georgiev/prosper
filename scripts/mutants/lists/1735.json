@@ -1,6 +1,6 @@
 {
  "entry": "1735",
- "filter": "AgentRowModelEffortTests/testAgentsCountOutlineOnTheLadderAtFiveAnd128|AgentRowModelEffortTests/testAgentsCountStrokeIsPurple|AgentRowModelEffortTests/testShellsCountDraws|AgentRowSelectedTextTests/testCountPillStrokes|AgentRowModelEffortTests/testRobot1453",
+ "filter": "AgentRowModelEffortTests/testAgentsCountOutlineOnTheLadderAtFiveAnd128|AgentRowModelEffortTests/testCountInksArePurpleAndWhiteWithAndWithoutIncreaseContrast|AgentRowModelEffortTests/testShellsCountDraws|AgentRowSelectedTextTests/testCountInksClearThreeToOneOnEveryTheme|AgentRowModelEffortTests/testRobot1453",
  "mutants": [
   {
    "name": "shells-always-white",

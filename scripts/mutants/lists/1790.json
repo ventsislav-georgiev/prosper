@@ -1,6 +1,6 @@
 {
  "entry": "1790",
- "filter": "AgentTerminalKeepTests|AgentWindowD1Tests/testAgentWindowKeptClients|AgentWindowD1Tests/testAgentWindowUnfocusedPaneSwitchingSessionKeepsItsOldClient|AgentWindowD1Tests/testAgentWindowNewSessionFormLeavesTheKeptClientsAlone|AgentWindowTerminalModeTests",
+ "filter": "AgentTerminalKeepTests|AgentWindowD1Tests/testAgentWindowKeptClients|AgentWindowD1Tests/testAgentWindowUnfocusedPaneSwitchingSessionKeepsItsOldClient|AgentWindowD1Tests/testAgentWindowNewSessionFormLeavesTheKeptClientsAlone|AgentWindowD1Tests/(testAgentWindowTerminalModeNeverShowsWhereNothingCanAttach|testAgentWindowTerminalAttachesOnlyToAVisibleSelectedLiveSessionInTerminalMode|testAgentWindowKeyRoutesForEveryResponder|testAgentWindowCommandArrowsSkipATextViewAndTheTerminalKeepsItsKeys)",
  "mutants": [
   {
    "name": "cap_per_pane",

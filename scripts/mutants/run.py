@@ -122,14 +122,29 @@ def swift(args, app, log, timeout):
         return rc, fh.read().decode("utf-8", "replace")
 
 
+_TEST_FILES = {}
+
+
+def test_files(root):
+    """Per app/Tests file: (classes declared, classes declared or extended, funcs); read once per root."""
+    if root not in _TEST_FILES:
+        out = []
+        for d, _, fs in os.walk(os.path.join(root, "app", "Tests")):
+            for f in fs:
+                if f.endswith(".swift"):
+                    with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
+                        t = fh.read()
+                    own = set(re.findall(r"\bclass\s+(\w+)", t))  # also matches `final class`
+                    out.append((own, own | set(re.findall(r"\bextension\s+(\w+)", t)), re.findall(r"\bfunc\s+(\w+)", t)))
+        _TEST_FILES[root] = out
+    return _TEST_FILES[root]
+
+
 def filter_problems(flt, root):
-    """--dry-run: every plain Class or Class/test in the filter must exist in app/Tests (a class or an extension)."""
-    src = ""
-    for d, _, fs in os.walk(os.path.join(root, "app", "Tests")):
-        for f in fs:
-            if f.endswith(".swift"):
-                with open(os.path.join(d, f), encoding="utf-8", errors="replace") as fh:
-                    src += fh.read()
+    """--dry-run: every plain Class or Class/test in the filter must select a test in app/Tests.
+    A Class must be declared as a class (an extension adds rows, its file name is not a class);
+    a Class/test needs `func test` in a file that declares or extends the class."""
+    files = test_files(root)
     errs = []
     try:
         re.compile(flt)
@@ -143,10 +158,10 @@ def filter_problems(flt, root):
         cls, _, fn = alt.partition("/")
         if not re.fullmatch(r"\w+", cls) or (fn and not re.fullmatch(r"\w+", fn)):
             continue  # a regex: shortcut, not checked
-        # shortcut: names match as prefixes (the filter is a regex); a test is found by `func name` anywhere in the tests.
-        if not re.search(r"\b(class|extension|struct)\s+" + cls, src):
+        # shortcut: names match as prefixes (the filter is a regex), like the xctest filter.
+        if not any(n.startswith(cls) for own, _, _ in files for n in own):
             errs.append(f"filter class {cls} not found")
-        elif fn and not re.search(r"\bfunc\s+" + fn, src):
+        elif fn and not any(f.startswith(fn) for _, ext, fs in files if any(n.startswith(cls) for n in ext) for f in fs):
             errs.append(f"filter test {alt} not found")
     return errs
 

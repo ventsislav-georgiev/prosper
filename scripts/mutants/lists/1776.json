@@ -1,6 +1,6 @@
 {
  "entry": "1776",
- "filter": "AgentRowModelEffortTests|AgentRowSelectedTextTests|AgentIslandRowStyleTests|DchShellsTests|AgentCountOutlineTests|AgentRobotCountTests",
+ "filter": "AgentRowModelEffortTests|AgentRowSelectedTextTests|AgentIslandRowStyleTests|DchShellsTests",
  "mutants": [
   {
    "name": "tint_dropped",
