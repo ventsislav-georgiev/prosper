@@ -1,0 +1,83 @@
+{
+ "entry": "1723",
+ "filter": "PVCommandTests",
+ "mutants": [
+  {
+   "name": "no_refuse_foreign",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "if [ -L \\(t) ] || { [ -e \\(t) ] && ! /usr/bin/grep -qF \\(quote(marker)) \\(t); }; then ",
+   "new": "if false; then ",
+   "expect": "killed"
+  },
+  {
+   "name": "follow_link",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "if [ -L \\(t) ] || {",
+   "new": "if false || {",
+   "expect": "killed"
+  },
+  {
+   "name": "uninstall_any",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "if [ -f \\(t) ] && [ ! -L \\(t) ] && /usr/bin/grep -qF \\(quote(marker)) \\(t); then /bin/rm",
+   "new": "if [ -f \\(t) ]; then /bin/rm",
+   "expect": "killed"
+  },
+  {
+   "name": "no_mkdir",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "/bin/mkdir -p \\(dir) && ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_relative",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "case $f in /*) ;; *) f=$PWD/$f ;; esac",
+   "new": ":",
+   "expect": "killed"
+  },
+  {
+   "name": "unquoted_path",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "open -a \"$app\" \"$f\" || rc=1",
+   "new": "open -a \"$app\" $f || rc=1",
+   "expect": "killed"
+  },
+  {
+   "name": "stdin_no_txt",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "f=$d/stdin.txt",
+   "new": "f=$d/stdin",
+   "expect": "killed"
+  },
+  {
+   "name": "no_usage_exit",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "          exit 2\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "state_ignores_marker",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "return text.contains(marker) ? .outdated : .other",
+   "new": "return .outdated",
+   "expect": "killed"
+  },
+  {
+   "name": "link_is_ours",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "guard attrs[.type] as? FileAttributeType == .typeRegular,",
+   "new": "guard true,",
+   "expect": "killed"
+  },
+  {
+   "name": "as_escape_quote",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": ".replacingOccurrences(of: \"\\\"\", with: \"\\\\\\\"\")",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
