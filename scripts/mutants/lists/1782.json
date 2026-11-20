@@ -5,15 +5,15 @@
   {
    "name": "no-keep",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "if key != nil, keptCap > 1 { keepShown() }",
-   "new": "if key != nil, keptCap > 99 { keepShown() }",
+   "old": "if key != nil || leave == .keep, keptCap > 1 { keepShown() }",
+   "new": "if key != nil || leave == .keep, keptCap > 99 { keepShown() }",
    "expect": "killed"
   },
   {
    "name": "evict-late",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "while kept.count > keptCap - 1 {",
-   "new": "while kept.count > keptCap {",
+   "old": "while peers.reduce(0, { $0 + $1.kept.count }) > keptCap - 1,",
+   "new": "while peers.reduce(0, { $0 + $1.kept.count }) > keptCap,",
    "expect": "killed"
   },
   {
@@ -26,8 +26,8 @@
   {
    "name": "nil-keeps",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "if key == nil { dropKept() }",
-   "new": "if key == nil { }",
+   "old": "if key == nil, leave == .end { dropKept() }",
+   "new": "if key == nil, leave == .end { }",
    "expect": "killed"
   },
   {
