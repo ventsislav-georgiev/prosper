@@ -2149,7 +2149,7 @@ tag from the now-released section and put it on the new top draft.
 - ccpool: taking over the port from the Python ccpool (the pane's "Stop ccpool and start" or
   prosper://ccpool/takeover) now waits until the port is really free before Prosper starts its
   proxy, instead of giving up a moment after stopping ccpool and leaving every session without its
-  API; if the port never frees, the pane says so and the log names the reason.
+  API; if the port never frees, the pane says so and the log names the reason. (#1714)
 
 ## v2.174.0
 
