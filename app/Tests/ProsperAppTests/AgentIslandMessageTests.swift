@@ -153,6 +153,79 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertFalse(store.actions.values.contains { $0.contains("check the") }, "the text is never on a row")
     }
 
+    /// #1733: "Sent" hides after the 10 s seam like "Allowed automatically"; an error line (too long) never arms a clear;
+    /// the older timer clears nothing newer.
+    @MainActor
+    func testSentHidesAfterTenSecondsAndAnErrorLineStays() throws {
+        let p = Proc()
+        p.out["/d"] = (Self.say("api", "ok"), 0)
+        let c = controller(p, [session("api")])
+        let store = try XCTUnwrap(c.store)
+        let api = AgentSessionKey(dir: "/d", name: "api")
+        var waits: [(TimeInterval, @MainActor @Sendable () -> Void)] = []
+        c.noteAfter = { d, fire in waits.append((d, fire)) }
+        c.askMessage(session("api"))
+        store.typeMessage("hello")
+        c.sendMessage()
+        settle { store.actions[api] == "Sent" }
+        XCTAssertEqual(store.actions[api], "Sent")
+        XCTAssertEqual(waits.map(\.0), [10], "one clear armed")
+        let old = waits.last?.1
+        store.actions[api] = "Restart failed: example"   // an error line replaced it
+        old?()
+        XCTAssertEqual(store.actions[api], "Restart failed: example", "the older timer: a no-op over another text")
+        store.actions[api] = nil
+        c.askMessage(session("api"))
+        store.typeMessage("again")
+        c.sendMessage()
+        settle { store.actions[api] == "Sent" }
+        XCTAssertEqual(waits.count, 2)
+        old?()
+        XCTAssertEqual(store.actions[api], "Sent", "the older timer is a no-op over the newer set")
+        waits.last?.1()
+        XCTAssertTrue(store.actions[api] == nil, "gone after")
+        store.actions[api] = nil
+        c.askMessage(session("api"))
+        store.typeMessage(String(repeating: "x", count: AgentIsland.messageCap + 1))
+        c.sendMessage()
+        XCTAssertEqual(store.actions[api], AgentIsland.messageTooLongText)
+        XCTAssertEqual(waits.count, 2, "an error line arms nothing")
+    }
+
+    /// #1733: the info set is the verbs' done words, a Kill's outcomes and the auto-allow note; errors are outside it.
+    func testInfoNotesAreTheGoodNewsTextsOnly() {
+        for t in ["Sent", "Restarted", "Stopped", "Resumed", "Pinned", "Cleared", AgentIsland.killedText,
+                  AgentIsland.alreadyEndedText, AgentIsland.autoAllowedText] {
+            XCTAssertTrue(AgentIsland.infoNotes.contains(t), t)
+        }
+        for t in ["Restart failed: example", AgentWindowText.notDelivered, AgentIsland.messageBusyText, AgentIsland.messageTooLongText,
+                  "1 failed", AgentIsland.sendingText] {
+            XCTAssertFalse(AgentIsland.infoNotes.contains(t), t)
+        }
+    }
+
+    /// #1733: an inline notice ("Attach command copied") hides after the 10 s seam; a newer notice is not cleared by the older timer.
+    @MainActor
+    func testAnAttachNoticeHidesAfterTenSeconds() throws {
+        let c = controller(Proc(), [session("api")])
+        let store = try XCTUnwrap(c.store)
+        let api = AgentSessionKey(dir: "/d", name: "api")
+        var waits: [(TimeInterval, @MainActor @Sendable () -> Void)] = []
+        c.noteAfter = { d, fire in waits.append((d, fire)) }
+        c.clickAction = { .copy }
+        c.jumpTarget = { _ in .notAttached }
+        c.jump(session("api"))
+        XCTAssertEqual(store.notices[api], "Attach command copied")
+        XCTAssertEqual(waits.map(\.0), [10])
+        let old = waits.last?.1
+        c.jump(session("api"))
+        XCTAssertEqual(waits.count, 2)
+        old?()
+        XCTAssertEqual(store.notices[api], "Attach command copied", "the older timer is a no-op")
+        waits.last?.1()
+        XCTAssertTrue(store.notices[api] == nil, "gone after")
+    }
+
     /// A row's result: "Sent" for ok, else dch's detail; a reply about another name, non-JSON output and a
     /// non-zero exit read failed; the 60 s bound reads cancelled.
     func testRowTextsFromSayReplies() {

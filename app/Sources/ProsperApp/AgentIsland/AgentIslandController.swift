@@ -760,7 +760,7 @@ final class AgentIslandController {
     /// QA #572 INFO-1: a Stop's or Restart's row text, unless a Kill cut through it:
     /// then the row keeps the Kill's outcome, and the text is held for a Kill that fails.
     private func setRow(_ key: AgentSessionKey, _ text: String) {
-        if killedRows[key] != nil { killedRows[key] = text } else { store?.actions[key] = text }
+        if killedRows[key] != nil { killedRows[key] = text } else { store?.actions[key] = text; noteInfo(key) }
     }
 
     /// A dir job's end: the summary on the dir line; a row left on a running
@@ -1149,6 +1149,7 @@ final class AgentIslandController {
             let text = AgentIsland.killText(r)
             if AgentIsland.killed(r) || AgentIsland.killGone(r) {
                 self.store?.actions[key] = text
+                self.noteInfo(key)
             } else {
                 // #749 (QA #572 INFO-R4): a failed or cancelled Kill hands the row back to the Stop
                 // or Restart it cut through: a result of theirs held back shows first; a phase (or
@@ -2116,15 +2117,33 @@ final class AgentIslandController {
     private func noteAllowed(_ key: AgentSessionKey) {
         guard !runner.isBusy(key), [nil, AgentIsland.autoAllowedText].contains(store?.actions[key]) else { return }
         store?.actions[key] = AgentIsland.autoAllowedText
-        // #1727: an info line hides by itself; one timer per set, and only its own text goes (a newer text, an error line, stays).
+        armNote(key, AgentIsland.autoAllowedText, notice: false)
+    }
+
+    /// #1727, #1733: an info line hides by itself; one timer per set, and only its own text goes (a newer text, an error line, stays).
+    /// `notice`: the row's inline notice (store.notices) instead of its action text (store.actions); each has its own chain.
+    private func armNote(_ key: AgentSessionKey, _ text: String, notice: Bool) {
         noteSeq += 1
         let id = noteSeq
-        noteChain[key] = id
+        if notice { noticeChain[key] = id } else { noteChain[key] = id }
         noteAfter(Self.noteLife) { [weak self] in
-            guard let self, self.noteChain[key] == id else { return }
-            self.noteChain[key] = nil
-            if self.store?.actions[key] == AgentIsland.autoAllowedText { self.store?.actions[key] = nil; self.layout() }
+            guard let self, (notice ? self.noticeChain[key] : self.noteChain[key]) == id else { return }
+            if notice { self.noticeChain[key] = nil } else { self.noteChain[key] = nil }
+            guard (notice ? self.store?.notices[key] : self.store?.actions[key]) == text else { return }
+            if notice { self.store?.notices[key] = nil } else { self.store?.actions[key] = nil }
+            self.layout()
         }
+    }
+
+    /// #1733: the row's action text just set is an info note (AgentIsland.infoNotes): it hides like "Allowed automatically"; any other text is an error or a count and stays.
+    private func noteInfo(_ key: AgentSessionKey) {
+        if let t = store?.actions[key], AgentIsland.infoNotes.contains(t) { armNote(key, t, notice: false) }
+    }
+
+    /// #1733: an inline notice ("Attach command copied", ...) is always info.
+    private func setNotice(_ key: AgentSessionKey, _ text: String) {
+        store?.notices[key] = text
+        armNote(key, text, notice: true)
     }
 
     /// #1727: how long an info note ("Allowed automatically") stays; the seam is the row tests' clock.
@@ -2132,7 +2151,7 @@ final class AgentIslandController {
     var noteAfter: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> Void = { delay, fire in
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { fire() } }
     }
-    private var noteChain: [AgentSessionKey: Int] = [:], noteSeq = 0
+    private var noteChain: [AgentSessionKey: Int] = [:], noticeChain: [AgentSessionKey: Int] = [:], noteSeq = 0
 
     /// #1436: a dropped answer's line goes once the session reads input again; any other text stays.
     private func dropNotDelivered(_ key: AgentSessionKey) {
@@ -2341,7 +2360,7 @@ final class AgentIslandController {
             open(s)
         case .attachedElsewhere where store.notices[s.key] == nil:
             // Not jumpable; say so instead of silently copying. A second click copies.
-            store.notices[s.key] = "Attached in tmux/ssh, click to copy attach command"
+            setNotice(s.key, "Attached in tmux/ssh, click to copy attach command")
         case .attachedElsewhere, .notAttached:
             copyAttach(s, notice: "Attach command copied")
         }
@@ -2351,7 +2370,7 @@ final class AgentIslandController {
         let pb = Pasteboard.general
         pb.clearContents()
         pb.setString(AgentIsland.attachCommand(s.key, defaultDir: DchCommand.defaultSocketDir), forType: .string)
-        store?.notices[s.key] = notice
+        setNotice(s.key, notice)
     }
 
     /// Collapses once the terminal is up; a failed open copies instead and says so.

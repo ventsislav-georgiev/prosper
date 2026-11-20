@@ -495,7 +495,7 @@ extension AgentIsland {
     // MARK: - --json results (#580)
 
     /// A row's verb: its done word and the minutes of its bound.
-    enum Verb: String {
+    enum Verb: String, CaseIterable {
         case restart = "Restart", stop = "Stop", resume = "Resume"
         /// #669: Resume (no message); its results read like Resume's, saying the message was skipped.
         case resumeNoMessage = "Resume (no message)"
@@ -778,6 +778,9 @@ extension AgentIsland {
     static let notInFrontText = "Claude is not in front in that session; nothing was typed"
     /// #792: a row whose prompt Always allow (or dch) answered; refuseBusy writes a refusal over it (#927).
     static let autoAllowedText = "Allowed automatically"
+    /// #1733: the row texts that are plain good news and hide after `noteLife`: each verb's done word, a Kill's outcome, "Allowed automatically".
+    /// Every other text (a failure, a refusal, a count, dch's detail) is an error line and stays.
+    static let infoNotes: Set<String> = Set(Verb.allCases.map(\.done) + [killedText, alreadyEndedText, autoAllowedText])
 
     /// The composer's text as sent: the window's sanitizer (AgentWindowDriver.message: controls but LF
     /// and tab dropped, CR to LF, trimmed), then its line breaks as spaces: one line, one argv element.
