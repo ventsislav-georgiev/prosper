@@ -37,11 +37,12 @@ final class KitAgentsTests: XCTestCase {
         func agent(_ name: String) -> URL { agents.appendingPathComponent(name + ".md") }
     }
 
-    private func env(label: String = #function) throws -> Env {
+    private func env(label: String = #function, homeIsRoot: Bool = false) throws -> Env {
         let root = tempDir(label)
         let roots = ManagedConfigRoots(claude: root.appendingPathComponent("claude home", isDirectory: true),
                                        configHome: root.appendingPathComponent("config", isDirectory: true),
-                                       stateDir: root.appendingPathComponent("state", isDirectory: true))
+                                       stateDir: root.appendingPathComponent("state", isDirectory: true),
+                                       home: homeIsRoot ? root : nil)
         for d in [roots.claude, roots.configHome] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         try Data("{}\n".utf8).write(to: roots.claude.appendingPathComponent("settings.json"))
         let clock = MCClock()
@@ -167,9 +168,10 @@ final class KitAgentsTests: XCTestCase {
 
     // MARK: a linked agents folder
 
-    func testASymlinkedAgentsFolderIsNotFollowed() async throws {
-        let e = try env()
-        let target = e.root.appendingPathComponent("elsewhere", isDirectory: true)
+    /// #1705: a link whose target is outside the home folder (and a link with no home known) stays refused.
+    func testASymlinkedAgentsFolderOutsideHomeIsNotFollowed() async throws {
+        let e = try env(homeIsRoot: true)
+        let target = tempDir("outside")
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: e.agents, withDestinationURL: target)
         let rt = try runtime(e)
@@ -182,6 +184,48 @@ final class KitAgentsTests: XCTestCase {
         XCTAssertTrue(notes.first?.contains("is a link; Prosper does not write through links") == true, "\(notes)")
         let record = try Data(contentsOf: URL(fileURLWithPath: rt.store.agentsRecordPath))
         XCTAssertEqual(try JSONDecoder().decode([String: KitStore.AgentRecord].self, from: record), [:], "the record is empty")
+    }
+
+    /// #1705 (OQ-166): the scratch home is the row's tempDir (home: root); links are made by the row, never ~/.claude.
+    private func applyThroughLink(_ e: Env, target: URL, makeTarget: Bool = true) async throws -> (KitRuntimeResult, KitRuntime) {
+        if makeTarget { try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true) }
+        try FileManager.default.createSymbolicLink(at: e.agents, withDestinationURL: target)
+        let rt = try runtime(e)
+        return (await rt.apply(try source(e)), rt)
+    }
+
+    func testALinkInsideHomeInstallsIntoItsTarget() async throws {
+        let e = try env(homeIsRoot: true)
+        let target = e.root.appendingPathComponent("dotfiles/agents", isDirectory: true)
+        let (r, rt) = try await applyThroughLink(e, target: target)
+        XCTAssertEqual(r.failures, [])
+        XCTAssertEqual(r.notes.filter { $0.hasPrefix("agents:") }, [], "\(r.notes)")
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("worker-example-high.md")), Data(Self.high.utf8))
+        XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("worker-example-low.md")), Data(Self.low.utf8))
+        XCTAssertEqual(KitPOSIXFS().kind(e.agents.path), .symlink, "the link stays a link")
+        XCTAssertEqual(rt.store.readAgentRecord().keys.sorted(), ["worker-example-high", "worker-example-low"])
+    }
+
+    func testALinkChainLeavingHomeIsRefused() async throws {
+        let e = try env(homeIsRoot: true)
+        let outside = tempDir("outside")
+        // agents -> <home>/hop (inside) -> <outside>: the whole chain is resolved
+        try FileManager.default.createSymbolicLink(at: e.root.appendingPathComponent("hop"), withDestinationURL: outside)
+        let (r, _) = try await applyThroughLink(e, target: e.root.appendingPathComponent("hop"), makeTarget: false)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [], "nothing is written outside home")
+        let notes = r.notes.filter { $0.hasPrefix("agents:") }
+        XCTAssertEqual(notes.count, 1, "\(r.notes)")
+        XCTAssertTrue(notes.first?.contains("is a link; Prosper does not write through links") == true, "\(notes)")
+    }
+
+    func testADanglingLinkIsRefused() async throws {
+        let e = try env(homeIsRoot: true)
+        let target = e.root.appendingPathComponent("gone", isDirectory: true)
+        let (r, _) = try await applyThroughLink(e, target: target, makeTarget: false)
+        let notes = r.notes.filter { $0.hasPrefix("agents:") }
+        XCTAssertEqual(notes.count, 1, "\(r.notes)")
+        XCTAssertTrue(notes.first?.contains("is a link; Prosper does not write through links") == true, "\(notes)")
+        XCTAssertTrue(KitPOSIXFS().kind(target.path) == .missing, "the dangling target is not created")
     }
 
     // MARK: validator

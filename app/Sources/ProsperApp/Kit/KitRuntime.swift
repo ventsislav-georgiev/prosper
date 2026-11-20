@@ -479,7 +479,7 @@ final class KitRuntime: @unchecked Sendable {
             out.configRefusals += r.refusals
             lock.withLock { wiring = r.ok ? nil : "\(r.status.rawValue) \(r.message)" }
             // #920: after the wiring landed; a refused agent is a note, never a failed apply (the other pieces stay)
-            if r.ok { out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude) }
+            if r.ok { out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude, home: config.roots.home) }
         default:
             return
         }
@@ -505,7 +505,7 @@ final class KitRuntime: @unchecked Sendable {
         guard r.ok else { return out }
         let keep = ids.map { ids in plan(v).shims.filter { !ids.contains($0.pieceID) } } ?? []
         do { try store.writeShims(keep) } catch { out.failures.append("writeShims: \(error)") }
-        out.notes += store.removeAgents(pieces: ids, claude: config.roots.claude)
+        out.notes += store.removeAgents(pieces: ids, claude: config.roots.claude, home: config.roots.home)
         return out
     }
 
@@ -528,7 +528,7 @@ final class KitRuntime: @unchecked Sendable {
         out.config = r
         guard r.ok else { return out }
         do { try store.writeShims(p.shims) } catch { out.failures.append("writeShims: \(error)") }
-        out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude)
+        out.notes += store.syncAgents(p.agents, from: store.layout.live, claude: config.roots.claude, home: config.roots.home)
         return out
     }
 
@@ -556,6 +556,6 @@ final class KitRuntime: @unchecked Sendable {
         }
         let p = plan(v)
         return KitRuntimeStatus(pieces: mc.status(owner: owner(ext, v, dir: store.layout.live), declared: p.pieces), off: off(v), live: live,
-                                agents: store.agentStates(p.agents, claude: mc.roots.claude))
+                                agents: store.agentStates(p.agents, claude: mc.roots.claude, home: mc.roots.home))
     }
 }

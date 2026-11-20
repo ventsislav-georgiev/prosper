@@ -5,7 +5,9 @@ import Foundation
 // kits/<ext-id>/agents.json: agent name -> the piece and the sha256 of the bytes the kit wrote.
 // - A file there that the record does not name is the person's: that agent is refused and the file never touched.
 // - A recorded file is replaced or removed only while it still hashes as written; an edited one is kept and reported.
-// - Every step is relative to the agents dir opened O_NOFOLLOW (KitDir); a symlinked agents dir is refused, never followed.
+// - Every step is relative to the agents dir opened O_NOFOLLOW (KitDir). #1705 (OQ-166): a symlinked agents dir is resolved
+//   (realpath, the whole chain) and used only when its target is inside the real home folder; any other link, a chain that
+//   leaves home, a dangling one and a nil home are refused with the "is a link" note.
 
 extension KitStore {
     struct AgentRecord: Codable, Equatable, Sendable {
@@ -32,15 +34,25 @@ extension KitStore {
 
     private static func agentsDir(_ claude: URL) -> String { claude.appendingPathComponent("agents", isDirectory: true).path }
 
+    /// The dir to open: the agents dir itself, or, when that is a link, its realpath if that lies inside the real home.
+    /// Anything else (outside home, dangling, no home known) returns the link path, which the O_NOFOLLOW open refuses.
+    static func agentsTarget(_ claude: URL, home: URL?) -> String {
+        let path = agentsDir(claude)
+        let reader = KitPOSIXFileReader()
+        guard reader.kind(path) == .symlink, let home, let h = reader.realPath(home.path), let t = reader.realPath(path),
+              t.hasPrefix(h.hasSuffix("/") ? h : h + "/") else { return path }
+        return t
+    }
+
     /// Apply / repair / an off toggle: every planned agent installed, every recorded one no longer planned removed.
     /// Returns the notes (refusals, kept files, I/O errors); nothing here throws past the caller.
-    func syncAgents(_ planned: [KitAgentPlan], from kitDir: String, claude: URL) -> [String] {
+    func syncAgents(_ planned: [KitAgentPlan], from kitDir: String, claude: URL, home: URL?) -> [String] {
         var record = readAgentRecord()
         let keep = Set(planned.map(\.name))
-        var notes = dropAgents(record.keys.filter { !keep.contains($0) }, claude: claude, record: &record)
+        var notes = dropAgents(record.keys.filter { !keep.contains($0) }, claude: claude, home: home, record: &record)
         if !planned.isEmpty {
             do {
-                let path = Self.agentsDir(claude)
+                let path = Self.agentsTarget(claude, home: home)
                 try fs.ensureDir(path, narrow: false)
                 let dir = try fs.openDir(path)
                 for a in planned { notes += installAgent(a, from: kitDir, in: dir, record: &record) }
@@ -87,18 +99,19 @@ extension KitStore {
 
     /// Remove: the recorded agents of `pieces` (nil: every one). A file still as written is deleted; an edited one is kept.
     /// Either way the record lets go of it.
-    func removeAgents(pieces: [String]?, claude: URL) -> [String] {
+    func removeAgents(pieces: [String]?, claude: URL, home: URL?) -> [String] {
         var record = readAgentRecord()
         let names = record.filter { r in pieces.map { $0.contains(r.value.piece) } ?? true }.map(\.key)
         guard !names.isEmpty else { return [] }
-        var notes = dropAgents(names, claude: claude, record: &record)
+        var notes = dropAgents(names, claude: claude, home: home, record: &record)
         do { try writeAgentRecord(record) } catch { notes.append("agents.json: \(error)") }
         return notes
     }
 
-    private func dropAgents(_ names: [String], claude: URL, record: inout [String: AgentRecord]) -> [String] {
+    private func dropAgents(_ names: [String], claude: URL, home: URL?, record: inout [String: AgentRecord]) -> [String] {
         guard !names.isEmpty else { return [] }
-        let dir: (any KitDir)? = fs.kind(Self.agentsDir(claude)) == .missing ? nil : try? fs.openDir(Self.agentsDir(claude))
+        let target = Self.agentsTarget(claude, home: home)
+        let dir: (any KitDir)? = fs.kind(target) == .missing ? nil : try? fs.openDir(target)
         var notes: [String] = []
         for name in names.sorted() {
             guard let mine = record[name] else { continue }
@@ -117,9 +130,9 @@ extension KitStore {
     }
 
     /// The pane's piece state for each agents piece: "installed", or each agent that is not, with why.
-    func agentStates(_ planned: [KitAgentPlan], claude: URL) -> [String: String] {
+    func agentStates(_ planned: [KitAgentPlan], claude: URL, home: URL?) -> [String: String] {
         let record = readAgentRecord()
-        let dir = try? fs.openDir(Self.agentsDir(claude))
+        let dir = try? fs.openDir(Self.agentsTarget(claude, home: home))
         var lines: [String: [String]] = [:]
         for a in planned {
             let file = a.name + ".md"

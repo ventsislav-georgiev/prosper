@@ -2140,6 +2140,8 @@ tag from the now-released section and put it on the new top draft.
   set to Ask; it waits until you allow Prosper to paste from other apps. (#1702)
 - Phone chat: a request that names the model already loaded on the Mac is answered instead of
   refused, and the phone no longer shows the cold-start hint while a model is loaded. (#1703)
+- Agent Kit: agents now install into a symlinked ~/.claude/agents folder when the link points inside
+  your home folder; links that lead anywhere else, or nowhere, are still refused. (#1705)
 
 ## v2.174.0
 
