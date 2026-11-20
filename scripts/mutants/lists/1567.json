@@ -47,7 +47,7 @@
   {
    "name": "M-big",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
-   "old": "guard out.count <= Self.maxBytes else { return }\n",
+   "old": "guard cost <= Self.maxBytes else { return }\n",
    "new": "",
    "expect": "killed"
   },
