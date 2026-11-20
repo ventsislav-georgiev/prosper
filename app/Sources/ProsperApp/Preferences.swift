@@ -453,6 +453,7 @@ enum Preferences {
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandSessionGroups = "agentIslandSessionGroups"   // #1757: JSON [SessionGroup], per Mac
         static let agentIslandSessionGroupsUpdated = "agentIslandSessionGroupsUpdated"   // #1756: ms, per Mac
+        static let agentIslandDchGroupsAdoptChecked = "agentIslandDchGroupsAdoptChecked"   // #1788: Bool, per Mac
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
@@ -1345,6 +1346,13 @@ enum Preferences {
 
     /// #1766: whether a list is stored; until then the getter reads the migrated Sidekicks group.
     static var agentIslandSessionGroupsStored: Bool { defaults.object(forKey: Keys.agentIslandSessionGroups) != nil }
+
+    /// #1788: the dch file's group lines were checked for adoption once (the first sync with a dch that reads them),
+    /// whatever that found; after it the file holds Prosper's own lines, never the user's. Per Mac.
+    static var agentIslandDchGroupsAdoptChecked: Bool {
+        get { defaults.bool(forKey: Keys.agentIslandDchGroupsAdoptChecked) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandDchGroupsAdoptChecked) }
+    }
 
     /// #571, #1757: the first group's pattern ("" with no groups): Settings' one field (until #1758) and the phone's
     /// 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits the first group, and with no

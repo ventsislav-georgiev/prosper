@@ -1999,7 +1999,9 @@ final class AgentIslandController {
         let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first?.pattern ?? "")
         let lines = DchConfigWriter.groupValues(groups)
         let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
-        let adopt = !Preferences.agentIslandSessionGroupsStored, replaced = groupsReplaced
+        // #1788: adopt only on the first check; after it the file's lines are Prosper's last write, not the user's.
+        let adopt = !Preferences.agentIslandSessionGroupsStored && !Preferences.agentIslandDchGroupsAdoptChecked
+        let replaced = groupsReplaced
         queue.async { [weak self] in
             // #1766: the lines this dch gets, after one read of the file's own group lines (only for a dch that reads
             // them). While the list is unstored, the file's valid lines are adopted on main and kept here (the next
@@ -2008,16 +2010,14 @@ final class AgentIslandController {
             let owned: (DchCommand.Binary?) -> [String]? = { bin in
                 guard let g = DchConfigWriter.groupLines(lines, dch: bin) else { return nil }
                 let had = DchConfigWriter.fileGroupValues(path: path)
-                if adopt, had == g {
+                if adopt {
                     // #1780: exactly Prosper's own lines (the migrated Sidekicks line): adopt and log nothing.
-                } else if adopt {
-                    let found = DchConfigWriter.adoptable(had)
+                    let found = had == g ? [] : DchConfigWriter.adoptable(had)
                     // #1779: lines dropped as refused (or all of them, for Sidekicks) log once, like a replaced list.
-                    if found.count < had.count { replaced(had, found.isEmpty ? g : DchConfigWriter.groupValues(found)) }
-                    guard found.isEmpty else {
-                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } }
-                        return nil
-                    }
+                    if had != g, found.count < had.count { replaced(had, found.isEmpty ? g : DchConfigWriter.groupValues(found)) }
+                    // #1788: the hop flags this one check whatever it found (none found included).
+                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } }
+                    guard found.isEmpty else { return nil }
                 } else if !had.isEmpty, had != g {
                     replaced(had, g)
                 }
@@ -2051,8 +2051,12 @@ final class AgentIslandController {
 
     /// #1766: the dch file's groups become the stored list as a Settings save would store it (the stamps move as an
     /// edit, so the phone adopts the Mac's), unless a list was stored meanwhile; then the regroup and the next write.
+    /// #1788: the first hop sets the checked flag whatever it carries (empty: nothing adopted); a later hop, queued by
+    /// a sync captured before that flag landed, adopts nothing.
     func adoptDchGroups(_ list: [SessionGroup]) {
-        guard !Preferences.agentIslandSessionGroupsStored else { return }
+        guard !Preferences.agentIslandDchGroupsAdoptChecked else { return }
+        Preferences.agentIslandDchGroupsAdoptChecked = true
+        guard !list.isEmpty, !Preferences.agentIslandSessionGroupsStored else { return }
         Preferences.editSessionGroups(list, now: now())
         rowDetailsChanged()
     }

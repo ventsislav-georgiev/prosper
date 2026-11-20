@@ -1461,15 +1461,20 @@ extension DchConfigWriterTests {
 /// instead of being replaced with the migrated Sidekicks group; a stored list replacing different lines logs once.
 /// Every file is a row's tempDir(); the defaults are the XCTest store's, put back after the row.
 extension DchConfigWriterTests {
-    /// No stored list for the row (the getter migrates), the stored one put back after it.
+    /// No stored list for the row (the getter migrates) and no adopt check yet (#1788), both put back after it.
     private func unstoredGroups() {
         let saved = Preferences.defaults.object(forKey: "agentIslandSessionGroups")
+        let checked = Preferences.defaults.object(forKey: "agentIslandDchGroupsAdoptChecked") as? Bool
         addTeardownBlock {
             if let saved { Preferences.defaults.set(saved, forKey: "agentIslandSessionGroups") } else {
                 Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
             }
+            if let checked { Preferences.defaults.set(checked, forKey: "agentIslandDchGroupsAdoptChecked") } else {
+                Preferences.defaults.removeObject(forKey: "agentIslandDchGroupsAdoptChecked")
+            }
         }
         Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+        Preferences.defaults.removeObject(forKey: "agentIslandDchGroupsAdoptChecked")
     }
 
     private func configFile(_ name: String, _ text: String) -> String {
@@ -1513,6 +1518,7 @@ extension DchConfigWriterTests {
         c.syncDchConfig()
         drain(c)
         XCTAssertTrue(Preferences.agentIslandSessionGroupsStored)
+        XCTAssertTrue(Preferences.agentIslandDchGroupsAdoptChecked, "#1788: the one check is flagged")
         XCTAssertEqual(Preferences.agentIslandSessionGroups.map { "\($0.name) = \($0.pattern)" }, ["Rev = -rev$", "QA = -qa$"])
         XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 1_000_000_000, "stamped as an edit (the controller's now)")
         XCTAssertEqual(read(file), "group = Rev = -rev$\n# mine\ngroup = QA = -qa$\nauto_allow = false\nsidekick_pattern = -qa\n",
@@ -1530,6 +1536,7 @@ extension DchConfigWriterTests {
         usePattern(tabs: true, "-qa")
         for (old, want) in [("picker_sort = name\n", "picker_sort = name\nauto_allow = false\nsidekick_pattern = -qa\ngroup = Sidekicks = -qa\n"),
                             ("group = Dots = a.b\n", "group = Sidekicks = -qa\nauto_allow = false\nsidekick_pattern = -qa\n")] {
+            unstoredGroups()
             let file = configFile("noLines", old)
             let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
             c.syncDchConfig()
@@ -1607,8 +1614,81 @@ extension DchConfigWriterTests {
             c.syncDchConfig()
             drain(c)
             XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, "\(String(describing: v))")
+            XCTAssertFalse(Preferences.agentIslandDchGroupsAdoptChecked, "#1788: no check without a dch that reads group lines")
             XCTAssertEqual(read(file), "group = Rev = -rev$\nauto_allow = false\nsidekick_pattern = -qa\n")
             XCTAssertEqual(logged.withLock { $0 }, 0)
         }
+    }
+
+    /// #1788 (QA R1776+1780 b2), all unstored: a first sync, then a phone pattern, a cleared pattern and Group tabs
+    /// off, each followed by a sync. The file holds Prosper's previous lines every time: nothing is adopted, the #571
+    /// value stays, its stamps stay the phone's (not the controller's now) and the file follows.
+    @MainActor func testProspersPreviousLinesAreNeverAdoptedAfterTheFirstCheck() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandSessionGroupsUpdated = 0
+        let file = configFile("once", "picker_sort = name\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock(initialState: 0)
+        c.groupsReplaced = { _, _ in logged.withLock { $0 += 1 } }
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertTrue(Preferences.agentIslandDchGroupsAdoptChecked, "flagged though nothing was adopted")
+        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\n"))
+        for (step, pattern, tabs, want) in [(1, "-new", true, "group = Sidekicks = -new\n"), (2, "", true, nil),
+                                            (3, "-qa", true, "group = Sidekicks = -qa\n"), (4, "-qa", false, nil)] as [(Int64, String, Bool, String?)] {
+            if tabs { Preferences.adoptSidekickPattern(pattern, updated: step) } else { Preferences.agentIslandSidekickTabs = false }
+            c.syncDchConfig()
+            drain(c)
+            let text = read(file) ?? ""
+            XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, "step \(step): nothing adopted")
+            XCTAssertEqual(Preferences.agentIslandSidekickPattern, pattern, "step \(step): the #571 value stays")
+            XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.id), [SessionGroup.sidekicksID], "step \(step)")
+            XCTAssertEqual(Preferences.agentIslandSidekickPatternUpdated, tabs ? step : 3, "step \(step): the phone's stamp")
+            XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, tabs ? step : 3, "step \(step): not moved to now")
+            if let want {
+                XCTAssertTrue(text.hasSuffix(want) && text.contains("sidekick_pattern = \(pattern)\n"), "step \(step): \(text)")
+            } else {
+                XCTAssertFalse(text.contains("group = "), "step \(step): the file follows, no group line: \(text)")
+                XCTAssertTrue(text.contains("sidekick_pattern = \n"), "step \(step): \(text)")
+            }
+        }
+        // As for a stored list, a write that changes the file's group lines logs once (steps 1, 2, 4; step 3 had none).
+        XCTAssertEqual(logged.withLock { $0 }, 3)
+    }
+
+    /// #1780 kept under #1788: the first check finding exactly Prosper's own line (an earlier Prosper's write) adopts
+    /// nothing, logs nothing and flags the check.
+    @MainActor func testTheFirstCheckOnProspersOwnLineAdoptsNothing() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        let file = configFile("ownFirst", "group = Sidekicks = -qa\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock(initialState: 0)
+        c.groupsReplaced = { _, _ in logged.withLock { $0 += 1 } }
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertFalse(Preferences.agentIslandSessionGroupsStored)
+        XCTAssertTrue(Preferences.agentIslandDchGroupsAdoptChecked)
+        XCTAssertEqual(logged.withLock { $0 }, 0)
+    }
+
+    /// #1788: once checked, a hand-written line is not adopted (the file follows the list, one log), and an adopt hop
+    /// queued by a sync captured before the flag landed changes nothing.
+    @MainActor func testOnceCheckedAHandLineIsReplacedNotAdopted() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandDchGroupsAdoptChecked = true
+        let file = configFile("checked", "group = Rev = -rev$\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+        c.groupsReplaced = { had, lines in logged.withLock { $0.append(had + ["->"] + lines) } }
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertFalse(Preferences.agentIslandSessionGroupsStored)
+        XCTAssertEqual(read(file), "group = Sidekicks = -qa\nauto_allow = false\nsidekick_pattern = -qa\n")
+        XCTAssertEqual(logged.withLock { $0 }, [["Rev = -rev$", "->", "Sidekicks = -qa"]])
+        c.adoptDchGroups([Self.group("Late", "-late$")])
+        XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, "a late hop adopts nothing")
     }
 }
