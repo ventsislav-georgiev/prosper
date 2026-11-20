@@ -1,0 +1,27 @@
+{
+ "entry": 1705,
+ "filter": "KitAgentsTests",
+ "mutants": [
+  {
+   "name": "no-home-check",
+   "file": "app/Sources/ProsperApp/Kit/KitAgents.swift",
+   "old": "t.hasPrefix(h.hasSuffix(\"/\") ? h : h + \"/\")",
+   "new": "true",
+   "expect": "killed"
+  },
+  {
+   "name": "never-follow",
+   "file": "app/Sources/ProsperApp/Kit/KitAgents.swift",
+   "old": "guard reader.kind(path) == .symlink,",
+   "new": "guard false, reader.kind(path) == .symlink,",
+   "expect": "killed"
+  },
+  {
+   "name": "lexical-not-real",
+   "file": "app/Sources/ProsperApp/Kit/KitAgents.swift",
+   "old": "let t = reader.realPath(path),",
+   "new": "let t = Optional(path),",
+   "expect": "killed"
+  }
+ ]
+}
