@@ -40,8 +40,8 @@
   {
    "name": "no-dup-check",
    "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "if rows.contains(where: { $0.id != g.id && SessionGroup.nameKey($0.name) == key }) { return \"Another group has this name: not saved\" }",
-   "new": "",
+   "old": "return keys.contains { $0.0 != r.id && $0.1 == k }",
+   "new": "return false",
    "expect": "killed"
   },
   {
@@ -68,8 +68,8 @@
   {
    "name": "saved-drops-fallback",
    "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "reason(g) == nil ? g : stored.first { $0.id == g.id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }",
-   "new": "reason(g) == nil ? g : nil",
+   "old": "bad.contains(g.id) ? stored(g.id, in: st) : g",
+   "new": "bad.contains(g.id) ? nil : g",
    "expect": "killed"
   },
   {
