@@ -2167,6 +2167,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: with several panes, a click on a pane header's X-ray button, "..." menu or title
   now works on the first click, even when that pane was not focused (it focuses the pane too); a
   click in a pane's body still only focuses it. (#1707)
+- Agent Kits can now set a fixed set of approved Claude Code environment variables and switch off
+  bypass-permissions mode; every key and value is shown before you agree, and removing the kit puts
+  your previous values back. (#1706)
 
 ## v2.174.0
 

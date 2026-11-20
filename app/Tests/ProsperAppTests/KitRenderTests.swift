@@ -140,9 +140,9 @@ final class KitRenderTests: XCTestCase {
         XCTAssertFalse(KitRender.plan(own, ctx).pieces.contains { $0.id == KitRender.localSeedID })
     }
 
-    /// spec 4.2 "Env-free": walks every piece kind's rendered output. The only settings.json keys a
-    /// kit can produce are hooks.<event>, statusLine and permissions.allow / deny / ask, and no
-    /// object carries a marker key (errata A10).
+    /// spec 4.2, OQ-193: walks every piece kind's rendered output. The only settings.json keys a kit can produce are
+    /// hooks.<event>, statusLine, permissions.allow / deny / ask, permissions.disableBypassPermissionsMode and
+    /// env.<allowlisted key>, and no object carries a marker key (errata A10).
     func testEveryPieceKindWritesOnlyAllowedSettingsKeys() throws {
         let extra = """
 
@@ -158,10 +158,16 @@ final class KitRenderTests: XCTestCase {
         allow = ["Read(*)"]
         deny  = ["Bash(curl:*)"]
         ask   = ["Bash(git push:*)"]
+        disable_bypass = true
 
         [[contributes.kit.pieces]]
         id    = "path"
         kind  = "shell-path"
+
+        [[contributes.kit.pieces]]
+        id    = "env"
+        kind  = "env"
+        vars  = { \(ManagedConfigPlanner.envKeys.first ?? "") = "1", \(ManagedConfigPlanner.envKeys.last ?? "") = "2" }
 
         [[contributes.kit.settings]]
         """
@@ -185,6 +191,8 @@ final class KitRenderTests: XCTestCase {
                 let allowed = (path.count == 2 && path[0] == "hooks" && ManagedConfigPlanner.hookEvents.contains(path[1]) && p.op == .append)
                     || (path == ["statusLine"] && p.op == .set)
                     || (path.count == 2 && path[0] == "permissions" && ["allow", "deny", "ask"].contains(path[1]) && p.op == .union)
+                    || (path == ["permissions", "disableBypassPermissionsMode"] && p.op == .set && p.value == #""disable""#)
+                    || (path.count == 2 && path[0] == "env" && ManagedConfigPlanner.envKeys.contains(path[1]) && p.op == .set)
                 XCTAssertTrue(allowed, "\(p.id) writes \(path) with \(String(describing: p.op))")
                 XCTAssertNil(ManagedConfigPlanner.jsonRule(path, p.op ?? .set), p.id)
                 let value = try JSONSerialization.jsonObject(with: Data((p.value ?? "").utf8), options: .fragmentsAllowed)
@@ -197,12 +205,16 @@ final class KitRenderTests: XCTestCase {
                     }
                 case "statusLine":
                     XCTAssertEqual(Set(try XCTUnwrap(value as? [String: Any], p.id).keys), ["type", "command"])
+                case "env":
+                    XCTAssertNotNil(value as? String, p.id)
+                case "permissions" where path.last == "disableBypassPermissionsMode":
+                    XCTAssertEqual(value as? String, "disable", p.id)
                 default:
                     XCTAssertNotNil(value as? [String], p.id)
                 }
             }
         }
-        XCTAssertEqual(json, 8)
+        XCTAssertEqual(json, 11)
     }
 
     // MARK: (e) "What will change" (spec 4.3, errata A1)

@@ -47,9 +47,21 @@ struct ManagedConfigPlanner {
     static func key(_ owner: String, _ id: String) -> String { owner + "\u{1F}" + id }
     static func skeleton(_ nl: String) -> [UInt8] { Array(("{}" + nl).utf8) }
 
-    // MARK: JSON allowlist (spec 2.3, operator ruling: no `env` writer in v1, errata A12)
+    // MARK: JSON allowlist (spec 2.3, errata A12; OQ-193 opens env.<key> for the keys below only)
 
     static let refusedTopKeys: Set<String> = ["env", "apiKeyHelper", "model", "disableAllHooks", "disableBypassPermissionsMode"]
+
+    /// OQ-193 (operator ruling 2026-11-20): the only env keys a piece may `set`, each to a string. A fixed list in code:
+    /// no credential, endpoint or model key is ever on it. Every other env key stays refused.
+    static let envKeys: [String] = [
+        "CLAUDE_AUTO_BACKGROUND_TASKS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_DISABLE_AGENT_VIEW", "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY",
+        "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS", "CLAUDE_CODE_ENABLE_AUTO_MODE", "CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
+        "DISABLE_ERROR_REPORTING", "DISABLE_NON_ESSENTIAL_MODEL_CALLS", "DISABLE_TELEMETRY_OFF", "ENABLE_CLAUDEAI_MCP_SERVERS", "ENABLE_TOOL_SEARCH",
+    ]
+    /// OQ-193: a permissions piece's disable_bypass sets this slot to "disable"; Remove restores what was there.
+    static let bypassPath = ["permissions", "disableBypassPermissionsMode"]
+
+    static func isEnvSlot(_ path: [String]) -> Bool { path.count == 2 && path[0] == "env" && envKeys.contains(path[1]) }
 
     /// errata A5: the hook events Claude Code documents, from the table on code.claude.com/docs/en/hooks
     /// as fetched 2026-11-11 (33 events). The one list: `jsonRule` reads it, and so does #872's kit
@@ -65,7 +77,7 @@ struct ManagedConfigPlanner {
 
     static func jsonRule(_ path: [String], _ op: ManagedConfigPiece.Op) -> ManagedConfigRefusalReason? {
         let name = path.joined(separator: ".")
-        guard let first = path.first, !refusedTopKeys.contains(first), !(path.count >= 2 && path[0] == "permissions" && path[1] == "defaultMode") else {
+        guard let first = path.first, !refusedTopKeys.contains(first) || isEnvSlot(path), !(path.count >= 2 && path[0] == "permissions" && path[1] == "defaultMode") else {
             return .refusedJSONPath(name)
         }
         switch op {
@@ -74,7 +86,7 @@ struct ManagedConfigPlanner {
         case .union:
             if path.count == 2, first == "permissions", ManagedConfigDiff.allowedPermissionKeys.contains(path[1]) { return nil }
         case .set:
-            if path == ["statusLine"] { return nil }
+            if path == ["statusLine"] || path == bypassPath || isEnvSlot(path) { return nil }
         }
         return .refusedJSONPath(name)
     }
@@ -341,9 +353,14 @@ struct ManagedConfigPlanner {
 
         case .set:
             // #1312: only a command status line plans, so the sheet's note (and its count) never misses one.
-            if !ManagedConfigPlanner.isCommandStatusLine(value) {
+            if path == ["statusLine"], !ManagedConfigPlanner.isCommandStatusLine(value) {
                 throw .invalidPiece("\(name) takes only {type: \"command\", command: string, padding?: number}, no other key")
             }
+            // jsonRule let only statusLine, bypassPath and an allowlisted env slot through
+            var text: String?
+            if case .string(let s) = value { text = s }
+            if path == ManagedConfigPlanner.bypassPath, text != "disable" { throw .invalidPiece("\(name) takes only the string \"disable\"") }
+            if path.first == "env", text == nil { throw .invalidPiece("\(name) takes only a string") }
             if let other = state.records.first(where: { $0.path == w.url.path && $0.piece.path == path && $0.piece.op == .set && $0.owner != owner.id }) {
                 throw .conflict(owner: other.owner)
             }
@@ -376,7 +393,7 @@ struct ManagedConfigPlanner {
                 try insert(value, at: path, leafIsContainer: false, &w)
             }
             upsert(&w, record)
-            statusLineNote(&w, value)
+            setNote(&w, path, value)
             return existing == nil ? .insert : .update
         }
     }
@@ -586,8 +603,12 @@ struct ManagedConfigPlanner {
         }
     }
 
-    private func statusLineNote(_ w: inout Work, _ value: OrderedJSON.Value) {
+    /// OQ-193: an env key and its value, and the bypass switch, are named on the sheet as well as in the diff.
+    private func setNote(_ w: inout Work, _ path: [String], _ value: OrderedJSON.Value) {
         liveNote(&w)
         if let command = string(value, "command") { w.notes.append("Claude Code will run `\(command)` as the status line in every session.") }
+        guard case .string(let s) = value, let key = path.last else { return }
+        if path.first == "env" { w.notes.append("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(s)).") }
+        if path == ManagedConfigPlanner.bypassPath { w.notes.append("Claude Code's bypass permissions mode is switched off.") }
     }
 }

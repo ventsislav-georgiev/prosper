@@ -34,6 +34,15 @@ final class HelloKitDocTests: XCTestCase {
         }
     }
 
+    /// OQ-193: the chapter's env allowlist names exactly the keys the code allows.
+    func testTheChaptersEnvAllowlistIsTheCodes() throws {
+        let line = try XCTUnwrap(try chapter().components(separatedBy: "\n").first { $0.hasPrefix("- **Env allowlist") })
+        let listed = Set(line.components(separatedBy: "`").enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+            .filter { $0.allSatisfy { $0.isUppercase || $0 == "_" } })
+        XCTAssertEqual(listed, Set(ManagedConfigPlanner.envKeys))
+        XCTAssertEqual(ManagedConfigPlanner.envKeys.count, 13, "OQ-193 approved 13 keys")
+    }
+
     func testEveryReadmeHeadingIsInTheChapter() throws {
         let text = try chapter()
         for h in KitValidator.readmeHeadings { XCTAssertTrue(text.contains("## \(h)"), "chapter lacks the heading \(h)") }

@@ -81,7 +81,7 @@ enum KitReason: String, Sendable, CaseIterable {
     case unknownKey = "unknown key: the kit schema does not list it"
     case wrongType = "wrong value type for this key"
     case missingKey = "a required key is missing"
-    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions, seed, agents or shell-path"
+    case unknownKind = "unknown piece kind: use claude-md, tools, hook, statusline, permissions, seed, agents, shell-path or env"
     case badID = "piece id must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
     case duplicateID = "piece id is used twice"
     case tooManyPieces = "a kit has at most 64 pieces"
@@ -110,6 +110,9 @@ enum KitReason: String, Sendable, CaseIterable {
     case needsCycle = "needs form a cycle: a piece needs itself, directly or through other pieces"
     case duplicateNeed = "needs lists the same piece id twice"
     case tooManyNeeds = "a piece lists at most 64 needs"
+    // OQ-193
+    case envKeyNotAllowed = "an env piece sets only the env keys Prosper allows (extensions.md section 12)"
+    case emptyEnv = "an env piece sets at least one key in vars"
     // kit dir (KitValidator)
     case badExtensionID = "the extension id must be [A-Za-z0-9._-]+, at most 128 characters, not starting with '-' and not only dots"
     case badSlug = "the extension name (the kit slug) must be [a-z0-9-]+, at most 64 characters, not starting with '-'"
@@ -170,6 +173,8 @@ struct KitManifest: Sendable, Equatable {
             case claudeMD = "claude-md", tools, hook, statusline, permissions, seed, agents
             /// #922 (OQ-4): opt-in; a block in ~/.zshrc appends {{kit_bin}} to PATH
             case shellPath = "shell-path"
+            /// OQ-193: env.<key> in settings.json, for ManagedConfigPlanner.envKeys only, string values
+            case env
         }
         var id: String
         var kind: Kind
@@ -184,6 +189,8 @@ struct KitManifest: Sendable, Equatable {
         var allow: [String] = [] // permissions
         var deny: [String] = []
         var ask: [String] = []
+        var disableBypass = false // permissions (OQ-193)
+        var vars: [String: String] = [:] // env
         var from: String? = nil // seed
         /// #917 G1: piece ids this piece needs (every kind); switching one of them off switches this one off
         var needs: [String] = []
@@ -246,10 +253,11 @@ struct KitManifest: Sendable, Equatable {
         .tools: ["dir"],
         .hook: ["event", "matcher", "run", "timeout", "interpreter"],
         .statusline: ["run", "interpreter"],
-        .permissions: ["allow", "deny", "ask"],
+        .permissions: ["allow", "deny", "ask", "disable_bypass"],
         .seed: ["from"],
         .agents: ["dir"],
         .shellPath: [],
+        .env: ["vars"],
     ]
     static let settingKeys: Set<String> = ["key", "title", "kind", "default", "values"]
 
@@ -461,7 +469,12 @@ struct KitManifest: Sendable, Equatable {
                 p.allow = strings(t, "allow", at)
                 p.deny = strings(t, "deny", at)
                 p.ask = strings(t, "ask", at)
-                if (p.allow + p.deny + p.ask).isEmpty { refuse("\(at)allow", .emptyPermissions) }
+                switch t["disable_bypass"] {
+                case nil: break
+                case .bool(let b)?: p.disableBypass = b
+                default: refuse("\(at)disable_bypass", .wrongType)
+                }
+                if (p.allow + p.deny + p.ask).isEmpty, !p.disableBypass { refuse("\(at)allow", .emptyPermissions) }
                 // each rule is reported under its own list key
                 for (k, list) in [("allow", p.allow), ("deny", p.deny), ("ask", p.ask)] {
                     for r in list where r.trimmingCharacters(in: .whitespaces).isEmpty || r.contains(where: \.isNewline) || r.contains("\0") {
@@ -476,6 +489,19 @@ struct KitManifest: Sendable, Equatable {
                 p.dir = string(t, "dir", at) ?? "agents"
             case .shellPath:
                 break
+            case .env:
+                switch t["vars"] {
+                case .table(let vars)?:
+                    if vars.isEmpty { refuse("\(at)vars", .emptyEnv) }
+                    for (k, v) in vars.sorted(by: { $0.key < $1.key }) {
+                        if !ManagedConfigPlanner.envKeys.contains(k) { refuse("\(at)vars.\(k)", .envKeyNotAllowed) }
+                        guard case .string(let s) = v else { refuse("\(at)vars.\(k)", .wrongType); continue }
+                        cap(s, KitManifest.maxValue, "\(at)vars.\(k)")
+                        p.vars[k] = s
+                    }
+                case nil: refuse("\(at)vars", .missingKey)
+                default: refuse("\(at)vars", .wrongType)
+                }
             }
             return refusals.count == before ? p : nil
         }

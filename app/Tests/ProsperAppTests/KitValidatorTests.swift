@@ -536,10 +536,11 @@ final class KitValidatorTests: XCTestCase {
         assertRefused(try f.validate(two), "more/NOTES.toml", .seedClash)
     }
 
-    /// spec 4.12 item 1 "env piece", through the whole validator.
-    func testEnvPieceRefusedAtInstall() throws {
+    /// OQ-193, through the whole validator: an env piece with a key off the allowlist refuses the kit.
+    func testEnvPieceWithAKeyOffTheAllowlistRefusedAtInstall() throws {
         let f = try makeKitDir()
-        assertRefused(try f.validate(KitFixture.kit(replacing: "kind = \"seed\"", with: "kind = \"env\"")), "pieces[5].kind", .unknownKind)
+        assertRefused(try f.validate(KitManifestTests.withPiece("id = \"env\"\nkind = \"env\"\nvars = { ANTHROPIC_BASE_URL = \"https://example.com\" }")),
+                      "pieces[6].vars.ANTHROPIC_BASE_URL", .envKeyNotAllowed)
     }
 
     /// Text reads stop at 1 MiB before reading: an oversize README or kit CLAUDE.md is not text.

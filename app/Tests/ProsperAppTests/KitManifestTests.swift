@@ -109,7 +109,8 @@ final class KitManifestTests: XCTestCase {
         XCTAssertEqual(bad, [])
         XCTAssertEqual(kit.pieces.map(\.kind), [.claudeMD, .tools, .hook, .statusline, .permissions, .seed])
         // #920: the agents kind needs an agents/ dir the shared fixture does not ship; KitAgentsTests covers it
-        XCTAssertEqual(Set(kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases).subtracting([.agents, .shellPath]))
+        // OQ-193: the env kind has its own rows (testEnvPieceKeepsAllowlistedKeysAndValues, KitEnvPieceTests)
+        XCTAssertEqual(Set(kit.pieces.map(\.kind)), Set(KitManifest.Piece.Kind.allCases).subtracting([.agents, .shellPath, .env]))
         XCTAssertEqual(kit.schema, 1)
         XCTAssertEqual(kit.homepage, "https://example.com/calm-agent")
         XCTAssertEqual(kit.requires, ["node"])
@@ -152,9 +153,9 @@ final class KitManifestTests: XCTestCase {
         try assertRefused(KitFixture.kit(replacing: "default = \"\"", with: "default = \"\"\nvalues = [\"a\"]"), "settings[0].values", .unknownKey)
     }
 
-    /// spec 4.12 item 1 "env piece": there is no env kind; any unknown kind is refused with the reason.
+    /// Any unknown kind is refused with the reason (OQ-193 made `env` a kind, so `model` stands in).
     func testUnknownPieceKindRefused() throws {
-        try assertRefused(KitFixture.kit(replacing: "kind = \"seed\"", with: "kind = \"env\""), "pieces[5].kind", .unknownKind)
+        try assertRefused(KitFixture.kit(replacing: "kind = \"seed\"", with: "kind = \"model\""), "pieces[5].kind", .unknownKind)
         try assertRefused(KitFixture.kit(replacing: "kind = \"seed\"", with: "kind = \"Seed\""), "pieces[5].kind", .unknownKind)
     }
 
@@ -234,6 +235,47 @@ final class KitManifestTests: XCTestCase {
         try assertRefused(KitFixture.kit(replacing: "allow = [\"Bash(calm-note:*)\"]\ndeny  = [\"Bash(rm -rf:*)\"]", with: "allow = []"), "pieces[4].allow", .emptyPermissions)
         try assertRefused(KitFixture.kit(replacing: "allow = [\"Bash(calm-note:*)\"]", with: "allow = [\"a\\nb\"]"), "pieces[4].allow", .badRule)
         try assertRefused(KitFixture.kit(replacing: "allow = [\"Bash(calm-note:*)\"]", with: "allow = \"Bash(x)\""), "pieces[4].allow", .wrongType)
+    }
+
+    // MARK: OQ-193 env pieces and disable_bypass
+
+    /// A kit with one more piece, appended after the fixture's pieces (index 6).
+    static func withPiece(_ piece: String) -> String {
+        KitFixture.kit(replacing: "\n[[contributes.kit.settings]]", with: "\n[[contributes.kit.pieces]]\n" + piece + "\n\n[[contributes.kit.settings]]")
+    }
+
+    /// Allowlisted keys parse with their string values, and nothing else is kept.
+    func testEnvPieceKeepsAllowlistedKeysAndValues() throws {
+        let a = try XCTUnwrap(ManagedConfigPlanner.envKeys.first), b = try XCTUnwrap(ManagedConfigPlanner.envKeys.last)
+        let (kit, bad) = try parse(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = { \(a) = \"1\", \(b) = \"600000\" }"))
+        XCTAssertEqual(bad, [])
+        XCTAssertEqual(kit.pieces.last?.kind, .env)
+        XCTAssertEqual(kit.pieces.last?.vars, [a: "1", b: "600000"])
+    }
+
+    /// A key off the allowlist refuses the kit (a credential key above all); so does an empty, missing or non-string vars.
+    func testEnvPieceRefusesAKeyOffTheAllowlist() throws {
+        let a = try XCTUnwrap(ManagedConfigPlanner.envKeys.first)
+        XCTAssertFalse(ManagedConfigPlanner.envKeys.contains("ANTHROPIC_API_KEY"))
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = { \(a) = \"1\", ANTHROPIC_API_KEY = \"x\" }"),
+                          "pieces[6].vars.ANTHROPIC_API_KEY", .envKeyNotAllowed)
+        // case matters: Claude Code's env keys are exact
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = { \(a.lowercased()) = \"1\" }"),
+                          "pieces[6].vars.\(a.lowercased())", .envKeyNotAllowed)
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = {}"), "pieces[6].vars", .emptyEnv)
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\""), "pieces[6].vars", .missingKey)
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = { \(a) = 1 }"), "pieces[6].vars.\(a)", .wrongType)
+        try assertRefused(Self.withPiece("id = \"env\"\nkind = \"env\"\nvars = \"\(a)=1\""), "pieces[6].vars", .wrongType)
+    }
+
+    /// disable_bypass is a bool; true alone is a whole permissions piece, false alone still needs a rule.
+    func testDisableBypassShape() throws {
+        let (kit, bad) = try parse(Self.withPiece("id = \"no-bypass\"\nkind = \"permissions\"\ndisable_bypass = true"))
+        XCTAssertEqual(bad, [])
+        XCTAssertEqual(kit.pieces.last?.disableBypass, true)
+        try assertRefused(Self.withPiece("id = \"no-bypass\"\nkind = \"permissions\"\ndisable_bypass = false"), "pieces[6].allow", .emptyPermissions)
+        try assertRefused(Self.withPiece("id = \"no-bypass\"\nkind = \"permissions\"\ndisable_bypass = \"disable\""),
+                          "pieces[6].disable_bypass", .wrongType)
     }
 
     /// A TOML date anywhere in the kit table still decodes the manifest; the kit is refused.

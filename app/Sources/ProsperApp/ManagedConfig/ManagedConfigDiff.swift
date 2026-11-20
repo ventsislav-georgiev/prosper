@@ -106,7 +106,12 @@ enum ManagedConfigDiff {
             case "permissions":
                 guard case .object(let kids) = m.value.value else { return false }
                 guard let k = kids.first(where: { $0.range.contains(offset) }) else { return true }
-                return ManagedConfigDiff.allowedPermissionKeys.contains(k.key)
+                return ManagedConfigDiff.allowedPermissionKeys.contains(k.key) || k.key == ManagedConfigPlanner.bypassPath[1]
+            case "env":
+                // OQ-193: an allowlisted key's line is shown; every other env line stays masked
+                guard case .object(let kids) = m.value.value else { return false }
+                guard let k = kids.first(where: { $0.range.contains(offset) }) else { return true }
+                return ManagedConfigPlanner.envKeys.contains(k.key)
             default:
                 return false
             }

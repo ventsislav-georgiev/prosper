@@ -153,7 +153,8 @@ enum KitRender {
 
     /// spec 4.2 piece table. Seeds come first, so local.md exists before the block importing it.
     /// The only settings.json paths written: hooks.<event> (append), statusLine (set) and
-    /// permissions.allow / deny / ask (union); KitRenderTests walks every kind to prove it.
+    /// permissions.allow / deny / ask (union), and (OQ-193) permissions.disableBypassPermissionsMode and env.<allowlisted key>
+    /// (set); KitRenderTests walks every kind to prove it.
     /// #917 G1: an off piece emits nothing; an off tool of an on piece emits no shim. The closure is taken HERE, not
     /// required of the caller, so an unclosed off set can never leave a dependent wired; a refused one plans nothing.
     static func plan(_ v: KitValidated, _ c: KitRenderContext, off asked: Set<String> = [], offTools: [String: Set<String>] = [:]) -> KitPlan {
@@ -195,6 +196,16 @@ enum KitRender {
                 for (key, rules) in [("allow", p.allow), ("deny", p.deny), ("ask", p.ask)] where !rules.isEmpty {
                     wiring.append(ManagedConfigPiece(id: "\(p.id).\(key)", kind: .json, target: "claude:settings.json", path: ["permissions", key],
                                                      op: .union, value: "[" + rules.map(OrderedJSON.quote).joined(separator: ", ") + "]"))
+                }
+                if p.disableBypass {
+                    wiring.append(ManagedConfigPiece(id: "\(p.id).disable-bypass", kind: .json, target: "claude:settings.json",
+                                                     path: ManagedConfigPlanner.bypassPath, op: .set, value: #""disable""#))
+                }
+            case .env:
+                // a set restores the prior value on Remove (or drops the key when there was none)
+                for (key, value) in p.vars.sorted(by: { $0.key < $1.key }) {
+                    wiring.append(ManagedConfigPiece(id: "\(p.id).\(key)", kind: .json, target: "claude:settings.json", path: ["env", key],
+                                                     op: .set, value: OrderedJSON.quote(value)))
                 }
             case .seed:
                 for f in v.seeds[p.id] ?? [] {
@@ -253,6 +264,13 @@ enum KitRender {
                 // one line per rule: a rule may itself hold ", "
                 for (key, rules) in [("allow", p.allow), ("deny", p.deny), ("ask", p.ask)] {
                     for rule in rules { lines.append("\(p.id): permissions.\(key) in settings.json gains \(rule)") }
+                }
+                if p.disableBypass {
+                    lines.append("\(p.id): permissions.disableBypassPermissionsMode in settings.json is set to disable; Remove puts your own value back")
+                }
+            case .env:
+                for (key, value) in p.vars.sorted(by: { $0.key < $1.key }) {
+                    lines.append("\(p.id): env \(key) in settings.json is set to \(OrderedJSON.quote(value)); Remove puts your own value back")
                 }
             case .seed:
                 let names = (v.seeds[p.id] ?? []).map(\.name).joined(separator: ", ")
