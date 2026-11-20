@@ -1,0 +1,41 @@
+{
+ "entry": "1788",
+ "filter": "DchConfigWriterTests",
+ "mutants": [
+  {
+   "name": "once_capture",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let adopt = !Preferences.agentIslandSessionGroupsStored && !Preferences.agentIslandDchGroupsAdoptChecked",
+   "new": "let adopt = !Preferences.agentIslandSessionGroupsStored",
+   "expect": "killed"
+  },
+  {
+   "name": "no_flag_set",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        Preferences.agentIslandDchGroupsAdoptChecked = true\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "hop_only_when_found",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "                    DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } }",
+   "new": "                    if !found.isEmpty { DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } } }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_late_guard",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        guard !Preferences.agentIslandDchGroupsAdoptChecked else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_own_lines_skip",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let found = had == g ? [] : DchConfigWriter.adoptable(had)",
+   "new": "let found = DchConfigWriter.adoptable(had)",
+   "expect": "killed"
+  }
+ ]
+}
