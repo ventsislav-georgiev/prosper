@@ -1,0 +1,20 @@
+{
+ "entry": 1716,
+ "filter": "DchChatTests",
+ "mutants": [
+  {
+   "name": "row-names-setting",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "let shown = resident ?? id",
+   "new": "let shown = id",
+   "expect": "killed"
+  },
+  {
+   "name": "loaded-always-true",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "\"loaded\": resident != nil]",
+   "new": "\"loaded\": true]",
+   "expect": "killed"
+  }
+ ]
+}
