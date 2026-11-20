@@ -495,19 +495,21 @@ final class SnippetExpander {
         let previous = Pasteboard.save(pb, access: Pasteboard.access())
         pb.clearContents()
         pb.setString(string, forType: .string)
+        let written = pb.changeCount
         postCmdV()
-        restoreClipboard(previous)
+        restoreClipboard(previous, ifChangeCount: written)
     }
 
     private func pasteRich(rtf: Data, plain: String) {
         let pb = Pasteboard.general
-        let previous = Pasteboard.save(pb, rtf: true, access: Pasteboard.access())
+        let previous = Pasteboard.save(pb, access: Pasteboard.access())
         pb.clearContents()
         // Both RTF and a plain fallback, so non-rich targets still receive text.
         pb.setData(rtf, forType: .rtf)
         pb.setString(plain, forType: .string)
+        let written = pb.changeCount
         postCmdV()
-        restoreClipboard(previous)
+        restoreClipboard(previous, ifChangeCount: written)
     }
 
     private func postCmdV() {
@@ -523,10 +525,10 @@ final class SnippetExpander {
         up?.post(tap: .cgSessionEventTap)
     }
 
-    private func restoreClipboard(_ previous: Pasteboard.SavedClip) {
+    private func restoreClipboard(_ previous: Pasteboard.SavedClip, ifChangeCount written: Int) {
         guard Preferences.snippetsRestoreClipboard else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            Pasteboard.restore(previous, to: Pasteboard.general)
+            Pasteboard.restore(previous, to: Pasteboard.general, ifChangeCount: written)
         }
     }
 }

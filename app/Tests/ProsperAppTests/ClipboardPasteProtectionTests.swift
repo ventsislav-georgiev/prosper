@@ -98,11 +98,11 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         let pb = board()
         pb.clearContents()
         pb.setString("the user's clip", forType: .string)
-        let saved = Pasteboard.save(pb, rtf: true, access: .denied)
+        let saved = Pasteboard.save(pb, access: .denied)
         XCTAssertEqual(saved, Pasteboard.SavedClip())
         pb.clearContents()
         pb.setString("snippet text", forType: .string)
-        Pasteboard.restore(saved, to: pb)
+        XCTAssertTrue(Pasteboard.restore(saved, to: pb, ifChangeCount: pb.changeCount))
         XCTAssertTrue(pb.string(forType: .string) == nil, "the snippet must not stay on the clipboard")
         XCTAssertEqual(pb.types?.count ?? 0, 0)
     }
@@ -115,16 +115,91 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         pb.setData(rtf, forType: .rtf)
         pb.setString("the user's clip", forType: .string)
         for state in [ClipboardAccess.allowed, .asks, .systemDefault, .unknown] {
-            let saved = Pasteboard.save(pb, rtf: true, access: state)
+            let saved = Pasteboard.save(pb, access: state)
             XCTAssertEqual(saved.string, "the user's clip", "\(state)")
-            XCTAssertEqual(saved.rtf, rtf, "\(state)")
+            XCTAssertEqual(saved.data(.rtf), rtf, "\(state)")
             pb.clearContents()
             pb.setString("snippet text", forType: .string)
-            Pasteboard.restore(saved, to: pb)
+            XCTAssertTrue(Pasteboard.restore(saved, to: pb, ifChangeCount: pb.changeCount), "\(state)")
             XCTAssertEqual(pb.string(forType: .string), "the user's clip", "\(state)")
             XCTAssertEqual(pb.data(forType: .rtf), rtf, "\(state)")
         }
-        XCTAssertTrue(Pasteboard.save(pb, access: .allowed).rtf == nil, "plain save reads no RTF")
+    }
+
+    /// #1691: a non-text clip (an image item and a file item) goes back item by item, every type's bytes exact.
+    func testImageAndFileItemsSurviveTheRestore() {
+        let pb = board()
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + Array(repeating: UInt8(7), count: 64))
+        let fileURL = Data("file:///Users/example/report.pdf".utf8)
+        let image = NSPasteboardItem(), file = NSPasteboardItem()
+        image.setData(png, forType: .png)
+        file.setData(fileURL, forType: .fileURL)
+        pb.clearContents()
+        XCTAssertTrue(pb.writeObjects([image, file]))
+        let saved = Pasteboard.save(pb, access: .allowed)
+        XCTAssertEqual(saved.items.count, 2)
+        pb.clearContents()
+        pb.setString("snippet text", forType: .string)
+        XCTAssertTrue(Pasteboard.restore(saved, to: pb, ifChangeCount: pb.changeCount))
+        let back = pb.pasteboardItems ?? []
+        XCTAssertEqual(back.count, 2)
+        XCTAssertEqual(back.first?.data(forType: .png), png)
+        XCTAssertEqual(back.last?.data(forType: .fileURL), fileURL)
+        XCTAssertTrue(pb.string(forType: .string) == nil, "the snippet must not stay on the clipboard")
+    }
+
+    /// #1691: a copy the user makes between Prosper's write and the delayed restore is kept; with no copy
+    /// in between the restore runs.
+    func testRestoreSkipsWhenTheUserCopiedAfterOurWrite() {
+        let pb = board()
+        pb.clearContents()
+        pb.setString("the user's old clip", forType: .string)
+        let saved = Pasteboard.save(pb, access: .allowed)
+        pb.clearContents()
+        pb.setString("snippet text", forType: .string)
+        let written = pb.changeCount
+        pb.clearContents()
+        pb.setString("the user's new copy", forType: .string)
+        XCTAssertFalse(Pasteboard.restore(saved, to: pb, ifChangeCount: written))
+        XCTAssertEqual(pb.string(forType: .string), "the user's new copy")
+
+        pb.clearContents()
+        pb.setString("snippet text", forType: .string)
+        XCTAssertTrue(Pasteboard.restore(saved, to: pb, ifChangeCount: pb.changeCount))
+        XCTAssertEqual(pb.string(forType: .string), "the user's old clip")
+    }
+
+    /// #1691: the save counts the bytes it copies and stops reading at the cap: under a large cap it reads
+    /// exactly the bytes the pasteboard holds; under a small one the representation that crosses the cap is
+    /// dropped and nothing after it is read.
+    func testSaveCountsBytesCopiedAndStopsAtTheCap() {
+        let pb = board()
+        let types = ["a", "b", "c", "d"].map { NSPasteboard.PasteboardType("com.example.prosper-test.\($0)") }
+        let first = NSPasteboardItem(), second = NSPasteboardItem()
+        first.setData(Data(count: 100), forType: types[0])
+        first.setData(Data(count: 100), forType: types[1])
+        second.setData(Data(count: 100), forType: types[2])
+        second.setData(Data(count: 100), forType: types[3])
+        pb.clearContents()
+        XCTAssertTrue(pb.writeObjects([first, second]))
+
+        let all = Pasteboard.save(pb, access: .allowed)
+        XCTAssertEqual(all.bytesRead, 400, "only the bytes the pasteboard holds")
+        XCTAssertEqual(all.items.count, 2)
+
+        let capped = Pasteboard.save(pb, access: .allowed, cap: 250)
+        XCTAssertEqual(capped.bytesRead, 300, "the read that crosses the cap is the last one")
+        XCTAssertEqual(capped.items.count, 1)
+        XCTAssertEqual(capped.items.first?.count, 2)
+        XCTAssertTrue(capped.data(types[2]) == nil && capped.data(types[3]) == nil)
+        XCTAssertLessThanOrEqual(capped.items.flatMap { $0 }.reduce(0) { $0 + $1.data.count }, 250)
+        XCTAssertEqual(Pasteboard.saveByteCap, 32 << 20)
+
+        // The cap crossed by the second representation of an item: the first one of that item is kept.
+        let mid = Pasteboard.save(pb, access: .allowed, cap: 150)
+        XCTAssertEqual(mid.bytesRead, 200)
+        XCTAssertEqual(mid.items.count, 1)
+        XCTAssertEqual(mid.items.first?.count, 1)
     }
 
     /// The snippet (plain and rich) and autocomplete paste paths all save and restore through the seam,
@@ -140,6 +215,8 @@ final class ClipboardPasteProtectionTests: XCTestCase {
         XCTAssertEqual(try count("Pasteboard.restore(", in: "Snippets/SnippetExpander.swift"), 1)
         XCTAssertEqual(try count("Pasteboard.save(pb", in: "Autocomplete/AutocompleteEngine.swift"), 1)
         XCTAssertEqual(try count("Pasteboard.restore(", in: "Autocomplete/AutocompleteEngine.swift"), 1)
+        XCTAssertEqual(try count("let written = pb.changeCount", in: "Snippets/SnippetExpander.swift"), 2)
+        XCTAssertEqual(try count("let written = pb.changeCount", in: "Autocomplete/AutocompleteEngine.swift"), 1)
         XCTAssertEqual(try count("if let previous {", in: "Autocomplete/AutocompleteEngine.swift"), 0,
                        "an unreadable clip is restored (cleared), not skipped")
     }

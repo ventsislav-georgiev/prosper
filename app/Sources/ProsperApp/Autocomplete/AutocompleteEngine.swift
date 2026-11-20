@@ -2595,6 +2595,7 @@ final class AutocompleteEngine {
         // the clipboard can skip echoing text it can see we injected.
         pb.setString(Bundle.main.bundleIdentifier ?? "com.prosper.app",
                      forType: Self.selfMarkerPasteboardType)
+        let written = pb.changeCount // #1691: a user copy after this point is not overwritten by the restore
 
         let source = CGEventSource(stateID: .combinedSessionState)
         let vKey: CGKeyCode = 9 // kVK_ANSI_V
@@ -2620,7 +2621,7 @@ final class AutocompleteEngine {
         // Restore the prior clipboard shortly after the paste lands; #1020: an unreadable one is
         // cleared, as the snippet paths do, so the completion never stays on the clipboard.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            Pasteboard.restore(previous, to: pb)
+            Pasteboard.restore(previous, to: pb, ifChangeCount: written)
         }
     }
 }

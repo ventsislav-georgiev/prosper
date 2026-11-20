@@ -2129,6 +2129,9 @@ tag from the now-released section and put it on the new top draft.
   the grid position from the terminal itself. (#1682)
 - Fixed a rare race where a newer follow cutting an older one at the instant it ended busy could
   still restart the cut follow. (#1693)
+- Snippet and autocomplete pastes now put back an image or copied files that were on your clipboard,
+  not only text, and no longer overwrite something you copy in the moment right after the paste.
+  (#1691)
 
 ## v2.174.0
 
