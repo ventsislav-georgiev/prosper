@@ -1,0 +1,76 @@
+{
+ "entry": "1732",
+ "filter": "PVCommandTests",
+ "mutants": [
+  {
+   "name": "write_through_target",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "/bin/mv -fh new \\(t)",
+   "new": "/bin/cat new > \\(t)",
+   "expect": "killed"
+  },
+  {
+   "name": "mv_enters_dir_link",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "/bin/mv -fh new",
+   "new": "/bin/mv -f new",
+   "expect": "killed"
+  },
+  {
+   "name": "no_owner_check",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "cd \\\"$d\\\" && [ -O . ] && ",
+   "new": "cd \\\"$d\\\" && ",
+   "expect": "killed"
+  },
+  {
+   "name": "temp_in_tmpdir",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "/usr/bin/mktemp -d \\(quote(parent + \"/.prosper.XXXXXX\"))",
+   "new": "/usr/bin/mktemp -d -t prosper",
+   "expect": "killed"
+  },
+  {
+   "name": "as_escape_backslash",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "command.replacingOccurrences(of: \"\\\\\", with: \"\\\\\\\\\")",
+   "new": "command",
+   "expect": "killed"
+  },
+  {
+   "name": "open_by_path",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "open -b \"$app\" \"$f\" || rc=1",
+   "new": "open -a \"$app\" \"$f\" || rc=1",
+   "expect": "killed"
+  },
+  {
+   "name": "legacy_any_pv",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "(legacy, legacyMarker)",
+   "new": "(legacy, \"\")",
+   "expect": "killed"
+  },
+  {
+   "name": "legacy_kept",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "[(target, marker), (legacy, legacyMarker)]",
+   "new": "[(target, marker)]",
+   "expect": "killed"
+  },
+  {
+   "name": "old_marker_is_ours",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "static let marker = \"# prosper-cli:\"",
+   "new": "static let marker = \"# prosper-pv:\"",
+   "expect": "killed"
+  },
+  {
+   "name": "default_target_pv",
+   "file": "app/Sources/ProsperApp/Extensions/PVCommand.swift",
+   "old": "URL(fileURLWithPath: \"/usr/local/bin/prosper\")",
+   "new": "URL(fileURLWithPath: \"/usr/local/bin/pv\")",
+   "expect": "killed"
+  }
+ ]
+}
