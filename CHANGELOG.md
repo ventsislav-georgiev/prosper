@@ -2202,8 +2202,10 @@ tag from the now-released section and put it on the new top draft.
   View, Go and Layout menus (with your saved layouts), in the menu bar while the window is in front;
   every window also gets a standard Window menu (Minimize, Zoom, Bring All to Front and the window
   list). (#1726)
-- The agents count is outlined in royal purple and the shells count in white, with no grey wash
-  behind either, on the Agent Island cards too. (#1735, #1739)
+- The agents and shells counts on session rows have no border and no fill: the robot and its number
+  are drawn in royal purple and the shell symbol and its number in white (the dark text colour on
+  light themes), the way the open pull request count is drawn in the theme blue, on the Agent Island
+  cards too. (#1735, #1739, #1776)
 - The New session form asks for a name (no generated default) and sits in the middle of the pane.
   (#1731)
 - Clicking a session on the Agent Island now opens it in Agent Sessions by default; opening a
