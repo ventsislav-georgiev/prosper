@@ -221,6 +221,25 @@ final class KitPaneMountTests: XCTestCase {
         XCTAssertFalse((update?.label ?? "\u{202E}").unicodeScalars.contains("\u{202E}"), "no bidi control")
     }
 
+    // MARK: #1683 the opener
+
+    /// The Settings body opens the Kit tab (ext:<id>|kit) as KitPaneMount before the extension-section lookup, and the mount
+    /// hands the pane the real NSWorkspace opener (reveal the kit folder, open local.md). No window is built: the source is read.
+    func testKitTabOpensKitPaneWithTheWorkspaceOpener() throws {
+        let src = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/SettingsWindow.swift"), encoding: .utf8)
+        func at(_ s: String) -> String.Index? { src.range(of: s)?.lowerBound }
+        let rec = at("settingsKitRecord(registry: registry, selection: selection)")
+        let mount = at("KitPaneMount(owner: owner, extID: kit.id).id(selection)")
+        let ext = at("extensionSettingsPane(registry: registry, selection: selection)")
+        XCTAssertTrue(rec != nil && mount != nil && ext != nil, "the three anchors are in the Settings body")
+        if let rec, let mount, let ext { XCTAssertTrue(rec < mount && mount < ext, "the kit tab resolves to KitPaneMount first") }
+        XCTAssertEqual(settingsKitTabID(Self.ext), Self.tab)
+        XCTAssertTrue(src.contains("KitPaneOpener(reveal: { NSWorkspace.shared.activateFileViewerSelecting([$0]) },"), "reveal opens Finder")
+        XCTAssertTrue(src.contains("open: { NSWorkspace.shared.open($0) }))"), "open goes to NSWorkspace")
+        XCTAssertTrue(src.contains("KitPaneView(model: model, opener: KitPaneOpener("), "the mount shows KitPaneView with the opener")
+    }
+
     // MARK: #1438
 
     /// R1425-s1: an applied, validated kit whose extension is then disabled adds no bin to liveBins or to a spawn's
