@@ -5,8 +5,8 @@
   {
    "name": "ownCardFalse",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "outlined: true, ownCard: inks != nil,",
-   "new": "outlined: true, ownCard: false,",
+   "old": "tinted: true, ownCard: inks != nil,",
+   "new": "tinted: true, ownCard: false,",
    "expect": "killed"
   }
  ]

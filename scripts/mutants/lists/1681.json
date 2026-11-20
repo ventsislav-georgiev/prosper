@@ -40,7 +40,7 @@
   {
    "name": "shells-chip-no-pill",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "case .shells: return ownCard ? .white : AgentSidebarRowView.shellsStroke",
+   "old": "case .shells: return ownCard ? .white : AgentSidebarRowView.shellsInk",
    "new": "case .shells: return nil",
    "expect": "killed"
   }

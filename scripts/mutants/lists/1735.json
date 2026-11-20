@@ -17,24 +17,10 @@
    "expect": "killed"
   },
   {
-   "name": "stroke-becomes-fill",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "Capsule().strokeBorder(pill, lineWidth: 1)",
-   "new": "Capsule().fill(pill)",
-   "expect": "killed"
-  },
-  {
-   "name": "no-stroke",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "Capsule().strokeBorder(pill, lineWidth: 1)",
-   "new": "Capsule().strokeBorder(Color.clear, lineWidth: 1)",
-   "expect": "killed"
-  },
-  {
    "name": "row-not-outlined",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "open: ink(.blue), outlined: true,",
-   "new": "open: ink(.blue), outlined: false,",
+   "old": "open: ink(.blue), tinted: true,",
+   "new": "open: ink(.blue), tinted: false,",
    "expect": "killed"
   }
  ]
