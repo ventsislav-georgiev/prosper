@@ -42,8 +42,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "g.0 == .shells ? AgentSidebarRowView.shellsStroke : nil",
    "new": "g.0 == .shells ? nil : nil",
-   "expect": "killed",
-   "filter": "AgentRowModelEffortTests/testShellsCountDraws|DchShellsTests"
+   "expect": "killed"
   }
  ]
 }
