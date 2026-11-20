@@ -19,8 +19,8 @@
   {
    "name": "refclick_remote_guard",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "guard XrayRefLink.decorate(), let owner, let key = owner.key, let g = gridMetrics else { return false }",
-   "new": "guard XrayRefLink.decorate(), let owner, owner.remoteHost == nil, let key = owner.key, let g = gridMetrics else { return false }",
+   "old": "guard XrayRefLink.decorate(), let owner, let key = owner.key, let c = gridCell(at: p) else { return false }",
+   "new": "guard XrayRefLink.decorate(), let owner, owner.remoteHost == nil, let key = owner.key, let c = gridCell(at: p) else { return false }",
    "expect": "killed"
   },
   {

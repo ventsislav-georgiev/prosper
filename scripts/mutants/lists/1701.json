@@ -1,0 +1,90 @@
+{
+ "entry": 1701,
+ "filter": "XrayHoverTests|XrayTerminalRefTests|XrayGridMarksTests",
+ "mutants": [
+  {
+   "name": "cmd_gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        command(event.modifierFlags.contains(.command))\n",
+   "new": "        command(true)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "cmd_release",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)",
+   "new": "if down { hover.point(pointer.flatMap { mark(at: $0) }?.key) }",
+   "expect": "killed"
+  },
+  {
+   "name": "flags_unwired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        marks.command(event.modifierFlags.contains(.command))\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "click_passes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "                pinnedDown = true\n                return\n",
+   "new": "                pinnedDown = true\n",
+   "expect": "killed"
+  },
+  {
+   "name": "up_passes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if pinnedDown { pinnedDown = false; return }\n",
+   "new": "        pinnedDown = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "click_no_pin",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        guard card != nil else { return false }\n        pin()\n",
+   "new": "        guard card != nil else { return false }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "list_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "(found + XrayRefSpans.continued(line, after: found))",
+   "new": "(found + [])",
+   "expect": "killed"
+  },
+  {
+   "name": "list_any_text",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "            guard \" ,;)\".contains(c) || dotEnd else { break }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "list_semicolon",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "let seps = [\", and \", \", or \", \" and \", \" or \", \", \"]",
+   "new": "let seps = [\", and \", \", or \", \" and \", \" or \", \", \", \"; \"]",
+   "expect": "killed"
+  },
+  {
+   "name": "list_overlap",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "                guard !(spans + out).contains(where: { $0.range.overlaps(r) }) else { break }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "prefix_hex",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "p == \"#\" || p.count > 1 && p.hasSuffix(\"-\")",
+   "new": "p == \"#\" || p.count > 0",
+   "expect": "killed"
+  },
+  {
+   "name": "listed_none",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "                ?? XrayRefSpans.listed(key, in: p.refs.entries) else {",
+   "new": "                else {",
+   "expect": "killed"
+  }
+ ]
+}

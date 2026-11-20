@@ -82,8 +82,8 @@
   {
    "name": "M13-click-swallowed",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "            refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y))\n        }\n        super.mouseDown(with: event)",
-   "new": "            if refClick(at: CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)) { return }\n        }\n        super.mouseDown(with: event)",
+   "old": "            refClick(at: q)\n        }\n        passedClick?(event)",
+   "new": "            if refClick(at: q) { return }\n        }\n        passedClick?(event)",
    "expect": "killed"
   }
  ]
