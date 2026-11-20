@@ -120,7 +120,7 @@ extension AgentWindowD1Tests {
         withCachePrefs {
             let list = [session("api", .idle, ago: 10), session("api-qa", .idle, ago: 20)]
             let a = store(list), b = store(list)
-            a.pairSuffix = ""
+            a.pairSuffix = "-none" // a real change that pairs nothing: a no-op set does not bump (#1797)
             b.pairSuffix = "-qa"
             XCTAssertEqual(a.groupsGeneration, b.groupsGeneration, "the same generation: only the store's identity tells")
             let m = windowModel(a)
