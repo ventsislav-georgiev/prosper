@@ -287,9 +287,9 @@ final class AgentTerminalController: ObservableObject {
     /// #1719: where a file link's disk check runs: off main, so a stat that blocks (a first look into a TCC-guarded
     /// folder waits for the consent answer, an iCloud folder for its download) holds a utility thread, never the UI.
     /// Rows run it inline.
+    var fileCheck: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }
     /// #1730: bumped by every file-link open(); a check that finishes after a newer click shows nothing.
     private var fileLinkGeneration = 0
-    var fileCheck: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }
     /// #1357 (P9): a prosper-xray link (OSC 8) to the window's ref card, the key checked against this session's refs.
     var openRefLink: @MainActor (URL, NSWindow?, AgentSessionKey?) -> Void = {
         XrayRefLink.openTerminalLink($0, $1 as? AgentsNSWindow, key: $2)
