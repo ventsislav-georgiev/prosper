@@ -62,8 +62,15 @@ extension AgentRowModelEffortTests {
                         guard let col = rep.colorAt(x: Int(x * k), y: Int(y * k))?.usingColorSpace(.sRGB) else { return [] }
                         return [col.redComponent, col.greenComponent, col.blueComponent]
                     }
-                    let edge = pix(c.minX + 0.5, c.midY), inside = pix(c.minX + sz(3), c.midY), outside = pix(c.minX - 2, c.midY)
-                    XCTAssertTrue(edge.count == 3 && inside.count == 3 && outside.count == 3, "pixels read: \(tag)")
+                    // At 1x the 1 px stroke and the glyph's antialiased edge straddle the 2.8 pt gap between them (CI: [0.04, 0.03, 0.06]
+                    // at one fixed point), so the interior is every sample across that gap and down the middle rows: a fill moves all of
+                    // them, the strictest one still has to be the row behind it.
+                    let edge = pix(c.minX + 0.5, c.midY), outside = pix(c.minX - 2, c.midY)
+                    let gap = stride(from: c.minX + 1, through: c.minX + sz(4), by: 0.25).flatMap { x in
+                        [-1, -0.5, 0, 0.5, 1].map { pix(x, c.midY + $0) }
+                    }
+                    let inside = gap.min { $0.reduce(0, +) < $1.reduce(0, +) } ?? []
+                    XCTAssertTrue(edge.count == 3 && inside.count == 3 && outside.count == 3 && gap.allSatisfy { $0.count == 3 }, "pixels read: \(tag)")
                     XCTAssertTrue(zip(inside, outside).allSatisfy { abs($0 - $1) <= 0.02 }, "no fill: the interior is the row behind it: \(inside) \(outside) \(tag)")
                     XCTAssertGreaterThan(zip(edge, inside).map { $0 - $1 }.reduce(0, +), 0.5, "the stroke is drawn at the edge: \(edge) over \(inside) \(tag)")
                     if n == 5 { XCTAssertTrue(h.frames["count.open"] != nil, "5 agents keep the open count: \(tag)") }

@@ -122,11 +122,19 @@ extension AgentRowModelEffortTests {
         XCTAssertEqual(r.counts.first.map { "\($0.0) \($0.1)" }, "agents 3", "the card's row carries the agents count")
         let line = AgentSidebarRowView(row: r, selected: false, inks: AgentIslandRow.inks).detailLine([])
         // #1546: the glyph is drawn in the surrounding ink like the text: no chromatic pixel (the emoji's colours are gone).
+        // #1735, #1739: the card wears the agents pill's purple stroke, so only the pill's inside counts. No product seam gives the glyph's
+        // rect to an ImageRenderer, so it is the chromatic bounding box (the stroke: it encloses everything) inset by the pill padding
+        // (sz(4), the glyph's left) horizontally and 1.5 pt vertically (the stroke and its rounded ends), at the renderer's scale 2.
         let (w, h, data) = try pixels1453(line)
-        let lit = stride(from: 0, to: data.count - 3, by: 4).filter { i in
-            let c = [data[i], data[i + 1], data[i + 2]], hi = c.max() ?? 0, lo = c.min() ?? 0
-            return Int(hi) - Int(lo) > 40
-        }.count
+        func chromatic(_ i: Int) -> Bool {
+            let c = [data[i], data[i + 1], data[i + 2]]
+            return Int(c.max() ?? 0) - Int(c.min() ?? 0) > 40
+        }
+        let all = stride(from: 0, to: data.count - 3, by: 4).filter(chromatic).map { ($0 / 4 % w, $0 / 4 / w) }
+        let box = (x0: all.map(\.0).min() ?? 0, x1: all.map(\.0).max() ?? 0, y0: all.map(\.1).min() ?? 0, y1: all.map(\.1).max() ?? 0)
+        let dx = Int((2 * sz(4)).rounded(.up)), dy = 3
+        let lit = all.filter { $0.0 >= box.x0 + dx && $0.0 <= box.x1 - dx && $0.1 >= box.y0 + dy && $0.1 <= box.y1 - dy }.count
+        XCTAssertTrue(all.count > 0 && box.x1 - box.x0 > 2 * dx && box.y1 - box.y0 > 2 * dy, "the pill's stroke is drawn: \(all.count) chromatic pixels")
         XCTAssertTrue(w > 0 && h > 0 && lit == 0, "the card's agents group is the one-ink robot glyph: \(lit) chromatic pixels")
     }
 
