@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import ProsperApp
 
@@ -250,5 +252,76 @@ final class DchShellsTests: XCTestCase {
     func testAnsweringKeepsTheShells() {
         let s = session(shells: [DchShell(id: "1", pid: 1, started: 0, command: "make")], state: .blocked)
         XCTAssertEqual(AgentIslandController.answering(s).shells, s.shells)
+    }
+
+    /// #1681 (left by #1583): a Text Viewer editor session shows an untrusted file's bytes, so AgentIsland.list gives it
+    /// no shells (and idle, no Claude id) whatever dch reports; a normal session in the same answer keeps its shells.
+    /// A fake runner, no dch.
+    @MainActor
+    func testEditSessionGetsNoShellsAndANormalOneKeepsThem() throws {
+        let edit = TerminalEditor.sessionName(path: "/Users/example/notes.md")
+        XCTAssertTrue(TerminalEditor.isEditSession(edit), edit)
+        let shell = #""shells":[{"id":"b1","pid":7,"started":1,"command":"make"}]"#
+        let json = "[{\"name\":\"\(edit)\",\"alias\":\"\",\"activity_epoch\":1,\"state\":\"working\",\"agents\":1,"
+            + "\"claude_session_id\":\"0b6c1d4e-1111-4222-8333-944455556666\",\(shell)},"
+            + "{\"name\":\"api\",\"alias\":\"\",\"activity_epoch\":1,\"state\":\"working\",\"agents\":1,\(shell)}]"
+        let list = AgentIsland.list(dirs: ["/Users/example/.dch"]) { _, _ in Data(json.utf8) }
+        let e = try XCTUnwrap(list.first { $0.key.name == edit }, "the editor session is listed")
+        XCTAssertTrue(e.shells.isEmpty, "no shells for an editor session")
+        XCTAssertEqual(e.state, .idle)
+        XCTAssertTrue(e.claudeSessionID == nil)
+        XCTAssertTrue(AgentIslandRow.sidebarRow(e, show: .all, now: 0, notice: nil).countHelp.isEmpty)
+        XCTAssertFalse(AgentIslandRow.accessibilityLabel(e, now: 0, show: .all).contains("shell"))
+        let api = try XCTUnwrap(list.first { $0.key.name == "api" })
+        XCTAssertEqual(api.shells.map(\.command), ["make"], "a normal session keeps its shells")
+    }
+
+    // MARK: Small-scale crowding (#1681)
+
+    /// The island card at the smallest UI scale with every count at its widest (99 shells, 999 agents, 999 merged), a
+    /// notice in the state word's place or not: the shells chip is drawn as the agents' pill, in order between the agents
+    /// and merged groups, below the title and left of the age, never past the card. Offscreen in a never-shown window.
+    @MainActor
+    func testShellsChipDoesNotOverlapTheRowTextAtTheSmallestScale() throws {
+        _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 0.7
+        let pixel = AXTreeSupport.devicePixel
+        let many = (0..<DchShell.maxShells).map { DchShell(id: "\($0)", pid: $0 + 1, started: 0, command: "c\($0)") }
+        var s = AgentSession(key: AgentSessionKey(dir: "/Users/example/.dch", name: "api-qa"), alias: "", activity: 1_000_000 - 240,
+                             state: .working, agents: 999, meta: DchSessionMeta(openPRs: [], merged: 999))
+        s.model = "claude-opus-4-5"
+        s.effort = "high"
+        s.shells = many
+        let width = AgentIslandGeometry.expandedWidth - 2 * AgentIslandGeometry.listInset
+        for notice in [nil, "Attach command copied"] {
+            final class Box { var seen: [String: CGRect] = [:] }
+            let box = Box()
+            AgentSidebarRowView.probe = { kind, _, r in box.seen[kind] = r }
+            defer { AgentSidebarRowView.probe = nil }
+            let (win, host) = AXTreeSupport.hosted(
+                AgentIslandRow(session: s, now: 1_000_000, notice: notice, show: .all) {}.frame(width: width), CGSize(width: width, height: 120))
+            let end = Date().addingTimeInterval(2)
+            while ["title", "age", "count.shells", "capsule.shells", "count.merged"].contains(where: { box.seen[$0] == nil }) && Date() < end {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            }
+            XCTAssertFalse(win.isVisible, "never on screen")
+            win.contentView = nil
+            win.close()
+            let f = box.seen, tag = notice ?? "no notice"
+            guard let chip = f["count.shells"], let pill = f["capsule.shells"], let agents = f["count.agents"],
+                  let merged = f["count.merged"], let age = f["age"], let title = f["title"] else {
+                return XCTFail("a part is not drawn at 0.7: \(f.keys.sorted()) \(tag)")
+            }
+            XCTAssertGreaterThanOrEqual(chip.minY, title.maxY - pixel, "the chip is on line two, below the title: \(tag)")
+            XCTAssertLessThanOrEqual(agents.maxX, chip.minX + pixel, "agents group, then the chip: \(tag)")
+            XCTAssertLessThanOrEqual(chip.maxX, merged.minX + pixel, "the chip, then merged: \(tag)")
+            XCTAssertLessThanOrEqual(merged.maxX, age.minX + pixel, "the age is clear of every group: \(tag)")
+            XCTAssertLessThanOrEqual(age.maxX, width + pixel, "inside the card: \(tag)")
+            XCTAssertGreaterThan(chip.width, 0, tag)
+            XCTAssertTrue(pill.intersects(chip), "the chip wears the pill: \(tag)")
+        }
     }
 }
