@@ -204,6 +204,35 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1699 (QA R1698 n38): the tier's lift of its own band applies only when the band is up for no other reason. Full
+    /// mode with the sidebar hidden (the glyph's band is up whatever the tier says): a pane column inside the 30 pt
+    /// strip, which fits only without the band, is really 30 pt short, so the tier stays on and the band stays.
+    @MainActor
+    func testPaneCostTooSmallTierIsNotLiftedWhenTheGlyphBandIsUp() throws {
+        let restoreModes = transcriptMode(["api", "web"])
+        defer { restoreModes() }
+        try withSidebarRow(gate: true) {
+            Preferences.agentWindowSidebarHidden = true   // the in-memory test defaults; put back by the row
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]))
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            XCTAssertTrue(m.sidebarMode == .full && !m.sidebarShown, "Full mode, sidebar hidden")
+            XCTAssertTrue(AgentWindowBand.showsBesidesTier(m) && AgentWindowBand.shows(m), "the glyph's band is up")
+            let width: CGFloat = 1000, band = AgentWindowBand.height
+            @MainActor func fits(_ h: CGFloat) -> Bool {
+                if case .tiled = m.layout.frames(in: CGRect(x: 0, y: 0, width: width, height: h), minimum: m.paneMinimum, splitsEnabled: true) { true } else { false }
+            }
+            let column = m.paneMinimum.height + band / 2
+            XCTAssertTrue(fits(column) && !fits(column - band), "the column is inside the strip")
+            for _ in 0..<2 {   // the view feeds the column less the band
+                m.paneArea = CGRect(x: 0, y: 0, width: width, height: column - band)
+                XCTAssertTrue(m.paneTooSmall, "the pane area is 30 pt short: too small, not lifted")
+                XCTAssertTrue(AgentWindowBand.shows(m), "the band stays")
+            }
+        }
+    }
+
     /// The drawn check, through the window's own sidebar (never shown): gate on with A | B the other pane's row has the
     /// glyph and reads "in view"; a window resize that only crosses the too-small line redraws the row (the label loses
     /// "in view") with no other change of the model, and every frame the probes report after keeps its place (the slot,
