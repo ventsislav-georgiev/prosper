@@ -3,6 +3,11 @@ import SwiftUI
 
 /// An NSPanel that can become key so its hosted text field accepts typing.
 final class KeyablePanel: NSPanel {
+    // A helper panel, never one of the user's windows: kept out of the Window menu (#1738).
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
+        isExcludedFromWindowsMenu = true
+    }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }

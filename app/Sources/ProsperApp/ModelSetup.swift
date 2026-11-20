@@ -126,6 +126,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
             defer: false
         )
         window.title = "Prosper Setup"
+        window.isExcludedFromWindowsMenu = true   // #1738: a progress notice
         window.delegate = self
         window.isReleasedWhenClosed = false
         // Neon-console chrome, same treatment as Settings / extension windows.

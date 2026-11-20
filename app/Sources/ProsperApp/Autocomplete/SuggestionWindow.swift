@@ -33,6 +33,7 @@ final class SuggestionWindow {
             backing: .buffered,
             defer: true
         )
+        panel.isExcludedFromWindowsMenu = true   // #1738: a helper, not a user window
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
