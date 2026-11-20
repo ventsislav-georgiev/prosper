@@ -1,0 +1,13 @@
+{
+ "entry": "1741",
+ "filter": "AgentWindowD1Tests/testIslandClickFocusesTheSessionAsASidebarClickDoes",
+ "mutants": [
+  {
+   "name": "dropFocus",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        model.select(.live(key))\n        model.focusSelection()\n",
+   "new": "        model.select(.live(key))\n",
+   "expect": "killed"
+  }
+ ]
+}
