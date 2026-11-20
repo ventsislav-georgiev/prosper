@@ -1,0 +1,13 @@
+{
+ "entry": "1775",
+ "filter": "SessionGroupSectionsTests",
+ "mutants": [
+  {
+   "name": "switcher-title",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "sections.filter { $0.id != \"History\" }.flatMap(\\.rows).map { r in",
+   "new": "sections.filter { $0.title != \"History\" }.flatMap(\\.rows).map { r in",
+   "expect": "killed"
+  }
+ ]
+}
