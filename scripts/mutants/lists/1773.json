@@ -1,0 +1,20 @@
+{
+ "entry": "1773",
+ "filter": "SessionGroupsEditorTests",
+ "mutants": [
+  {
+   "name": "M1",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "all.contains(r.id) ? stored(r.id, in: st).map { SessionGroup.nameKey($0.name) } : SessionGroup.nameKey(r.name)",
+   "new": "SessionGroup.nameKey(r.name)",
+   "expect": "killed"
+  },
+  {
+   "name": "M2",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "all.formUnion(dup.map(\\.id))",
+   "new": "return (own, all.union(dup.map(\\.id)))",
+   "expect": "killed"
+  }
+ ]
+}
