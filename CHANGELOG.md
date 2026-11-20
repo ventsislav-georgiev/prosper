@@ -2178,6 +2178,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: opening a file link from a terminal (Cmd+Shift-click in Claude Code) no longer
   freezes Prosper while macOS asks for folder access or downloads the folder from iCloud; the file
   check now runs in the background. (#1719)
+- Double-clicking the Text Viewer window's top bar now zooms it to the screen and back, following
+  the system double-click setting (as the Agent Sessions window does). (#1725)
 
 ## v2.174.0
 

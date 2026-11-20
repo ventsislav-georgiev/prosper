@@ -1129,4 +1129,53 @@ extension TextViewerWindowTests {
         XCTAssertEqual(model.identity?.path, b.path, "the identity's path is the new target's")
         XCTAssertEqual(model.identity, fileIdentity(b))
     }
+
+    /// #1725: the header's empty part is the Agent Sessions window's drag view: a press drags, a double-click follows the
+    /// injected title-bar setting (zoom twice = back through NSWindow's own toggle, Minimize and None honoured).
+    func testHeaderDragViewDragsAndDoubleClickFollowsTheSetting() throws {
+        final class Recorder: NSWindow {
+            var drags = 0, zooms = 0, minimises = 0
+            override func performDrag(with event: NSEvent) { drags += 1 }
+            override func zoom(_ sender: Any?) { zooms += 1 }
+            override func miniaturize(_ sender: Any?) { minimises += 1 }
+        }
+        let d = Preferences.defaults
+        XCTAssertFalse(d === UserDefaults.standard, "a private defaults store")
+        let saved = d.object(forKey: "AppleActionOnDoubleClick")
+        defer { if let saved { d.set(saved, forKey: "AppleActionOnDoubleClick") } else { d.removeObject(forKey: "AppleActionOnDoubleClick") } }
+        let url = URL(fileURLWithPath: "/Users/example/a.txt")
+        let model = TextViewerModel(url: url, resolved: url, actions: fakeActions())
+        let w = Recorder(contentRect: NSRect(x: 0, y: 0, width: 600, height: 80), styleMask: [.borderless], backing: .buffered, defer: true)
+        w.isReleasedWhenClosed = false
+        w.contentView = NSHostingView(rootView: TextViewerHeader(model: model).frame(width: 600))
+        defer { w.contentView = NSView() }
+        for _ in 0..<3 {
+            w.contentView?.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        @MainActor func drags(_ v: NSView) -> [AgentWindowDragView] {
+            ((v as? AgentWindowDragView).map { [$0] } ?? []) + v.subviews.flatMap { drags($0) }
+        }
+        let v = try XCTUnwrap(drags(try XCTUnwrap(w.contentView)).first, "the header has a drag view")
+        func click(_ n: Int) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 300, y: 40), modifierFlags: [], timestamp: 0,
+                                             windowNumber: w.windowNumber, context: nil, eventNumber: 0, clickCount: n, pressure: 1))
+        }
+        v.mouseDown(with: try click(1))
+        XCTAssertEqual(w.drags, 1)
+        XCTAssertEqual(w.zooms, 0)
+        d.removeObject(forKey: "AppleActionOnDoubleClick")
+        v.mouseDown(with: try click(2)); v.mouseDown(with: try click(2))
+        XCTAssertEqual(w.zooms, 2, "twice = zoom and back")
+        d.set("None", forKey: "AppleActionOnDoubleClick")
+        v.mouseDown(with: try click(2))
+        XCTAssertEqual(w.zooms, 2)
+        XCTAssertEqual(w.minimises, 0)
+        d.set("Minimize", forKey: "AppleActionOnDoubleClick")
+        v.mouseDown(with: try click(2))
+        XCTAssertEqual(w.zooms, 2)
+        XCTAssertEqual(w.minimises, 1)
+        XCTAssertEqual(w.drags, 1, "a double-click never drags")
+        XCTAssertFalse(w.isVisible, "built, never shown")
+    }
 }

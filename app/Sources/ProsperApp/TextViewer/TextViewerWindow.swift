@@ -801,6 +801,7 @@ struct TextViewerHeader: View {
         }
         .padding(.horizontal, sz(14))
         .padding(.vertical, sz(8))
+        .background(AgentWindowDragArea())   // #1725: the header's empty parts move the window; a double-click zooms (the system setting)
     }
 
     private func actions(titles: Bool) -> some View {
