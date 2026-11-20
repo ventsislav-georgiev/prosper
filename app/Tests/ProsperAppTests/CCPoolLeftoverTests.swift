@@ -508,4 +508,41 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertEqual(binds.count, 2, "a lost listener: restart is a plain start")
         XCTAssertTrue(service.currentListener !== first)
     }
+
+    // #1571 r10, mutant: restart's `isListeningTCP(l.fd) else { return nil }` -> `true else`. The published listener stops
+    // listening while the status stays .running (dup2 of a bound, non-listening socket onto its fd; no listenerLost): restart
+    // must drop it and bind anew. Under the mutant it keeps it: the "no bind" count and the "listener kept" note go red.
+    nonisolated func testCCPoolRestartBindsAnewWhenThePublishedListenerStoppedListening() throws {
+        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let binds = LeftoverCounter()
+        let log = CCPoolCapturingLogger()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        cfg.afterReady = { _ in binds.bump() }
+        let service = CCPoolService(config: cfg, store: store, secrets: CCPoolMemorySecrets(), logger: log)
+        defer { service.stop() }
+        guard case .running = service.start() else { return XCTFail("\(service.status)") }
+        let first = try XCTUnwrap(service.currentListener)
+        let dead = socket(AF_INET, SOCK_STREAM, 0)
+        defer { Darwin.close(dead) }
+        var a = sockaddr_in()
+        a.sin_family = sa_family_t(AF_INET)
+        a.sin_addr.s_addr = UInt32(0x7f00_0001).bigEndian
+        let bound = withUnsafePointer(to: &a) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(dead, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        XCTAssertEqual(bound, 0, "a bound socket that never listens")
+        XCTAssertTrue(!CCPoolListener.isListeningTCP(dead))
+        XCTAssertGreaterThanOrEqual(dup2(dead, first.fd), 0)
+        XCTAssertTrue(!CCPoolListener.isListeningTCP(first.fd), "the published fd no longer listens")
+        guard case .running = service.status else { return XCTFail("still running: \(service.status)") }
+
+        guard case .running(let port) = service.restart(), port != 0 else { return XCTFail("\(service.status)") }
+        XCTAssertFalse(log.lines.contains { $0.contains("listener kept") }, "\(log.lines)")
+        XCTAssertEqual(binds.count, 2, "a new bind")
+        let second = service.currentListener
+        XCTAssertTrue(second != nil && second !== first, "a new listener")
+        XCTAssertTrue(second.map { CCPoolListener.isListeningTCP($0.fd) } ?? false, "listening again")
+    }
 }

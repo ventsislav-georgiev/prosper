@@ -168,7 +168,7 @@ final class CCPoolShareTests: XCTestCase {
         XCTAssertTrue(first.contains("5h=allowed/0.9") || first.contains("five_hour=allowed/0.9"), first)
         XCTAssertTrue(first.contains("cooldown=none"), first)
         XCTAssertTrue(first.contains("outcome=retry"), first)
-        XCTAssertTrue(first.hasSuffix("reason=no exhausted quota"), first)
+        XCTAssertTrue(first.contains("; reason=no exhausted quota"), first)
         XCTAssertFalse(r.log.lines.contains { $0.contains("reported exhausted quota") || $0.contains("now full") })
         XCTAssertEqual(r.store.snapshot.accounts.values.map(\.cooldown), [[:], [:]], "nobody benched")
         XCTAssertFalse(r.eventKinds().contains { $0 == "bench" || $0 == "retire" }, "no bench or retire row")
