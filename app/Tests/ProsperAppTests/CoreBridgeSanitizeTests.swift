@@ -6,6 +6,18 @@ import XCTest
 /// leading echo where the model re-emits text the user already typed. A single
 /// boundary space left after stripping is intentional and preserved.
 final class CoreBridgeSanitizeTests: XCTestCase {
+    private var savedLexicon: Lexicon?
+
+    override func setUp() {
+        super.setUp()
+        savedLexicon = Lexicon.shared
+        Lexicon.store(.bundledFromSources) // the shipped lexicon, not xctest's empty one (#1679)
+    }
+
+    override func tearDown() {
+        if let savedLexicon { Lexicon.store(savedLexicon) }
+        super.tearDown()
+    }
 
     func testStripsLeadingEchoOfTail() {
         // Model re-emits the last word, then continues; boundary space preserved.

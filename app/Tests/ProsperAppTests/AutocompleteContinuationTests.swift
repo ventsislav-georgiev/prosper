@@ -17,15 +17,19 @@ import XCTest
 final class AutocompleteContinuationTests: XCTestCase {
 
     private var savedSpell: SpellOracle?
+    private var savedLexicon: Lexicon?
 
     override func setUp() {
         super.setUp()
         savedSpell = SpellOracle.current
         SpellOracle.current = .fake() // verdicts must not follow the Mac's dictionaries (#1310)
+        savedLexicon = Lexicon.shared
+        Lexicon.store(.bundledFromSources) // the shipped lexicon, not xctest's empty one (#1679)
     }
 
     override func tearDown() {
         if let savedSpell { SpellOracle.current = savedSpell }
+        if let savedLexicon { Lexicon.store(savedLexicon) }
         super.tearDown()
     }
 
@@ -197,6 +201,7 @@ final class AutocompleteContinuationTests: XCTestCase {
     /// word for it: with no completions the fragment guard suppresses, with one
     /// made-up completion it inserts.
     func testCompletablePrefixComesFromTheOracle() {
+        Lexicon.store(.empty) // a lexicon-known word never reaches the oracle (row below); tearDown restores
         var spell = SpellOracle.fake()
         spell.completions = { _, _ in [] }
         SpellOracle.current = spell
@@ -205,6 +210,16 @@ final class AutocompleteContinuationTests: XCTestCase {
         spell.completions = { fragment, _ in fragment == "brown" ? ["brownqz"] : [] }
         SpellOracle.current = spell
         XCTAssertTrue(AutocompleteEngine.lastWordIsCompletablePrefix("the quick brown"))
+        XCTAssertEqual(inserted(before: "the quick brown", raw: "fox jumps"), " fox jumps")
+    }
+
+    /// #1679 counterpart: with the real lexicon "brown" is a known word, so the
+    /// fragment guard lets the spaced word through even when the oracle offers
+    /// no completion at all.
+    func testLexiconKnownWordNeedsNoOracleCompletion() {
+        var spell = SpellOracle.fake()
+        spell.completions = { _, _ in [] }
+        SpellOracle.current = spell
         XCTAssertEqual(inserted(before: "the quick brown", raw: "fox jumps"), " fox jumps")
     }
 

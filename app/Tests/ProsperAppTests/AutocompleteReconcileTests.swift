@@ -353,6 +353,19 @@ final class RecentSentencesTests: XCTestCase {
 /// broken trailing token becomes an inline correction, not junk to endorse/hide.
 @MainActor
 final class TypoFixFromSuggestionTests: XCTestCase {
+    private var savedLexicon: Lexicon?
+
+    override func setUp() {
+        super.setUp()
+        savedLexicon = Lexicon.shared
+        Lexicon.store(.bundledFromSources) // the shipped lexicon, not xctest's empty one (#1679)
+    }
+
+    override func tearDown() {
+        if let savedLexicon { Lexicon.store(savedLexicon) }
+        super.tearDown()
+    }
+
     func testFxConvertsToFox() {
         let c = AutocompleteEngine.typoFixFromSuggestion(
             before: "the quick brown fx", spaced: " fox jumps over the lazy dog")

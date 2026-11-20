@@ -9,15 +9,19 @@ import XCTest
 final class AutocompleteWordBoundaryTests: XCTestCase {
 
     private var savedSpell: SpellOracle?
+    private var savedLexicon: Lexicon?
 
     override func setUp() {
         super.setUp()
         savedSpell = SpellOracle.current
         SpellOracle.current = .fake() // verdicts must not follow the Mac's dictionaries (#1310)
+        savedLexicon = Lexicon.shared
+        Lexicon.store(.bundledFromSources) // the shipped lexicon, not xctest's empty one (#1679)
     }
 
     override func tearDown() {
         if let savedSpell { SpellOracle.current = savedSpell }
+        if let savedLexicon { Lexicon.store(savedLexicon) }
         super.tearDown()
     }
 

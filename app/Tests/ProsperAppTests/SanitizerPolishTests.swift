@@ -6,6 +6,18 @@ import XCTest
 /// realistic completion that used to be killed (or trimmed) wrongly, plus the
 /// garbage case the guard still must catch.
 final class SanitizerPolishTests: XCTestCase {
+    private var savedLexicon: Lexicon?
+
+    override func setUp() {
+        super.setUp()
+        savedLexicon = Lexicon.shared
+        Lexicon.store(.bundledFromSources) // the shipped lexicon, not xctest's empty one (#1679)
+    }
+
+    override func tearDown() {
+        if let savedLexicon { Lexicon.store(savedLexicon) }
+        super.tearDown()
+    }
 
     // MARK: - cutImmediateRepeat: deliberate reduplication survives
 
@@ -45,13 +57,12 @@ final class SanitizerPolishTests: XCTestCase {
 
     // MARK: - mid-word capital guard: scoped to unfinished fragments
 
-    func testCapitalAfterCompleteWordAllowed() throws {
+    func testCapitalAfterCompleteWordAllowed() {
         // Model omitted the leading space on a proper noun after a finished word;
         // applyWordBoundary adds the space downstream — must not be rejected.
-        // The guard keys off the bundled lexicon, which only loads inside the app
-        // bundle — skip (not fail) where it is unavailable.
-        try XCTSkipUnless(
-            Lexicon.shared.isKnownWord("and"), "bundled lexicon not loaded in this environment")
+        // The guard keys off the bundled lexicon; setUp installs it (#1679), so
+        // this row pins that the lexicon is loaded under swift test.
+        XCTAssertTrue(Lexicon.shared.isKnownWord("and"), "bundled lexicon not loaded under test")
         XCTAssertNotNil(CoreBridge.sanitizeCompletion("Docker containers", before: "we deploy with and"))
     }
 

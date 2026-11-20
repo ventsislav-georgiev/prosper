@@ -123,7 +123,8 @@ final class Lexicon: @unchecked Sendable {
 
     /// Sync setter for `_shared`. Kept as a non-async function so `NSLock.lock()`
     /// (unavailable from async contexts) can be used from the detached loader.
-    private static func store(_ lex: Lexicon) {
+    /// Internal so test classes install the real lexicon (Lexicon.bundledFromSources, #1679).
+    static func store(_ lex: Lexicon) {
         sharedLock.lock(); _shared = lex; sharedLock.unlock()
     }
 
