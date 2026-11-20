@@ -2041,11 +2041,16 @@ extension AgentSidebarRowView {
     static func prChipInk(selected: Bool) -> Color { ink(.blocked, selected: selected) }
     static let prChipFillOpacity = 0.14
     static var prChipFill: Color { agentStateColor(.blocked).opacity(prChipFillOpacity) }
-    /// #1531: the subagents count's pill: no stroke, a soft fill of the neutral badge's family (textSecondary, as
-    /// `neutralLook`) at 0.16 instead of the badge's 0.06, so it reads as a pill over the row and the selected row on all
-    /// 22 themes, selected or not (AgentCountOutlineTests). The number keeps its quiet ink.
-    static let countPillOpacity = 0.16
-    static func countPillFill(_ quiet: Color = Neon.textSecondary) -> Color { quiet.opacity(countPillOpacity) }
+    /// #1735 (operator 2026-11-20): the count pills (agents, shells) have no fill (#1531's grey wash is gone, the row shows
+    /// through) and a 1 pt stroke instead: the shells' is white, or the theme's textPrimary where white misses 3:1 over the
+    /// sidebar (the light themes); the agents' is one royal purple, the lighter #9D7BEA or the darker #7851A9, whichever
+    /// contrasts more with the sidebar. Over the sidebar and the selected row each clears 3:1 on all 22 themes (AgentCountOutlineTests).
+    static let purpleLight = Color(red: 0x9D / 255, green: 0x7B / 255, blue: 0xEA / 255)
+    static let purpleDark = Color(red: 0x78 / 255, green: 0x51 / 255, blue: 0xA9 / 255)
+    static var agentsStroke: Color {
+        ThemeRuntime.contrastRatio(purpleLight, Neon.sidebar) >= ThemeRuntime.contrastRatio(purpleDark, Neon.sidebar) ? purpleLight : purpleDark
+    }
+    static var shellsStroke: Color { ThemeRuntime.contrastRatio(.white, Neon.sidebar) >= 3 ? .white : Neon.textPrimary }
 
     /// #1203: the model slot's width. #1268: the widest known short name and the widest effort word, each in its badge
     /// (not a model id); a longer name is cut in the middle inside its badge.
@@ -2160,7 +2165,7 @@ extension AgentSidebarRowView {
                     .lineLimit(1)
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
-                             quiet: ink(.quiet), open: ink(.blue), fill: Self.countPillFill(inks?.quiet ?? Neon.textSecondary),
+                             quiet: ink(.quiet), open: ink(.blue), outlined: true,
                              help: row.countHelp)
             ForEach(Array(Self.chipLinks(chips, row.prLinks).enumerated()), id: \.offset) { _, entry in
                 let pr = entry.text
@@ -2300,8 +2305,8 @@ struct AgentCountGroups: View {
     /// #1271: the inks of the other groups and of the open PRs' group (the selected sidebar row's, see `AgentSidebarRowView.ink`).
     var quiet = Neon.textSecondary
     var open = Neon.blue
-    /// #1531: the agents group's pill fill (a capsule, no stroke, its padding in the group's width); nil: none (the header).
-    var fill: Color?
+    /// #1735: the agents and shells groups are outlined pills (a 1 pt stroke inside, no fill, the padding in the group's width); false: none (the header).
+    var outlined = false
     /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
     var help: [AgentSidebar.Count: String] = [:]
 
@@ -2309,7 +2314,7 @@ struct AgentCountGroups: View {
         if !counts.isEmpty {   // no empty slot in the caller's HStack (it would add a spacing)
             HStack(spacing: sz(6)) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { _, g in
-                    let pill = g.0 == .agents || g.0 == .shells ? fill : nil   // #1558: the shells chip wears the agents' pill
+                    let pill = outlined ? (g.0 == .agents ? AgentSidebarRowView.agentsStroke : g.0 == .shells ? AgentSidebarRowView.shellsStroke : nil) : nil   // #1558: the shells chip is a pill too
                     HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
@@ -2318,9 +2323,7 @@ struct AgentCountGroups: View {
                     .padding(.horizontal, pill == nil ? 0 : sz(4))
                     .background {   // no vertical padding: the line's height stays (31/39/45)
                         if let pill {
-                            Capsule().fill(pill)
-                                // #1531 n2: no stroke in the default look; Increase Contrast keeps a 1 pt quiet-ink edge (inside, no layout change).
-                                .overlay { if ThemeRuntime.increaseContrast { Capsule().strokeBorder(quiet, lineWidth: 1) } }
+                            Capsule().strokeBorder(pill, lineWidth: 1)   // inside: the frame is unchanged
                                 .modifier(AgentSidebarRowProbe(kind: "capsule.\(g.0)", title: g.0.words(g.1)))
                         }
                     }

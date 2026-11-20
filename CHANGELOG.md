@@ -2200,6 +2200,8 @@ tag from the now-released section and put it on the new top draft.
   View, Go and Layout menus (with your saved layouts), in the menu bar while the window is in front;
   every window also gets a standard Window menu (Minimize, Zoom, Bring All to Front and the window
   list). (#1726)
+- The agents count is outlined in royal purple and the shells count in white, with no grey wash
+  behind either. (#1735)
 
 ## v2.174.0
 

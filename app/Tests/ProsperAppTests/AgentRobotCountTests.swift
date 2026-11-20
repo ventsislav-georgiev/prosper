@@ -16,14 +16,14 @@ private final class Window1453: NSWindow {
 extension AgentRowModelEffortTests {
     static let robot1453 = "\u{1F916}"
 
-    /// The agents group as AgentCountGroups draws it, with `lead` in front of the number (the pill fill, the paddings, the ink).
+    /// The agents group as AgentCountGroups draws it, with `lead` in front of the number (the pill stroke, the paddings, the ink).
     func group1453<L: View>(_ n: Int, _ lead: L) -> some View {
         HStack(spacing: sz(2)) {
             lead.font(Neon.font(10.5 - 1))
             Text(AgentIsland.count(n)).font(Neon.font(10.5).monospacedDigit())
         }
         .padding(.horizontal, sz(4))
-        .background { Capsule().fill(AgentSidebarRowView.countPillFill()) }
+        .background { Capsule().strokeBorder(AgentSidebarRowView.agentsStroke, lineWidth: 1) }   // #1735: outlined, no fill
         .foregroundStyle(Neon.textSecondary)
         .fixedSize()
     }
@@ -41,13 +41,33 @@ extension AgentRowModelEffortTests {
     func testRobot1453TheCountDrawsTheEmojiNotThePeopleIcon() throws {
         try atScales { scale in
             for n in [3, 128] {
-                let got = try pixels1453(AgentCountGroups(counts: [(.agents, n)], size: 10.5, fill: AgentSidebarRowView.countPillFill()))
+                let got = try pixels1453(AgentCountGroups(counts: [(.agents, n)], size: 10.5, outlined: true))
                 let robot = try pixels1453(group1453(n, RobotGlyph(size: 10.5 - 1)))
                 let people = try pixels1453(group1453(n, Image(systemName: "person.2")))
                 XCTAssertTrue(got.0 == robot.0 && got.1 == robot.1 && got.2 == robot.2, "the robot and the number: \(n) agents (\(scale))")
                 XCTAssertTrue(got.2 != people.2, "not the people symbol: \(n) agents (\(scale))")
             }
         }
+    }
+
+    /// #1735: the shells group is the terminal symbol and the number in a white (or textPrimary) outline, not the agents' purple one.
+    @MainActor
+    func testShellsCountDrawsAWhiteOutlinePillNotThePurpleOne() throws {
+        func ref(_ stroke: Color) -> some View {
+            HStack(spacing: sz(2)) {
+                Image(systemName: AgentSidebar.Count.shells.symbol).font(Neon.font(10.5 - 1))
+                Text(AgentIsland.count(2)).font(Neon.font(10.5).monospacedDigit())
+            }
+            .padding(.horizontal, sz(4))
+            .background { Capsule().strokeBorder(stroke, lineWidth: 1) }
+            .foregroundStyle(Neon.textSecondary)
+            .fixedSize()
+        }
+        let got = try pixels1453(AgentCountGroups(counts: [(.shells, 2)], size: 10.5, outlined: true))
+        let want = try pixels1453(ref(AgentSidebarRowView.shellsStroke))
+        let purple = try pixels1453(ref(AgentSidebarRowView.agentsStroke))
+        XCTAssertTrue(got.0 == want.0 && got.1 == want.1 && got.2 == want.2, "the shells pill: its own outline, no fill")
+        XCTAssertTrue(got.2 != purple.2, "not the agents' purple")
     }
 
     /// The pill is the capsule it was: the group's frame plus the 4 pt padding each side, its height the group's, within
@@ -77,7 +97,7 @@ extension AgentRowModelEffortTests {
     func testRobot1453VoiceOverKeepsTheWordsOnTheRowAndTheCard() {
         let box = CGSize(width: 300, height: 60)
         func reads(_ t: [AXTreeNode], _ s: String) -> Bool { t.contains { n in [n.label, n.title, n.value, n.help].contains { $0.contains(s) } } }
-        let group = AXTreeSupport.tree(AgentCountGroups(counts: [(.agents, 3)], size: 10.5, fill: AgentSidebarRowView.countPillFill()), box) { t in t.contains { $0.label == "3 agents" } }
+        let group = AXTreeSupport.tree(AgentCountGroups(counts: [(.agents, 3)], size: 10.5, outlined: true), box) { t in t.contains { $0.label == "3 agents" } }
         XCTAssertTrue(group.contains { $0.label == "3 agents" }, "the words: \(group.map(\.label))")
         XCTAssertFalse(reads(group, Self.robot1453) || reads(group, "robot"), "no emoji, no emoji name: \(group.map(\.label))")
         let row = AXTreeSupport.tree(AgentSidebarRowView(row: outlined1360(agents: 3), selected: false).frame(width: AgentWindowModel.fullSidebarWidth - sz(16)),
