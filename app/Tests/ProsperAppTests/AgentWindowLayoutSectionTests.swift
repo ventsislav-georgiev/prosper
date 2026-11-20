@@ -173,6 +173,24 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1792: `sidebarTree` in a never-shown window pinned to `backing` (SwiftUI lays out on its pixel grid), not the screen's.
+    @MainActor
+    private func sidebarTree(_ m: AgentWindowModel, backing: CGFloat, until done: @escaping ([AXTreeNode]) -> Bool) -> [AXTreeNode] {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let size = CGSize(width: AgentWindowModel.fullSidebarWidth - sz(16), height: 900)
+        let win = LayoutRowBackingWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: true)
+        win.fixedBacking = backing
+        win.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AgentSidebarView(model: m))
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        defer { win.contentView = nil; win.close() }
+        let tree = AXTreeSupport.poll(host) { t in t.contains { $0.label.hasPrefix("docs,") && !$0.label.contains(", Control ") } && done(t) }
+        XCTAssertFalse(win.isVisible, "never shown")
+        return tree
+    }
+
     /// One node per drawn element: the first unignored node with a name and a frame (a wrapper repeating it is dropped).
     private func unique(_ tree: [AXTreeNode], _ keep: (AXTreeNode) -> Bool) -> [AXTreeNode] {
         var out: [AXTreeNode] = []
@@ -461,22 +479,25 @@ extension AgentWindowD1Tests {
     /// element after the row's name; the other rows have none. #1654: on the row's line, its right edge one sz(8) gap
     /// before the ⌃N chip's column (the column's width measured, the row's sz(10) padding after it), so both rows keep one
     /// width. The single-pane view (no active row) shows it nowhere. GUARD edit-only-on-the-active-row.
+    /// #1792: at backing 1 and 2 (never-shown windows pinned to each), the column read at the backing the row lays out on
+    /// (an unhosted fittingSize is the 1x width rounded up to a point: 35.0 against the 2x row's narrower column at 0.85).
     @MainActor
     func testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly() throws {
         _ = ThemeStore.shared   // its first use seeds ThemeRuntime.scale from the prefs: before the scale is set here
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
-        let pixel = AXTreeSupport.devicePixel
+        for backing: CGFloat in [1, 2] {
+        let pixel = 1 / backing
         for scale: CGFloat in [1.0, 0.85, 0.7] {
             ThemeRuntime.scale = scale
-            let column = NSHostingView(rootView: AgentSidebarRowView.digitColumn).fittingSize.width   // at this scale
-            XCTAssertGreaterThan(column, 0, "\(scale)")
+            let column = AgentSidebarRowView.columnWidths(backing: backing).full   // the row's column at this scale and backing
+            XCTAssertGreaterThan(column, 0, "\(scale) backing \(backing)")
             gate(true)
             let a = named(paneLayout([paneTarget("api")]), "Review"), b = paneLayout([paneTarget("api"), paneTarget("docs")])
             let (m, _) = try sectionModel([a, b], active: b.id, sessions: ["api", "docs", "ops"])
             defer { m.close() }
             m.setLayoutEditing(false)
-            let tree = sidebarTree(m) { t in t.contains { $0.label == "Edit layout" } }
+            let tree = sidebarTree(m, backing: backing) { t in t.contains { $0.label == "Edit layout" } }
             let edit = unique(tree) { $0.label == "Edit layout" }
             XCTAssertEqual(edit.count, 1, "one Edit, on the active row only (\(scale))")
             XCTAssertEqual(edit.first?.role, "AXButton", "\(scale)")
@@ -486,7 +507,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(button.frame.midY, active.frame.midY, accuracy: 2 * pixel, "on the active row's line (\(scale))")
             XCTAssertTrue(button.frame.minX >= active.frame.minX + sz(10) - pixel, "inside the row (\(scale)): \(active.frame) \(button.frame)")
             XCTAssertEqual(button.frame.maxX, active.frame.maxX - sz(10) - column - sz(8), accuracy: 2 * pixel,
-                           "right-aligned before the chip column (\(scale)): \(active.frame) \(button.frame) column \(column)")
+                           "right-aligned before the chip column (\(scale) backing \(backing)): \(active.frame) \(button.frame) column \(column)")
             // the button lies over the row's own room for it: the active row keeps the other row's width (the name's
             // room is guarded in testAgentWindowLayoutChipSharesTheSessionChipColumnAtThreeScales)
             XCTAssertEqual(active.frame.width, other.frame.width, accuracy: pixel, "one row width (\(scale)): \(other.frame) \(active.frame)")
@@ -495,14 +516,15 @@ extension AgentWindowD1Tests {
             let rowAt = try XCTUnwrap(order.firstIndex(of: "api + docs, Control 2")), editAt = try XCTUnwrap(order.firstIndex(of: "Edit layout"))
             XCTAssertLessThan(rowAt, editAt, "VoiceOver: the row, then its Edit (\(scale))")
             m.setLayoutEditing(true)
-            let editing = sidebarTree(m) { t in t.contains { $0.label == "Done editing layout" } }
+            let editing = sidebarTree(m, backing: backing) { t in t.contains { $0.label == "Done editing layout" } }
             XCTAssertEqual(unique(editing) { $0.label == "Done editing layout" }.count, 1, "Done while editing (\(scale))")
             XCTAssertFalse(editing.contains { $0.label == "Edit layout" }, "\(scale)")
             m.setLayoutEditing(false)
             m.click(.live(paneKey("ops")))
             XCTAssertTrue(m.parked != nil && m.layoutRows != nil, "the single-pane view, the section still built (\(scale))")
-            let single = sidebarTree(m) { t in t.contains { $0.label == "Review, Control 1" } }
+            let single = sidebarTree(m, backing: backing) { t in t.contains { $0.label == "Review, Control 1" } }
             XCTAssertFalse(single.contains { $0.label == "Edit layout" || $0.label == "Done editing layout" }, "no Edit in the view (\(scale))")
+        }
         }
     }
 
@@ -915,4 +937,10 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(Set(box.seen.keys), ["1 idle", "2 idle"], "only a session in no layout works: both redrawn idle")
         XCTAssertFalse(win.isVisible, "never on screen")
     }
+}
+
+/// #1792: a never-shown window whose backing is pinned (SwiftUI snaps the hosted views to it).
+private final class LayoutRowBackingWindow: NSWindow {
+    var fixedBacking: CGFloat = 1
+    override var backingScaleFactor: CGFloat { fixedBacking }
 }
