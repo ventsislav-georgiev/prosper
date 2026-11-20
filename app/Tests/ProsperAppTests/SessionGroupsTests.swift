@@ -78,6 +78,16 @@ final class SessionGroupsTests: XCTestCase {
         XCTAssertEqual(kept.map(\.name), (1...8).map { "g\($0)" }, "invalid names dropped, the first 8 kept, names trimmed")
     }
 
+    /// #1758 (QA R1757 n86): the first of each id and of each name (trimmed, any case) is kept, stored and in dch's lines.
+    func testNormalizedKeepsTheFirstOfEachIdAndEachName() {
+        let list = [SessionGroup(id: "a", name: "QA", pattern: "-qa$"), SessionGroup(id: "a", name: "Other", pattern: "-o$"),
+                    SessionGroup(id: "b", name: " qa ", pattern: "-x$"), SessionGroup(id: "c", name: "Rev", pattern: "-rev$")]
+        XCTAssertEqual(SessionGroup.normalized(list).map(\.id), ["a", "c"])
+        Preferences.agentIslandSessionGroups = list
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["QA", "Rev"])
+        XCTAssertEqual(DchConfigWriter.groupValues(list), ["QA = -qa$", "Rev = -rev$"])
+    }
+
     // MARK: - Matching
 
     func testASessionGoesIntoTheFirstGroupItMatchesElseTheMainList() {

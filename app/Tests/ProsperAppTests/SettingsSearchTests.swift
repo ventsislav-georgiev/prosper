@@ -327,4 +327,14 @@ final class SettingsSearchTests: XCTestCase {
         XCTAssertFalse(nativeOnly.isEmpty)
         XCTAssertFalse(nativeOnly.contains { $0.paneID.hasPrefix("ext:") })
     }
+
+    /// #1758: the groups editor is a native footer of the Agent Island pane: its terms find that pane's row, and only it.
+    func testSessionGroupTermsFindTheAgentIslandPane() {
+        let island = SettingsIndexEntry(paneID: "ext:com.prosper.agentisland|agentisland", paneTitle: "Agent Island", section: "")
+        let general = SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "")
+        for q in ["session groups", "Group pattern", "group tabs", "sidekick"] {
+            XCTAssertTrue(SettingsSearch.matches(q, island), q)
+            XCTAssertFalse(SettingsSearch.matches(q, general), q)
+        }
+    }
 }

@@ -1143,15 +1143,18 @@ struct AgentSessionsSection: View {
 }
 
 /// #571: Agent Island › Session list: the sort and the Sessions / Sidekicks
-/// tabs (prosper-ios's split). Per Mac (not in SyncedKeys); #760: the pattern
+/// tabs (prosper-ios's split). Per Mac (not in SyncedKeys); #760: the first group's pattern
 /// syncs with the phone over sidekickSync instead. A change re-sorts
 /// or re-splits the open island at once, with no animation.
+/// #1758: the one pattern row became the session groups editor: a row per group (name, pattern, move, remove), Add group
+/// up to SessionGroup.maxCount. Saved on commit (Return, focus leaving a field, a button), never per keystroke.
 struct AgentIslandListSection: View {
     @State private var sort = Preferences.agentIslandSort
     @State private var tabs = Preferences.agentIslandSidekickTabs
-    @State private var pattern = Preferences.agentIslandSidekickPattern
+    @State private var editor = SessionGroupsEditor()
+    @FocusState private var focus: String?
     /// #1210: dch's picker matches all three (pk_load), so the caption names them.
-    static let footer = "Sessions whose name, alias or session title matches the pattern, a regex ignoring case (e.g. -(qa|reviewer)$), go under a Sidekicks tab. Empty shows every session together. Syncs with Prosper on iPhone."
+    static let footer = "Sessions whose name, alias or session title matches the pattern of a group, a regex ignoring case (e.g. -(qa|reviewer)$), go under that group's tab; the first group that matches takes it. No group shows every session together. The first group's pattern syncs with Prosper on iPhone."
 
     var body: some View {
         NeonSection("Session list",
@@ -1164,53 +1167,148 @@ struct AgentIslandListSection: View {
                 .labelsHidden().pickerStyle(.menu).fixedSize()
             }
             NeonDivider()
-            NeonRow("Sidekick tabs") { Toggle("", isOn: $tabs).labelsHidden() }
+            NeonRow("Group tabs") { Toggle("", isOn: $tabs).labelsHidden().accessibilityLabel("Group tabs") }   // #1758: every group's tabs; key stays agentIslandSidekickTabs
+            ForEach($editor.rows) { $g in
+                NeonDivider()
+                groupRow($g)
+            }
             NeonDivider()
-            // #938: the subtitle is one fixed line (a no-break space when there is no hint), so the row never changes height.
-            NeonRow("Sidekick pattern", subtitle: Self.hintLine(pattern)) {
-                // Empty = no split, so the placeholder says so (QA #434 L1).
-                VStack(alignment: .trailing, spacing: sz(2)) {
-                    TextField("None", text: $pattern).frame(width: sz(180))
-                        .disabled(!tabs)
-                        .accessibilityLabel("Sidekick pattern")
-                        .accessibilityHint(AgentIsland.sidekickHint(pattern).text ?? "")
-                    // The button's slot is always laid out; hidden() keeps its size and drops it from the accessibility tree.
-                    // The press runs on the main actor (a View's button action); the onChange below saves, as a typed edit does.
-                    ViewThatFits(in: .horizontal) {
-                        exactButton("Match this text exactly")
-                        exactButton("Match exactly")
-                    }
-                    .hidden(!AgentIsland.sidekickCanMatchExactly(pattern))
-                    if let caption = AgentIsland.sidekickCaption(pattern, tabs: tabs, sessions: AgentIslandController.shared.store?.sessions ?? []) {
-                        Text(caption)
-                            .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
-                    }
-                }
+            NeonRow("Session groups", subtitle: "\(editor.rows.count) of \(SessionGroup.maxCount)") {
+                Button("Add group") { editor.add() }   // an empty pattern: nothing to save yet
+                    .disabled(!tabs || !editor.canAdd)
+                    .accessibilityLabel("Add group")
             }
         }
         .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }
         .onChange(of: tabs) { _, v in Preferences.agentIslandSidekickTabs = v; AgentIslandController.shared.rowDetailsChanged() }
-        .onChange(of: pattern) { _, v in Self.patternEdited(v) }
-        // #760: a phone's adopted pattern shows here; the onChange above sees it stored and stamps nothing.
+        .onChange(of: focus) { old, _ in if old != nil { commit() } }   // focus left a field: its edit is done
+        .onDisappear { if focus != nil { commit() } }   // closed mid-edit; a view that was only drawn writes nothing
+        // #760: a phone's adopted pattern shows here; the save after it finds the list stored and stamps nothing.
         .onReceive(NotificationCenter.default.publisher(for: .sidekickPatternChangedExternally)) { _ in
-            pattern = Preferences.agentIslandSidekickPattern
+            editor = SessionGroupsEditor()
         }
+    }
+
+    private func commit() { SessionGroupsEditor.save(editor) }
+
+    /// #938: the subtitle is one fixed line (a no-break space when there is nothing to say), so the row never changes height;
+    /// #1758: it carries the row's reason for not saving first.
+    private func groupRow(_ g: Binding<SessionGroup>) -> some View {
+        let row = g.wrappedValue, title = editor.title(row), reason = editor.reason(row)
+        let i = editor.rows.firstIndex { $0.id == row.id } ?? 0
+        return NeonRow(title, subtitle: reason ?? Self.hintLine(row.pattern)) {
+            VStack(alignment: .trailing, spacing: sz(2)) {
+                HStack(spacing: sz(4)) {
+                    TextField("Name", text: g.name).frame(width: sz(110))
+                        .focused($focus, equals: row.id + ".name").onSubmit(commit)
+                        .accessibilityLabel("Name of group \(title)")
+                    // Empty = not saved yet, so the placeholder says so (QA #434 L1).
+                    TextField("None", text: g.pattern).frame(width: sz(180))
+                        .focused($focus, equals: row.id + ".pattern").onSubmit(commit)
+                        .accessibilityLabel("Pattern of group \(title)")
+                        .accessibilityHint(AgentIsland.sidekickHint(row.pattern).text ?? "")
+                    iconButton("chevron.up", "Move group \(title) up", off: i == 0) { editor.move(row.id, by: -1); commit() }
+                    iconButton("chevron.down", "Move group \(title) down", off: i == editor.rows.count - 1) { editor.move(row.id, by: 1); commit() }
+                    iconButton("minus.circle", "Remove group \(title)", off: false) { editor.remove(row.id); commit() }
+                }
+                // The button's slot is always laid out; hidden() keeps its size and drops it from the accessibility tree.
+                ViewThatFits(in: .horizontal) {
+                    exactButton("Match this text exactly", g, title)
+                    exactButton("Match exactly", g, title)
+                }
+                .hidden(!AgentIsland.sidekickCanMatchExactly(row.pattern))
+                if reason == nil, let caption = AgentIsland.sidekickCaption(row.pattern, tabs: tabs, sessions: AgentIslandController.shared.store?.sessions ?? []) {
+                    Text(caption)
+                        .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                }
+            }
+            .disabled(!tabs)
+        }
+    }
+
+    private func iconButton(_ symbol: String, _ label: String, off: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(.borderless).disabled(off).help(label).accessibilityLabel(label)
     }
 
     /// The hint slot's text: the hint, or a no-break space that keeps the line.
     static func hintLine(_ pattern: String) -> String { AgentIsland.sidekickHint(pattern).text ?? "\u{00A0}" }
 
-    private func exactButton(_ title: String) -> some View {
-        Button(title) { pattern = AgentIsland.sidekickMatchExactly(pattern) }
+    private func exactButton(_ text: String, _ g: Binding<SessionGroup>, _ title: String) -> some View {
+        Button(text) { g.wrappedValue.pattern = AgentIsland.sidekickMatchExactly(g.wrappedValue.pattern); commit() }
             .controlSize(AgentIslandPane.aliasesControlSize(ThemeRuntime.scale))
             .fixedSize()
-            .disabled(!tabs)
-            .accessibilityLabel("Match this text exactly")
+            .accessibilityLabel("Match this text exactly in group \(title)")
     }
 
-    /// The field's onChange, here so a test can drive it: an edit stamps, the echo of an adopt does not.
+    /// The first group's pattern as one edit, here so a test can drive it: an edit stamps, the echo of an adopt does not.
     static func patternEdited(_ v: String, now: Date = Date()) {
         Preferences.editSidekickPattern(v, now: now)
+        AgentIslandController.shared.rowDetailsChanged()
+    }
+}
+
+/// #1758: the groups editor's rows and rules, a value the Settings section holds and a test drives. Rows may hold what is
+/// not saved (a bad name, a duplicate name, an invalid or match-everything regex, no pattern yet); `saved` is what is stored.
+struct SessionGroupsEditor: Equatable {
+    var rows: [SessionGroup]
+
+    init(_ rows: [SessionGroup] = Preferences.agentIslandSessionGroups) { self.rows = rows }
+
+    var canAdd: Bool { rows.count < SessionGroup.maxCount }
+
+    /// Appends "Group N" (the first N from count + 1 no row has) with an empty pattern and a new short random id.
+    mutating func add() {
+        guard canAdd else { return }
+        let names = Set(rows.map { SessionGroup.nameKey($0.name) })
+        var n = rows.count + 1
+        while names.contains(SessionGroup.nameKey("Group \(n)")) { n += 1 }
+        rows.append(SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: "Group \(n)", pattern: ""))
+    }
+
+    mutating func remove(_ id: String) { rows.removeAll { $0.id == id } }
+
+    mutating func move(_ id: String, by step: Int) {
+        guard let i = rows.firstIndex(where: { $0.id == id }), rows.indices.contains(i + step) else { return }
+        rows.swapAt(i, i + step)
+    }
+
+    /// What labels the row: its name, or "Group N" by place while the name is blank.
+    func title(_ g: SessionGroup) -> String {
+        let n = g.name.trimmingCharacters(in: .whitespaces)
+        return n.isEmpty ? "Group \((rows.firstIndex { $0.id == g.id } ?? rows.count) + 1)" : n
+    }
+
+    /// Why the row is not saved, nil when it is.
+    func reason(_ g: SessionGroup) -> String? {
+        guard SessionGroup.validName(g.name) else { return "A name is 1-32 bytes, without \"=\": not saved" }
+        let key = SessionGroup.nameKey(g.name)
+        if rows.contains(where: { $0.id != g.id && SessionGroup.nameKey($0.name) == key }) { return "Another group has this name: not saved" }
+        let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty { return "No pattern yet: not saved" }
+        switch AgentIsland.sidekickMatch(p) {
+        case .invalid: return "Not a valid regex: not saved"
+        case .matchesEmpty: return "Matches every session: not saved"
+        default: return nil
+        }
+    }
+
+    /// The list to store: each row in order, as edited when it has no reason, else as `stored` has it (same id, a
+    /// pattern), else left out; so an invalid edit leaves the stored group as it was.
+    func saved(stored: [SessionGroup]) -> [SessionGroup] {
+        SessionGroup.normalized(rows.compactMap { g in
+            reason(g) == nil ? g : stored.first { $0.id == g.id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        })
+    }
+
+    /// Stores `saved` when it differs (an unchanged editor stores nothing: the migration stays lazy). The first group's
+    /// pattern goes through editSidekickPattern first, so the phone's stamp moves as a pattern edit's did; the list is
+    /// stored after it, so both agree. Then the island regroups and syncDchConfig writes dch's lines.
+    @MainActor static func save(_ editor: SessionGroupsEditor, now: Date = Date()) {
+        let stored = Preferences.agentIslandSessionGroups, list = editor.saved(stored: stored)
+        guard list != stored else { return }
+        Preferences.editSidekickPattern(list.first?.pattern ?? "", now: now)
+        Preferences.agentIslandSessionGroups = list
         AgentIslandController.shared.rowDetailsChanged()
     }
 }

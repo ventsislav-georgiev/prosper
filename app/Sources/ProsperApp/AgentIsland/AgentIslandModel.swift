@@ -1352,9 +1352,14 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
         return (1...maxNameBytes).contains(n.utf8.count) && !n.unicodeScalars.contains { $0 == "=" || $0.value < 0x20 || $0.value == 0x7F }
     }
 
-    /// What is kept: the first `maxCount` groups whose name is valid, names trimmed.
+    /// A name as dch and the editor compare it: trimmed, ignoring case.
+    static func nameKey(_ name: String) -> String { name.trimmingCharacters(in: .whitespaces).lowercased() }
+
+    /// What is kept: the first `maxCount` groups whose name is valid, names trimmed; #1758 (QA R1757 n86): only the first
+    /// of each id (SwiftUI rows) and of each name (nameKey: one dch section per name).
     static func normalized(_ list: [SessionGroup]) -> [SessionGroup] {
-        Array(list.filter { validName($0.name) }.prefix(maxCount)).map {
+        var ids = Set<String>(), names = Set<String>()
+        return Array(list.filter { validName($0.name) && ids.insert($0.id).inserted && names.insert(nameKey($0.name)).inserted }.prefix(maxCount)).map {
             SessionGroup(id: $0.id, name: $0.name.trimmingCharacters(in: .whitespaces), pattern: $0.pattern)
         }
     }

@@ -8,13 +8,14 @@ import XCTest
 /// at three UI scales on the accessibility tree of a never-shown window. Preferences are the XCTest scratch suite only
 /// (saved and restored per test); nothing spawns, nothing is clicked, no event is posted.
 final class SidekickPatternHintTests: XCTestCase {
-    private static let patternKey = "agentIslandSidekickPattern", tabsKey = "agentIslandSidekickTabs"
+    private static let patternKey = "agentIslandSidekickPattern", tabsKey = "agentIslandSidekickTabs", groupsKey = "agentIslandSessionGroups"
 
     @MainActor
     private func withSavedKeys(_ body: () throws -> Void) rethrows {
         XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
-        let saved = [Self.patternKey, Self.tabsKey].map { ($0, Preferences.defaults.object(forKey: $0)) }
+        let saved = [Self.patternKey, Self.tabsKey, Self.groupsKey].map { ($0, Preferences.defaults.object(forKey: $0)) }
         defer { for (k, v) in saved { Preferences.defaults.set(v, forKey: k) } }
+        Preferences.defaults.removeObject(forKey: Self.groupsKey)   // #1758: the Sidekicks row reads the pattern key
         try body()
     }
 
@@ -182,7 +183,7 @@ final class SidekickPatternHintTests: XCTestCase {
                 XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(what) height")
             }
             Preferences.agentIslandSidekickTabs = true
-            let button = "Match this text exactly"
+            let button = "Match this text exactly in group Sidekicks"
             // Plain, regex (the hint and the button), regex again, already exact: the hint line and the button come and go.
             // `same`: the other lines of the section are the same too. "a.b" and "c++" are not portable to dch (DchConfigWriter.portable), so
             // the existing caption under the field (sidekickDchNote, a line that was always variable) adds its own line: only the hint is checked.
@@ -197,7 +198,7 @@ final class SidekickPatternHintTests: XCTestCase {
                 var first: (title: CGRect, field: CGRect, height: CGFloat)?
                 for (pattern, hint, same) in cases {
                     Preferences.agentIslandSidekickPattern = pattern
-                    func field(_ t: [AXTreeNode]) -> AXTreeNode? { t.first { $0.role == "AXTextField" && $0.label == "Sidekick pattern" } }
+                    func field(_ t: [AXTreeNode]) -> AXTreeNode? { t.first { $0.role == "AXTextField" && $0.label == "Pattern of group Sidekicks" } }
                     func settled(_ t: [AXTreeNode]) -> Bool {
                         abs((field(t)?.frame.width ?? 0) - sz(180)) <= 1 && field(t)?.value == pattern
                             && (hint.map { h in t.contains { $0.named(h) } && t.contains { $0.reads(button) } } ?? true)
@@ -207,7 +208,7 @@ final class SidekickPatternHintTests: XCTestCase {
                         print("#938 TREE \(pattern) at \(scale): " + tree.filter { !($0.label + $0.title + $0.value).isEmpty }
                             .map { "\($0.role)|\($0.label)|\($0.title)|\($0.value)|\(NSStringFromRect($0.frame))" }.joined(separator: " ; "))
                     }
-                    let title = tree.first { $0.role == "AXStaticText" && $0.named("Sidekick pattern") }
+                    let title = tree.first { $0.role == "AXStaticText" && $0.named("Sidekicks") }
                     XCTAssertTrue(title != nil, "the row's title at \(scale)")
                     XCTAssertTrue(field(tree) != nil, "the named field at \(scale) for \(pattern)")
                     XCTAssertTrue(tree.contains { $0.named(prefix: "Read as a regex") } == (hint != nil), "the hint only for a regex: \(pattern) at \(scale)")
@@ -244,10 +245,10 @@ final class SidekickPatternHintTests: XCTestCase {
     func testRowHidesTheButtonForAnEscapeThatDoesNotFit() {
         withSavedKeys {
             Preferences.agentIslandSidekickTabs = true
-            let size = CGSize(width: sz(560), height: sz(600)), button = "Match this text exactly"
+            let size = CGSize(width: sz(560), height: sz(600)), button = "Match this text exactly in group Sidekicks"
             @MainActor func state(_ pattern: String) -> (button: Bool, hint: Bool, height: CGFloat) {
                 Preferences.agentIslandSidekickPattern = pattern
-                let tree = axTree(size) { $0.contains { $0.role == "AXTextField" && $0.label == "Sidekick pattern" && $0.value == pattern } }
+                let tree = axTree(size) { $0.contains { $0.role == "AXTextField" && $0.label == "Pattern of group Sidekicks" && $0.value == pattern } }
                 return (tree.contains { $0.reads(button) }, tree.contains { $0.named(prefix: "Read as a regex") }, fittingHeight(size.width))
             }
             let shown = state(dots(240, 2)), hidden = state(dots(240, 10))   // escaped 244 and 260 bytes
@@ -265,7 +266,7 @@ final class SidekickPatternHintTests: XCTestCase {
             Preferences.agentIslandSidekickPattern = "a.b"
             let tree = axTree(CGSize(width: sz(560), height: sz(600))) { $0.contains { $0.named(prefix: "Read as a regex") } }
             XCTAssertTrue(tree.contains { $0.named(prefix: "Read as a regex") }, "the hint stays: the saved text is still read that way")
-            XCTAssertTrue(tree.first { $0.reads("Match this text exactly") }.map { !$0.enabled } ?? true, "the button is off with the tabs")
+            XCTAssertTrue(tree.first { $0.reads("Match this text exactly in group Sidekicks") }.map { !$0.enabled } ?? true, "the button is off with the tabs")
         }
     }
 }

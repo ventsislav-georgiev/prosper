@@ -2217,6 +2217,8 @@ tag from the now-released section and put it on the new top draft.
   Mentions, and shows formatting (bold, code, links) instead of raw Markdown and HTML symbols. A
   filter box narrows the rows as you type, and you can select snippet text and copy it with
   Command-C. When the X-ray drawer is open, cards open beside it instead of covering it. (#1760)
+- Session groups: make your own sidebar and Island groups with a name and a pattern in Settings;
+  Sidekicks is the default group and can be renamed or removed. (#1758)
 
 ## v2.174.0
 

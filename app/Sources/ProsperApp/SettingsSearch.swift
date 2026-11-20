@@ -40,6 +40,8 @@ let extraSettingsKeywords: [String: [String]] = [
     "agent-permissions": ["fda", "full disk access"],
     "audio-mixer": ["volume", "sound", "audio"],
     "general": ["clipboard history", "launch at login"],
+    // #1758: the groups editor is a native footer section, which the extension index does not reach.
+    "ext:com.prosper.agentisland|agentisland": ["session groups", "group pattern", "group tabs", "sidekick"],
 ]
 
 enum SettingsSearch {
