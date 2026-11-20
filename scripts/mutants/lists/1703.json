@@ -5,15 +5,15 @@
   {
    "name": "resident-refused",
    "file": "app/Sources/ProsperApp/Server/DchChat.swift",
-   "old": "m != id, await residentId() != m {",
-   "new": "m != id {",
+   "old": "m != id, await residentId() != m,\n",
+   "new": "m != id,\n",
    "expect": "killed"
   },
   {
    "name": "any-id-accepted",
    "file": "app/Sources/ProsperApp/Server/DchChat.swift",
-   "old": "if let m = req.model, m != id, await residentId() != m {",
-   "new": "if let m = req.model, m != id, await residentId() == nil, true {",
+   "old": "if let m = req.model, m != id, await residentId() != m,",
+   "new": "if let m = req.model, m != id, await residentId() == nil, true,",
    "expect": "killed"
   },
   {
