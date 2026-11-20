@@ -150,8 +150,12 @@ final class TextViewerMenuTests: XCTestCase {
         // row can look); on macOS 27 AppKit gives Minimize the standard Command-M, accepted. Nothing else carries a key.
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AppDelegate.swift"), encoding: .utf8)
-        let body = source.components(separatedBy: "static func makeWindowMenu() -> NSMenu {").last?
-            .components(separatedBy: "return menu").first ?? ""
+        let marker = "static func makeWindowMenu() -> NSMenu {"
+        XCTAssertEqual(source.components(separatedBy: marker).count - 1, 1, "marker '\(marker)' occurs exactly once in AppDelegate.swift")
+        let start = try XCTUnwrap(source.range(of: marker), "marker '\(marker)' is in AppDelegate.swift")
+        let rest = String(source[start.upperBound...])
+        _ = try XCTUnwrap(rest.range(of: "return menu"), "'return menu' follows marker '\(marker)'")
+        let body = rest.components(separatedBy: "return menu").first ?? ""
         XCTAssertEqual(body.components(separatedBy: "menu.addItem(withTitle:").count - 1, 3, "three titled items")
         XCTAssertEqual(body.components(separatedBy: "keyEquivalent: \"\")").count - 1, 3, "each made with no key equivalent")
         XCTAssertFalse(body.contains(".keyEquivalent"), "no key equivalent set afterwards")
