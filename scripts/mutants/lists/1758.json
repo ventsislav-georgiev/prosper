@@ -81,16 +81,16 @@
   },
   {
    "name": "save-no-stamp",
-   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n",
-   "new": "",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n        let stamp",
+   "new": "let stamp",
    "expect": "killed"
   },
   {
    "name": "save-stamp-after-list",
-   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n        Preferences.agentIslandSessionGroups = list",
-   "new": "Preferences.agentIslandSessionGroups = list\n        Preferences.editSidekickPattern(list.first?.pattern ?? \"\", now: now)",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "editSidekickPattern(list.first?.pattern ?? \"\", now: now)\n        let stamp = editStamp(now: now, after: agentIslandSessionGroupsUpdated)\n        agentIslandSessionGroups = list",
+   "new": "let stamp = editStamp(now: now, after: agentIslandSessionGroupsUpdated)\n        agentIslandSessionGroups = list\n        editSidekickPattern(list.first?.pattern ?? \"\", now: now)",
    "expect": "killed"
   },
   {
