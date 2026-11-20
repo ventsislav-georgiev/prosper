@@ -202,6 +202,48 @@ final class AgentTerminalFileLinkTests: XCTestCase {
         XCTAssertFalse(onMain.withLock { $0 })
     }
 
+    /// #1730 (n53): open() through its own default fileCheck (a real global queue and the main hop) on a real temp file:
+    /// the file shows once, on main, with the run loop spun (catches an isolation trap or a wrong hop).
+    func testOpenThroughTheDefaultOffMainCheckShowsTheFileOnce() throws {
+        let f = try fixture()
+        let c = AgentTerminalController()
+        c.attach(AgentSessionKey(dir: "/Users/example/dch", name: "api"))
+        c.cwd = { _ in f.dir.path }
+        var got: [(URL, Bool)] = []
+        c.showFile = { got.append(($0, Thread.isMainThread)) }
+        c.open("docs/draft.txt")
+        XCTAssertTrue(got.isEmpty, "the check is off main: nothing shown before the run loop turns")
+        let end = Date().addingTimeInterval(30)
+        while got.isEmpty && Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05)) }
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.2))   // a second show would land here
+        XCTAssertEqual(got.map { $0.0.path }, [f.dir.path + "/docs/draft.txt"])
+        XCTAssertEqual(got.map { $0.1 }, [true])
+    }
+
+    /// #1730 (n54): a slow link then a fast one, checks held and finished in reverse: only the newest click's file shows,
+    /// whichever order the checks end in.
+    func testASlowLinkFollowedByAFastOneShowsOnlyTheFastFile() throws {
+        let f = try fixture()
+        var held: [@Sendable () -> Void] = []
+        f.rig.c.fileCheck = { held.append($0) }
+        f.rig.c.open("docs/draft.txt")   // slow
+        f.rig.c.open("home/todo.md")     // fast
+        XCTAssertEqual(held.count, 2)
+        held.last?()
+        held.first?()   // the slow check ends last
+        XCTAssertEqual(shown(f), [f.dir.path + "/home/todo.md"])
+        // Same result when the slow one ends first, and a later click opens again.
+        held = []
+        f.rig.c.open("docs/draft.txt")
+        f.rig.c.open("home/todo.md")
+        held.first?()
+        held.last?()
+        XCTAssertEqual(shown(f), [f.dir.path + "/home/todo.md", f.dir.path + "/home/todo.md"])
+        f.rig.c.fileCheck = { $0() }
+        f.rig.c.open("docs/draft.txt")
+        XCTAssertEqual(shown(f).last, f.dir.path + "/docs/draft.txt")
+    }
+
     // MARK: #1724 (operator 2026-11-20): Cmd alone opens and underlines a link while the program reports the mouse
 
     /// The operator's screenshot shapes (a Claude Code session): bare relative paths, a path in prose, an absolute one.

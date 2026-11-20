@@ -287,6 +287,8 @@ final class AgentTerminalController: ObservableObject {
     /// #1719: where a file link's disk check runs: off main, so a stat that blocks (a first look into a TCC-guarded
     /// folder waits for the consent answer, an iCloud folder for its download) holds a utility thread, never the UI.
     /// Rows run it inline.
+    /// #1730: bumped by every file-link open(); a check that finishes after a newer click shows nothing.
+    private var fileLinkGeneration = 0
     var fileCheck: (@escaping @Sendable () -> Void) -> Void = { DispatchQueue.global(qos: .userInitiated).async(execute: $0) }
     /// #1357 (P9): a prosper-xray link (OSC 8) to the window's ref card, the key checked against this session's refs.
     var openRefLink: @MainActor (URL, NSWindow?, AgentSessionKey?) -> Void = {
@@ -713,9 +715,15 @@ final class AgentTerminalController: ObservableObject {
         // A remote row's paths are another machine's: never open one here, not even an absolute one (same-named local file).
         guard remoteHost == nil,
               let file = AgentTerminalFileLink.resolve(link, cwd: key.flatMap(cwd), home: homeDirectory()) else { return }
+        fileLinkGeneration &+= 1
+        let gen = fileLinkGeneration
         fileCheck { [weak self] in
             guard AgentTerminalFileLink.isViewable(file) else { return }
-            let show: @Sendable () -> Void = { MainActor.assumeIsolated { self?.showFile(file) } }
+            // #1730: checks finish in any order; only the newest click's file shows (read on main, in the hop).
+            let show: @Sendable () -> Void = { MainActor.assumeIsolated {
+                guard let self, self.fileLinkGeneration == gen else { return }
+                self.showFile(file)
+            } }
             if Thread.isMainThread { show() } else { DispatchQueue.main.async(execute: show) }   // inline: rows
         }
     }

@@ -2206,6 +2206,8 @@ tag from the now-released section and put it on the new top draft.
   (#1731)
 - Clicking a session on the Agent Island now opens it in Agent Sessions by default; opening a
   terminal or copying the attach command stay as choices in Settings. (#1736)
+- Clicking several file links quickly now opens only the last one, even if an earlier file was slow
+  to check. (#1730)
 
 ## v2.174.0
 
