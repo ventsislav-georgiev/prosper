@@ -19,8 +19,8 @@
   {
    "name": "no_viewable_check",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "            guard AgentTerminalFileLink.isViewable(file) else { return }\n            let show",
-   "new": "            guard true else { return }\n            let show",
+   "old": "            guard AgentTerminalFileLink.isViewable(file) else { return }\n            // #1730",
+   "new": "            guard true else { return }\n            // #1730",
    "expect": "killed"
   }
  ]
