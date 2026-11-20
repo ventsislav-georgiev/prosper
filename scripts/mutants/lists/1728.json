@@ -1,0 +1,20 @@
+{
+ "entry": "1728",
+ "filter": "DchChatTests",
+ "mutants": [
+  {
+   "name": "known-id-refused",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "           !AgentModelRegistry.all().contains(where: { $0.id == m }) { return",
+   "new": "           true { return",
+   "expect": "killed"
+  },
+  {
+   "name": "any-id-answered",
+   "file": "app/Sources/ProsperApp/Server/DchChat.swift",
+   "old": "           !AgentModelRegistry.all().contains(where: { $0.id == m }) { return",
+   "new": "           false { return",
+   "expect": "killed"
+  }
+ ]
+}
