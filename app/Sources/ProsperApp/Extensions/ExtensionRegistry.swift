@@ -544,6 +544,10 @@ final class ExtensionRegistry: ObservableObject {
         })
     }
 
+    /// #1794: folder name -> id of a built-in that was seeded into userDir by an older release and no longer ships
+    /// (Violet became Royal Purple; ThemeStore.renamedThemeIDs moves its users).
+    static let retiredBuiltIns = ["theme-violet": "com.prosper.theme.violet"]
+
     /// #1246: bundled folder name -> the id its pristine copy declares. A pristine copy that does not load is left out.
     private func bundledIDsByFolder() -> [String: String] {
         guard let pristineRoot = systemPristineDir else { return [:] }
@@ -587,6 +591,8 @@ final class ExtensionRegistry: ObservableObject {
             do {
                 let loaded = try ExtensionLoader.load(
                     directory: entry, isSystem: false, hostVersion: hostVersion)
+                // #1794: the seeded copy of a built-in that no longer ships stays on disk but never loads.
+                if Self.retiredBuiltIns[entry.lastPathComponent] == loaded.id { continue }
                 // #1246: a system record is a bundled folder holding the id its bundled copy declares, never a name alone.
                 let isSystem = bundledIDs[entry.lastPathComponent] == loaded.id
                 loads.append(isSystem ? LoadedExtension(manifest: loaded.manifest, directory: entry, isSystem: true) : loaded)

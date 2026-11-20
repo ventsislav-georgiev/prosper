@@ -93,6 +93,8 @@ final class ThemeStore: ObservableObject {
     /// #862: theme id -> remembered variant key, beside `activeKey` in the same store.
     /// Per Mac like `activeKey` (neither is in SyncedKeys).
     private static let tintKey = "prosper.themeTints"
+    /// #1794: a retired built-in theme id -> the one that replaced it, so a saved choice still resolves.
+    static let renamedThemeIDs = ["com.prosper.theme.violet": "com.prosper.theme.royal"]
     /// Cap on a cached remote asset. ponytail: post-download size check, not a
     /// streaming cap — themes ship from the trusted marketplace and icons are
     /// small. Upgrade to a streaming `URLSession.bytes` cap if untrusted theme
@@ -355,7 +357,8 @@ final class ThemeStore: ObservableObject {
         previews = Dictionary(uniqueKeysWithValues: specs.map { id, spec in
             (id, ThemePalette.resolve(spec, tint: storedTint(for: id)))
         })
-        let wanted = defaults.string(forKey: Self.activeKey) ?? ThemeDescriptor.builtInID
+        let stored = defaults.string(forKey: Self.activeKey) ?? ThemeDescriptor.builtInID
+        let wanted = Self.renamedThemeIDs[stored] ?? stored
         let target = available.first { $0.id == wanted } ?? available.first ?? .builtIn
         applyDescriptor(target, tint: storedTint(for: target.id), persist: false)
     }

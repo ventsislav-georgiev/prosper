@@ -127,8 +127,8 @@ final class ThemeContrastTests: XCTestCase {
         let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
                         "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
                         "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
-                        "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
-                        "theme-teal", "theme-violet"]
+                        "theme-lime", "theme-mint", "theme-rose", "theme-royal", "theme-silver", "theme-solar",
+                        "theme-teal"]
         let themes = try themes()
         XCTAssertEqual(expected.count, 22)
         XCTAssertEqual(Set(themes.map(\.title)), Set(expected), "the literal list is every bundled theme")
@@ -247,8 +247,8 @@ final class ThemeContrastTests: XCTestCase {
         let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
                         "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
                         "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
-                        "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
-                        "theme-teal", "theme-violet"]
+                        "theme-lime", "theme-mint", "theme-rose", "theme-royal", "theme-silver", "theme-solar",
+                        "theme-teal"]
         let themes = try themes()
         XCTAssertEqual(expected.count, 22)
         XCTAssertEqual(Set(themes.map(\.title)), Set(expected), "the literal list is every bundled theme")

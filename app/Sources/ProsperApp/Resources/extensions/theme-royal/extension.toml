@@ -1,9 +1,9 @@
 [extension]
-id          = "com.prosper.theme.violet"
-name        = "theme-violet"
-title       = "Violet Theme"
-description = "Vivid violet on deep plum, with a mint counter-accent."
-version     = "1.1.0"
+id          = "com.prosper.theme.royal"
+name        = "theme-royal"
+title       = "Royal Purple Theme"
+description = "Deep royal purple with a gold counter-accent."
+version     = "1.0.0"
 author      = "prosper"
 license     = "MIT"
 icon        = "paintpalette.fill"
@@ -21,7 +21,7 @@ on_event = []
 eager    = false
 
 [[contributes.themes]]
-id         = "com.prosper.theme.violet"
-title      = "Violet"
+id         = "com.prosper.theme.royal"
+title      = "Royal Purple"
 path       = "theme.json"
 appearance = "dark"

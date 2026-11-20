@@ -1,0 +1,34 @@
+{
+ "entry": "1794",
+ "filter": "ThemeTests",
+ "mutants": [
+  {
+   "name": "alias-off",
+   "file": "app/Sources/ProsperApp/Theme/ThemeStore.swift",
+   "old": "let wanted = Self.renamedThemeIDs[stored] ?? stored",
+   "new": "let wanted = stored",
+   "expect": "killed"
+  },
+  {
+   "name": "retire-skip-off",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if Self.retiredBuiltIns[entry.lastPathComponent] == loaded.id { continue }",
+   "new": "if false { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "retire-skip-all",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "if Self.retiredBuiltIns[entry.lastPathComponent] == loaded.id { continue }",
+   "new": "if true { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "accent-a47bff",
+   "file": "app/Sources/ProsperApp/Resources/extensions/theme-royal/theme.json",
+   "old": "\"blue\":          \"#A87BFF\"",
+   "new": "\"blue\":          \"#A47BFF\"",
+   "expect": "killed"
+  }
+ ]
+}

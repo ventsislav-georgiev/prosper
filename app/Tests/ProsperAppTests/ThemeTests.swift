@@ -401,6 +401,61 @@ final class ThemeTests: XCTestCase {
         XCTAssertEqual(store2.activeID, "t.amber")
     }
 
+    /// #1794: Royal Purple replaced Violet; a saved Violet choice opens on Royal Purple, not on Default.
+    @MainActor
+    func testSavedVioletChoiceResolvesToRoyal() {
+        let defaults = scratchDefaults("themetest")
+        defaults.set("com.prosper.theme.violet", forKey: "prosper.activeThemeID")
+        let dir = writeThemeJSON(##"{ "appearance": "dark", "colors": { "blue": "#A87BFF" } }"##)
+        let royal = ThemeDescriptor(id: "com.prosper.theme.royal", title: "Royal Purple", appearance: .dark,
+                                    extensionID: "com.prosper.theme.royal", jsonPath: dir)
+        let store = ThemeStore(defaults: defaults, cacheDir: tmpCache())
+        store.setAvailable([royal])
+        XCTAssertEqual(store.activeID, "com.prosper.theme.royal")
+        XCTAssertEqual(ThemeRuntime.palette.blue, Color(hex: "#A87BFF")!)
+    }
+
+    /// #1794: an older release seeded theme-violet into the user folder; after the update it no longer
+    /// loads, so no "Violet" lingers in Extensions or the theme list. Another folder still loads.
+    @MainActor
+    func testSeededVioletCopyNoLongerLoads() throws {
+        let user = tempDir("royal-user")
+        for (folder, id) in [("theme-violet", "com.prosper.theme.violet"), ("theme-plum", "com.example.theme.plum")] {
+            let dir = user.appendingPathComponent(folder, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try """
+            [extension]
+            id = "\(id)"
+            name = "\(folder)"
+            title = "T"
+            description = "t"
+            version = "1.1.0"
+            author = "prosper"
+
+            [extension.host]
+            min_version = "2.0.0"
+            api_level = 1
+
+            [extension.entry]
+            main = "init.lua"
+
+            [[contributes.themes]]
+            id = "\(id)"
+            title = "T"
+            path = "theme.json"
+            appearance = "dark"
+            """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+            try "-- none".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+            try ##"{ "appearance": "dark", "colors": { "blue": "#C266FF" } }"##
+                .write(to: dir.appendingPathComponent("theme.json"), atomically: true, encoding: .utf8)
+        }
+        let registry = ExtensionRegistry(systemDir: tempDir("royal-system"), userDir: user,
+                                         hostVersion: "2.0.0", defaults: scratchDefaults("royal"))
+        registry.discover()
+        XCTAssertTrue(registry.record(id: "com.prosper.theme.violet") == nil, "the retired Violet copy must not load")
+        XCTAssertTrue(registry.record(id: "com.example.theme.plum") != nil, "a folder that is not retired still loads")
+    }
+
     @MainActor
     func testStoreDefaultAlwaysPresentAndFirst() {
         let store = ThemeStore(defaults: scratchDefaults("t"), cacheDir: tmpCache())

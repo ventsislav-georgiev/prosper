@@ -11,8 +11,8 @@ final class AgentIslandThemeTests: XCTestCase {
     static let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
                            "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
                            "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
-                           "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
-                           "theme-teal", "theme-violet"]
+                           "theme-lime", "theme-mint", "theme-rose", "theme-royal", "theme-silver", "theme-solar",
+                           "theme-teal"]
     typealias RGBA = (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat)
     static let now: TimeInterval = 1_000_000
     private static var savedFollows: Any?

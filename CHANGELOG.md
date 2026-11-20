@@ -2239,6 +2239,8 @@ tag from the now-released section and put it on the new top draft.
   not drawn as 18 hidden chips in every row. (#1783)
 - Agent Sessions: closing the window keeps it hidden for 30 minutes, so reopening it within that
   time is instant. (#1784)
+- The Violet theme is now Royal Purple: deep purple with gold accents. If you used Violet, you are
+  moved to it. (#1794)
 
 ## v2.174.0
 

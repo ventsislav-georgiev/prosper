@@ -154,8 +154,8 @@ final class AgentIslandRowStyleTests: XCTestCase {
     static let expected = ["Default", "theme-amber", "theme-blossom", "theme-contrast-dark", "theme-contrast-light",
                            "theme-crimson", "theme-daylight", "theme-default", "theme-ember", "theme-emerald",
                            "theme-fern", "theme-gold", "theme-graphite", "theme-indigo", "theme-lavender",
-                           "theme-lime", "theme-mint", "theme-rose", "theme-silver", "theme-solar",
-                           "theme-teal", "theme-violet"]
+                           "theme-lime", "theme-mint", "theme-rose", "theme-royal", "theme-silver", "theme-solar",
+                           "theme-teal"]
     typealias RGBA = (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat)
 
     /// The 22 themes as ThemeContrastTests loads them; the literal list above must be all of them.
