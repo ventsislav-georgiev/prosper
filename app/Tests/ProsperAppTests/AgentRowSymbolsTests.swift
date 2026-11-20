@@ -142,27 +142,26 @@ extension AgentWindowD1Tests {
         let first = AgentIsland.firstSendingText   // #1369: longer than "Relaunching\u{2026}", so cut wherever it is
         let calm: Set<String> = ["Done", "Idle"]
         // The state texts that DROP the open count, per (digits, scale); every other state keeps it.
-        // #1360: every cell's agents group is a filled pill, its capsule's padding (sz(4) each side) in the line's width, so
-        // the count gives way sooner: from TIP's prints plus 2 * sz(4) (BADGE1268C-FIT reads the new widths).
+        // #1791: re-cut from the BADGE1268C-FIT prints after #1776 (the agents and shells groups lost their pill padding, sz(4)
+        // each side, so every detail line is sz(8) narrower than the #1360 cut assumed): the count now keeps in more cells.
+        let ending = "Ending\u{2026}", exiting = "Exiting\u{2026}", pausing = "Pausing\u{2026}", sending = "Sending\u{2026}"
+        let starting = "Starting\u{2026}", stopping = "Stopping\u{2026}", restarting = "Restarting\u{2026}", resuming = "Resuming\u{2026}"
+        let needs = "Needs input"
         let drops: [Int: [CGFloat: Set<String>]] = [
-            // #1546: the drawn RobotGlyph is narrower than the robot emoji was (about 2 pt at 0.85 and 1.0): Ending keeps the
-            // count at 999 1.0, Done at 9999 0.85 and Idle at 99999 1.0 (CI run 44297110831 and a local 2x run read the same).
-            999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm).subtracting(["Working", "Exiting\u{2026}", "Ending\u{2026}"])],   // #1453: the robot group is narrower than the people symbol was, so two more states keep the count at 1.0
-            9_999: [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
-            99_999: [0.7: all, 0.85: all, 1.0: all.subtracting(["Idle"])],
+            999: [0.7: all.subtracting(calm).subtracting(["Working", ending, exiting]),
+                  0.85: all.subtracting(calm).subtracting(["Working", ending, exiting, pausing]),
+                  1.0: all.subtracting(calm).subtracting(["Working", ending, exiting, pausing, sending, starting, stopping])],
+            9_999: [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm).subtracting(["Working"])],
+            99_999: [0.7: all, 0.85: all.subtracting(["Idle"]), 1.0: all.subtracting(calm)],
         ]
-        // The cells drawn cut, per (digits as printed, scale).
-        // #1546 (the drawn RobotGlyph, narrower): eight cells fit now: Relaunching 999 0.85, Stopping 9999 0.85, Needs input
-        // and Restarting 9999 1.0, Ending and Exiting 99999 0.85, Pausing and Starting 99999 1.0.
+        // The cells drawn cut, per (digits as printed, scale): the last step's unrounded ideal is over rowColumn.
         let cuts: [String: [CGFloat: Set<String>]] = [
-            "999": [0.7: [relaunching, first], 0.85: [first], 1.0: [first]],   // #1453: "Relaunching" now fits at 1.0
-            "9999": [0.7: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Stopping\u{2026}", first],   // #1453: "Sending" and "Starting" now fit
-                     0.85: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", first],
-                     1.0: [relaunching, first]],
-            "99999": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm).subtracting(["Working", "Ending\u{2026}", "Exiting\u{2026}"]),   // #1453: "Working" now fits at 0.85
-                      1.0: ["Needs input", relaunching, "Restarting\u{2026}", "Resuming\u{2026}", "Sending\u{2026}",
-                            "Stopping\u{2026}", first]],
-            "99999+": [0.7: all.subtracting(["Idle"]), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm)],
+            "999": [0.7: [first], 0.85: [first], 1.0: [first]],
+            "9999": [0.7: [needs, relaunching, first], 0.85: [relaunching, first], 1.0: [first]],
+            "99999": [0.7: [needs, pausing, relaunching, restarting, resuming, sending, starting, stopping, first],
+                      0.85: [needs, relaunching, restarting, resuming, stopping, first],
+                      1.0: [needs, relaunching, restarting, resuming, first]],
+            "99999+": [0.7: all.subtracting(calm), 0.85: all.subtracting(calm), 1.0: all.subtracting(calm).subtracting(["Working", exiting])],
         ]
         let cut = Set(cuts.flatMap { digits, byScale in byScale.flatMap { scale, s in s.map { "\($0) \(digits) \(scale)" } } })
         let named = (drops.values.flatMap { $0.values } + cuts.values.flatMap { $0.values }).reduce(Set<String>()) { $0.union($1) }
