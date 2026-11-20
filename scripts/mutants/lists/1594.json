@@ -8,14 +8,6 @@
    "old": "            if got.range(of: Data(#\"{\"type\":\"message\"\"#.utf8)) != nil { up.releaseCut() }",
    "new": "            _ = (got, up)",
    "expect": "killed"
-  },
-  {
-   "name": "cut-close-at-once",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "                return conn.send(content: nil, contentContext: .finalMessage, isComplete: true,\n                                 completion: .contentProcessed { [weak self] _ in self?.close() })",
-   "new": "                return close()",
-   "expect": "survives",
-   "note": "accepted survivor: ordering hardening, no row is red (a 400 KB first chunk still arrived whole on loopback)"
   }
  ]
 }

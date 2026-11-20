@@ -5,15 +5,8 @@
   {
    "name": "no-reprobe",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {",
+   "old": "wanted == nil || pid == wanted else {",
    "new": "true else {",
-   "expect": "killed"
-  },
-  {
-   "name": "signal-on-heldByOther",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "case .ccpool(let holder?, _) = config.portProbe(config.port, config.probeTimeout), holder == pid else {",
-   "new": "config.portProbe(config.port, config.probeTimeout) != .free else {",
    "expect": "killed"
   },
   {
@@ -61,23 +54,24 @@
   {
    "name": "listen-check-dropped",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "config.listensOn(p, config.port), config.signal(p, SIGTERM)",
-   "new": "config.signal(p, SIGTERM)",
+   "old": "config.listensOn(p, config.port) else {",
+   "new": "true else {",
    "expect": "killed"
   },
   {
    "name": "listen-check-wrong-port",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "config.listensOn(p, config.port), config.signal",
-   "new": "config.listensOn(p, config.port &+ 1), config.signal",
+   "old": "config.listensOn(p, config.port) else {",
+   "new": "config.listensOn(p, config.port &+ 1) else {",
    "expect": "killed"
   },
   {
    "name": "n2-reprobe-dropped",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "case .ccpool(let holder?, _) where holder == pid:",
-   "new": "case _ where true:",
-   "expect": "killed"
+   "old": "while config.listensOn(p, config.port) {",
+   "new": "while false {",
+   "expect": "killed",
+   "note": "#1665 re-anchor: the post-signal wait on the LISTEN socket replaced the n2 re-probe"
   },
   {
    "name": "libproc-port-ignored",

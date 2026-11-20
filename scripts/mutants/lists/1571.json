@@ -26,9 +26,10 @@
   {
    "name": "r10",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "        if old != nil { _ = gone.wait(timeout: .now() + 2) }\n",
-   "new": "",
-   "expect": "killed"
+   "old": "CCPoolListener.isListeningTCP(l.fd) else { return nil }",
+   "new": "true else { return nil }",
+   "expect": "killed",
+   "note": "#1672 re-anchor: Restart keeps a listener only while it still listens; the lost-listener step kills it"
   },
   {
    "name": "u12",
