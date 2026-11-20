@@ -1,0 +1,41 @@
+{
+ "entry": "1733",
+ "filter": "AgentIslandMessageTests",
+ "mutants": [
+  {
+   "name": "setRowNoArm",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "store?.actions[key] = text; noteInfo(key) }",
+   "new": "store?.actions[key] = text }",
+   "expect": "killed"
+  },
+  {
+   "name": "noticeNoArm",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        store?.notices[key] = text\n        armNote(key, text, notice: true)",
+   "new": "        store?.notices[key] = text",
+   "expect": "killed"
+  },
+  {
+   "name": "clearsAnyText",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "guard (notice ? self.store?.notices[key] : self.store?.actions[key]) == text else { return }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "noChainCheck",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "guard let self, (notice ? self.noticeChain[key] : self.noteChain[key]) == id else { return }",
+   "new": "guard let self else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "errorsAreInfo",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "+ [killedText, alreadyEndedText, autoAllowedText])",
+   "new": "+ [killedText, alreadyEndedText, autoAllowedText, messageTooLongText, messageBusyText])",
+   "expect": "killed"
+  }
+ ]
+}
