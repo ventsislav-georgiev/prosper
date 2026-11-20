@@ -1,0 +1,90 @@
+{
+ "entry": 1700,
+ "filter": "AgentWindowLayoutEditTests",
+ "mutants": [
+  {
+   "name": "split-no-unpark",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if parked != nil, case let .success(l) = next { keyFocus = .pane; unpark(l); return true }",
+   "new": "if false, case let .success(l) = next { keyFocus = .pane; unpark(l); return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "splitting-locked-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked, parked == nil { return .failure(.layoutLocked) }",
+   "new": "if layoutLocked { return .failure(.layoutLocked) }",
+   "expect": "killed"
+  },
+  {
+   "name": "side-no-unpark",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else { layout = l }",
+   "new": "layout = l",
+   "expect": "killed"
+  },
+  {
+   "name": "showing-side-locked-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if placement == .side, layoutLocked, parked == nil { return",
+   "new": "if placement == .side, layoutLocked { return",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-locked-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }   // #1538: a drop",
+   "new": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: a drop",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-no-unpark",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if parked != nil { unpark(l) } else { layout = l }   // #1700",
+   "new": "layout = l   // #1700",
+   "expect": "killed"
+  },
+  {
+   "name": "choose-locked-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }",
+   "new": "paneRefusal = .layoutLocked",
+   "expect": "killed"
+  },
+  {
+   "name": "closepane-locked-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }   // #1538; #1700",
+   "new": "if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538; #1700",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-notice-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
+   "new": "if layoutLocked { paneRefusal = .layoutLocked; return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-falls-through-in-view",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
+   "new": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "unpark-drops-refusal",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let r = addLayout({ _ in l }) { paneRefusal = r }",
+   "new": "_ = addLayout({ _ in l })",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-notice-nil",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentPaneLayout.swift",
+   "old": "        case .layoutCap: \"9 layouts is the most a window holds\"",
+   "new": "        case .layoutCap: nil",
+   "expect": "killed"
+  }
+ ]
+}

@@ -26,15 +26,15 @@
   {
    "name": "split-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { return .failure(.layoutLocked) }   // #1538: the key",
-   "new": "if layoutLocked && false { return .failure(.layoutLocked) }   // #1538: the key",
+   "old": "if layoutLocked, parked == nil { return .failure(.layoutLocked) }",
+   "new": "if layoutLocked, parked == nil, false { return .failure(.layoutLocked) }",
    "expect": "killed"
   },
   {
    "name": "choose-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538: a pane retarget",
-   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return }   // #1538: a pane retarget",
+   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }",
+   "new": "if layoutLocked && false { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }",
    "expect": "killed"
   },
   {
@@ -54,22 +54,22 @@
   {
    "name": "close-pane-header-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538\n",
+   "old": "        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }   // #1538; #1700: the view's one pane never closes\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "perform-close-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed",
-   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return true }   // #1538: refused, the chord swallowed",
+   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
+   "new": "if layoutLocked && false { if parked == nil { paneRefusal = .layoutLocked }; return true }",
    "expect": "killed"
   },
   {
    "name": "drop-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
-   "new": "if layoutLocked && false { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
+   "old": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
+   "new": "if layoutLocked, parked == nil, false { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits",
    "expect": "survives",
    "note": "no row: testAgentWindowLayoutEditLockedStructuralChangesAreRefused drops at .centre, which choose(_:into:) still refuses by its own lock guard; no row drops on an edge zone while locked"
   }

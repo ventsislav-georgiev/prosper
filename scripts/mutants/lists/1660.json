@@ -68,8 +68,8 @@
   {
    "name": "n2-reprobe-dropped",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "while config.listensOn(p, config.port) {",
-   "new": "while false {",
+   "old": "        wait: while true {\n",
+   "new": "        wait: while false {\n",
    "expect": "killed",
    "note": "#1665 re-anchor: the post-signal wait on the LISTEN socket replaced the n2 re-probe"
   },
