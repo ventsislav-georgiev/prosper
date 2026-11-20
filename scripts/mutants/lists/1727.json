@@ -12,15 +12,15 @@
   {
    "name": "noSeqCheck",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "guard let self, self.noteChain[key] == id else { return }",
+   "old": "guard let self, (notice ? self.noticeChain[key] : self.noteChain[key]) == id else { return }",
    "new": "guard let self else { return }",
    "expect": "killed"
   },
   {
    "name": "clearsAnyText",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "if self.store?.actions[key] == AgentIsland.autoAllowedText { self.store?.actions[key] = nil; self.layout() }",
-   "new": "self.store?.actions[key] = nil; self.layout()",
+   "old": "guard (notice ? self.store?.notices[key] : self.store?.actions[key]) == text else { return }",
+   "new": "",
    "expect": "killed"
   }
  ]
