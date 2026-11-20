@@ -477,7 +477,7 @@ final class AgentSidebarModeTests: XCTestCase {
 
     // MARK: The setting
 
-    /// Unset and unknown read as Full; each mode round-trips; Settings' call and the Go menu's item (checked) apply it to
+    /// Unset and unknown read as Full; each mode round-trips; Settings' call and the View menu's item (checked) apply it to
     /// an open window's model at once; Slide starts slid out.
     func testTheSettingRoundTripsAndAppliesAtOnce() throws {
         try withModeRow {
@@ -494,7 +494,7 @@ final class AgentSidebarModeTests: XCTestCase {
             let (win, m, _) = d1.treeWindow()
             defer { win.close(); m.close() }
             XCTAssertEqual(m.sidebarMode, .mini)
-            let go = win.goMenu
+            let go = try XCTUnwrap(win.menus.first { $0.kind == .view })   // #1726: the modes live in the View menu
             let menu = try XCTUnwrap(go.item.submenu)
             go.menuNeedsUpdate(menu)
             let items = menu.items.filter { !$0.isSeparatorItem }
