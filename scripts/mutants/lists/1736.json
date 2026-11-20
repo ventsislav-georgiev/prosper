@@ -1,0 +1,34 @@
+{
+ "entry": "1736",
+ "filter": "AgentIslandTests",
+ "mutants": [
+  {
+   "name": "default-open",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "?? .sessions }",
+   "new": "?? .open }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-collapse",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "return setExpanded(false) }\n            click = .open",
+   "new": "return }\n            click = .open",
+   "expect": "killed"
+  },
+  {
+   "name": "app-target-wins",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if !fromWindow, showInSessions(s.key)",
+   "new": "if !fromWindow, case .notAttached = jumpTarget(s.key), showInSessions(s.key)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-fallback",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "            click = .open\n        }",
+   "new": "        }",
+   "expect": "killed"
+  }
+ ]
+}
