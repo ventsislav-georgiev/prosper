@@ -1052,12 +1052,20 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// #1701 (operator 2026-11-20: "when i use cmd, you know it is intentional, so clicking will keep the xray window
     /// open, instead of opening me a link"): a Cmd-down on a mark pins its card and goes no further, nor does its up or
     /// drag, so libghostty opens no link (it opens on the up) and the program gets no click. Elsewhere as before.
+    /// #1724 (operator 2026-11-20): while the program reports the mouse (Claude Code) libghostty gives a Cmd click to the
+    /// program and links only with Shift; a Cmd-down (no Shift) on a link Prosper sees (capturedLink) opens it here and
+    /// goes no further, the same as a pin. Cmd+Shift and every other click go on as before.
     override func mouseDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command), !unfocused {
             let p = convert(event.locationInWindow, from: nil)
             let q = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
             if let k = marks.mark(at: q)?.key, marks.hover.click(k) {
                 pinnedDown = true
+                return
+            }
+            if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {
+                pinnedDown = true
+                owner?.open(link.text)
                 return
             }
             refClick(at: q)
@@ -1072,7 +1080,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         super.mouseUp(with: event)
     }
 
-    /// #1701: the down pinned a card; its up and drags stop here.
+    /// #1701: the down pinned a card (#1724: or opened a link); its up and drags stop here.
     private(set) var pinnedDown = false
     /// Tests: each left down and up handed on to libghostty; nil in the product.
     var passedClick: ((NSEvent) -> Void)?
@@ -1082,6 +1090,23 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func flagsChanged(with event: NSEvent) {
         marks.command(event.modifierFlags.contains(.command))
         super.flagsChanged(with: event)
+    }
+
+    /// #1724: the program has mouse reporting on (libghostty's surface); rows hand in their own.
+    lazy var mouseCaptured: @MainActor () -> Bool = { [weak self] in self?.surface?.isMouseCaptured ?? false }
+    /// #1724: viewport reads for a link (counted by rows: one per cell the Command pointer enters, never one per move).
+    private(set) var linkReads = 0
+
+    /// #1724: the link-shaped token under a top-left point while the program reports the mouse; nil otherwise (no
+    /// capture, the unfocused pane, no grid, or no link there), so libghostty's own links stay as they are. By shape only:
+    /// a path is checked on disk only when clicked (open, off main). A remote session's path is never a link here.
+    func capturedLink(at p: CGPoint) -> AgentTerminalFileLink.Token? {
+        guard !unfocused, mouseCaptured(), let c = gridCell(at: p) else { return nil }
+        linkReads += 1
+        let lines = (viewportText() ?? "").components(separatedBy: "\n")
+        guard c.row < lines.count, let t = AgentTerminalFileLink.token(atColumn: c.col, in: lines[c.row]) else { return nil }
+        let web = ["http://", "https://", "mailto:"].contains { t.text.lowercased().hasPrefix($0) }
+        return web || owner?.remoteHost == nil ? t : nil
     }
 
     /// The grid cell under a top-left point: the rows' seam, else libghostty's surface (#1682), else the config padding.

@@ -119,6 +119,8 @@ final class XrayGridMarksView: NSView {
     /// #1565: output closes an unpinned hover card (a pinned one stays).
     func output(resized: Bool = false) {
         hover.close(all: false)
+        // #1724: the text under a Command hover may have changed: one re-read per drain, only while one is on the grid
+        if link != nil || linkCell != nil { linkCell = nil; linkHover(pointer) }
         // #1628: one viewport read per drain, only while marks are drawn (drains are coalesced, one per main-loop turn)
         let lines = resized || marks.isEmpty || !shown() ? [] : (host?.viewportText() ?? "").components(separatedBy: "\n")
         let kept = marks.filter { m in
@@ -240,6 +242,7 @@ final class XrayGridMarksView: NSView {
     override func mouseExited(with event: NSEvent) {
         pointer = nil
         hover.point(nil)
+        linkHover(nil)
     }
 
     /// #1701: the pointer's last point over this view (top-left); nil once it left.
@@ -249,6 +252,21 @@ final class XrayGridMarksView: NSView {
     /// hovered; Command up is a hover-out (the 250 ms close, a pinned card stays).
     func command(_ down: Bool) {
         hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)
+        linkHover(down ? pointer : nil)
+    }
+
+    /// #1724: the link under the Command pointer while the program reports the mouse (AgentTerminalHostView.capturedLink),
+    /// drawn with a solid underline; nil: none.
+    private(set) var link: Mark?
+    /// The cell `link` was read for: a move inside the same cell reads no viewport text.
+    private var linkCell: (col: Int, row: Int)?
+
+    private func linkHover(_ p: CGPoint?) {
+        let c = p.flatMap { host?.gridCell(at: $0) }
+        if let c, let l = linkCell, c == l { return }
+        linkCell = c
+        let now = p.flatMap { host?.capturedLink(at: $0) }.map { Mark(row: c?.row ?? 0, col: $0.col, cells: $0.cells, key: $0.text) }
+        if now != link { link = now; needsDisplay = true }
     }
 
     /// #1565: Esc in the terminal closes any card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
@@ -289,7 +307,7 @@ final class XrayGridMarksView: NSView {
     static var color: NSColor { NSColor(Neon.textPrimary).withAlphaComponent(0.6) }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !marks.isEmpty, let g = host?.gridMetrics, g.cellWidthPixels > 0, g.cellHeightPixels > 0 else { return }
+        guard !marks.isEmpty || link != nil, let g = host?.gridMetrics, g.cellWidthPixels > 0, g.cellHeightPixels > 0 else { return }
         let scale = max(window?.backingScaleFactor ?? 2, 1)
         let w = CGFloat(g.cellWidthPixels) / scale, h = CGFloat(g.cellHeightPixels) / scale
         let o = AgentTerminalHostView.gridOrigin
@@ -303,6 +321,10 @@ final class XrayGridMarksView: NSView {
         path.setLineDash([1, 2], count: 2, phase: 0)
         Self.color.setStroke()
         path.stroke()
+        if let l = link {   // #1724: solid, as libghostty's own link underline
+            let y = o.y + CGFloat(l.row + 1) * h - 1.5
+            NSBezierPath.strokeLine(from: CGPoint(x: o.x + CGFloat(l.col) * w, y: y), to: CGPoint(x: o.x + CGFloat(l.col + l.cells) * w, y: y))
+        }
     }
 }
 

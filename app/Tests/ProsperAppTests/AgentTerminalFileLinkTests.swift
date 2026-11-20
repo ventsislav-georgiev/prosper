@@ -201,4 +201,132 @@ final class AgentTerminalFileLinkTests: XCTestCase {
         XCTAssertEqual(done.wait(timeout: .now() + 30), .success)
         XCTAssertFalse(onMain.withLock { $0 })
     }
+
+    // MARK: #1724 (operator 2026-11-20): Cmd alone opens and underlines a link while the program reports the mouse
+
+    /// The operator's screenshot shapes (a Claude Code session): bare relative paths, a path in prose, an absolute one.
+    static func captureLines(_ dir: URL) -> String {
+        "  Updated CHANGELOG.md and docs/ADR-001-mlx-engine.md (see `extensions.md`).\n"
+            + "  the plain words and/or e.g. Node here\n"
+            + "  " + dir.path + "/docs/draft.txt\n"
+            + "  https://example.org/acme/7\n"
+    }
+
+    /// A pane over `captureLines` with mouse reporting `captured`, never in a window; cells 8 x 17 pt at (4, 2) (no
+    /// window: scale 2); each left down and up handed on to libghostty recorded.
+    private func captureView(_ f: Fixture, captured: Bool) throws -> (AgentTerminalHostView, () -> [NSEvent.EventType]) {
+        for name in ["CHANGELOG.md", "docs/ADR-001-mlx-engine.md"] {
+            try "fake\n".write(to: f.dir.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let v = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
+        v.owner = f.rig.c
+        v.gridMetrics = TerminalGridMetrics(columns: 80, rows: 24, widthPixels: 1280, heightPixels: 816, cellWidthPixels: 16, cellHeightPixels: 34)
+        let text = Self.captureLines(f.dir)
+        v.viewportText = { text }
+        v.mouseCaptured = { captured }
+        v.marks.after = { _, _ in }   // output's settle never runs
+        final class Box { var passed: [NSEvent.EventType] = [] }
+        let box = Box()
+        v.passedClick = { box.passed.append($0.type) }
+        return (v, { box.passed })
+    }
+
+    /// A left down and up at a cell, built and handed straight to the view (never posted).
+    private func click(_ v: AgentTerminalHostView, col: Int, row: Int, _ flags: NSEvent.ModifierFlags) throws {
+        let at = NSPoint(x: 4 + 8 * CGFloat(col) + 1, y: v.bounds.height - (2 + 17 * CGFloat(row) + 1))
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let e = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: at, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                                                     context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            if type == .leftMouseDown { v.mouseDown(with: e) } else { v.mouseUp(with: e) }
+        }
+    }
+
+    /// The pointer over a cell through the overlay's own mouseMoved (a built event, never posted).
+    private func move(_ v: AgentTerminalHostView, col: Int, row: Int, _ flags: NSEvent.ModifierFlags = .command) throws {
+        let p = CGPoint(x: 4 + 8 * CGFloat(col) + 1, y: 2 + 17 * CGFloat(row) + 1)
+        let e = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: v.marks.convert(p, to: nil), modifierFlags: flags,
+                                                 timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        v.marks.mouseMoved(with: e)
+    }
+
+    /// Red at the parent: mouseDown had no link branch (old: `refClick(at: q)` then `passedClick?(event)` and
+    /// `super.mouseDown`), so every Cmd-down went to the program and nothing opened.
+    func testACommandDownOnAPathWithMouseReportingOpensItAndReachesNoProgram() throws {
+        let f = try fixture()
+        let (v, passed) = try captureView(f, captured: true)
+        try click(v, col: 12, row: 0, .command)          // CHANGELOG.md
+        try click(v, col: 35, row: 0, .command)          // docs/ADR-001-mlx-engine.md
+        try click(v, col: 10, row: 2, .command)          // the absolute path
+        XCTAssertEqual(shown(f), [f.dir.path + "/CHANGELOG.md", f.dir.path + "/docs/ADR-001-mlx-engine.md", f.dir.path + "/docs/draft.txt"])
+        XCTAssertTrue(passed().isEmpty, "no down, no up reached libghostty or the program")
+        XCTAssertFalse(v.pinnedDown, "the up ended the taken click")
+        try click(v, col: 6, row: 3, .command)           // a URL goes to openURL
+        XCTAssertEqual(f.rig.opened.map(\.absoluteString), ["https://example.org/acme/7"])
+        try click(v, col: 66, row: 0, .command)          // extensions.md: no such file, taken, nothing shown
+        XCTAssertEqual(shown(f).count, 3)
+        XCTAssertTrue(passed().isEmpty)
+    }
+
+    /// Red if a plain click, a Cmd+Shift click (libghostty's own link path, #1719) or a Cmd click on prose is taken, or
+    /// a Cmd click with mouse reporting off is (libghostty links it itself then).
+    func testOtherClicksStillReachTheProgram() throws {
+        let f = try fixture()
+        let (v, passed) = try captureView(f, captured: true)
+        try click(v, col: 12, row: 0, [])
+        try click(v, col: 12, row: 0, [.command, .shift])
+        try click(v, col: 4, row: 1, .command)           // "the"
+        try click(v, col: 18, row: 1, .command)          // "and/or"
+        XCTAssertEqual(passed().count, 8)
+        XCTAssertTrue(shown(f).isEmpty && f.rig.opened.isEmpty)
+        let (off, offPassed) = try captureView(f, captured: false)
+        try click(off, col: 12, row: 0, .command)
+        XCTAssertEqual(offPassed(), [.leftMouseDown, .leftMouseUp])
+        XCTAssertTrue(shown(f).isEmpty)
+    }
+
+    /// Red if the Command hover underlines nothing over a path (old: command() set only the ref hover), underlines prose
+    /// or without Command, reads the viewport on a move inside the same cell or more than once per output, or checks the disk (extensions.md has no file
+    /// and is underlined by shape).
+    func testTheCommandHoverUnderlinesALinkByShapeOnly() throws {
+        let f = try fixture()
+        let (v, _) = try captureView(f, captured: true)
+        try move(v, col: 12, row: 0, [])
+        XCTAssertTrue(v.marks.link == nil, "no Command, no underline")
+        XCTAssertEqual(v.linkReads, 0)
+        try move(v, col: 12, row: 0)
+        XCTAssertEqual(v.marks.link, XrayGridMarksView.Mark(row: 0, col: 10, cells: 12, key: "CHANGELOG.md"))
+        try move(v, col: 13, row: 0)
+        try move(v, col: 13, row: 0)
+        XCTAssertEqual(v.linkReads, 2, "one read per cell entered, none for a move inside it")
+        try move(v, col: 66, row: 0)
+        XCTAssertEqual(v.marks.link?.key, "extensions.md")
+        for col in [4, 18, 25, 30] {                     // the, and/or, e.g., Node
+            try move(v, col: col, row: 1)
+            XCTAssertTrue(v.marks.link == nil, "prose at column \(col)")
+        }
+        try move(v, col: 12, row: 0)
+        let reads = v.linkReads
+        v.marks.output()
+        XCTAssertEqual(v.linkReads, reads + 1, "output under a Command hover: one re-read per drain")
+        XCTAssertEqual(v.marks.link?.key, "CHANGELOG.md")
+        v.marks.command(false)
+        XCTAssertTrue(v.marks.link == nil, "Command up drops it")
+        v.mouseCaptured = { false }
+        try move(v, col: 13, row: 0)
+        XCTAssertTrue(v.marks.link == nil, "no capture: libghostty's own hover")
+    }
+
+    /// Red if a prose word, a quote or trailing punctuation is part of a link, or a link's cells are off.
+    func testTheLinkTokenIsTight() {
+        func t(_ line: String, _ col: Int) -> String? { AgentTerminalFileLink.token(atColumn: col, in: line)?.text }
+        XCTAssertEqual(t("see `CHANGELOG.md`.", 6), "CHANGELOG.md")
+        XCTAssertEqual(t("(docs/x.md:12).", 3), "docs/x.md:12")
+        XCTAssertEqual(t("at ~/notes, then", 5), "~/notes")
+        XCTAssertEqual(t("open https://example.org/a).", 8), "https://example.org/a")
+        XCTAssertEqual(AgentTerminalFileLink.token(atColumn: 5, in: "日本 a/b.md")?.col, 5, "a wide character takes two cells")
+        for (line, col) in [("the plain words", 5), ("and/or", 1), ("e.g.", 1), ("Node", 1), ("v1.2", 1), ("1/2", 0), ("a  b", 1),
+                            ("docs/", 1), ("x.md", 9), ("src/app", 2), ("http://", 2), ("~/", 0)] {
+            XCTAssertTrue(AgentTerminalFileLink.token(atColumn: col, in: line) == nil, "\(line) at \(col)")
+        }
+    }
 }
