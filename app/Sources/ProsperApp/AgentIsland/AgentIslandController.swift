@@ -1999,14 +1999,33 @@ final class AgentIslandController {
         let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first?.pattern ?? "")
         let lines = DchConfigWriter.groupValues(groups)
         let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
-        queue.async {
+        let adopt = !Preferences.agentIslandSessionGroupsStored, replaced = groupsReplaced
+        queue.async { [weak self] in
+            // #1766: the lines this dch gets, after one read of the file's own group lines (only for a dch that reads
+            // them). While the list is unstored, the file's valid lines are adopted on main and kept here (the next
+            // sync writes them from the stored list); none valid: the migrated Sidekicks group as before. A stored
+            // list replacing different lines logs one line.
+            let owned: (DchCommand.Binary?) -> [String]? = { bin in
+                guard let g = DchConfigWriter.groupLines(lines, dch: bin) else { return nil }
+                let had = DchConfigWriter.fileGroupValues(path: path)
+                if adopt {
+                    let found = DchConfigWriter.adoptable(had)
+                    guard found.isEmpty else {
+                        DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } }
+                        return nil
+                    }
+                } else if !had.isEmpty, had != g {
+                    replaced(had, g)
+                }
+                return g
+            }
             // #781 r2: false needs neither version nor build, so turning the toggle off always reaches the file.
             // #1757: group lines only for a dch that reads them; with none found the file keeps its own.
             // #1765: the off value lands first, before the probe (which may fork dch --version); the group lines
             // follow in a second write once the probe says dch reads them (.unchanged when equal).
             guard toggle else {
                 DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)
-                if let g = DchConfigWriter.groupLines(lines, dch: probe()) {
+                if let g = owned(probe()) {
                     DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g)
                 }
                 return
@@ -2019,8 +2038,19 @@ final class AgentIslandController {
             if allow, DchConfigWriter.holdsTrue(DchConfigWriter.masters(dirs().map {
                 run(bin.path, ["--ls-json"], AgentIsland.listEnv(dir: $0))
             })) { allow = false }
-            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern, groups: DchConfigWriter.groupLines(lines, dch: bin))
+            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern, groups: owned(bin))
         }
+    }
+
+    /// #1766 seam: the one log line of a stored list replacing different group lines (had, written); called on `queue`.
+    var groupsReplaced: @Sendable ([String], [String]) -> Void = { DchConfigWriter.logReplaced($0, $1) }
+
+    /// #1766: the dch file's groups become the stored list as a Settings save would store it (the stamps move as an
+    /// edit, so the phone adopts the Mac's), unless a list was stored meanwhile; then the regroup and the next write.
+    func adoptDchGroups(_ list: [SessionGroup]) {
+        guard !Preferences.agentIslandSessionGroupsStored else { return }
+        Preferences.editSessionGroups(list, now: now())
+        rowDetailsChanged()
     }
 
     /// #1172: a Settings or phone change of the pattern, the tabs or the sort writes dch's config once, `dchConfigSettle`

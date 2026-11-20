@@ -2224,6 +2224,9 @@ tag from the now-released section and put it on the new top draft.
   and how many new prompts, two short titles and the ticket and PR references, without system
   messages. (#1764)
 - Session groups sync to the Prosper phone app, one section per group there. (#1756)
+- Session groups: group lines you already have in dch's config file are kept on the first sync with
+  dch 1.124.0 or later and become Prosper's group list, instead of being replaced by the Sidekicks
+  group. (#1766)
 
 ## v2.174.0
 

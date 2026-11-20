@@ -1343,6 +1343,9 @@ enum Preferences {
         set { defaults.set(try? JSONEncoder().encode(SessionGroup.normalized(newValue)), forKey: Keys.agentIslandSessionGroups) }
     }
 
+    /// #1766: whether a list is stored; until then the getter reads the migrated Sidekicks group.
+    static var agentIslandSessionGroupsStored: Bool { defaults.object(forKey: Keys.agentIslandSessionGroups) != nil }
+
     /// #571, #1757: the first group's pattern ("" with no groups): Settings' one field (until #1758) and the phone's
     /// 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits the first group, and with no
     /// group a non-empty pattern (the phone's adopt) adds the Sidekicks group back.

@@ -1456,3 +1456,121 @@ extension DchConfigWriterTests {
         }
     }
 }
+
+/// #1766 (QA R1757 n85): while the list is unstored, the group lines already in dch's file become the stored list
+/// instead of being replaced with the migrated Sidekicks group; a stored list replacing different lines logs once.
+/// Every file is a row's tempDir(); the defaults are the XCTest store's, put back after the row.
+extension DchConfigWriterTests {
+    /// No stored list for the row (the getter migrates), the stored one put back after it.
+    private func unstoredGroups() {
+        let saved = Preferences.defaults.object(forKey: "agentIslandSessionGroups")
+        addTeardownBlock {
+            if let saved { Preferences.defaults.set(saved, forKey: "agentIslandSessionGroups") } else {
+                Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+            }
+        }
+        Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+    }
+
+    private func configFile(_ name: String, _ text: String) -> String {
+        let file = tempDir(name).appendingPathComponent("config").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data(text.utf8)))
+        return file
+    }
+
+    func testFileGroupValuesFindTheLinesRenderOwns() {
+        let file = configFile("groupValues", "# group = Not = a\ngroup = Rev = -rev$\r\n  group=Older=y\ngroup_x = 1\n"
+                              + "group = Cut = -c$\u{0}tail\n")
+        XCTAssertEqual(DchConfigWriter.fileGroupValues(path: file), ["Rev = -rev$", "Older=y", "Cut = -c$"])
+        var bad = Data("group = ".utf8)
+        bad.append(contentsOf: [0xFF, 0x0A])
+        bad.append(contentsOf: Array("group = QA = -qa$\n".utf8))
+        XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: bad))
+        XCTAssertEqual(DchConfigWriter.fileGroupValues(path: file), ["QA = -qa$"], "a non-UTF-8 value skipped")
+        XCTAssertEqual(DchConfigWriter.fileGroupValues(path: file + "-missing"), [])
+        XCTAssertEqual(DchConfigWriter.fileGroupValues(path: (file as NSString).deletingLastPathComponent), [], "a folder")
+    }
+
+    func testAdoptableKeepsWhatDchKeepsAndStopsAtEight() {
+        let got = DchConfigWriter.adoptable(["Rev = -rev$", "Dots = a.b", " = -x", String(repeating: "n", count: 33) + " = -x",
+                                            "Blank = ", "noequal", "rev = -dup$", "Older=y"])
+        XCTAssertEqual(got.map { "\($0.name) = \($0.pattern)" }, ["Rev = -rev$", "Older = y"],
+                       "a non-portable or empty regex, a blank or 33-byte name, no \"=\", a second Rev: dropped")
+        XCTAssertEqual(Set(got.map(\.id)).count, 2, "an id each")
+        XCTAssertTrue(got.allSatisfy { $0.id.count == 8 && $0.id != SessionGroup.sidekicksID })
+        let ten = DchConfigWriter.adoptable((1...10).map { "g\($0) = -p\($0)$" })
+        XCTAssertEqual(ten.map(\.name), (1...8).map { "g\($0)" })
+    }
+
+    @MainActor func testAnUnstoredListAdoptsTheFilesGroupLinesInOrder() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandSessionGroupsUpdated = 0
+        let file = configFile("adopt", "group = Rev = -rev$\n# mine\ngroup = QA = -qa$\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock(initialState: 0)
+        c.groupsReplaced = { _, _ in logged.withLock { $0 += 1 } }
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertTrue(Preferences.agentIslandSessionGroupsStored)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map { "\($0.name) = \($0.pattern)" }, ["Rev = -rev$", "QA = -qa$"])
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 1_000_000_000, "stamped as an edit (the controller's now)")
+        XCTAssertEqual(read(file), "group = Rev = -rev$\n# mine\ngroup = QA = -qa$\nauto_allow = false\nsidekick_pattern = -qa\n",
+                       "this sync keeps the file's lines")
+        c.syncDchConfig()   // the write rowDetailsChanged schedules
+        drain(c)
+        XCTAssertEqual(read(file), "group = Rev = -rev$\ngroup = QA = -qa$\n# mine\nauto_allow = false\nsidekick_pattern = -rev$\n",
+                       "the same lines, from the stored list")
+        XCTAssertEqual(logged.withLock { $0 }, 0, "nothing replaced")
+    }
+
+    /// No valid group line: the Sidekicks group is written as before and the list stays unstored (lazy migration).
+    @MainActor func testAnUnstoredListWithNoValidLinesWritesSidekicksAsBefore() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        for (old, want) in [("picker_sort = name\n", "picker_sort = name\nauto_allow = false\nsidekick_pattern = -qa\ngroup = Sidekicks = -qa\n"),
+                            ("group = Dots = a.b\n", "group = Sidekicks = -qa\nauto_allow = false\nsidekick_pattern = -qa\n")] {
+            let file = configFile("noLines", old)
+            let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+            c.syncDchConfig()
+            drain(c)
+            XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, old)
+            XCTAssertEqual(read(file), want, old)
+        }
+    }
+
+    @MainActor func testAStoredListReplacesDifferentLinesAndLogsOnce() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$")]
+        let file = configFile("replace", "group = Old = x\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        let logged = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+        c.groupsReplaced = { had, lines in logged.withLock { $0.append(had + ["->"] + lines) } }
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertEqual(read(file), "group = Rev = -rev$\nauto_allow = false\nsidekick_pattern = -rev$\n")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Rev"], "the stored list is never adopted over")
+        c.adoptDchGroups([Self.group("Late", "-late$")])   // an adopt hop landing after a save
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Rev"], "a list stored meanwhile wins")
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertEqual(logged.withLock { $0 }, [["Old = x", "->", "Rev = -rev$"]], "one line, and none once equal")
+    }
+
+    @MainActor func testBelowDch1_124_0NothingIsAdopted() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        for v in [[1, 123, 9], nil] as [[Int]?] {
+            let file = configFile("old", "group = Rev = -rev$\n")
+            let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
+            let logged = OSAllocatedUnfairLock(initialState: 0)
+            c.groupsReplaced = { _, _ in logged.withLock { $0 += 1 } }
+            c.syncDchConfig()
+            drain(c)
+            XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, "\(String(describing: v))")
+            XCTAssertEqual(read(file), "group = Rev = -rev$\nauto_allow = false\nsidekick_pattern = -qa\n")
+            XCTAssertEqual(logged.withLock { $0 }, 0)
+        }
+    }
+}

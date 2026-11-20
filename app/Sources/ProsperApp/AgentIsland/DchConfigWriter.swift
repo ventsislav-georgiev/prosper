@@ -68,6 +68,37 @@ enum DchConfigWriter {
         return values
     }
 
+    /// #1766: the values of the file's group lines in order, found as `render` finds the lines it owns (setsKey), each
+    /// read up to its first NUL as dch reads it, after its first "=", spaces, tabs and CR trimmed; a non-UTF-8 value is
+    /// skipped. Empty when the file is missing or not one `write` would read (not regular, over maxFileBytes, unreadable).
+    static func fileGroupValues(path: String) -> [String] {
+        var st = stat()
+        guard stat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxFileBytes,
+              let d = FileManager.default.contents(atPath: path) else { return [] }
+        return d.split(separator: 0x0A).compactMap { whole in
+            let line = whole.prefix { $0 != 0 }
+            guard setsKey(line, "group"), let v = String(data: Data(line.drop { $0 != 0x3D }.dropFirst()), encoding: .utf8) else { return nil }
+            return v.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r"))
+        }
+    }
+
+    /// #1766: the groups in those values that Prosper writes back as one line each: `<name> = <regex>` split at the
+    /// first "=", a regex sidekickValue keeps; then normalized (a name dch keeps, first of a name, at most 8). Ids as
+    /// the Settings editor makes a new row's.
+    static func adoptable(_ values: [String]) -> [SessionGroup] {
+        SessionGroup.normalized(values.compactMap { v in
+            guard let eq = v.firstIndex(of: "=") else { return nil }
+            let name = String(v[..<eq]), p = sidekickValue(String(v[v.index(after: eq)...]))
+            guard !p.isEmpty else { return nil }
+            return SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: p)
+        })
+    }
+
+    /// #1766: the one line logged when a stored list replaces different group lines in the file.
+    static func logReplaced(_ had: [String], _ lines: [String]) {
+        log.notice("dch config: \(had.count, privacy: .public) group line(s) replaced by Prosper's \(lines.count, privacy: .public)")
+    }
+
     /// #1172: what may stand inside a bracket set, alone or as a range of one kind (digits, a-z, A-Z), low to high.
     static let setMembers = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_".unicodeScalars)
 
