@@ -1,0 +1,20 @@
+{
+ "entry": "1730",
+ "filter": "AgentTerminalFileLinkTests",
+ "mutants": [
+  {
+   "name": "no-generation-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "guard let self, self.fileLinkGeneration == gen else { return }",
+   "new": "guard let self else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "fileLinkGeneration &+= 1\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
