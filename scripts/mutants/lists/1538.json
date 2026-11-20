@@ -47,7 +47,7 @@
   {
    "name": "band-always-shown",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "shown && (m.layout.panes.count >= 2 || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
    "new": "shown",
    "expect": "killed"
   },

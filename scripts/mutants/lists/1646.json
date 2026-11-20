@@ -26,8 +26,8 @@
   {
    "name": "band-shows-for-layouts",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "shown && (m.layout.panes.count >= 2 ||",
-   "new": "shown && (m.layoutRows != nil || m.layout.panes.count >= 2 ||",
+   "old": "shown && ((m.layout.zoomed",
+   "new": "shown && (m.layoutRows != nil || (m.layout.zoomed",
    "expect": "killed"
   }
  ]

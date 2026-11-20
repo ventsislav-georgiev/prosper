@@ -1,0 +1,34 @@
+{
+ "entry": 1697,
+ "filter": "AgentWindowD1Tests",
+ "mutants": [
+  {
+   "name": "band-at-two-panes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "new": "shown && (m.layout.panes.count >= 2 || (m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "expect": "killed"
+  },
+  {
+   "name": "no-too-small",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "new": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "expect": "killed"
+  },
+  {
+   "name": "no-zoom",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "new": "shown && (m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "expect": "killed"
+  },
+  {
+   "name": "zoom-any-count",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "shown && ((m.layout.zoomed != nil && m.layout.panes.count >= 2) || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "new": "shown && (m.layout.zoomed != nil || m.paneTooSmall || (m.sidebarMode != .slide && !m.sidebarShown))",
+   "expect": "survives"
+  }
+ ]
+}
