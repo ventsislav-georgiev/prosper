@@ -158,8 +158,14 @@ final class AgentIslandController {
     var showInSessions: @MainActor (AgentSessionKey) -> Bool = { key in
         AgentsWindow.shared.show()
         guard let model = AgentsWindow.shared.model else { return false }
-        model.select(.live(key))
+        AgentIslandController.select(key, in: model)
         return true
+    }
+    /// #1741: the island click's selection, as a sidebar click does it (select, then the keys: #845). The sidebar's own
+    /// choose() lives in AgentsWindow.swift, so this repeats its two calls on the model.
+    static func select(_ key: AgentSessionKey, in model: AgentWindowModel) {
+        model.select(.live(key))
+        model.focusSelection()
     }
     var terminal: @MainActor () -> AgentTerminal = {
         AgentTerminal.resolve(raw: Preferences.agentIslandTerminal, installed: AgentTerminal.isInstalled)

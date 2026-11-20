@@ -234,4 +234,23 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.runtimes.values.allSatisfy { $0.terminal == nil })
         }
     }
+
+    /// #1741: an island click into Agent Sessions leaves the keys asked for as a sidebar click does (compared on the same
+    /// setup). Red without model.focusSelection() in AgentIslandController.select: the terminal's focus is never asked.
+    @MainActor
+    func testIslandClickFocusesTheSessionAsASidebarClickDoes() throws {
+        func run(_ pick: (AgentWindowModel, AgentSessionKey) -> Void) throws -> Bool {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            _ = splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let web = try XCTUnwrap(m.sections.flatMap(\.rows).compactMap(\.session).first { $0.name == "web" })
+            pick(m, web.key)
+            return m.terminal.focusPending
+        }
+        let sidebar = try run { m, k in m.select(.live(k)); m.focusSelection() }
+        let island = try run { m, k in AgentIslandController.select(k, in: m) }
+        XCTAssertTrue(sidebar, "a sidebar click asks the terminal for the keys")
+        XCTAssertEqual(island, sidebar)
+    }
 }
