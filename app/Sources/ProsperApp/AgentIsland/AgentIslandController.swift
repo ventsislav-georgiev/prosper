@@ -2010,6 +2010,8 @@ final class AgentIslandController {
                 let had = DchConfigWriter.fileGroupValues(path: path)
                 if adopt {
                     let found = DchConfigWriter.adoptable(had)
+                    // #1779: lines dropped as refused (or all of them, for Sidekicks) log once, like a replaced list.
+                    if found.count < had.count { replaced(had, found.isEmpty ? g : DchConfigWriter.groupValues(found)) }
                     guard found.isEmpty else {
                         DispatchQueue.main.async { MainActor.assumeIsolated { self?.adoptDchGroups(found) } }
                         return nil

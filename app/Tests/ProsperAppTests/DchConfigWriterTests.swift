@@ -1539,6 +1539,25 @@ extension DchConfigWriterTests {
         }
     }
 
+    /// #1779: a refused line is dropped from the adopted lines with one log; all refused: Sidekicks, one log.
+    @MainActor func testDroppedGroupLinesLogOnceThroughTheSeam() {
+        for (old, adopted, want) in [("group = Rev = -rev$\ngroup = Dots = a.b\n", ["Rev"],
+                                      [["Rev = -rev$", "Dots = a.b", "->", "Rev = -rev$"]]),
+                                     ("group = Dots = a.b\n", [], [["Dots = a.b", "->", "Sidekicks = -qa"]])] as [(String, [String], [[String]])] {
+            unstoredGroups()
+            usePattern(tabs: true, "-qa")
+            let file = configFile("dropped", old)
+            let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+            let logged = OSAllocatedUnfairLock<[[String]]>(initialState: [])
+            c.groupsReplaced = { had, lines in logged.withLock { $0.append(had + ["->"] + lines) } }
+            c.syncDchConfig()
+            drain(c)
+            XCTAssertEqual(Preferences.agentIslandSessionGroupsStored, !adopted.isEmpty, old)
+            if !adopted.isEmpty { XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), adopted, old) }
+            XCTAssertEqual(logged.withLock { $0 }, want, old)
+        }
+    }
+
     @MainActor func testAStoredListReplacesDifferentLinesAndLogsOnce() {
         unstoredGroups()
         usePattern(tabs: true, "-qa")
