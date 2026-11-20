@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import GhosttyTerminal
 import XCTest
 @testable import ProsperApp
@@ -125,7 +125,7 @@ final class AgentTerminalColoursTests: XCTestCase {
         // Back to Prosper: the overlay goes and Prosper's colours return.
         AgentTerminalLook.refresh(c, colours: [])
         XCTAssertFalse(c.renderedConfig.contains("#101010"))
-        XCTAssertTrue(c.renderedConfig.contains("background = \(AgentTerminalLook.hex(Neon.bgBottom))"))
+        XCTAssertTrue(c.renderedConfig.contains("background = \(AgentTerminalLook.vivid(ThemeStore.shared.appearance).background)"))
     }
 
     /// A value the allowlist passes but libghostty refuses rolls the overlay back: Prosper's config and colours stay.
@@ -134,7 +134,39 @@ final class AgentTerminalColoursTests: XCTestCase {
         let c = AgentTerminalLook.make(colours: [("background", "notacolourname")])
         XCTAssertFalse(c.renderedConfig.contains("notacolourname"))
         XCTAssertTrue(c.renderedConfig.contains("clipboard-read = deny"))
-        XCTAssertTrue(c.renderedConfig.contains("background = \(AgentTerminalLook.hex(Neon.bgBottom))"))
+        XCTAssertTrue(c.renderedConfig.contains("background = \(AgentTerminalLook.vivid(ThemeStore.shared.appearance).background)"))
+    }
+
+    /// #1754 (operator: "Make the Prosper look vivid"): under "Prosper" the cells are a pure pair (black and white in a
+    /// dark theme, white and black in a light one) and a saturated palette whose colours 1-15 are each at least 4.5:1 on
+    /// that background, drawn as Display P3; "My Ghostty theme" gets none of it. Red on the parent: no vivid(), and the
+    /// theme was hex(Neon.bgBottom) / hex(Neon.textPrimary) with no palette or window-colorspace line.
+    @MainActor
+    func testTheProsperLookIsVividInBothAppearances() {
+        func srgb(_ hex: String) -> NSColor {
+            let v = AgentTerminalTests.rgb(hex).map { CGFloat($0) / 255 }
+            return NSColor(srgbRed: v[0], green: v[1], blue: v[2], alpha: 1)
+        }
+        let c = AgentTerminalLook.make(colours: [])
+        for (appearance, bg, fg) in [(ThemeAppearance.dark, "#000000", "#ffffff"), (.light, "#ffffff", "#000000")] {
+            let look = AgentTerminalLook.vivid(appearance)
+            XCTAssertEqual([look.background, look.foreground], [bg, fg], "\(appearance)")
+            XCTAssertEqual(look.palette.count, 16, "\(appearance): all 16 ANSI colours")
+            for (i, colour) in look.palette.enumerated() where i > 0 {
+                XCTAssertGreaterThanOrEqual(ThemeContrastTests.contrast(srgb(colour), on: srgb(bg)), 4.5,
+                                            "\(appearance) palette \(i) \(colour) on \(bg)")
+            }
+            c.setTheme(AgentTerminalLook.theme(appearance: appearance))
+            XCTAssertTrue(c.lastConfigurationIssue == nil, "libghostty accepted the \(appearance) look")
+            let live = c.renderedConfig.components(separatedBy: "\n")
+            XCTAssertTrue(live.contains("background = \(bg)") && live.contains("foreground = \(fg)"), "\(appearance)")
+            XCTAssertTrue(live.contains("window-colorspace = display-p3"), "\(appearance): Display P3")
+            for (i, colour) in look.palette.enumerated() {
+                XCTAssertTrue(live.contains("palette = \(i)=\(colour)"), "\(appearance) palette \(i)")
+            }
+        }
+        XCTAssertEqual(AgentTerminalLook.theme(colours: [("background", "#101010")]), TerminalTheme(),
+                       "My Ghostty theme: no Prosper colours and no display-p3 over the user's lines")
     }
 
     /// QA r1418 m1: a theme file is a whole Ghostty config: only its colour lines are kept, its own `theme` is not

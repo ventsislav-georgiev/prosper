@@ -2211,6 +2211,8 @@ tag from the now-released section and put it on the new top draft.
   to check. (#1730)
 - "My Ghostty theme" in Agent Sessions now also follows the window-colorspace setting of your
   Ghostty config, so colours look as vivid as in Ghostty when it is set to display-p3. (#1752)
+- Agent Sessions terminals look more vivid: a black background, white text and brighter colours
+  (white background and black text with a light theme). (#1754)
 
 ## v2.174.0
 

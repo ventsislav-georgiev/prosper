@@ -18,9 +18,9 @@ extension AgentTerminalTests {
     struct Drawn { var raw: [Int]; var srgb: [Int]; var alpha: Int }
 
     @MainActor
-    func probeText(_ v: ViewRig) -> String {
+    func probeText(_ v: ViewRig, _ sgrs: [String] = AgentTerminalTests.probeRows) -> String {
         let fill = String(repeating: " ", count: v.rig.c.grid?.cols ?? 80)
-        return "\u{1b}[2J\u{1b}[H" + Self.probeRows.map { "\u{1b}[0;\($0)m\(fill)\u{1b}[0m" }.joined(separator: "\r\n")
+        return "\u{1b}[2J\u{1b}[H" + sgrs.map { "\u{1b}[0;\($0)m\(fill)\u{1b}[0m" }.joined(separator: "\r\n")
     }
 
     /// The IOSurface libghostty presents into, and the layer holding it.
@@ -69,37 +69,44 @@ extension AgentTerminalTests {
 
     /// The probe rows drawn: the background, then one entry per row (from the foreground row on), then the background.
     @MainActor
-    func drawnRows(_ v: ViewRig, _ what: String, bg: String, fg: String, raw: Bool = false) -> [Drawn] {
-        v.output(probeText(v), self)
+    func drawnRows(_ v: ViewRig, _ what: String, bg: String, fg: String, raw: Bool = false,
+                   sgrs: [String] = AgentTerminalTests.probeRows) -> [Drawn] {
+        v.output(probeText(v, sgrs), self)
         var rows: [Drawn] = []
         let pick: (Drawn) -> [Int] = { raw ? $0.raw : $0.srgb }
         wait(what) {
             let runs = Self.surfaceRef(v.host).map { Self.drawnRuns($0.0) } ?? []
             guard let first = runs.firstIndex(where: { Self.near(pick($0), Self.rgb(fg)) }) else { return false }
             rows = Array(runs[first...])
-            return rows.count == Self.probeRows.count + 1 && Self.near(pick(runs.last!), Self.rgb(bg))
+            return rows.count == sgrs.count + 1 && Self.near(pick(runs.last!), Self.rgb(bg))
         }
         return rows
     }
 
-    /// The cells libghostty draws are the configured colours (within 1/255 at the cell centre, after the surface's
-    /// colour space tag), opaque, under Prosper's look and under "My Ghostty theme" (a fixture config): the surface
-    /// itself washes nothing out (#1752 H1-H3: colour space, blending, translucency all measured clean).
+    /// The cells libghostty draws are the configured colours (within 1/255 at the cell centre), opaque, under Prosper's
+    /// look and under "My Ghostty theme" (a fixture config): the surface itself washes nothing out (#1752 H1-H3: colour
+    /// space, blending, translucency all measured clean). #1754: Prosper's look is Display P3, so its raw bytes are the
+    /// configured numbers (its palette 1, 3, 6, 15 in the tail); "My Ghostty theme" (no window-colorspace) stays sRGB.
     @MainActor
     func testTheSurfaceDrawsEachCellInItsConfiguredColour() throws {
         let v = startedView()
         defer { v.tearDown() }
         XCTAssertEqual(Self.surfaceRef(v.host).map { $0.1.isOpaque }, true, "an opaque layer: nothing behind shows through")
-        func check(_ name: String, bg: String, fg: String) {
-            let rows = drawnRows(v, name, bg: bg, fg: fg)
-            let want = [fg] + Self.probeTail + [bg]
+        func check(_ name: String, bg: String, fg: String, tail: [String] = Self.probeTail, raw: Bool = false) {
+            let rows = drawnRows(v, name, bg: bg, fg: fg, raw: raw)
+            let want = [fg] + tail + [bg]
             XCTAssertEqual(rows.count, want.count, name)
             for (d, w) in zip(rows, want) {
-                XCTAssertTrue(Self.near(d.srgb, Self.rgb(w)), "\(name): drawn \(d.srgb) for \(w)")
+                XCTAssertTrue(Self.near(raw ? d.raw : d.srgb, Self.rgb(w)), "\(name): drawn \(raw ? d.raw : d.srgb) for \(w)")
                 XCTAssertEqual(d.alpha, 255, "\(name): \(w) opaque")
             }
         }
-        check("prosper", bg: AgentTerminalLook.hex(Neon.bgBottom), fg: AgentTerminalLook.hex(Neon.textPrimary))
+        v.app.setTheme(AgentTerminalLook.theme(appearance: .dark))
+        let p = AgentTerminalLook.vivid(.dark).palette
+        XCTAssertEqual(p.count, 16, "all 16 ANSI colours")
+        guard p.count == 16 else { return }
+        check("prosper", bg: "#000000", fg: "#ffffff",
+              tail: [p[1], "#d77757", p[3], p[6], "#999999", p[15], "#8a8a8a", "#ff0000", "#0000ff"], raw: true)
         let file = tempDir().appendingPathComponent("config")
         try "background = #000000\nforeground = #ffffff\n".write(to: file, atomically: true, encoding: .utf8)
         AgentTerminalLook.refresh(v.app, colours: AgentTerminalLook.userColours(choice: "ghostty", files: [file], themeDirs: [],
@@ -122,5 +129,33 @@ extension AgentTerminalTests {
         let orange = rows.dropFirst(2).first
         XCTAssertTrue(orange.map { Self.near($0.raw, [215, 119, 87]) } ?? false, "P3 numbers as given: \(String(describing: orange?.raw))")
         XCTAssertFalse(orange.map { Self.near($0.srgb, [215, 119, 87]) } ?? true, "so in sRGB terms it is not the sRGB orange")
+    }
+
+    /// #1754 (operator: "Make the Prosper look vivid"): under "Prosper" the surface draws the pure pair and each of the
+    /// 16 ANSI colours exactly as configured, as Display P3 numbers (raw bytes = the configured value; mapped to sRGB the
+    /// red is not the same numbers), in a dark and a light theme. Palette 0 sits mid-list so no two neighbouring rows
+    /// share a colour (dark: 0 = the background; light: 0 = the text). Red on the parent: #05080D / #E8F2FC and
+    /// Ghostty's default palette drawn as sRGB.
+    @MainActor
+    func testTheProsperLookDrawsItsVividPaletteAsDisplayP3() {
+        let v = startedView()
+        defer { v.tearDown() }
+        let order = [1, 2, 3, 4, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14, 15]
+        for appearance in [ThemeAppearance.dark, .light] {
+            let look = AgentTerminalLook.vivid(appearance)
+            XCTAssertEqual(look.palette.count, 16, "\(appearance): all 16 ANSI colours")
+            guard look.palette.count == 16 else { continue }
+            v.app.setTheme(AgentTerminalLook.theme(appearance: appearance))
+            let rows = drawnRows(v, "\(appearance)", bg: look.background, fg: look.foreground, raw: true,
+                                 sgrs: ["7"] + order.map { "48;5;\($0)" })
+            let want = [look.foreground] + order.map { look.palette[$0] } + [look.background]
+            XCTAssertEqual(rows.count, want.count, "\(appearance)")
+            for (d, w) in zip(rows, want) {
+                XCTAssertTrue(Self.near(d.raw, Self.rgb(w)), "\(appearance): drawn \(d.raw) for \(w)")
+                XCTAssertEqual(d.alpha, 255, "\(appearance): \(w) opaque")
+            }
+            let red = rows.dropFirst().first
+            XCTAssertFalse(red.map { Self.near($0.srgb, $0.raw) } ?? true, "\(appearance): red drawn as P3, not sRGB")
+        }
     }
 }

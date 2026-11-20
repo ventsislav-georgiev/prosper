@@ -1254,8 +1254,8 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     override func accessibilityValue() -> Any? { installed?.session.readViewportText() }
 }
 
-/// The ghostty app and its config: Prosper's background and text colours, libghostty's own palette
-/// and font (what Ghostty draws), no key bindings inside libghostty but Ghostty's macOS text ones (the window owns Cmd
+/// The ghostty app and its config: Prosper's background, text and palette colours (#1754), libghostty's own
+/// font (what Ghostty draws), no key bindings inside libghostty but Ghostty's macOS text ones (the window owns Cmd
 /// keys, the view's Edit-menu actions own Cmd-C/V/A), OSC 52 reads denied and writes asked (see the view).
 @MainActor
 enum AgentTerminalLook {
@@ -1317,13 +1317,29 @@ enum AgentTerminalLook {
         }
     }
 
-    /// Prosper's palette follows its own theme, not the system appearance: both variants are the same.
-    /// #1456: with the user's colour lines there is no theme, so Prosper's background and text never cover them.
-    static func theme(colours: [(key: String, value: String)] = []) -> TerminalTheme {
+    /// #1754 (operator: "Make the Prosper look vivid"): Prosper's terminal colours, the same for every Prosper theme of
+    /// an appearance: a pure background and text pair and a saturated 16-colour palette, each of 1-15 at least 4.5:1 on
+    /// its background (AgentTerminalColoursTests). A light theme keeps a light (white) background on the same principle.
+    static func vivid(_ appearance: ThemeAppearance) -> (background: String, foreground: String, palette: [String]) {
+        appearance == .light
+            ? ("#ffffff", "#000000", ["#000000", "#c41a16", "#007a1f", "#8a5a00", "#0040dd", "#a3009f", "#006f80", "#4d4d4d",
+                                      "#595959", "#d70015", "#00862b", "#9c6200", "#0050e0", "#c000c0", "#007a8a", "#262626"])
+            : ("#000000", "#ffffff", ["#000000", "#ff453a", "#32d74b", "#ffd60a", "#0a84ff", "#ff4fd8", "#40d8ff", "#e6e6e6",
+                                      "#767676", "#ff6961", "#5af78e", "#fff066", "#5ca8ff", "#ff77ff", "#70f0ff", "#ffffff"])
+    }
+
+    /// Prosper's palette follows its own theme's appearance, not the system's: both variants are the same.
+    /// #1456: with the user's colour lines there is no theme, so Prosper's colours never cover them.
+    /// #1754: drawn as Display P3 (Ghostty's window-colorspace), in the theme so "My Ghostty theme" keeps its own.
+    static func theme(colours: [(key: String, value: String)] = [],
+                      appearance: ThemeAppearance = ThemeStore.shared.appearance) -> TerminalTheme {
         guard colours.isEmpty else { return TerminalTheme() }
+        let look = vivid(appearance)
         let colours = TerminalConfiguration {
-            $0.withBackground(hex(Neon.bgBottom))
-            $0.withForeground(hex(Neon.textPrimary))
+            $0.withBackground(look.background)
+            $0.withForeground(look.foreground)
+            for (i, c) in look.palette.enumerated() { $0.withPalette(i, color: c) }
+            $0.withCustom("window-colorspace", "display-p3")
         }
         return TerminalTheme(light: colours, dark: colours)
     }
@@ -1350,12 +1366,6 @@ enum AgentTerminalLook {
         let url = Mirror(reflecting: c).children.first { $0.label == "managedConfigURL" }?.value as? URL
         if let url { try? FileManager.default.removeItem(at: url) }
         return url
-    }
-
-    static func hex(_ c: Color) -> String {
-        let n = NSColor(c).usingColorSpace(.sRGB) ?? .black
-        let v = [n.redComponent, n.greenComponent, n.blueComponent].map { Int(($0 * 255).rounded()) }
-        return String(format: "#%02x%02x%02x", v[0], v[1], v[2])
     }
 }
 
