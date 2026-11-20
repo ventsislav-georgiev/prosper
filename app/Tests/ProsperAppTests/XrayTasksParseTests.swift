@@ -26,6 +26,29 @@ final class XrayTasksParseTests: XCTestCase {
         XCTAssertEqual(r.tasks.count, 1)
     }
 
+    /// #1787 (lag1778a R6: 258 of 716 follow-queue samples in NSISO8601DateFormatter): with a cache, a parse decodes and
+    /// dates only the rows whose bytes it has not seen, gives the same result as the whole parse, and keeps only the rows
+    /// of its last parse. Red at base: no reusing parse (XrayTasks.swift:139 read every row of the block each time).
+    func testACachedParseDecodesOnlyChangedRows() {
+        let date = #","created":"2026-11-01T10:00:00Z","updated":"2026-11-02T11:30:00.500Z""#
+        let one = [header, row("1", "pending", extra: date), row("2", "active", extra: date), row("3", "done", extra: date), done]
+        var cache = XrayTasks.Cache()
+        let lines = { (ls: [String]) in ls.map { Data($0.utf8) } }
+        XCTAssertEqual(XrayTasks.parse(lines(one), reusing: &cache), parse(one))
+        XCTAssertEqual(cache.parses, 3, "first parse: every row")
+        XCTAssertEqual(cache.rows.count, 3)
+        var two = one
+        two[2] = row("2", "done", extra: date)
+        XCTAssertEqual(XrayTasks.parse(lines(two), reusing: &cache), parse(two))
+        XCTAssertEqual(cache.parses, 4, "one changed row: one row decoded and dated")
+        XCTAssertEqual(cache.rows.count, 3, "the old bytes of row 2 are dropped")
+        XCTAssertEqual(XrayTasks.parse(lines(two + [row("1", "pending", extra: date)]), reusing: &cache).tasks.map(\.id),
+                       ["1", "2", "3", "1"], "a repeated row is kept twice and decoded none")
+        XCTAssertEqual(cache.parses, 4)
+        XCTAssertTrue(XrayTasks.date("2026-11-01T10:00:00+02:00") == Date(timeIntervalSince1970: 1_793_520_000))
+        XCTAssertTrue(XrayTasks.date("v1.2") == nil, "a '.' that is no ISO date reads as null")
+    }
+
     func testNulls() {
         let r = parse([#"{"schema":1,"session":"api","session_id":"s-1","source":"none","title":null,"partial":false}"#,
                        row("1", "pending", extra: #","active":null,"note":null,"created":null,"updated":"yesterday","chapter":null,"created_chapter":null,"blocked_by":[],"url":null,"group":null"#), done])

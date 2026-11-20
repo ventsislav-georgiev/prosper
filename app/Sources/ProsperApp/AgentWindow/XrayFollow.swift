@@ -39,9 +39,11 @@ final class XrayFollow: ObservableObject {
         /// What XrayTasks.parse / XrayMemory.parse read: the lines in order.
         var data: Data {
             var out = head
-            for l in rows.map({ $0.line }) + (done.map { [$0] } ?? []) { out.append(0x0A); out.append(l) }
+            for l in lines.dropFirst() { out.append(0x0A); out.append(l) }
             return out
         }
+        /// #1787: the lines themselves (no copy of their bytes), for XrayTasks.parse(_:reusing:).
+        var lines: [Data] { [head] + rows.map { $0.line } + (done.map { [$0] } ?? []) }
 
         /// #1631: the same lines (a whole block dch sent again): the byte count first, then each line's bytes.
         func same(_ o: Block) -> Bool {
@@ -179,6 +181,7 @@ final class XrayFollow: ObservableObject {
             if b.refs { parsed.refs += 1 }
             refRows += b.refRows
             blockParses += b.blocks
+            taskRowParses &+= b.taskRows
             if b.onMain { builtOnMain += 1 }
             held = b.state
         }
@@ -201,6 +204,8 @@ final class XrayFollow: ObservableObject {
     private(set) var refRows = 0
     /// #1631: tasks and memory blocks parsed (XrayTasks.parse, XrayMemory.parse), one per changed block per build.
     private(set) var blockParses = 0
+    /// #1787: task rows decoded and dated in those parses (a build parses only the rows whose bytes changed). A counter.
+    private(set) var taskRowParses = 0
     private(set) var builtOnMain = 0
     private(set) var swapped = 0
     /// #1638: lines decoded (JSONSerialization) so far, and those decoded on main (0 with the hop on). Counters only.
@@ -236,6 +241,7 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
         var refs: Bool
         var refRows: Int
         var blocks: Int
+        var taskRows = 0
         var onMain: Bool
     }
 
@@ -271,6 +277,8 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
     private var capped = false
     private var last: XrayFollow.State?
     private var refCache = XrayRefs.Cache()
+    /// #1787: the last tasks parse's rows by their bytes (XrayTasks.Cache): only changed rows are decoded and dated.
+    private var taskCache = XrayTasks.Cache()
 
     /// #1629: what a snapshot or reset makes stale (every part of the object); a delta marks only its own part.
     private static let whole: Set<String> = ["snapshot", "chapters", "refs"]
@@ -299,6 +307,7 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
             if o["reset"] != nil {
                 object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; (chapterBytes, refBytes) = ([], [])
                 (blocks, openBlock, replaced) = ([:], nil, [:]); dirty = Self.whole.union(["task", "memory"])   // #1475 c: the blocks come again after it
+                taskCache.rows = [:]   // #1787: the rows' bytes go with their block
                 continue
             }
             if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
@@ -412,18 +421,18 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
         let all = last == nil || j.dirty.contains("snapshot")
         let chapters = all || j.dirty.contains("chapters"), refs = all || j.dirty.contains("refs")
         if all { refCache.rows = [:] }   // #1631: a snapshot or reset parses every ref again
-        let before = refCache.parses
+        let (before, taskBefore) = (refCache.parses, taskCache.parses)
         let s = XrayFollow.State(
             chapters: chapters ? XrayChapters.parse(j.object) : last?.chapters,
             refs: refs ? XrayRefs.parse(j.object, reusing: &refCache, changed: j.refKeys) : last?.refs,
             anchors: chapters ? XrayPanelModel.anchors(j.object) : last?.anchors ?? [:],
-            tasks: j.dirty.contains("task") ? j.task.map { XrayTasks.parse($0.data) } : last?.tasks,
+            tasks: j.dirty.contains("task") ? j.task.map { XrayTasks.parse($0.lines, reusing: &taskCache) } : last?.tasks,
             memory: j.dirty.contains("memory") ? j.memory.map { XrayMemory.parse($0.data) } : last?.memory,
             corpus: all ? XrayChapters.corpus(j.object) : last?.corpus)
         last = s
         let blocks = (j.dirty.contains("task") && j.task != nil ? 1 : 0) + (j.dirty.contains("memory") && j.memory != nil ? 1 : 0)
         return Built(state: s, chapters: chapters, refs: refs, refRows: refCache.parses &- before, blocks: blocks,
-                     onMain: Thread.isMainThread)
+                     taskRows: taskCache.parses &- taskBefore, onMain: Thread.isMainThread)
     }
 }
 

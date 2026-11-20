@@ -111,18 +111,25 @@ struct XrayTasks: Equatable {
         let warn: String?
     }
 
-    // Built once: parse runs per poll and a row has two dates. Tried in this order.
-    nonisolated(unsafe) private static let isoFormatters: [ISO8601DateFormatter] = {
-        let plain = ISO8601DateFormatter(), fractional = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return [plain, fractional]
+    // Built once and shared: parse runs per poll and a row has two dates.
+    nonisolated(unsafe) private static let plainISO: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
+    }()
+    nonisolated(unsafe) private static let fractionalISO: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
     }()
 
     static func date(_ s: String?) -> Date? {   // a non-ISO value reads as null
         guard let s else { return nil }
-        for f in isoFormatters { if let d = f.date(from: s) { return d } }
-        return nil
+        // #1787: one formatter per date: only a fractional form has a '.', and each formatter reads only its own form
+        return (s.contains(".") ? fractionalISO : plainISO).date(from: s)
+    }
+
+    /// #1787: a follow's parsed rows by their line bytes, from its last parse (rows no longer sent drop out), so a build
+    /// decodes and dates only the rows that changed. `parses`: rows decoded so far (each one task's date parse).
+    struct Cache {
+        var rows: [Data: Task] = [:]
+        var parses = 0
     }
 
     private static func task(_ t: Row.T) -> Task {
@@ -137,15 +144,30 @@ struct XrayTasks: Equatable {
 
     /// The parse: bytes in, never throws; a bad line is counted and skipped.
     static func parse(_ data: Data) -> XrayTasks {
+        var cache = Cache()
+        return parse(data.split(separator: 0x0A, omittingEmptySubsequences: true), reusing: &cache)
+    }
+
+    /// #1787: the same parse over the lines in hand; a row line byte-equal to one in `cache` is not decoded again.
+    static func parse(_ lines: [Data], reusing cache: inout Cache) -> XrayTasks {
+        var kept: [Data: Task] = [:]
+        defer { cache.rows = kept }
         var r = XrayTasks(schema: nil, source: nil, sessionTitle: nil, partial: true, headerWarn: nil, doneWarn: nil, droppedCount: 0,
                           skippedLines: 0, tasks: [])
         var sawDone = false, headerPartial = false, rows = 0
         let dec = JSONDecoder()
-        for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+        for line in lines where !line.isEmpty {
             if line.count > maxLine { r.skippedLines += 1; continue }
-            if let row = try? dec.decode(Row.self, from: line) {
+            if let t = kept[line] ?? cache.rows[line] {
                 rows += 1
-                if rows > maxRows { r.skippedLines += 1 } else { r.tasks.append(task(row.task)) }
+                if rows > maxRows { r.skippedLines += 1 } else { r.tasks.append(t); kept[line] = t }
+            } else if let row = try? dec.decode(Row.self, from: line) {
+                rows += 1
+                if rows > maxRows { r.skippedLines += 1 } else {
+                    let t = task(row.task)
+                    cache.parses &+= 1   // a counter only: wrapping is harmless
+                    r.tasks.append(t); kept[line] = t
+                }
             } else if let d = try? dec.decode(DoneLine.self, from: line), d.done {
                 sawDone = true
                 r.droppedCount = max(0, d.dropped ?? 0)

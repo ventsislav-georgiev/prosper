@@ -2229,6 +2229,8 @@ tag from the now-released section and put it on the new top draft.
 - Session groups: group lines you already have in dch's config file are kept on the first sync with
   dch 1.124.0 or later and become Prosper's group list, instead of being replaced by the Sidekicks
   group. (#1766)
+- X-ray uses less battery while following a session: its task list now reads only the tasks that
+  changed. (#1787)
 
 ## v2.174.0
 

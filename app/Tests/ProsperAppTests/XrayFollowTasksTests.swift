@@ -145,6 +145,26 @@ final class XrayFollowTasksTests: XCTestCase {
         XCTAssertEqual(f.state?.memory?.items.map(\.id), ["m1"])
     }
 
+    /// #1787 (lag1778a R6): a build parses (decodes and dates) only the task rows whose bytes changed: one delta row is
+    /// one row parse, a whole block sent again with one new row is one, a reset's block is parsed whole again. Red at
+    /// base: XrayFollow.swift:420 parsed the whole block per build (taskRowParses 3, 6, 9 for the three builds).
+    func testABuildParsesOnlyTheChangedTaskRows() {
+        let f = XrayFollow(target: XrayFollowTests.target("api"))
+        let lines = { (ls: [String]) in ls.map { Data($0.utf8) } }
+        f.take(lines([XrayFollowTests.snapshot()] + Self.blocks(tasks: ["1", "2", "3"], memories: ["m1"])))
+        XCTAssertEqual(f.taskRowParses, 3)
+        f.take(lines([Self.task("2", "done")]))
+        XCTAssertEqual(f.taskRowParses, 4, "one changed row: one row parse")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.status), [.pending, .done, .pending])
+        f.take(lines(Self.blocks(tasks: ["1", "3", "4"], memories: ["m1"])))
+        XCTAssertEqual(f.taskRowParses, 5, "the block again with one new row: that row alone")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["1", "3", "4"])
+        f.take(lines([XrayFollowTests.reset, XrayFollowTests.snapshot()] + Self.blocks(tasks: ["1", "3", "4"], memories: ["m1"])))
+        XCTAssertEqual(f.taskRowParses, 8, "after a reset the block is parsed whole")
+        XCTAssertEqual(f.state?.tasks?.tasks.map(\.id), ["1", "3", "4"])
+        XCTAssertEqual(f.blockParses, 6)
+    }
+
     /// #1643 (QA r1 on #1642): Block.same compares the header too. The same task rows and done line resent under a header
     /// whose source changed (none -> command; the title is padded so both headers have the same byte length, which the
     /// `bytes` check cannot tell apart) are one more parse and the new source is shown. Red with head-ignored (the
