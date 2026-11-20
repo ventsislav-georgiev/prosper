@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 import LuaRuntime
@@ -63,6 +64,10 @@ enum ExtensionError: Error, Equatable {
     /// An update's archive is a kit where the installed record is not, or the reverse: the id is stored as shown (OutsideText).
     /// A refusal of the content (RefusedUpdates.isRefusal); installLocal would keep trust and privilege across the change.
     case marketKindChanged(id: String)
+    /// #1704 (OQ-191): an update over a trusted extension asked for permissions the installed version lacks and the review
+    /// was declined: nothing was copied. The id is stored as shown (OutsideText); `added` as the manifest declares them
+    /// (outside data, shown through OutsideText). Not a refusal of the content: the update check holds it for review.
+    case newPermissionsDeclined(id: String, added: [String])
 }
 
 extension ExtensionError: LocalizedError {
@@ -82,6 +87,8 @@ extension ExtensionError: LocalizedError {
             return "Not installed: the Marketplace listing of \(id) could not be loaded to check the kit. Try again."
         case let .marketKindChanged(id):
             return "Not installed: \(id) changed kind; install it again from the Marketplace. Nothing was changed."
+        case let .newPermissionsDeclined(id, _):
+            return "Not updated: \(id) asks for new permissions and they were not allowed. The installed version stays."
         default:
             return nil
         }
@@ -1356,8 +1363,10 @@ final class ExtensionRegistry: ObservableObject {
     /// Install (or upgrade) a user extension by copying a validated source
     /// directory into the user extensions dir. The source must contain an
     /// `extension.toml`; it is validated against the host before any copy.
+    /// #1704: `review` answers the new-permissions question (nil: `reviewNewPermissions`, the person's alert); the daily
+    /// update check passes a quiet decline.
     @discardableResult
-    func installLocal(from sourceDir: URL) throws -> ExtensionRecord {
+    func installLocal(from sourceDir: URL, review: PermissionReview? = nil) throws -> ExtensionRecord {
         // Validate first so a bad download never lands in the extensions dir.
         let loaded = try ExtensionLoader.load(
             directory: sourceDir, isSystem: false, hostVersion: hostVersion)
@@ -1379,6 +1388,16 @@ final class ExtensionRegistry: ObservableObject {
         if let why = ExtensionInstallID.caseRefusal(loaded.id, installed: installedNames, occupied: occupied) {
             throw ExtensionInstallID.Refused(reason: why)
         }
+        // #1704 (OQ-191): an update over a trusted extension of the same kind (a kind change drops trust, #1495) that declares
+        // a permission the installed version lacks is reviewed before anything is copied; declined: nothing on disk changes.
+        if let old = record(id: loaded.id), old.trusted,
+           (old.manifest.contributes?.kit != nil) == (loaded.manifest.contributes?.kit != nil) {
+            let had = Set(old.manifest.extension.declaredPermissions)
+            let added = loaded.manifest.extension.declaredPermissions.filter { !had.contains($0) }
+            if !added.isEmpty, !(review ?? reviewNewPermissions)(loaded.manifest.extension.title, added) {
+                throw ExtensionError.newPermissionsDeclined(id: OutsideText.shown(loaded.id), added: added)
+            }
+        }
         let fm = FileManager.default
         try fm.createDirectory(at: userDir, withIntermediateDirectories: true)
         // Use the extension id as the on-disk folder name (stable across renames).
@@ -1395,11 +1414,32 @@ final class ExtensionRegistry: ObservableObject {
         }
         discover()
         guard let record = record(id: loaded.id) else { throw ExtensionError.notFound(loaded.id) }
+        refusedUpdates.release(id: loaded.id)   // #1704: an installed update no longer waits for review
         if old != nil {
             onEnabledChanged?()   // as reset: the new manifest's shortcuts, themes and live flags
             replayLaunch(id: loaded.id)   // as a re-enable: only the launch handler re-takes what the teardown released
         }
         return record
+    }
+
+    /// #1704 (OQ-191): the review an update over a trusted extension gets when it declares new permissions (the title and
+    /// the added names, both outside data); true installs. Rows pass a recorder.
+    typealias PermissionReview = @MainActor (_ title: String, _ added: [String]) -> Bool
+    var reviewNewPermissions: PermissionReview = { ExtensionRegistry.newPermissionsAlert(title: $0, added: $1) }
+
+    /// The app's review: a modal alert naming the added permissions, only ever after a person's click (Prosper is in front
+    /// then, so it does not activate itself). Under XCTest it declines without showing anything.
+    static func newPermissionsAlert(title: String, added: [String]) -> Bool {
+        guard NSClassFromString("XCTestCase") == nil else { return false }
+        let names = added.prefix(10).map { OutsideText.shown($0, max: 64) }
+        let alert = NSAlert()
+        alert.messageText = "\(OutsideText.shown(title, max: 120)) asks for new permissions"
+        alert.informativeText = "This update asks for: " + names.joined(separator: ", ")
+            + (added.count > 10 ? " and \(added.count - 10) more" : "")
+            + ". Allow them and update? If not, the installed version stays as it is."
+        alert.addButton(withTitle: "Allow and Update")
+        alert.addButton(withTitle: "Not Now")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// #1430: the folder copy install and reset use; a row swaps in a failing one.
@@ -1553,9 +1593,9 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     /// Stamps `prosper://market/<id>` as the update origin and installs the prepared folder.
-    func install(_ prepared: PreparedMarketInstall) throws -> ExtensionRecord {
+    func install(_ prepared: PreparedMarketInstall, review: PermissionReview? = nil) throws -> ExtensionRecord {
         injectUpdateURL("prosper://market/\(prepared.id)", intoManifestAt: prepared.directory, force: true)
-        return try installLocal(from: prepared.directory)
+        return try installLocal(from: prepared.directory, review: review)
     }
 
     func discard(_ prepared: PreparedMarketInstall) { RemoteInstaller.removeWorkFolder(holding: prepared.directory, tempRoot: marketTempRoot) }
@@ -1620,6 +1660,22 @@ final class ExtensionRegistry: ObservableObject {
         static let maxCount = 256          // ids are outside data: at most this many are remembered
         private(set) var listed: [String: String] = [:]   // id -> the listed version that was refused
 
+        /// #1704: updates held for the person's review (they declare new permissions): id -> the listed version when known
+        /// (market; nil for GitHub, whose version is known only after the download) and the note the row shows.
+        private(set) var waiting: [String: (listed: String?, note: String)] = [:]
+
+        /// The daily check neither asks nor downloads a held market pair again.
+        func waits(id: String, listed version: String) -> Bool { waiting[id]?.listed == version }
+
+        mutating func hold(id: String, listed: String?, added: [String]) {
+            guard waiting[id] != nil || waiting.count < Self.maxCount else { return }
+            let names = added.prefix(10).map { OutsideText.shown($0, max: 64) }.joined(separator: ", ")
+                + (added.count > 10 ? " and \(added.count - 10) more" : "")
+            waiting[id] = (listed, "Update waits for your review (asks for: \(names)). Click Check for Updates to review it.")
+        }
+
+        mutating func release(id: String) { waiting[id] = nil }
+
         /// True only for the exact pair noted (both texts compared whole): another listed version is downloaded.
         func skips(id: String, listed version: String) -> Bool { listed[id] == version }
 
@@ -1645,12 +1701,17 @@ final class ExtensionRegistry: ObservableObject {
 
     private var refusedUpdates = RefusedUpdates()
 
+    /// #1704: the row's note while an update of `id` waits for the person's review; nil when none does.
+    func updateWaitingNote(id: String) -> String? { refusedUpdates.waiting[id]?.note }
+
     /// R1182-q5: what one check did. A skipped (refused) or failed candidate is not installed: the status then says so in one
     /// fixed sentence (a count only, no name, path or error text) and never "up to date".
     struct UpdateTally: Sendable {
         private(set) var installed = 0
         private(set) var notInstalled = 0
         private(set) var unchecked = 0   // R1182-q6/q7: no newer version could be looked up (fetch or index failed)
+        private(set) var waiting = 0     // #1704: held for the person's review (new permissions); not a failure
+        mutating func waitingOne() { waiting += 1 }
         mutating func installedOne() { installed += 1 }
         mutating func skippedOne() { notInstalled += 1 }
         mutating func failedOne() { notInstalled += 1 }
@@ -1677,6 +1738,7 @@ final class ExtensionRegistry: ObservableObject {
             var parts: [String] = []
             if unchecked > 0 { parts.append("Could not check \(unchecked) extension\(unchecked == 1 ? "" : "s") for updates.") }
             if notInstalled > 0 { parts.append("\(notInstalled) update\(notInstalled == 1 ? "" : "s") could not be installed.") }
+            if waiting > 0 { parts.append("\(waiting) update\(waiting == 1 ? " waits" : "s wait") for your review.") }
             if !parts.isEmpty { return parts.joined(separator: " ") }
             return installed == 0 ? "All extensions up to date." : "Updated \(installed) extension\(installed == 1 ? "" : "s")."
         }
@@ -1737,6 +1799,9 @@ final class ExtensionRegistry: ObservableObject {
         let marketIndex: [String: String]? = candidates.contains { $0.url.hasPrefix(marketPrefix) }
             ? await marketIndex() : [:]   // nil = the index failed (R1182-q7)
 
+        // #1704: only the person's Check for Updates (force) asks about new permissions; the daily check never shows the
+        // alert: it declines quietly and holds the update for review.
+        let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }
         var tally = UpdateTally()
         for cand in candidates {
             var tried: (id: String, listed: String)?   // R1182-q1: the market pair this pass downloads
@@ -1747,13 +1812,14 @@ final class ExtensionRegistry: ObservableObject {
                     let step = Self.marketStep(index: marketIndex, id: pkgID, current: cand.version, refused: refusedUpdates)
                     tally.record(step)
                     guard step == .install, let latest = marketIndex?[pkgID] else { continue }
+                    if !force, refusedUpdates.waits(id: cand.id, listed: latest) { tally.waitingOne(); continue }
                     tried = (pkgID, latest)
                     // An installed kit gets its listing read whatever the new archive is (it may have turned into a non-kit).
                     let wasKit = record(id: cand.id)?.manifest.contributes?.kit != nil
                     let prepared = try await prepareFromMarket(id: pkgID, version: latest, listedKind: wasKit ? "kit" : nil,
                                                                installedKit: wasKit)
                     defer { discard(prepared) }
-                    _ = try install(prepared)
+                    _ = try install(prepared, review: review)
                     tally.record(Self.outcome(threwAt: nil))
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue
@@ -1769,9 +1835,14 @@ final class ExtensionRegistry: ObservableObject {
                 // GitHub has no signature, so this id-binding is the only defense.
                 try bindMarketIdentity(extDir: remoteDir, expected: cand.id, expectedVersion: nil)
                 injectUpdateURL(cand.url, intoManifestAt: remoteDir)   // keep origin sticky
-                try installLocal(from: remoteDir)
+                try installLocal(from: remoteDir, review: review)
                 tally.record(Self.outcome(threwAt: nil))
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
+            } catch ExtensionError.newPermissionsDeclined(_, let added) {
+                tally.waitingOne()
+                refusedUpdates.hold(id: cand.id, listed: tried?.listed, added: added)
+                objectWillChange.send()   // the row's note; an automatic check sets no status
+                log.info("update of \(cand.id, privacy: .public) waits for review: it asks for new permissions")
             } catch {
                 tally.record(Self.outcome(threwAt: stage))
                 if let tried { refusedUpdates.note(error, id: tried.id, listed: tried.listed) }

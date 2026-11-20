@@ -276,6 +276,30 @@ final class MarketKitRecheckTests: XCTestCase {
         XCTAssertFalse(registry.record(id: extID)?.privileged ?? true, "the old privilege came back on re-trust")
     }
 
+    /// #1704: a trusted plain extension reinstalled as a kit that declares a new permission is not asked about: the kind
+    /// change drops trust, so the new code lands untrusted (the review would be a second question for nothing).
+    func testKindChangeWithANewPermissionIsNotReviewedAndLandsUntrusted() throws {
+        let root = tempDir()
+        let registry = makeRegistry(root.appendingPathComponent("user", isDirectory: true))
+        var reviews = 0
+        registry.reviewNewPermissions = { _, _ in reviews += 1; return false }
+        let old = root.appendingPathComponent("old", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data(KitFixture.head.utf8).write(to: old.appendingPathComponent("extension.toml"))
+        try Data("return {}\n".utf8).write(to: old.appendingPathComponent("init.lua"))
+        _ = try registry.installLocal(from: old)
+        try registry.trust(id: extID)
+        let new = try kitFolder(under: root.appendingPathComponent("new", isDirectory: true)) { f in
+            try f.write("extension.toml", KitFixture.head.replacingOccurrences(
+                of: "[extension]\n", with: "[extension]\npermissions = [\"full-disk-access\"]\n") + "\n" + KitFixture.kit + "\n")
+        }
+        let after = try registry.installLocal(from: new.kit)
+        XCTAssertEqual(reviews, 0, "a kind change was reviewed")
+        XCTAssertTrue(after.manifest.contributes?.kit != nil)
+        XCTAssertEqual(after.manifest.extension.declaredPermissions, ["full-disk-access"])
+        XCTAssertFalse(after.trusted)
+    }
+
     /// R1539 s1: a same-kind reinstall (kit over kit) keeps trust and privilege, as before.
     func testSameKindReinstallKeepsTrustAndPrivilege() async throws {
         let (registry, market, _) = try updating(newVersion: "1.1.0") { _ in }

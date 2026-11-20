@@ -229,6 +229,10 @@ struct ExtensionRow: View {
                     .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
             }
 
+            if let note = registry.updateWaitingNote(id: record.id) {   // #1704
+                Text(verbatim: note).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
+            }
+
             if record.privileged && !record.isSystem {
                 Text("System access granted: this extension can run shell commands, the coding-agent, and delete files as you. Revoke if unsure.")
                     .font(Neon.font(.caption)).foregroundStyle(Neon.magenta)

@@ -2156,6 +2156,10 @@ tag from the now-released section and put it on the new top draft.
   (#1700)
 - The Marketplace no longer jumps when you switch between All, Themes, Extensions and Agent Kits;
   once the full list is loaded, switching categories is instant and needs no reload. (#1717)
+- An extension update that asks for new permissions is no longer installed on its own: the daily
+  check holds it and its row in Settings › Extensions says so, and clicking Check for Updates asks
+  you before any of its files are copied. Updates that ask for nothing new still install quietly.
+  (#1704)
 
 ## v2.174.0
 
