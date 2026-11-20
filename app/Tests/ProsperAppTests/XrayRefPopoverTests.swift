@@ -86,7 +86,7 @@ final class XrayRefPopoverTests: XCTestCase {
             ThemeRuntime.scale = scale
             let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
             p.openRef(try entry("#12"))
-            XCTAssertEqual(cards.sizes, [CGSize(width: 380 * scale, height: 360 * scale)], "once, 380x360\u{00B7}s at \(scale)")
+            XCTAssertEqual(cards.sizes, [CGSize(width: 460 * scale, height: 520 * scale)], "once, 460x520\u{00B7}s at \(scale) (#1760)")
             XCTAssertEqual(p.refCard?.text, "#12")
             await panels.refReading?.value
             XCTAssertEqual(run.calls, [["--xray", "api", "--ref", "-", "--scope", "project", "--full", "--json"]])
@@ -121,11 +121,11 @@ final class XrayRefPopoverTests: XCTestCase {
     func testFourTabsAndTheirCounts() async throws {
         let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
         p.openRef(try entry("#12"))
-        XCTAssertEqual(XrayRefPopover.Tab.allCases.map { XrayRefPopover.title($0, p) }, ["Definition", "Mentions", "Tasks", "Memory"],
+        XCTAssertEqual(XrayRefPopover.Tab.allCases.map { XrayRefPopover.title($0, p) }, ["Mentions", "Definition", "Tasks", "Memory"],
                        "names alone before the read lands")
         await panels.refReading?.value
         XCTAssertEqual(XrayRefPopover.Tab.allCases.map { XrayRefPopover.title($0, p) },
-                       ["Definition 1", "Mentions 2", "Tasks 2", "Memory 1"])
+                       ["Mentions 2", "Definition 1", "Tasks 2", "Memory 1"])
         XCTAssertEqual(XrayRefPopover.spoken(.mentions, p), "Mentions, 2")
     }
 
@@ -145,15 +145,6 @@ final class XrayRefPopoverTests: XCTestCase {
         XCTAssertEqual(XrayRefPopover.tasks(p).count, 0, "no task mentions it: the empty line is drawn")
     }
 
-    /// Copy gives the ref text, on a scratch pasteboard (never the user's).
-    func testCopyWritesTheRefTextToAScratchPasteboard() throws {
-        let pb = NSPasteboard(name: NSPasteboard.Name("com.example.xctest.refpop.\(UUID().uuidString)"))
-        defer { pb.releaseGlobally() }
-        let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
-        XrayRefPopover(panel: p, entry: try entry("#12"), complete: true, pasteboard: pb).copy()
-        XCTAssertEqual(pb.string(forType: .string), "#12")
-    }
-
     /// Red with M3b (Open for a non-http url): the seam once for https; never for ftp:, file: or a non-url ref.
     func testOpenCallsTheSeamOnceForHttpsOnly() throws {
         let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
@@ -165,31 +156,6 @@ final class XrayRefPopoverTests: XCTestCase {
         XCTAssertEqual(opened, [URL(string: "https://example.org/acme/api/pull/7")].compactMap { $0 })
         XCTAssertTrue(XrayRefPopover.openURL(try entry("ftp://example.org/acme")) == nil, "no Open button")
         XCTAssertTrue(XrayRefPopover.openURL(try entry("README.md")) == nil, "a file ref: Copy only (OQ-164)")
-    }
-
-    /// Red with M3c (searchOK skipped): Search closes the card and lands on Search with the query; a text dch would
-    /// refuse changes nothing.
-    func testSearchClosesTheCardAndLandsOnTheSearchTab() async throws {
-        let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
-        p.searchable = true
-        p.openRef(try entry("x"))
-        let bad = XrayRefPopover(panel: p, entry: try entry("x"), complete: true)
-        XCTAssertFalse(XrayRefPopover.canSearch(p, try entry("x")), "no Search button for a 1-byte text")
-        bad.search()
-        XCTAssertEqual(p.query, "")
-        XCTAssertEqual(p.tab, .refs)
-        XCTAssertEqual(cards.closes, 0)
-        await panels.refReading?.value
-        p.openRef(try entry("#12"))
-        await panels.refReading?.value
-        XCTAssertTrue(XrayRefPopover.canSearch(p, try entry("#12")))
-        XrayRefPopover(panel: p, entry: try entry("#12"), complete: true).search()
-        XCTAssertEqual(cards.closes, 2, "the card closed (the first by the second's present)")
-        XCTAssertEqual(p.tab, .search)
-        XCTAssertEqual(p.query, "#12")
-        await p.reading?.value
-        XCTAssertEqual(run.calls.last, ["--xray", "api", "--search", "-", "--json"])
-        XCTAssertEqual(run.stdins.last, "#12\n", "#1410: the query on stdin")
     }
 
     /// Red with M3a (the close does not cancel): the presenter's close and Esc each cancel the read in flight; a replaced
@@ -249,18 +215,20 @@ final class XrayRefPopoverTests: XCTestCase {
         }
     }
 
-    /// VoiceOver: the header's spoken row, a tab group with each tab's count and the shown one selected, labelled actions.
+    /// VoiceOver: the header's spoken row, a tab group with each tab's count and the shown one selected, the filter.
+    /// #1760: no Copy and no Search button (selectable text and the inline filter replace them); Mentions is shown first.
     func testAccessibilityTabGroupAndLabels() throws {
         let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
-        p.searchable = true
         p.refContext = XrayRefContext(T.parse(T.golden), ref: "#12", tasks: p.tasks, memory: p.memory)
         let v = XrayRefPopover(panel: p, entry: try entry("#12"), complete: true)
-        let tree = AXTreeSupport.tree(v, XrayRefPopover.size) { t in t.contains { $0.reads("Search this session for #12") } }
+        let tree = AXTreeSupport.tree(v, XrayRefPopover.size) { t in t.contains { $0.reads("Filter this card") } }
         for n in ["Issue #12, Login retries, 2 mentions", "Ref tabs", "Definition, 1", "Mentions, 2", "Tasks, 2", "Memory, 1",
-                  "Copy #12", "Search this session for #12"] {
+                  "Filter this card"] {
             XCTAssertTrue(tree.contains { $0.reads(n) }, n)
         }
-        XCTAssertTrue(tree.contains { $0.reads("Definition, 1") && $0.selected }, "the shown tab is selected")
+        XCTAssertTrue(tree.contains { $0.reads("Mentions, 2") && $0.selected }, "Mentions is the shown tab")
+        XCTAssertFalse(tree.contains { $0.names.contains { $0.hasPrefix("Copy") || $0.hasPrefix("Search this session") } },
+                       "no Copy or Search button")
         XCTAssertFalse(tree.contains { $0.names.contains { $0.hasPrefix("Open ") } }, "no Open for an issue")
     }
 

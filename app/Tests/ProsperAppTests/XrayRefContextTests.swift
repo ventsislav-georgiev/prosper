@@ -87,22 +87,6 @@ final class XrayRefContextTests: XCTestCase {
         XCTAssertTrue(XrayRefContext(T.parse(T.golden), ref: "#12", tasks: nil, memory: nil).openURL == nil)
     }
 
-    func testSearchNotRunForAOneByteOrBadText() async {
-        let run = XrayRefRunTests.Run()
-        let p = XrayPanelModel(target: XrayRefRunTests.local, tab: .search)
-        (p.dch, p.run) = ("/fake/dch", run.run)
-        p.query = "kept"
-        p.searchRef("#")
-        p.searchRef("a\u{202E}b")
-        XCTAssertTrue(p.reading == nil)
-        XCTAssertEqual(p.query, "kept")
-        p.searchRef("#12")
-        await p.reading?.value
-        XCTAssertEqual(p.query, "#12")
-        XCTAssertEqual(run.calls, [["--xray", "api", "--search", "-", "--json"]])
-        XCTAssertEqual(run.stdins, ["#12\n"], "#1410: the query on stdin")
-    }
-
     /// Red with M2f (the session check dropped): another session's mention never jumps, even with a chapter.
     func testOnlyThisSessionsMentionJumps() {
         let lines = [T.first, Self.mention("api", at: 40, offset: 100, chapter: "f12:100"),

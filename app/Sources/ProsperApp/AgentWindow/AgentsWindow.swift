@@ -554,8 +554,8 @@ final class AgentsNSWindow: NSWindow {
 
     static let chordLetters: Set<String> = ["w", "t", "f", "g", "n"]
 
-    /// The X-ray card's surface (a popover from the pane header's "..."). Rows put a fake here before the first key.
-    var cards: XrayCardPresenter = XrayPopoverPresenter()
+    /// The X-ray card's surface (#1760: a Prosper card panel under the pane header's "..."). Rows put a fake here before the first key.
+    var cards: XrayCardPresenter = XrayCardPanelPresenter()
 
     // MARK: #1351 the X-ray panel (#1346 P3a)
 

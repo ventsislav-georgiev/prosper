@@ -8,44 +8,164 @@ import SwiftUI
 protocol XrayCardPresenter: AnyObject {
     /// Shows `content` at `size` under `anchor`; `closed` runs once when it goes, whoever closed it.
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void)
+    /// #1760: `key` false: a hover card, shown without taking key (typing stays in the terminal) until it is clicked.
+    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void)
     func close()
     var isShown: Bool { get }
 }
 
-/// The product's presenter: an NSPopover, transient (a click outside closes it), below the anchor.
+extension XrayCardPresenter {
+    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void) {
+        present(content, size: size, anchor: anchor, closed: closed)
+    }
+}
+
+/// #1760: the card's window: borderless and clear (the card draws its own rounded surface), the system's soft shadow,
+/// no arrow. Key while shown, so Escape and the filter field reach the card; Escape the card does not take closes it.
+final class XrayCardPanel: NSPanel {
+    var onCancel: (() -> Void)?
+    /// #1760: a hover card: never key or main until a click on it (clicked) promotes it.
+    var quiet = false
+    var onPromote: (() -> Void)?
+    override var canBecomeKey: Bool { !quiet }
+    override var canBecomeMain: Bool { false }
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown || event.type == .rightMouseDown { clicked() }
+        super.sendEvent(event)
+    }
+    /// A click on the card: a quiet (hover) card becomes a key one.
+    func clicked() {
+        guard quiet else { return }
+        quiet = false
+        onPromote?()
+    }
+}
+
+/// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
+/// corners) in its own panel, replacing the dropdown-like NSPopover. Placed by `frame` (below the anchor; beside the
+/// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it.
 @MainActor
-final class XrayPopoverPresenter: NSObject, XrayCardPresenter, NSPopoverDelegate {
-    // Internal, not private: a row sets a stale-popover state and calls popoverDidClose without showing one (#1432).
-    var popover: NSPopover?
+final class XrayCardPanelPresenter: XrayCardPresenter {
+    // Internal, not private: rows read the panel and post its resign-key without ever showing one.
+    var panel: XrayCardPanel?
     var closed: (@MainActor () -> Void)?
-
-    var isShown: Bool { popover?.isShown == true }
-
-    func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
-        // Retire the old card here: its did-close may arrive after the new popover is installed (#1432).
-        let (old, oldClosed) = (popover, self.closed)
-        (popover, self.closed) = (nil, nil)
-        old?.delegate = nil
-        old?.performClose(nil)
-        oldClosed?()
-        let p = NSPopover()
-        p.behavior = .transient
-        p.animates = false
-        p.contentSize = size
-        p.contentViewController = NSHostingController(rootView: Themed { content })
-        p.delegate = self
-        popover = p
-        self.closed = closed
-        p.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+    private var resign: NSObjectProtocol?
+    enum Order: Equatable { case showKey, showQuiet, promote, hide }
+    /// The seam that shows (key: a click or keyboard open; quiet: a hover), promotes (a click on a hover card) or hides
+    /// the card's panel over `parent`; rows put a recorder here, so no window is ever ordered front or made key by a test.
+    var order: @MainActor (XrayCardPanel, NSWindow?, Order) -> Void = { p, parent, o in
+        switch o {
+        case .showKey, .showQuiet:
+            parent?.addChildWindow(p, ordered: .above)   // moves with its window
+            if o == .showKey { p.makeKeyAndOrderFront(nil) } else { p.orderFront(nil) }
+            p.invalidateShadow()
+        case .promote: p.makeKey()
+        case .hide:
+            parent?.removeChildWindow(p)
+            p.orderOut(nil)
+        }
     }
 
-    func close() { popover?.performClose(nil) }
+    var isShown: Bool { panel != nil }
 
-    func popoverDidClose(_ notification: Notification) {
-        guard (notification.object as? NSPopover) === popover else { return }
+    func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
+        present(content, size: size, anchor: anchor, key: true, closed: closed)
+    }
+
+    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void) {
+        close()   // one card at a time: the old card's closed runs before the new one is installed (#1432)
+        let win = anchor.window
+        let screen = (win?.screen ?? NSScreen.main)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let at = win.map { $0.convertToScreen(anchor.convert(anchor.bounds, to: nil)) } ?? .zero
+        let drawer = XrayDrawerFrame.frame(in: win, near: at)
+        let f = Self.frame(size: size, anchor: at, drawer: drawer, window: win?.frame, screen: screen)
+        let p = XrayCardPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        p.isReleasedWhenClosed = false
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.isExcludedFromWindowsMenu = true
+        p.hidesOnDeactivate = true
+        p.level = .floating
+        let shape = RoundedRectangle(cornerRadius: sz(14), style: .continuous)
+        let host = NSHostingView(rootView: Themed {
+            content.frame(width: f.width, height: f.height, alignment: .topLeading)
+                .background(shape.fill(Neon.card))
+                .overlay(shape.strokeBorder(Neon.cardStroke, lineWidth: 1))
+                .clipShape(shape)
+        })
+        host.frame = CGRect(origin: .zero, size: f.size)
+        p.contentView = host
+        p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close() } }
+        p.quiet = !key
+        p.onPromote = { [weak self, weak p] in if let self, let p, self.panel === p { self.order(p, p.parent, .promote) } }
+        resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
+            [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
+        }
+        (panel, self.closed) = (p, closed)
+        order(p, win, key ? .showKey : .showQuiet)
+    }
+
+    func close() {
+        guard let p = panel else { return }
         let f = closed
-        (popover, closed) = (nil, nil)
+        resign.map { NotificationCenter.default.removeObserver($0) }
+        (panel, self.closed, resign) = (nil, nil, nil)
+        order(p, p.parent, .hide)
         f?()
+    }
+
+    static let gap: CGFloat = 6
+
+    /// #1760: where a card of `size` goes (screen points, y up). `size` is first clamped to the screen less a margin.
+    /// No drawer: centred below the anchor (the popover's place), beside it when below has no room, clamped to the
+    /// screen. A drawer: beside the drawer on the side away from it in its window (the other side when the first has
+    /// no room), top aligned to the anchor; neither side has room: the roomier side, clamped, which may overlap the
+    /// drawer's near edge, never more than the overflow.
+    static func frame(size: CGSize, anchor: CGRect, drawer: CGRect?, window: CGRect?, screen: CGRect) -> CGRect {
+        let m = gap
+        let w = min(size.width, max(1, screen.width - 2 * m)), h = min(size.height, max(1, screen.height - 2 * m))
+        func clamp(_ r: CGRect) -> CGRect {
+            CGRect(x: min(max(r.minX, screen.minX + m), screen.maxX - m - w),
+                   y: min(max(r.minY, screen.minY + m), screen.maxY - m - h), width: w, height: h)
+        }
+        let top = anchor.maxY
+        if let d = drawer {
+            let left = CGRect(x: d.minX - m - w, y: top - h, width: w, height: h)
+            let right = CGRect(x: d.maxX + m, y: top - h, width: w, height: h)
+            let leftRoom = left.minX >= screen.minX + m, rightRoom = right.maxX <= screen.maxX - m
+            let awayLeft = d.midX >= (window ?? screen).midX
+            let pick = awayLeft ? (leftRoom || !rightRoom ? left : right) : (rightRoom || !leftRoom ? right : left)
+            if leftRoom || rightRoom { return clamp(pick) }
+            return clamp(d.minX - screen.minX >= screen.maxX - d.maxX ? left : right)
+        }
+        let below = CGRect(x: anchor.midX - w / 2, y: anchor.minY - m - h, width: w, height: h)
+        if below.minY >= screen.minY + m { return clamp(below) }
+        let beside = CGRect(x: anchor.maxX + m, y: top - h, width: w, height: h)
+        return clamp(beside.maxX <= screen.maxX - m ? beside : beside.offsetBy(dx: -(w + 2 * m + anchor.width), dy: 0))
+    }
+}
+
+/// #1760: the X-ray drawer's view, registered so a card opened while the drawer is open goes beside it, never over it.
+struct XrayDrawerFrame: NSViewRepresentable {
+    @MainActor static var views: [XrayCardAnchor.WeakAnchor] = []
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        Self.views = Self.views.filter { $0.view != nil } + [XrayCardAnchor.WeakAnchor(v)]
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    /// The screen frame of the shown drawer in `window` nearest `anchor` (the one holding its midX first); nil: none.
+    @MainActor static func frame(in window: NSWindow?, near anchor: CGRect) -> CGRect? {
+        guard let window else { return nil }
+        let frames = views.compactMap(\.view).filter { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
+            .map { window.convertToScreen($0.convert($0.bounds, to: nil)) }.filter { $0.width > 0 }
+        return frames.first { $0.minX <= anchor.midX && anchor.midX <= $0.maxX }
+            ?? frames.min { abs($0.midX - anchor.midX) < abs($1.midX - anchor.midX) }
     }
 }
 

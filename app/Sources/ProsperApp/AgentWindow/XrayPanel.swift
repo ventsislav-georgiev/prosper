@@ -98,12 +98,12 @@ final class XrayPanels: ObservableObject {
     func wire(_ m: XrayPanelModel, _ pane: UUID) {   // #1418: and XrayRefLink.panel, for a transcript link's card
         let target = m.target
         // #1417: `closed` runs once when the card goes, whoever closed it (the ref card cancels its --ref read there)
-        func show(_ view: AnyView, _ size: CGSize, _ closed: @escaping @MainActor () -> Void) {
+        func show(_ view: AnyView, _ size: CGSize, key: Bool, _ closed: @escaping @MainActor () -> Void) {
             guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return closed() }
-            w.cards.present(view, size: size, anchor: anchor, closed: closed)
+            w.cards.present(view, size: size, anchor: anchor, key: key, closed: closed)
         }
-        m.present = { show($0, $1) {} }
-        m.presentRef = { show($0, $1, $2) }
+        m.present = { show($0, $1, key: true) {} }
+        m.presentRef = { [weak m] in show($0, $1, key: m?.hovering != true, $2) }   // #1760: a hover card never takes key
         m.panels = self
         m.dismiss = { Self.window(pane)?.cards.close() }
         m.fromDch = { Self.chaptersRead(pane, target) }
@@ -284,6 +284,8 @@ final class XrayPanelModel: ObservableObject {
     var present: (AnyView, CGSize) -> Void = { _, _ in }
     /// #1417: as present, with the presenter's `closed` (the ref card's --ref cancel).
     var presentRef: (AnyView, CGSize, @escaping @MainActor () -> Void) -> Void = { _, _, _ in }
+    /// #1760: true while a hover card is being presented (hoverRef, an unpinned extRef): it is shown without key.
+    var hovering = false
     var dismiss: () -> Void = {}
     var openURL: (URL) -> Void = { _ in }
     var cwd: () -> String? = { nil }
@@ -911,6 +913,7 @@ struct XrayDrawer: View {
                     .frame(maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "xray"))   // tests only (nil probe: nothing)
                     .background(Neon.card)
+                    .background(XrayDrawerFrame())   // #1760: a card goes beside the drawer, never over it
                     .overlay(alignment: .leading) { Rectangle().fill(Neon.stroke).frame(width: 1) }
                     .overlay(alignment: .leading) { handle(offered: g.size.width) }
                     .frame(maxWidth: .infinity, alignment: .trailing)

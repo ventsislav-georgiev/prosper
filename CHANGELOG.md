@@ -2213,6 +2213,10 @@ tag from the now-released section and put it on the new top draft.
   Ghostty config, so colours look as vivid as in Ghostty when it is set to display-p3. (#1752)
 - Agent Sessions terminals look more vivid: a black background, white text and brighter colours
   (white background and black text with a light theme). (#1754)
+- The X-ray ref card is now a Prosper card instead of a dropdown popover. It is bigger, opens on
+  Mentions, and shows formatting (bold, code, links) instead of raw Markdown and HTML symbols. A
+  filter box narrows the rows as you type, and you can select snippet text and copy it with
+  Command-C. When the X-ray drawer is open, cards open beside it instead of covering it. (#1760)
 
 ## v2.174.0
 

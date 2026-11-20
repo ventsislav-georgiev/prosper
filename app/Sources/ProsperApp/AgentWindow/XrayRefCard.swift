@@ -51,6 +51,10 @@ struct XrayRefStream: Equatable {
         var turnTitle: String? = nil
         var lastActive: Date? = nil
         var recall = false
+        /// #1760: the snippet (the sentence, else the line) as Markdown runs, parsed once here; `fold` their text
+        /// lowercased for the card's filter.
+        var rich: [XrayRich.Run] = []
+        var fold = ""
     }
 
     /// #1528: the sentence around the ref, each part cleaned on its own; `hit` "" when dch's span did not hold (the plain
@@ -168,6 +172,12 @@ struct XrayRefStream: Equatable {
                                           sentence: (m["sentence"] as? String).map { sentence($0, span: m["span"]) },
                                           sessionID: text(m["session_id"], 64), turnTitle: text(m["turn_title"], XrayRefs.titleCap),
                                           lastActive: date(m["last_active"]), recall: m["turn_title"] != nil || m["last_active"] != nil))
+                if var last = s.mentions.popLast() {   // #1760: parsed once, from the parts cleaned above (cleaned again after)
+                    last.rich = last.sentence.map { XrayRich.runs(before: $0.before, hit: $0.hit, after: $0.after, max: sentenceCap) }
+                        ?? XrayRich.runs(last.line, max: lineCap)
+                    last.fold = XrayRich.fold(last.rich)
+                    s.mentions.append(last)
+                }
             } else if let t = o["tally"] as? [String: Any] {
                 s.tallies.append(Tally(session: text(t["session"], 64) ?? "", count: int(t["count"]) ?? 0,
                                        mentionsDropped: int(t["mentions_dropped"]) ?? 0))
@@ -232,6 +242,9 @@ struct XrayRefContext: Equatable {
     var othersCount: String?
     let tasks: [XrayTasks.Task]
     let memory: [XrayMemory.Item]
+    /// #1760: each task's and memory's title as Markdown runs, parsed once with the context (the card's filter reads `fold`).
+    let taskRich: [[XrayRich.Run]]
+    let memoryRich: [[XrayRich.Run]]
     /// #1567: the footer's facts: dch's counts as sent, a done line came, every count a lower bound (XrayRefStream), and
     /// the answer came from a light read (takeRef sets it; a full result serving a hover is not light).
     let rawCounts: XrayRefStream.Counts?
@@ -242,6 +255,8 @@ struct XrayRefContext: Equatable {
     static let commandMark = "your define_command"
     static let othersCountPrefix = "All projects"
     static let noDefinition = "No definition found"
+    /// #1760: the task and memory rows whose titles get Markdown runs (the 520 pt card shows about 12; the filter reaches the rest by title).
+    static let richCap = 50
 
     init(_ s: XrayRefStream, ref: String, tasks: XrayTasks?, memory: XrayMemory?) {
         self.ref = ref
@@ -308,6 +323,9 @@ struct XrayRefContext: Equatable {
         self.memory = (memory?.items ?? []).filter { m in
             [m.title, m.note ?? "", m.body ?? ""].contains { $0.localizedCaseInsensitiveContains(q) }
         }
+        // #1760: runs for the rows a card can list, at most richCap each; a row past it draws its plain title
+        taskRich = self.tasks.prefix(Self.richCap).map { XrayRich.runs($0.title, max: XrayRefStream.lineCap) }
+        memoryRich = self.memory.prefix(Self.richCap).map { XrayRich.runs($0.title, max: XrayRefStream.lineCap) }
     }
 
     /// #1589: the other same-project sessions' blocks, keyed by session_id (the name when dch sent none), newest
@@ -450,7 +468,7 @@ extension XrayPanels {
         let cache = m.refResults(), key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: budget != nil, scope: scope)
         if let hit = cache?.get(key) {   // #1567: no spawn; a light answer never reaches a full ask (get)
             Self.othersRead = nil
-            m.takeRef((0, hit.out), text: shown ?? text, scope: scope, light: hit.light, cached: true)
+            m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, scope: scope, light: hit.light, cached: true)
             return true
         }
         let plain = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope)
@@ -460,8 +478,12 @@ extension XrayPanels {
             // #1623: a host older than 1.113.0 refuses --no-github (exit 1; so does no corpus, so the retry is the evidence): once more without it
             if flagged, r.status == 1, !Task.isCancelled { r = await run(dch, plain, env) }
             guard !Task.isCancelled, let m else { return }   // cancelled: the SIGTERMed answer is not news
-            if r.status == 0 { cache?.put(key, r.out) }   // #1567: only an answer the card shows as a context
-            m.takeRef(r, text: shown ?? text, scope: scope, light: budget != nil)
+            // #1760: the stream, each snippet's Markdown with it, parsed off main, once; the cache keeps it for a hit
+            let out = r.out
+            let parsed = r.status == 0 ? await Task.detached(priority: .userInitiated) { XrayRefStream.parse(out) }.value : nil
+            if r.status == 0 { cache?.put(key, r.out, parsed: parsed) }   // #1567: only an answer the card shows as a context
+            guard !Task.isCancelled else { return }
+            m.takeRef(r, parsed: parsed, text: shown ?? text, scope: scope, light: budget != nil)
         }
         Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
         return true
@@ -523,10 +545,12 @@ extension XrayPanelModel {
     /// #1560: a `scope` "all" read adds its extra groups to the card's context (XrayRefContext.with(others:)).
     /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent). #1567: not a `cached` one (no spawn); the
     /// context says it is light (its footer's end slot).
-    func takeRef(_ r: (status: Int32, out: Data), text: String, scope: String = "project", light: Bool = false, cached: Bool = false) {
+    /// #1760: `parsed`: the stream already parsed off main (runRef's read); nil parses here (a cache hit, rows).
+    func takeRef(_ r: (status: Int32, out: Data), parsed: XrayRefStream? = nil, text: String, scope: String = "project",
+                 light: Bool = false, cached: Bool = false) {
         switch r.status {
         case 0:
-            let s = XrayRefStream.parse(r.out)
+            let s = parsed ?? XrayRefStream.parse(r.out)
             if light, !cached { XrayPanels.spent(s.first?.elapsed) }
             var c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
             c.light = light
@@ -547,16 +571,6 @@ extension XrayPanelModel {
         // as openRef sends it (XrayPanel.swift): a term in backticks
         let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text
         return panels?.runRef(sent, shown: e.text, scope: "all", for: self) == true
-    }
-
-    /// Search: the ref text becomes the query and runs, only when DchCtl.searchOK takes it (else nothing changes); #1417:
-    /// the card closes and the panel lands on the Search tab.
-    func searchRef(_ text: String) {
-        guard DchCtl.searchOK(text) else { return }
-        dismiss()
-        tab = .search
-        query = text
-        runSearch()
     }
 
     /// A mention's Return: this session's mention opens its chapter's card (#1471: no transcript to jump in); another

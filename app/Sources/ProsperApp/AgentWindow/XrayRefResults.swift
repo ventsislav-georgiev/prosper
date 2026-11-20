@@ -23,21 +23,22 @@ final class XrayRefResults {
 
     var now: @MainActor () -> Date = { Date() }
     /// Oldest use first.
-    private(set) var entries: [(key: Key, out: Data, at: Date)] = []
+    /// #1760: `parsed`: the answer's stream, parsed off main by the read that put it, so a hit parses nothing on main.
+    private(set) var entries: [(key: Key, out: Data, at: Date, parsed: XrayRefStream?)] = []
     /// Each kept out is at most maxBytes (put refuses more) and at most maxKeys are kept: the sum cannot overflow.
     var bytes: Int { entries.reduce(0) { $0 + $1.out.count } }
 
     /// A read's exit-0 answer. One over the byte cap is never kept.
-    func put(_ k: Key, _ out: Data) {
+    func put(_ k: Key, _ out: Data, parsed: XrayRefStream? = nil) {
         entries.removeAll { $0.key == k }
         guard out.count <= Self.maxBytes else { return }
-        entries.append((k, out, now()))
+        entries.append((k, out, now(), parsed))
         while entries.count > Self.maxKeys || bytes > Self.maxBytes { entries.removeFirst() }
     }
 
     /// The kept answer for `k` within 30 s: a full ask takes a full result only; a light one a full result first, else a
     /// light one. `light`: the answer served came from a light read. A hit becomes the newest use.
-    func get(_ k: Key) -> (out: Data, light: Bool)? {
+    func get(_ k: Key) -> (out: Data, light: Bool, parsed: XrayRefStream?)? {
         let t = now()
         entries.removeAll { t.timeIntervalSince($0.at) >= Self.keptFor }
         let full = Key(target: k.target, ref: k.ref, light: false, scope: k.scope)
@@ -45,7 +46,7 @@ final class XrayRefResults {
         else { return nil }
         let e = entries.remove(at: i)
         entries.append(e)
-        return (e.out, e.key.light)
+        return (e.out, e.key.light, e.parsed)
     }
 
     func clear() { entries = [] }
