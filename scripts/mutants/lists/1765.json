@@ -5,8 +5,8 @@
   {
    "name": "off-after-probe",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)\n                if let g = DchConfigWriter.groupLines(lines, dch: probe()) {",
-   "new": "                let pr = probe()\n                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)\n                if let g = DchConfigWriter.groupLines(lines, dch: pr) {",
+   "old": "                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)\n                if let g = owned(probe()) {",
+   "new": "                let pr = probe()\n                DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)\n                if let g = owned(pr) {",
    "expect": "killed"
   }
  ]
