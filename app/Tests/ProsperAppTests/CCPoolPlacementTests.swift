@@ -345,4 +345,51 @@ final class CCPoolPlacementTests: XCTestCase {
         XCTAssertEqual(writes.value, w, "no write")
         XCTAssertEqual(try Data(contentsOf: s.stateURL), file)
     }
+
+    // MARK: #1677 the share (the pane's "Move off an account at") is a soft preference
+
+    /// A 12 $/pt at 0.85 scores 1.8, B 1 $/pt at 0.3 scores 0.7: the score takes A; a share of 0.8 takes B (A is over
+    /// it); 0.9 takes A again (both under). A share never turns an answer into none.
+    func testShareSteersANewPlacementToTheAccountUnderIt() {
+        let st = pool([orgA, orgB], rows: [orgA: row(cap: 3, util: 0.85), orgB: row(cap: 0.25, util: 0.3)])
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 1.0), orgA)
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 0.8), orgB)
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 0.9), orgA)
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [orgB], now: t0, share: 0.8), orgA, "only A left: still placed")
+        XCTAssertEqual(CCPoolCore.route(st, key: "sess-example-1/", quotaCheck: false, model: opus, exclude: [], now: t0,
+                                        share: 0.8).account, orgB)
+    }
+
+    /// Every account at or over the share: placed exactly as without it (score, then the full ones last).
+    func testEveryAccountOverTheSharePlacesAsToday() {
+        let cases: [[String: CCPoolCapacityState]] = [
+            [orgA: row(cap: 3, util: 0.85), orgB: row(cap: 0.25, util: 0.9)],
+            [orgA: row(cap: 0.25, util: 0.85), orgB: row(cap: 3, util: 0.9)],
+            [orgA: row(cap: 3, util: 1), orgB: row(cap: 0.25, util: 0.9)],
+            [orgA: row(util: 0.8), orgB: row(util: 0.8)],
+        ]
+        for rows in cases {
+            let st = pool([orgA, orgB], rows: rows)
+            XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 0.8), place(st), "\(rows)")
+        }
+        let full = pool([orgA, orgB], rows: [orgA: row(cap: 3, util: 1), orgB: row(cap: 0.25, util: 0.9)])
+        XCTAssertEqual(CCPoolCore.place(full, model: opus, exclude: [], now: t0, share: 0.8), orgB, "a full account is still last")
+    }
+
+    /// A pin on an account over the share is followed: no move for the share alone.
+    func testShareNeverMovesAPinnedConversation() {
+        let st = pool([orgA, orgB], rows: [orgA: row(util: 0.85), orgB: row(util: 0.1)], pins: ["sess-example-1/": orgA])
+        let r = CCPoolCore.route(st, key: "sess-example-1/", quotaCheck: false, model: opus, exclude: [], now: t0, share: 0.5)
+        XCTAssertEqual(r.account, orgA)
+        XCTAssertTrue(r.followed)
+        let sub = CCPoolCore.route(st, key: "sess-example-1/agent-example-1", quotaCheck: false, model: opus, exclude: [], now: t0,
+                                   share: 0.5)
+        XCTAssertEqual(sub.account, orgA, "a subagent follows its session")
+    }
+
+    /// The share reads the same number the score does: a rolled-over window is 0, so under any share.
+    func testShareReadsTheLiveWindowOnly() {
+        let st = pool([orgA, orgB], rows: [orgA: row(cap: 3, util: 0.95, reset: t0 - 1), orgB: row(cap: 0.25, util: 0.1)])
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 0.5), orgA)
+    }
 }

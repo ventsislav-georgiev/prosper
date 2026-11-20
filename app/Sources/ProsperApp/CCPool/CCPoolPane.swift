@@ -194,6 +194,11 @@ struct CCPoolPane: View {
         }
     }
 
+    /// #1677: the share is a soft preference for new sessions (CCPoolCore.place); it never pauses an account.
+    static let thresholdCaption = "Below 100 %, new sessions start on an account under this share when one is; nothing is paused."
+    /// #1677 (n21): VoiceOver reads the value, not only the label.
+    static func thresholdValue(_ pct: Int) -> String { "\(pct) percent" }
+
     private var thresholdSection: some View {
         let pct = Int((model.exhaustedThreshold * 100).rounded())
         return NeonSection("Account switching") {
@@ -208,9 +213,10 @@ struct CCPoolPane: View {
                                 in: 50...100, step: 5)
                             .labelsHidden()
                             .accessibilityLabel("Move off an account at")
+                            .accessibilityValue(Self.thresholdValue(pct))
                     }
                 }
-                caption("Below 100 %, Prosper moves new requests to another account before this one hits its limit.")
+                caption(Self.thresholdCaption)
             }
         }
     }

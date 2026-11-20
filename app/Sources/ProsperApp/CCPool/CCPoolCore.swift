@@ -238,9 +238,9 @@ enum CCPoolCore {
     /// session's latest; each only while in `order`, not excluded and eligible. None of them (a new conversation, or
     /// the move after a refusal, its account in `exclude`): `place` (#1261). A request pins (or moves) its key to the
     /// account; a quota check only touches a pin it follows.
-    /// `followed` is true when a pin gave the answer (#1259 R1259-a).
+    /// `followed` is true when a pin gave the answer (#1259 R1259-a). `share` (#1677) only steers `place`; a pin is followed whatever its use.
     static func route(_ state: CCPoolState, key: String?, quotaCheck: Bool, model: String?,
-                      exclude: Set<String>, now: Double) -> (account: String?, state: CCPoolState, followed: Bool) {
+                      exclude: Set<String>, now: Double, share: Double = exhaustedDefault) -> (account: String?, state: CCPoolState, followed: Bool) {
         guard let key, CCPoolState.validPinKey(key) else { return (pick(state, model: model, exclude: exclude, now: now), state, false) }
         // Lookups read an expired copy: a lookup alone never changes what the file holds (expired pins leave it
         // with the next pin or move, which expires first).
@@ -254,7 +254,7 @@ enum CCPoolCore {
             && eligible(state.accounts[n], model: model, now: now) }
         // followed: the answer came from a pin, not from `place`; its reply then leaves `current` where it is.
         let pinned = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
-        guard let name = pinned ?? place(state, model: model, exclude: exclude, now: now) else { return (nil, state, false) }
+        guard let name = pinned ?? place(state, model: model, exclude: exclude, now: now, share: share) else { return (nil, state, false) }
         var st = state
         if live.pins[key]?.account == name {   // the expired copy: an idle pin is never revived by a touch (R1259-q1)
             st.touchPin(key, now: now)   // stamp only: kept in memory, never written (Pin == ignores it)
@@ -272,25 +272,30 @@ enum CCPoolCore {
     /// (a lookup changes nothing). Learned numbers are outside data: a non-finite or negative score is 0. An account
     /// at or above 100%, or whose row fails the row check, ranks after every other; all there: still one is
     /// returned, as in the reference. Ties: the soonest five-hour reset, then `order`.
-    static func place(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double) -> String? {
+    /// #1677: below 1.0, `share` (the pane's "Move off an account at") is a soft preference: an account whose utilization
+    /// now is at or above it ranks after every account under it, before the full ones; all over: the order above. It
+    /// never excludes, so it never turns an answer into none. At 1.0 (or NaN) no account is over without being full.
+    static func place(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double,
+                      share: Double = exhaustedDefault) -> String? {
         var live = state
         live.expirePins(now: now)
         var sessions: [String: Set<Substring>] = [:]   // bounded by the pin cap
         for (key, pin) in live.pins { sessions[pin.account, default: []].insert(key.prefix { $0 != "/" }) }
         let rows = state.order.compactMap { state.accounts[$0].flatMap { state.capacity[$0.id] } }.filter(\.isValid)
-        func rank(_ n: String) -> (full: Bool, score: Double) {
+        /// tier: 0 under the share, 1 at or over it, 2 full (or a failed row).
+        func rank(_ n: String) -> (tier: Int, score: Double) {
             let row = state.accounts[n].flatMap { state.capacity[$0.id] }
-            if let row, !row.isValid { return (true, 0) }
+            if let row, !row.isValid { return (2, 0) }
             let util = row.flatMap { r in r.reset.map { $0 > now ? r.maxUtilization : 0 } } ?? 0
             let score = (1 - util) * CCPoolCapacity.capacity(of: row, among: rows) / Double((sessions[n]?.count ?? 0) + 1)
-            return (util >= 1, score.isFinite && score > 0 ? score : 0)
+            return (util >= 1 ? 2 : util >= share ? 1 : 0, score.isFinite && score > 0 ? score : 0)
         }
         let ready = state.order.enumerated().filter { state.accounts[$0.element] != nil && !exclude.contains($0.element)
             && eligible(state.accounts[$0.element], model: model, now: now) }
             .map { (name: $0.element, index: $0.offset, rank: rank($0.element),
                     reset: resetAt(state.accounts[$0.element], fiveHour, now: now)) }
         return ready.min { a, b in
-            if a.rank.full != b.rank.full { return !a.rank.full }
+            if a.rank.tier != b.rank.tier { return a.rank.tier < b.rank.tier }
             if a.rank.score != b.rank.score { return a.rank.score > b.rank.score }
             return a.reset != b.reset ? a.reset < b.reset : a.index < b.index
         }?.name
@@ -500,6 +505,8 @@ extension CCPoolState {
     /// #1673: session id -> account label for the live pins, read-only (no expiry written). A key is "<sid>/<agent>"
     /// (first "/" splits it); a sid with several agents shows the main agent's pin (empty agent id), else the most
     /// recently seen (ties: the smaller key). Live = `expirePins`' rule; a pin whose account left the pool is skipped.
+    /// QA R1673 n22: at most `sessionLabelsCap` sessions, the most recently seen (ties: the smaller key), so the health
+    /// body stays well under the start-up probe's 64 KiB read; a dropped session's status line shows the current account.
     func sessionLabels(now: Double) -> [String: String] {
         guard now.isFinite else { return [:] }
         var best: [String: (rank: Int, seen: Double, key: String, label: String)] = [:]
@@ -512,8 +519,11 @@ extension CCPoolState {
             if let b = best[sid], !(rank > b.rank || (rank == b.rank && (seen > b.seen || (seen == b.seen && key < b.key)))) { continue }
             best[sid] = (rank, seen, key, p.account)
         }
-        return best.mapValues(\.label)
+        guard best.count > CCPoolState.sessionLabelsCap else { return best.mapValues(\.label) }
+        let kept = best.sorted { ($0.value.seen, $1.value.key) > ($1.value.seen, $0.value.key) }.prefix(CCPoolState.sessionLabelsCap)
+        return Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value.label) })
     }
+    static let sessionLabelsCap = 64
 
     /// Re-stamp a live pin (Python re-pins on every request that follows it).
     mutating func touchPin(_ key: String, now: Double) {

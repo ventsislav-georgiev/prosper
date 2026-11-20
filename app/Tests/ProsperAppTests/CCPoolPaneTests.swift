@@ -274,6 +274,17 @@ final class CCPoolPaneTests: XCTestCase {
         XCTAssertEqual(secrets.count, 0)
     }
 
+    // #1677: the share is a soft preference (the caption says so) and the stepper reads its value (n21).
+    func testThresholdCaptionAndStepperValue() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(CCPoolPane.thresholdCaption,
+                       "Below 100 %, new sessions start on an account under this share when one is; nothing is paused.")
+        XCTAssertTrue(viewStrings(r.model).contains { $0.contains(CCPoolPane.thresholdCaption) }, "the caption is shown")
+        XCTAssertFalse(viewStrings(r.model).contains { $0.contains("moves new requests to another account") }, "the old caption is gone")
+        XCTAssertEqual(CCPoolPane.thresholdValue(80), "80 percent")
+        XCTAssertEqual(CCPoolPane.thresholdValue(100), "100 percent")
+    }
+
     func testCCPoolPaneCopy() async throws {
         let r = try ccpoolPaneRig()
         XCTAssertTrue(CCPoolPane.mintHint.contains("claude setup-token"))

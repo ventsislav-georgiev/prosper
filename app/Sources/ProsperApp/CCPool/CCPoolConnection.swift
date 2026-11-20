@@ -446,17 +446,28 @@ final class CCPoolConnection: @unchecked Sendable {
             routed = "pick"
         } else {
             var followed = false
+            // #1677: the pane's "Move off an account at" steers new placements only; exhaustion stays at 1.0.
+            let share = config.exhaustedThreshold
+            var skipped: String?
             picked = store.mutate { st -> String? in
+                var exclude = tried.union(st.refusedLabels)
                 var (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model,
-                                                       exclude: tried.union(st.refusedLabels), now: now)
+                                                       exclude: exclude, now: now, share: share)
                 if name == nil, lastResort(st) {
                     anyway = true
-                    (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: tried, now: now)
+                    exclude = tried
+                    (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: exclude, now: now, share: share)
+                }
+                // The account a placement at 1.0 would have taken, when the share moved it elsewhere (only below 1.0).
+                if share < CCPoolCore.exhaustedDefault, !f, let name,
+                   let plain = CCPoolCore.place(st, model: model, exclude: exclude, now: now), plain != name {
+                    skipped = plain
                 }
                 st = next
                 followed = f
                 return name
             }
+            if let skipped, let picked { log.note(skipped, "over share; new conversation placed on \(picked)") }
             // #1262: the move does not move `current` (Python's move calls place(), not choose()'s remember_last).
             followedPin = followed || last != nil
             routed = followed ? "pin" : "place"
@@ -549,7 +560,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
         if response.statusCode == 429 {
             ex.shouldRetry = CCPoolThrottleShape.shouldRetry(headers["x-should-retry"])
-            var spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
+            var spent = CCPoolCore.exhaustedClaims(limits, now: now)
             let retry = headers["retry-after"]
             let wait = CCPoolCore.retryAfterSeconds(retry)
             let detail = limits.isEmpty ? "NO unified rate-limit headers"
@@ -605,7 +616,7 @@ final class CCPoolConnection: @unchecked Sendable {
                     + "attempt=\(attempts); retry=\(throttleRetries); outcome=\(word)")
             }
             // Retire before streaming: the body can take a minute to drain (B15).
-            let spent = CCPoolCore.exhaustedClaims(limits, now: now, threshold: config.exhaustedThreshold)
+            let spent = CCPoolCore.exhaustedClaims(limits, now: now)
             let retired = store.mutate { st -> String? in
                 guard let owner = st.label(ofID: id) else { return nil }
                 st.recordResets(owner, limits: limits, now: now)

@@ -215,6 +215,22 @@ final class CCPoolFollowUpTests: XCTestCase {
         XCTAssertTrue((h["sessions"] as? [String: String]) == [:], "no pins: an empty map: \(h)")
     }
 
+    // QA R1673 n22: the health map holds the 64 most recently seen sessions, so it stays under the probe's 64 KiB read.
+    func testSessionLabelsKeepTheMostRecentSixtyFour() {
+        let now: Double = 1_800_000_000
+        var st = CCPoolState(current: "a", order: ["a"], accounts: ["a": .init(id: "id-a")])
+        for n in 0..<70 { st.pins["sess-\(n)/"] = .init(account: "a", seen: now - 1000 + Double(n)) }
+        let got = st.sessionLabels(now: now)
+        XCTAssertEqual(CCPoolState.sessionLabelsCap, 64)
+        XCTAssertEqual(got.count, 64)
+        XCTAssertEqual(Set(got.keys), Set((6..<70).map { "sess-\($0)" }), "the oldest 6 are dropped")
+        st.pins.removeValue(forKey: "sess-69/")
+        st.pins.removeValue(forKey: "sess-68/")
+        XCTAssertEqual(st.sessionLabels(now: now).count, 64, "68 sessions: still 64")
+        st.pins = st.pins.filter { $0.key < "sess-3" }   // sess-0..2 and sess-10..29: 23
+        XCTAssertEqual(st.sessionLabels(now: now).count, 23, "under the cap: every live session")
+    }
+
     // QA #734 INFO-4: a state.json that exists but cannot be read is never replaced, and account
     // changes are refused with the reason.
     func testCCPoolUnreadableStateIsNeverOverwritten() throws {
