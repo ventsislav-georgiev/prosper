@@ -104,7 +104,7 @@ final class PVCommand: ObservableObject {
         rc=0
         for f in "$@"; do
           if [ "$f" = - ]; then
-            d=$(mktemp -d "${TMPDIR:-/tmp}/pv.XXXXXX") || exit 1
+            d=$(mktemp -d "${TMPDIR:-/tmp}/prosper.XXXXXX") || exit 1
             f=$d/stdin.txt
             cat > "$f" || exit 1
           fi

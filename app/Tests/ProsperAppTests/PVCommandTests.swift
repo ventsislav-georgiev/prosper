@@ -77,7 +77,7 @@ final class PVCommandTests: XCTestCase {
             XCTAssertEqual(lines.first, "\(a)[\(cwd.path)/a b.txt]", sh)
             XCTAssertTrue(lines.contains("\(a)[/abs/x.md]"), sh)
             XCTAssertEqual(lines.last, "\(a)[\(cwd.path)/-it's.md]", sh)
-            let piped = try XCTUnwrap(lines.first { $0.hasPrefix("\(a)[\(tmp.path)/pv.") }, sh)
+            let piped = try XCTUnwrap(lines.first { $0.hasPrefix("\(a)[\(tmp.path)/prosper.") }, sh)
             let path = String(piped.dropFirst(a.count + 1).dropLast())
             XCTAssertTrue(path.hasSuffix("/stdin.txt"), sh)
             XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), "hello\n", sh)

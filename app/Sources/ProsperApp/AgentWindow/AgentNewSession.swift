@@ -107,27 +107,6 @@ enum AgentNewSession {
     /// #847 S9: the sidekick's name: the main's (typed or automatic) and the Settings suffix.
     static func sidekickName(_ main: String, suffix: String) -> String { main + suffix }
 
-    /// #1214: the next member of group `stem` (folded): a main "stem-N" or a sidekick "stem<suffix>-N", N one past the
-    /// highest number that role uses in `taken` (live, History and claimed names, case-folded; the bare member is 1).
-    /// Never a gap: a lower free number may be an ended member's in History. nil (refused): a name past dch's room in
-    /// `dir` (a cut stem is another group, and dch would hash the name), one nameError refuses, or one the #1116 rule
-    /// does not read back into that group in that role.
-    static func groupName(stem: String, sidekick: Bool, suffix: String, taken: Set<String>, dir: String) -> String? {
-        let base = sidekick ? stem + suffix.lowercased() : stem
-        var used = Set<Int>()
-        for t in taken.map({ $0.lowercased() }) {
-            if t == base { used.insert(1); continue }
-            guard let d = AgentIsland.trailingDigits(t), d.digits.count <= 9,
-                  (d.rest.hasSuffix("-") ? d.rest.dropLast() : d.rest) == base, let n = Int(d.digits) else { continue }
-            used.insert(n)
-        }
-        let name = "\(base)-\((used.max() ?? 0) + 1)"
-        guard nameError(name, taken: taken, dir: dir) == nil else { return nil }
-        let keys = (taken.union([name])).map { AgentSessionKey(dir: dir, name: $0) }
-        let g = AgentIsland.groups(keys, suffix: suffix).first { $0.stem == stem }
-        return (sidekick ? g?.sidekicks : g?.mains)?.contains(name) == true ? name : nil
-    }
-
     /// #847 D4.3: "$name" replaced by the main session's name where the next character is not [A-Za-z0-9_]
     /// ("$names" stays). The only placeholder.
     static func render(_ template: String, name: String) -> String {

@@ -148,39 +148,6 @@ final class AgentNewSessionGroupTests: XCTestCase {
         }
     }
 
-    // MARK: The namer
-
-    /// A literal table: first extra main and sidekick, numbers with gaps (History's ended ones count), case-folded
-    /// names, a stem ending in a digit, a suffix ending in a digit, and names past dch's room: refused (nil), never cut.
-    func testGroupNameTable() {
-        let dir = "/tmp/dch-501"   // room 64
-        let narrow = "/Users/example-user/.config/prosper/dch-isolated-00001"   // 54 bytes: room 43
-        let a61 = String(repeating: "a", count: 61), a62 = String(repeating: "a", count: 62)
-        let n41 = String(repeating: "n", count: 41), n42 = String(repeating: "n", count: 42)
-        let rows: [(stem: String, sidekick: Bool, suffix: String, taken: Set<String>, dir: String, want: String?)] = [
-            ("sec", false, "-qa", ["sec", "sec-qa"], dir, "sec-2"),
-            ("sec", true, "-qa", ["sec", "sec-qa"], dir, "sec-qa-2"),
-            ("sec", false, "-qa", ["sec", "sec-qa", "sec-2", "sec-5", "sec-qa-3"], dir, "sec-6"),
-            ("sec", true, "-qa", ["sec", "sec-qa", "sec-2", "sec-5", "sec-qa-3"], dir, "sec-qa-4"),
-            ("sec", false, "-qa", ["Sec", "SEC-QA", "Sec-02", "sec3"], dir, "sec-4"),
-            ("api2", false, "-qa", ["api2", "api2-qa", "api23"], dir, "api2-2"),
-            ("api2", true, "-qa", ["api2", "api2-qa", "api2-qa7"], dir, "api2-qa-8"),
-            ("x", true, "-r2", ["x", "x-r2", "x-r2-3"], dir, "x-r2-4"),
-            (a61, false, "-qa", [a61, a61 + "-qa"], dir, a61 + "-2"),
-            (a62, false, "-qa", [a62, a62 + "-qa"], dir, a62 + "-2"),
-            (n41, false, "-qa", [n41, n41 + "-qa"], narrow, n41 + "-2"),
-            (n42, false, "-qa", [n42, n42 + "-qa"], narrow, nil),
-            ("sec", true, "", ["sec", "sec-qa"], dir, nil),
-        ]
-        let got = rows.map { AgentNewSession.groupName(stem: $0.stem, sidekick: $0.sidekick, suffix: $0.suffix, taken: $0.taken, dir: $0.dir) }
-        XCTAssertEqual(got, rows.map(\.want))
-        XCTAssertEqual(Set(got.compactMap { $0 }),
-                       Set(["sec-2", "sec-qa-2", "sec-6", "sec-qa-4", "sec-4", "api2-2", "api2-qa-8", "x-r2-4",
-                            a61 + "-2", a62 + "-2", n41 + "-2"]))
-        XCTAssertEqual(AgentNewSession.groupName(stem: a62 + "a", sidekick: false, suffix: "-qa", taken: [a62 + "a", a62 + "a-qa"], dir: dir),
-                       nil, "65 bytes: past the room of 64, refused (a cut stem is another group)")
-    }
-
     // MARK: The sidekick's first prompt names its main
 
     func testSidekickFirstPromptNamesTheSelectedMainElseTheFirst() throws {
