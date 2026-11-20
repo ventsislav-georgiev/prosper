@@ -19,6 +19,9 @@ struct DchCtlOps: Sendable {
     var agentTimeout: TimeInterval = 660
     /// #856: arms the timeout's timer; tests record it and fire it by hand.
     var after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after
+    /// #1680: waits `delay` s (serve's CTL_RETRY_MS) before the one rerun of a follow that was busy at its start; tests
+    /// record it and return at once. The wait ends early never: a cut or 0x34 during it is seen by the rerun.
+    var retryWait: @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     /// stdout + stderr of a non-follow verb.
     var cap = 8 << 20
     /// #1013: dch serve's STALL_MS (#201, serve.c:85 and :2262-2270@v1.73.0): a 0x31/0x32 the socket has not taken
@@ -65,6 +68,9 @@ enum DchCtl {
     static let longVerbs: Set<String> = ["--say", "--stop", "--revive", "--run"]
     /// dch's CTL_ARGV_MAX.
     static let argvMax = 1024
+    /// #1680: serve's CTL_RETRY_MS (serve.c:101@v1.99.0) and the stderr of a follow the master had no subscriber slot for.
+    static let retryDelay: TimeInterval = 1
+    static let busyText = Array("dch: busy\n".utf8)
 
     /// #1357 (P9): the first dch whose serve ctl_xray is `.xray`'s allowlist. #1247 ported rframe.c@v1.99.0 (flags, words,
     /// order of checks, --budget-ms, refOK's code points). Re-read at v1.78.0 (rframe.c:630-694): the same eleven flags,
@@ -418,6 +424,11 @@ final class DchCtlJob: @unchecked Sendable {
     /// The timeout's 0x33 goes here, so the timer holds nothing but a weak job (QA #688 F1). Set in run(), before the
     /// spawn: #1556's cut (cutTimeout) may come from another connection as soon as the pid is set.
     private var timeoutReply: (@Sendable (Data) -> Void)?
+    /// #1680 (under sendLock): the first run of a counted follow holds its stderr, at most busyText's length, until
+    /// stdout or other stderr shows it is not a busy start. `waiting` (under lock): busy, between the two runs.
+    private var hold = false
+    private var held: [UInt8] = []
+    private var waiting = false
 
     /// Ends the request once: true for the one caller that did. `running` (the timeout): only while
     /// dch is not yet reaped (one that exited in time ends with its own exit) and not cut by a 0x34
@@ -448,6 +459,8 @@ final class DchCtlJob: @unchecked Sendable {
     func cutTimeout() {
         sendLock.withLock {
             if end(.killGroup, running: true) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
+            // #1680: cut between a busy start and its rerun (serve: "cut while it waited: its 0x33 now"); the rerun then runs nothing.
+            else if lock.withLock({ waiting }), end(.none) { timeoutReply?(DchCtl.exitFrame(2, why: "timeout")) }
         }
     }
 
@@ -498,9 +511,13 @@ final class DchCtlJob: @unchecked Sendable {
     }
 
     /// Blocks its thread (never the connection's queue) until dch exits or is killed.
+    /// #1680: `holdBusy` (serve's ctl_hold, a counted follow's first run): when it ends with exit 1, no stdout and stderr
+    /// exactly "dch: busy\n" (the master's 4 subscriber slots full while the oldest is cut), nothing is sent, the job
+    /// stays open and this returns true: the caller waits retryDelay and runs it once more. Else false, as before.
+    @discardableResult
     func run(path: String, argv: [String], env: [String: String], cwd: String?, follow: Bool, cap: Int,
-             timeout: TimeInterval, grace: TimeInterval, after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after,
-             send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) {
+             holdBusy: Bool = false, timeout: TimeInterval, grace: TimeInterval, after: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void = DchCtl.after,
+             send: @escaping @Sendable (Data) -> Bool, reply: @escaping @Sendable (Data) -> Void) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = argv
@@ -517,13 +534,15 @@ final class DchCtlJob: @unchecked Sendable {
         var wake: [Int32] = [-1, -1]
         guard Darwin.pipe(&wake) == 0 else {
             if end(.none) { reply(DchControlOps.error("dch could not be run")) }
-            return
+            return false
         }
         defer { Darwin.close(wake[0]); Darwin.close(wake[1]) }
         // A closed connection keeps its ctlJob, and `reply` holds the connection: clear it, or the two hold each other.
-        defer { sendLock.withLock { timeoutReply = nil } }
+        // #1680: not while it waits for its rerun, which a cut in between needs.
+        var again = false
+        defer { if !again { sendLock.withLock { timeoutReply = nil } } }
         for fd in wake { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }   // no forkpty child inherits them
-        sendLock.withLock { timeoutReply = reply }
+        sendLock.withLock { timeoutReply = reply; hold = holdBusy; held = [] }
         let exited = DispatchSemaphore(value: 0), poke = wake[1]
         // Cleared once reaped: a late kill must not signal a recycled pid.
         p.terminationHandler = { [lock] _ in
@@ -534,16 +553,18 @@ final class DchCtlJob: @unchecked Sendable {
         }
         lock.lock()   // a cancel either sees the pid or stops the spawn
         if !stopping { self.grace = grace }   // QA #729 INFO-1: a stop that came first keeps its 2 s
-        guard !ended else { lock.unlock(); return }
+        waiting = false
+        guard !ended else { lock.unlock(); return false }
         if cancelled {   // a 0x34 that came before the spawn: nothing runs
             ended = true
             lock.unlock()
-            return reply(DchCtl.exitFrame(2, why: "cancel"))
+            reply(DchCtl.exitFrame(2, why: "cancel"))
+            return false
         }
         do { try p.run() } catch {
             lock.unlock()
             if end(.none) { reply(DchControlOps.error("dch could not be run")) }
-            return
+            return false
         }
         pid = p.processIdentifier
         lock.unlock()
@@ -556,7 +577,22 @@ final class DchCtlJob: @unchecked Sendable {
         exited.wait()
         let code = p.terminationReason == .uncaughtSignal ? 128 + p.terminationStatus : p.terminationStatus
         let frame = lock.withLock { cancelled } ? DchCtl.exitFrame(2, why: "cancel") : DchCtl.exitFrame(code)
-        sendLock.withLock { if end(.none) { reply(frame) } }
+        sendLock.withLock {
+            if hold {
+                hold = false
+                let live = lock.withLock { !ended && !cancelled }
+                if live, held == DchCtl.busyText, code == 1, p.terminationReason == .exit {
+                    held = []
+                    lock.withLock { waiting = true }
+                    again = true
+                    return
+                }
+                if live, !held.isEmpty { sent += held.count; _ = send(DchFrame.encode(DchFrame.ctlStderr, held)) }
+                held = []
+            }
+            if end(.none) { reply(frame) }
+        }
+        return again
     }
 
     /// #841 (QA #680 INFO-3): dch's stdout and stderr, each chunk as it comes (--say/--stop/--revive
@@ -595,6 +631,11 @@ final class DchCtlJob: @unchecked Sendable {
         sendLock.lock()
         defer { sendLock.unlock() }
         guard !lock.withLock({ ended || cancelled }) else { return }
+        if hold {
+            if type == DchFrame.ctlStderr, held.count + chunk.count <= DchCtl.busyText.count { held += chunk; return }
+            hold = false   // not a busy start: what was held goes first, in order
+            if !held.isEmpty { sent += held.count; _ = send(DchFrame.encode(DchFrame.ctlStderr, held)); held = [] }
+        }
         if !follow, sent + chunk.count > cap {
             if cap > sent { _ = send(DchFrame.encode(type, [UInt8](chunk.prefix(cap - sent)))) }
             sent = cap

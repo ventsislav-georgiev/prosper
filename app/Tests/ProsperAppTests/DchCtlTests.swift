@@ -562,6 +562,66 @@ final class DchCtlTests: XCTestCase {
         XCTAssertEqual(reg.count(new), 1)
     }
 
+    // MARK: - #1680: a counted follow busy at its start is run once more (serve's ctl_busy, serve.c:1538-1574@v1.99.0)
+
+    /// A fake dch that logs each run to $D/runs, then `body`; the rig's retry wait is recorded and returns at once.
+    private func busyRig(_ body: String) throws -> (rig: Rig, dir: URL, waits: Timers) {
+        let f = try fake("echo x >> \"$D/runs\"\n\(body)")
+        let r = rig(f.path), waits = Timers()
+        r.conn.ctl.xray = { true }
+        r.conn.ctl.retryWait = { waits.add($0, {}) }
+        return (r, f.dir, waits)
+    }
+
+    private func runs(_ dir: URL) -> Int {
+        ((try? String(contentsOf: dir.appendingPathComponent("runs"), encoding: .utf8)) ?? "").split(separator: "\n").count
+    }
+
+    /// The first run's whole output is "dch: busy", exit 1: nothing is sent, one wait of 1 s, one more run, whose
+    /// output goes out; 2 runs counted, the second not held.
+    func testABusyStartOfAnXrayFollowRunsOnceMoreAfterTheDelayAndSendsNothingOfTheFirst() throws {
+        let b = try busyRig("""
+            if [ "$(/usr/bin/wc -l < "$D/runs")" -lt 2 ]; then echo 'dch: busy' >&2; exit 1; fi
+            echo $$ > "$D/pid"; trap 'exit 0' TERM; printf hello; while :; do /bin/sleep 0.05; done
+            """)
+        send(b.rig, Self.ctl(["--xray", "api", "--follow", "--json"]))
+        XCTAssertTrue(wait(5) { bytes(b.rig, DchFrame.ctlStdout) == Data("hello".utf8) })
+        XCTAssertEqual(runs(b.dir), 2, "attempts: the first and one more")
+        XCTAssertEqual(b.waits.count, 1)
+        XCTAssertEqual(b.waits.delay(0), DchCtl.retryDelay)
+        XCTAssertEqual(bytes(b.rig, DchFrame.ctlStderr).count, 0, "the busy line was never sent")
+        XCTAssertEqual(finals(b.rig).count, 0, "no 0x33 of the first run")
+        b.rig.queue.sync { b.rig.conn.close() }
+        XCTAssertTrue(dead(pid(b.dir, "pid")))
+    }
+
+    /// Busy twice: never a third run (bounded, one wait); the second run's words go out with its exit 1.
+    func testABusyFollowThatIsBusyAgainEndsWithItsWordsAfterTwoRuns() throws {
+        let b = try busyRig("echo 'dch: busy' >&2; exit 1")
+        send(b.rig, Self.ctl(["--xray", "api", "--follow", "--json"]))
+        XCTAssertTrue(wait(5) { finals(b.rig).count == 1 })
+        XCTAssertEqual(runs(b.dir), 2, "attempts capped at two")
+        XCTAssertEqual(b.waits.count, 1, "one wait, no loop")
+        XCTAssertEqual(String(decoding: bytes(b.rig, DchFrame.ctlStderr), as: UTF8.self), "dch: busy\n")
+        XCTAssertEqual(Self.object(finals(b.rig).first) as NSDictionary, ["exit": 1] as NSDictionary)
+    }
+
+    /// Not a busy start: a plain --follow is never held or rerun; stdout before the busy words, other words, or another
+    /// exit are sent as they came. One run each.
+    func testOnlyACountedFollowWithNothingButTheBusyWordsIsRerun() throws {
+        for (argv, body) in [(["--follow", "api"], "echo 'dch: busy' >&2; exit 1"),
+                             (["--xray", "api", "--follow", "--json"], "printf out; echo 'dch: busy' >&2; exit 1"),
+                             (["--xray", "api", "--follow", "--json"], "echo 'dch: gone' >&2; exit 1"),
+                             (["--xray", "api", "--follow", "--json"], "echo 'dch: busy' >&2; exit 3")] {
+            let b = try busyRig(body)
+            send(b.rig, Self.ctl(argv))
+            XCTAssertTrue(wait(5) { finals(b.rig).count == 1 }, body)
+            XCTAssertEqual(runs(b.dir), 1, body)
+            XCTAssertEqual(b.waits.count, 0, body)
+            XCTAssertTrue(bytes(b.rig, DchFrame.ctlStderr).count >= 10, "its words went out: \(body)")
+        }
+    }
+
     /// An unstubbed test never reaches a real dch: under XCTest the default path is a test's override or nil.
     func testTheDefaultPathRunsNoDchUnderXCTest() {
         XCTAssertNil(DchCommand.dchPathOverride)

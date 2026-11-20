@@ -781,9 +781,16 @@ final class DchConnection: @unchecked Sendable {
                 let key = DchFollows.key(device: device, dir: DchCommand.socketDir(env: env), name: argv.dropFirst().first ?? "")
                 for old in follows.add(job, key) { old.cutTimeout() }
             }
-            job.run(path: path, argv: argv, env: env, cwd: cwd, follow: follow, cap: ctl.cap,
-                    timeout: timeout, grace: ctl.grace(of: argv[0]), after: ctl.after,
-                    send: { self.sendStreamed($0, stall: ctl.stall, end: end) }, reply: { self.ctlFinal($0) })
+            // #1680, serve's ctl_busy (serve.c:1538-1574@v1.99.0): a counted follow busy at its start (nothing out but
+            // "dch: busy", exit 1) runs once more DchCtl.retryDelay later, nothing sent, its slot kept; never a third run.
+            for attempt in 1...2 {
+                let busy = job.run(path: path, argv: argv, env: env, cwd: cwd, follow: follow, cap: ctl.cap,
+                                   holdBusy: counted && attempt == 1, timeout: timeout, grace: ctl.grace(of: argv[0]),
+                                   after: ctl.after, send: { self.sendStreamed($0, stall: ctl.stall, end: end) },
+                                   reply: { self.ctlFinal($0) })
+                guard busy else { break }
+                ctl.retryWait(DchCtl.retryDelay)
+            }
             if counted { follows.remove(job) }   // ended (reaped, or never ran): its slot is free
             // #1013: reaped: the slot is free. Only this job's: a 0x33 that found it reaped freed it, and a newer one may hold it.
             self.queue.async { if self.ctlJob === job { self.ctlJob = nil } }

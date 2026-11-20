@@ -2120,6 +2120,8 @@ tag from the now-released section and put it on the new top draft.
 - Clipboard history no longer keeps reading the clipboard every second when macOS denies Prosper
   access to it, and a snippet or autocomplete paste no longer leaves its text on your clipboard when
   Prosper could not read what was there before. (#1020)
+- Remote Terminal's live view (xray follow) now retries once, a second later, when dch is
+  momentarily out of subscriber slots, instead of ending with 'dch: busy'. (#1680)
 
 ## v2.174.0
 
