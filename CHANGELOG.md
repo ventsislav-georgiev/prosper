@@ -2283,6 +2283,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: pairs are gone: no Pairs setting, no Stop both / Resume both, no sidekick box or
   sidekick prompt in New session, and no Control-Tab "Next in Group" / "Previous in Group"; session
   groups replace them. (#1820)
+- Agents can now read and change Prosper's settings through the control channel (settings.schema,
+  settings.get, settings.set): every change is checked first, shows the Undo notice and is logged,
+  and secrets such as keys and tokens are never listed or readable. (#1810)
 
 ## v2.174.0
 

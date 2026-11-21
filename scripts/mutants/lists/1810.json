@@ -1,0 +1,69 @@
+{
+ "entry": "1810",
+ "filter": "ControlSettingsTests",
+ "mutants": [
+  {
+   "name": "range",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "guard n.isFinite, r.contains(n) else",
+   "new": "guard n.isFinite else",
+   "expect": "killed"
+  },
+  {
+   "name": "whole",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "guard !integer || n == n.rounded() else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "enum",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "guard allowed.contains(s) else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "readonly",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "guard s.set != nil else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "check-then-write",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "            let v = try s.checked(values[key]!)",
+   "new": "            s.set?(values[key]!); let v = try s.checked(values[key]!)",
+   "expect": "killed"
+  },
+  {
+   "name": "undo",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "for (s, _, old) in done.reversed() { s.set?(old) }",
+   "new": "for (s, new, _) in done { s.set?(new) }",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-setting",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "            .bool(\"suppressOnTypo\", \"Don't complete when a typo is suspected\", \"Completions\", false,\n                  get: { Preferences.suppressOnTypo }, set: { Preferences.suppressOnTypo = $0 }),\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "default-drift",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "\"emojiGender\", \"Emoji gender\", \"Completions\", EmojiGender.male,",
+   "new": "\"emojiGender\", \"Emoji gender\", \"Completions\", EmojiGender.neutral,",
+   "expect": "killed"
+  },
+  {
+   "name": "wrong-key",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": ".bool(\"useOCRContext\",",
+   "new": ".bool(\"useOCR\",",
+   "expect": "killed"
+  }
+ ]
+}
