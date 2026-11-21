@@ -5,7 +5,10 @@ import Foundation
 struct ControlChange {
     var summary: String
     var result: ControlJSON = .bool(true)
-    var undo: @MainActor () -> Void
+    /// The notice reads "Agent <verb>: <summary>"; "changed" unless a change says otherwise (actions.run says "ran").
+    var verb = "changed"
+    /// nil = no known inverse: the notice has no Undo button and the log marks the entry not undoable.
+    var undo: (@MainActor () -> Void)? = nil
 }
 
 extension ControlCommand {
@@ -16,7 +19,7 @@ extension ControlCommand {
                        apply: @escaping @MainActor @Sendable (_ registry: ControlRegistry, _ args: [String: ControlJSON]) throws -> ControlChange) -> ControlCommand {
         ControlCommand(name: name, summary: summary, args: args, mutates: true) { reg, a in
             let c = try apply(reg, a)
-            reg.changes.record(command: name, summary: c.summary, undo: c.undo)
+            reg.changes.record(command: name, summary: c.summary, verb: c.verb, undo: c.undo)
             return c.result
         }
     }
@@ -30,6 +33,7 @@ final class ControlChanges {
     nonisolated init() {}
 
     static let capacity = 100
+    static let summaryMax = 200
     static let offError = "agent control is off in Settings"
 
     struct Entry: Equatable {
@@ -38,6 +42,7 @@ final class ControlChanges {
         let command: String
         let summary: String
         var undone = false
+        var undoable = true
     }
 
     private(set) var entries: [Entry] = []
@@ -45,17 +50,20 @@ final class ControlChanges {
     private var nextID = 0
 
     /// Seam: shows the notice (text, undo). The real panel, never under XCTest; rows swap in a recorder.
-    var present: @MainActor (_ text: String, _ undo: @escaping @MainActor () -> Void) -> Void = { text, undo in
+    var present: @MainActor (_ text: String, _ undo: (@MainActor () -> Void)?) -> Void = { text, undo in
         guard NSClassFromString("XCTestCase") == nil else { return }
         ControlNotice.shared.show(text, undo: undo)
     }
 
-    static func noticeText(_ summary: String) -> String { "Agent changed: \(summary)" }
+    static func noticeText(_ summary: String, verb: String = "changed") -> String { "Agent \(verb): \(summary)" }
 
     @discardableResult
-    func record(command: String, summary: String, undo: @escaping @MainActor () -> Void) -> Entry {
+    func record(command: String, summary: String, verb: String = "changed", undo: (@MainActor () -> Void)? = nil) -> Entry {
         nextID += 1
-        let e = Entry(id: nextID, date: Date(), command: command, summary: summary)
+        // QA n123: a summary can carry agent text; clean it once here so the notice and `ctl log` never show bidi or control
+        // characters or a line that pushes the real action out of view.
+        let summary = OutsideText.shown(summary, max: Self.summaryMax)
+        let e = Entry(id: nextID, date: Date(), command: command, summary: summary, undoable: undo != nil)
         entries.append(e)
         undos[e.id] = undo
         if entries.count > Self.capacity {
@@ -63,7 +71,9 @@ final class ControlChanges {
             entries.removeFirst(entries.count - Self.capacity)
         }
         let id = e.id
-        present(Self.noticeText(summary)) { [weak self] in _ = self?.undo(id) }
+        var click: (@MainActor () -> Void)?
+        if undo != nil { click = { [weak self] in _ = self?.undo(id) } }
+        present(Self.noticeText(summary, verb: verb), click)
         return e
     }
 
@@ -76,12 +86,12 @@ final class ControlChanges {
         return true
     }
 
-    /// `ctl log`: {"changes": [{id, time, command, summary, undone}, ...]}, oldest first.
+    /// `ctl log`: {"changes": [{id, time, command, summary, undone, undoable}, ...]}, oldest first.
     var logJSON: ControlJSON {
         let f = ISO8601DateFormatter()
         return .object(["changes": .array(entries.map {
             .object(["id": .number(Double($0.id)), "time": .string(f.string(from: $0.date)), "command": .string($0.command),
-                     "summary": .string($0.summary), "undone": .bool($0.undone)])
+                     "summary": .string($0.summary), "undone": .bool($0.undone), "undoable": .bool($0.undoable)])
         })])
     }
 }
@@ -100,14 +110,16 @@ final class ControlNotice: NSObject {
 
     private var panel: NSPanel?
     private var label: NSTextField?
+    private var undoButton: NSButton?
     private var hide: DispatchWorkItem?
     private var pendingUndo: (@MainActor () -> Void)?
 
-    func show(_ text: String, undo: @escaping @MainActor () -> Void) {
+    func show(_ text: String, undo: (@MainActor () -> Void)?) {
         let p = panel ?? makePanel()
         panel = p
         pendingUndo = undo
         label?.stringValue = text
+        undoButton?.isHidden = undo == nil
         let w: CGFloat = 360, h: CGFloat = 48
         if let f = NSScreen.main?.visibleFrame {
             p.setFrame(NSRect(x: f.maxX - w - 16, y: f.maxY - h - 16, width: w, height: h), display: true)
@@ -163,6 +175,7 @@ final class ControlNotice: NSObject {
         bg.addSubview(button)
         p.contentView?.addSubview(bg)
         label = text
+        undoButton = button
         return p
     }
 }

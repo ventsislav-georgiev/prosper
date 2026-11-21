@@ -2277,6 +2277,9 @@ tag from the now-released section and put it on the new top draft.
 - Fixed typing sometimes going to another app after quickly closing and reopening the Agent Sessions
   window: when macOS declines to bring Prosper forward, Prosper now brings itself to the front so
   the keyboard reaches the window you see. (#1821)
+- Agent control: an action an agent runs shows "Agent ran: <action>" with no Undo button (a fired
+  action cannot be undone), and every agent notice and `ctl log` entry drops hidden and direction-
+  flipping characters and is cut to 200 characters. (#1825)
 
 ## v2.174.0
 

@@ -149,6 +149,20 @@ final class ControlActionsTests: XCTestCase {
         XCTAssertEqual(try ControlActions.run(id: "extensionItem\u{1}fake.pick\u{1}Alpha", input: nil), "Fake Tools \u{203A} Alpha")
     }
 
+    func testRunNoticeReadsAgentRanAndHasNoUndo() async throws {
+        useRecorder(try fakeRegistry())
+        var reg = registry()
+        let changes = ControlChanges()
+        var notices: [(String, Bool)] = []
+        changes.present = { text, undo in notices.append((text, undo != nil)) }
+        reg.changes = changes
+        let r = await call(reg, "actions.run", ["id": .string("extensionItem\u{1}fake.pick\u{1}Alpha")])
+        XCTAssertTrue(r.ok, "\(r)")
+        XCTAssertEqual(notices.map(\.0), ["Agent ran: Fake Tools \u{203A} Alpha"])
+        XCTAssertEqual(notices.map(\.1), [false])
+        XCTAssertEqual(changes.entries.last?.undoable, false)
+    }
+
     func testUnknownIdIsAnError() async throws {
         useRecorder(try fakeRegistry())
         let reg = registry()

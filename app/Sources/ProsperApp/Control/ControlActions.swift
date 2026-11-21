@@ -134,8 +134,8 @@ extension ControlRegistry {
             var input: String?
             if case .string(let s)? = args["input"] { input = s }
             let label = try ControlActions.run(id: id, input: input)
-            // An action has no known inverse, so its undo does nothing.
-            return ControlChange(summary: "ran \(label)") {}
+            // An action has no known inverse: no undo, so no Undo button; the notice reads "Agent ran: <label>".
+            return ControlChange(summary: label, verb: "ran", undo: nil)
         })
     }
 }

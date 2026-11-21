@@ -11,7 +11,7 @@ final class ControlNoticeTests: XCTestCase {
 
     @MainActor private final class Box { var color = "red" }
 
-    private struct Shown { let text: String; let undo: @MainActor () -> Void }
+    private struct Shown { let text: String; let undo: (@MainActor () -> Void)? }
 
     private var shown: [Shown] = []
     private let box = Box()
@@ -59,15 +59,45 @@ final class ControlNoticeTests: XCTestCase {
         XCTAssertEqual(log.last?["summary"], .string("color to Royal Purple"))
         XCTAssertEqual(log.last?["undone"], .bool(false))
 
-        shown.last?.undo()
+        XCTAssertEqual(log.last?["undoable"], .bool(true))
+        XCTAssertTrue(shown.last?.undo != nil)
+
+        shown.last?.undo?()
         XCTAssertEqual(box.color, "red")
         log = await logChanges(reg)
         XCTAssertEqual(log.last?["undone"], .bool(true))
         // A second click (or a stale notice) never runs the inverse again.
         box.color = "green"
-        shown.last?.undo()
+        shown.last?.undo?()
         XCTAssertEqual(box.color, "green")
         XCTAssertEqual(reg.changes.undo(1), false)
+    }
+
+    func testAChangeWithNoInverseHasNoUndoAndTheLogSaysNotUndoable() async {
+        var reg = registry()
+        reg.register(.change(name: "fire", summary: "fire it") { _, _ in ControlChange(summary: "fired it", verb: "ran") })
+        let r = await call(reg, #"{"cmd":"fire"}"#)
+        XCTAssertTrue(r.ok, "\(r)")
+        XCTAssertEqual(shown.map(\.text), ["Agent ran: fired it"])
+        XCTAssertTrue(shown.last?.undo == nil, "no inverse: the notice model gets no undo, so the panel hides Undo")
+        let log = await logChanges(reg)
+        XCTAssertEqual(log.last?["undoable"], .bool(false))
+        XCTAssertEqual(log.last?["undone"], .bool(false))
+        XCTAssertEqual(reg.changes.undo(1), false, "the entry has no undo slot to call")
+        XCTAssertEqual(reg.changes.entries.last?.undone, false)
+    }
+
+    func testAHostileSummaryIsCleanedAndCappedInTheNoticeAndTheLog() async {
+        var reg = registry()
+        let hostile = "ok\u{202E}evil\nline\u{0007}two" + String(repeating: "x", count: 10_000)
+        reg.register(.change(name: "say", summary: "say it") { _, _ in ControlChange(summary: hostile) })
+        _ = await call(reg, #"{"cmd":"say"}"#)
+        let want = OutsideText.shown(hostile, max: ControlChanges.summaryMax)
+        XCTAssertEqual(want.count, ControlChanges.summaryMax)
+        XCTAssertTrue(want.hasPrefix("okevillinetwoxxx") && want.hasSuffix("\u{2026}"))
+        XCTAssertEqual(shown.map(\.text), ["Agent changed: " + want])
+        let log = await logChanges(reg)
+        XCTAssertEqual(log.last?["summary"], .string(want))
     }
 
     func testAFailedChangeIsNotLoggedOrAnnounced() async {
@@ -137,5 +167,6 @@ final class ControlNoticeTests: XCTestCase {
         XCTAssertFalse(panel.isVisible)
         XCTAssertEqual(ControlNotice.visibleSeconds, 6)
         XCTAssertEqual(ControlChanges.noticeText("theme to Royal Purple"), "Agent changed: theme to Royal Purple")
+        XCTAssertEqual(ControlChanges.noticeText("x", verb: "ran"), "Agent ran: x")
     }
 }

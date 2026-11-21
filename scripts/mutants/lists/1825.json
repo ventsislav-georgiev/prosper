@@ -1,0 +1,41 @@
+{
+ "entry": "1825",
+ "filter": "ControlNoticeTests|ControlActionsTests",
+ "mutants": [
+  {
+   "name": "optional-undo-always-present",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "summary: summary, undoable: undo != nil)",
+   "new": "summary: summary, undoable: true)",
+   "expect": "killed"
+  },
+  {
+   "name": "notice-gets-undo-when-nil",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "if undo != nil { click =",
+   "new": "if true { click =",
+   "expect": "killed"
+  },
+  {
+   "name": "verb-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "noticeText(summary, verb: verb)",
+   "new": "noticeText(summary)",
+   "expect": "killed"
+  },
+  {
+   "name": "actions-run-keeps-undo",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "verb: \"ran\", undo: nil)",
+   "new": "verb: \"ran\") {}",
+   "expect": "killed"
+  },
+  {
+   "name": "summary-not-cleaned",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "let summary = OutsideText.shown(summary, max: Self.summaryMax)",
+   "new": "let summary = summary",
+   "expect": "killed"
+  }
+ ]
+}

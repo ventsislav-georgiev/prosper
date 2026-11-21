@@ -26,15 +26,15 @@
   {
    "name": "no-record",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "reg.changes.record(command: name, summary: c.summary, undo: c.undo)",
+   "old": "reg.changes.record(command: name, summary: c.summary, verb: c.verb, undo: c.undo)",
    "new": "_ = c",
    "expect": "killed"
   },
   {
    "name": "no-notice",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "present(Self.noticeText(summary)) { [weak self] in _ = self?.undo(id) }",
-   "new": "_ = id",
+   "old": "present(Self.noticeText(summary, verb: verb), click)",
+   "new": "_ = (id, click)",
    "expect": "killed"
   },
   {
