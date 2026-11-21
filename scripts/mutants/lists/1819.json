@@ -1,0 +1,41 @@
+{
+ "entry": "1819",
+ "filter": "ControlChannelTests",
+ "mutants": [
+  {
+   "name": "depth-check-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "case .success(let line) where ControlDepth.exceeds(line):",
+   "new": "case .success(let line) where false && ControlDepth.exceeds(line):",
+   "expect": "killed"
+  },
+  {
+   "name": "depth-counts-in-strings",
+   "file": "app/Sources/ProsperApp/Control/ControlDepth.swift",
+   "old": "            if inString {\n",
+   "new": "            if false && inString {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "depth-ignores-escapes",
+   "file": "app/Sources/ProsperApp/Control/ControlDepth.swift",
+   "old": "if escaped { escaped = false } else if b == UInt8(ascii: \"\\\\\") { escaped = true } else ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "cli-depth-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlCLI.swift",
+   "old": "guard !ControlDepth.exceeds(rest[1].utf8, limit: ControlDepth.limit - 1) else {",
+   "new": "guard true || !ControlDepth.exceeds(rest[1].utf8, limit: ControlDepth.limit - 1) else {",
+   "expect": "killed"
+  },
+  {
+   "name": "socket-bound-at-final-path",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "Self.withUnixAddr(tmp, { Darwin.bind(s, $0, $1) }) == 0 else {",
+   "new": "Self.withUnixAddr(path, { Darwin.bind(s, $0, $1) }) == 0 else {",
+   "expect": "killed"
+  }
+ ]
+}

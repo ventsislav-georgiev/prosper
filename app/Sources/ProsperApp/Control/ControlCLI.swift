@@ -33,6 +33,10 @@ enum ControlCLI {
         let rest = Array(args.dropFirst())
         if !rest.isEmpty {
             guard rest.count == 2, rest[0] == "--json" else { return .failure(ControlError(usage)) }
+            // The args sit one level inside the request object, which the server bounds as a whole.
+            guard !ControlDepth.exceeds(rest[1].utf8, limit: ControlDepth.limit - 1) else {
+                return .failure(ControlError("--json is nested deeper than \(ControlDepth.limit - 1) levels"))
+            }
             guard case .object(let o)? = try? JSONDecoder().decode(ControlJSON.self, from: Data(rest[1].utf8)) else {
                 return .failure(ControlError("--json must be a JSON object, e.g. --json '{\"name\": \"api\"}'"))
             }

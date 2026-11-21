@@ -208,6 +208,86 @@ final class ControlChannelTests: XCTestCase {
         XCTAssertEqual(down.code, 2)
         XCTAssertTrue(down.stderr?.contains("not running") == true, String(describing: down.stderr))
     }
+
+    // MARK: - #1819 nesting bound and atomic socket replace
+
+    /// A registry whose "echo" takes an optional array `a` and string `s`, so depth rows that pass answer ok.
+    private func echoRegistry() -> ControlRegistry {
+        var reg = ControlRegistry.standard()
+        reg.register(ControlCommand(name: "echo", summary: "e", args: ["a": ControlArg(type: "array"), "s": ControlArg(type: "string")],
+                                    mutates: false) { _, _ in .bool(true) })
+        return reg
+    }
+
+    /// A request line nested exactly `depth` levels: the request object, its args object, then `depth - 2` arrays.
+    private func nested(_ depth: Int) -> String {
+        #"{"cmd":"echo","args":{"a":"# + String(repeating: "[", count: depth - 2) + String(repeating: "]", count: depth - 2) + "}}"
+    }
+
+    func testADeeplyNestedRequestGetsAnErrorReplyAndTheServerStillAnswers() async {
+        let s = startServer(echoRegistry())
+        let line = nested(10_000)
+        XCTAssertLessThan(line.utf8.count, ControlServer.maxRequest, "must reach the depth check, not the size cap")
+        let deep = await send(s.path, line)
+        XCTAssertEqual(deep?.ok, false)
+        XCTAssertEqual(deep?.error, ControlDepth.message)
+        let ping = await send(s.path, #"{"cmd":"ping"}"#)
+        XCTAssertEqual(ping?.result, .string("pong"))
+    }
+
+    func testDepth32PassesAndDepth33IsRefused() async {
+        XCTAssertFalse(ControlDepth.exceeds(Data(nested(32).utf8)))
+        XCTAssertTrue(ControlDepth.exceeds(Data(nested(33).utf8)))
+        let s = startServer(echoRegistry())
+        let ok = await send(s.path, nested(32))
+        XCTAssertEqual(ok?.result, .bool(true), String(describing: ok))
+        let refused = await send(s.path, nested(33))
+        XCTAssertEqual(refused?.error, ControlDepth.message)
+    }
+
+    func testBracketsInsideAStringDoNotCount() async {
+        // The escaped quote keeps the scan inside the string; a scan that ignores escapes would count all 80 brackets.
+        let text = "\\\"" + String(repeating: "[{", count: 40)  // backslash, quote, then the brackets
+        let line = #"{"cmd":"echo","args":{"s":""# + text + #""}}"#
+        XCTAssertFalse(ControlDepth.exceeds(Data(line.utf8)))
+        XCTAssertFalse(ControlDepth.exceeds(Data(#"]]]]"#.utf8) + Data(nested(32).utf8)), "stray closers must not buy depth")
+        XCTAssertTrue(ControlDepth.exceeds(Data(#"]]]]"#.utf8) + Data(nested(33).utf8)), "stray closers must not buy depth")
+        let s = startServer(echoRegistry())
+        let r = await send(s.path, line)
+        XCTAssertEqual(r?.result, .bool(true), String(describing: r))
+    }
+
+    func testCLIRefusesADeepJSONArg() async throws {
+        func args(_ depth: Int) -> String { #"{"a":"# + String(repeating: "[", count: depth - 1) + String(repeating: "]", count: depth - 1) + "}" }
+        let deep = ControlCLI.parse(["echo", "--json", args(10_000)])
+        guard case .failure(let e) = deep else { return XCTFail("a 10000-deep --json was accepted") }
+        XCTAssertTrue(e.message.contains("nested deeper"), e.message)
+        XCTAssertThrowsError(try ControlCLI.parse(["echo", "--json", args(32)]).get())
+        // 31 levels of args are 32 in the request line: the deepest the server takes.
+        let line = try ControlCLI.parse(["echo", "--json", args(31)]).get()
+        XCTAssertFalse(ControlDepth.exceeds(line))
+        XCTAssertTrue(ControlDepth.exceeds(line, limit: ControlDepth.limit - 1))
+        let s = startServer(echoRegistry())
+        let out = await cli(["echo", "--json", args(31)], s.path)
+        XCTAssertEqual(out.code, 0, String(describing: out))
+    }
+
+    func testTheSocketIsSwappedInListeningAndOwnerOnlyWithNoTempLeft() async throws {
+        // A leftover regular file at the path (not a socket) is replaced in one rename.
+        let dir = tempDir("ctl")
+        let path = dir.appendingPathComponent("c.sock").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: Data("old".utf8)))
+        let s = ControlServer(path: path)
+        XCTAssertTrue(s.start())
+        addTeardownBlock { s.stop() }
+        var st = stat()
+        XCTAssertEqual(lstat(path, &st), 0)
+        XCTAssertEqual(st.st_mode & S_IFMT, S_IFSOCK)
+        XCTAssertEqual(st.st_mode & 0o777, 0o600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["c.sock"], "the temp name was left behind")
+        let r = await send(path, #"{"cmd":"ping"}"#)
+        XCTAssertEqual(r?.ok, true)
+    }
 }
 
 private extension ControlJSON {

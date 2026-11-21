@@ -55,6 +55,8 @@ final class ControlServer: @unchecked Sendable {
 
     /// Bind and listen. False when the path is too long, a live listener already answers there (another Prosper),
     /// or the socket cannot be made. A stale socket file (nothing answers) is replaced.
+    /// #1819: the listener is bound, chmodded and listening under a temp name in the same dir first, then renamed over
+    /// `path` in one step, so `path` is never a socket with the default mode and never missing between two starters.
     func start() -> Bool {
         guard lock.withLock({ source == nil }), Self.fitsUnixAddr(path) else { return false }
         let dir = (path as NSString).deletingLastPathComponent
@@ -63,19 +65,20 @@ final class ControlServer: @unchecked Sendable {
             Darwin.close(live)
             return false
         }
-        unlink(path)
+        let tmp = "\(dir)/.ctl-\(getpid())-\(UInt16.random(in: 0...UInt16.max))"
+        guard Self.fitsUnixAddr(tmp) else { return false }
         let s = socket(AF_UNIX, SOCK_STREAM, 0)
         guard s >= 0 else { return false }
         let fl = fcntl(s, F_GETFL)
         guard Self.configure(s), fl >= 0, fcntl(s, F_SETFL, fl | O_NONBLOCK) == 0,
-              Self.withUnixAddr(path, { Darwin.bind(s, $0, $1) }) == 0 else {
+              Self.withUnixAddr(tmp, { Darwin.bind(s, $0, $1) }) == 0 else {
             Darwin.close(s)
             return false
         }
         // The peer uid check below is the real gate; the mode keeps other users from even connecting.
-        guard chmod(path, 0o600) == 0, listen(s, 16) == 0 else {
+        guard chmod(tmp, 0o600) == 0, listen(s, 16) == 0, rename(tmp, path) == 0 else {
             Darwin.close(s)
-            unlink(path)
+            unlink(tmp)
             return false
         }
         let src = DispatchSource.makeReadSource(fileDescriptor: s, queue: queue)
@@ -125,6 +128,9 @@ final class ControlServer: @unchecked Sendable {
         switch readRequest(c) {
         case .failure(let e):
             Self.writeAll(c, ControlReply.failure(e.message).line)
+            Darwin.close(c)
+        case .success(let line) where ControlDepth.exceeds(line):
+            Self.writeAll(c, ControlReply.failure(ControlDepth.message).line)
             Darwin.close(c)
         case .success(let line):
             let registry = registry

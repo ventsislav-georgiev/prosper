@@ -26,8 +26,8 @@
   {
    "name": "mode-not-0600",
    "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
-   "old": "guard chmod(path, 0o600) == 0,",
-   "new": "guard chmod(path, 0o666) == 0,",
+   "old": "guard chmod(tmp, 0o600) == 0,",
+   "new": "guard chmod(tmp, 0o666) == 0,",
    "expect": "killed"
   },
   {
