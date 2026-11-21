@@ -1435,8 +1435,9 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.140.0 (was 1.74.0). dch's own session tabs follow your session groups (Settings),
   one tab per group (a group named Sessions or History, or repeating an earlier name, is skipped),
   and the selected tab stays in view when they overflow. A kept session's hidden view no longer
-  tells Claude Code that you left or came back. Inside a session's terminal, `dch` and Enter on
-  another session switches that terminal to it instead of refusing. The X-ray card names
+  tells Claude Code that you left or came back. In a session attached from your own terminal, `dch`
+  and Enter on another session switches that terminal to it instead of refusing (Agent Sessions
+  panes still refuse). The X-ray card names
   what a reference points to: a commit's
   subject, author, age and whether it is on HEAD, a file's path and when it was modified, and an
   issue's or pull request's title and state (through a read-only `gh` call; dch's xray_github
