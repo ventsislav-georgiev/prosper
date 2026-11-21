@@ -125,6 +125,33 @@ extension AgentWindowD1Tests {
         XCTAssertFalse(win.isVisible, "never on screen")
     }
 
+    /// #1847 (#1083 red at c53563f9): the Agent Sessions window goes as soon as nothing of the app needs it. Past the
+    /// grace's teardown, with no main-queue turn (the queued contentViewController reset held it strongly); and a kept
+    /// window whose owner goes without a teardown (the willClose and occlusion observers held it strongly).
+    @MainActor
+    func testAgentsWindowTeardownAndADroppedOwnerLetTheWindowGo() throws {
+        weak var tornDown: NSWindow?
+        weak var dropped: NSWindow?
+        try autoreleasepool { () throws -> Void in
+            let r = HideRig(store([session("api", .working, ago: 30)]))
+            r.w.show()
+            let first = try XCTUnwrap(r.w.window)
+            tornDown = first
+            first.close()
+            try XCTUnwrap(r.w.grace).fire()   // the grace's end: today's teardown
+            XCTAssertTrue(r.w.window == nil)
+            r.w.show()                         // rebuilt, closed (hidden), shown again inside the grace: kept
+            let second = try XCTUnwrap(r.w.window)
+            dropped = second
+            XCTAssertTrue(second !== first)
+            second.close()
+            r.w.show()
+            XCTAssertTrue(r.w.window === second && r.w.grace == nil)
+        }
+        XCTAssertTrue(tornDown == nil, "the teardown let the window go at once")
+        XCTAssertTrue(dropped == nil, "a window whose owner went is not kept by its observers")
+    }
+
     /// The operator's "light on memory": phys_footprint of a real window (AgentsWindow.makeWindow, never shown) with 60
     /// sidebar rows, laid out: before show, hidden after the close, and after the grace's teardown. One warm-up cycle first
     /// so the process's one-time costs (SwiftUI metadata, fonts) are not counted. Printed as HIDE1784 for the report.

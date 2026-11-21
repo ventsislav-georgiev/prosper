@@ -31,8 +31,8 @@ extension AgentWindowD1Tests {
             win.isReleasedWhenClosed = false
             defer { win.close() }
             win.model = m
-            var raised: [NSWindow] = []
-            win.raise = { raised.append($0) }   // the recorder first: the real call never runs
+            var raised: [ObjectIdentifier] = []   // #1847: ids: a window kept in its own recorder's array never goes
+            win.raise = { raised.append(ObjectIdentifier($0)) }   // the recorder first: the real call never runs
             let size = win.contentLayoutRect.size
             let a = try XCTUnwrap(m.paneAreaFrame(in: size))
             let line = try XCTUnwrap(m.dividers(in: a.size).first).line
@@ -42,7 +42,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.dividerDrag != nil, "the divider took the down")
             XCTAssertEqual(m.layout.focused, focused, "not the first-click rule: nothing focused")
             XCTAssertEqual(raised.count, 1, "asked for key and front once")
-            XCTAssertTrue(raised.first === win, "for this window")
+            XCTAssertTrue(raised.first == ObjectIdentifier(win), "for this window")
             win.sendEvent(try paneFocusMouse(.leftMouseDragged, CGPoint(x: p.x + 50, y: p.y), win))
             win.sendEvent(try paneFocusMouse(.leftMouseDragged, CGPoint(x: p.x + 60, y: p.y), win))
             XCTAssertEqual(raised.count, 1, "the moves ask nothing")

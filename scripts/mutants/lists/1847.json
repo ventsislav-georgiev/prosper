@@ -1,0 +1,27 @@
+{
+ "entry": "1847",
+ "filter": "AgentWindowD1Tests/testAgentsWindowTeardownAndADroppedOwnerLetTheWindowGo",
+ "mutants": [
+  {
+   "name": "teardown-async-strong",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "DispatchQueue.main.async { [weak win] in win?.contentViewController = nil }",
+   "new": "DispatchQueue.main.async { win.contentViewController = nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "willclose-observer-strong",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "{ [weak self, weak win] _ in\n                MainActor.assumeIsolated { if let win { self?.hide(win) } }",
+   "new": "{ [weak self] _ in\n                MainActor.assumeIsolated { self?.hide(win) }",
+   "expect": "killed"
+  },
+  {
+   "name": "occlusion-observer-strong",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "{ [weak model, weak win] _ in\n                MainActor.assumeIsolated { if let win { model?.setVisible(",
+   "new": "{ [weak model] _ in\n                MainActor.assumeIsolated { do { model?.setVisible(",
+   "expect": "killed"
+  }
+ ]
+}

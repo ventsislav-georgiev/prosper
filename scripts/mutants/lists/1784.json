@@ -26,8 +26,8 @@
   {
    "name": "close-tears-down",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "MainActor.assumeIsolated { self?.hide(win) }",
-   "new": "MainActor.assumeIsolated { self?.teardown(win) }",
+   "old": "MainActor.assumeIsolated { if let win { self?.hide(win) } }",
+   "new": "MainActor.assumeIsolated { if let win { self?.teardown(win) } }",
    "expect": "killed"
   },
   {

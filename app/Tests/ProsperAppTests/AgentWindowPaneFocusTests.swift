@@ -60,8 +60,8 @@ extension AgentWindowD1Tests {
             win.isReleasedWhenClosed = false
             defer { win.close() }
             win.model = m
-            var raised: [NSWindow] = []
-            win.raise = { raised.append($0) }   // the recorder first: the real call never runs
+            var raised: [ObjectIdentifier] = []   // #1847: ids: a window kept in its own recorder's array never goes
+            win.raise = { raised.append(ObjectIdentifier($0)) }   // the recorder first: the real call never runs
             let p = try paneFocusCentre(m, second, in: win.contentLayoutRect.size)
             m.keyFocus = .sidebar
             let writes = m.layoutWrites
@@ -70,7 +70,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(win.focusClick.swallowing, "swallowed as before")
             XCTAssertEqual(m.layoutWrites, writes + 1, "one write")
             XCTAssertEqual(raised.count, 1, "asked for key and front once")
-            XCTAssertTrue(raised.first === win, "for this window")
+            XCTAssertTrue(raised.first == ObjectIdentifier(win), "for this window")
             win.sendEvent(try paneFocusMouse(.leftMouseUp, p, win))
             XCTAssertFalse(win.focusClick.swallowing)
             XCTAssertEqual(raised.count, 1, "its up asks nothing")

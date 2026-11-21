@@ -65,13 +65,14 @@ final class AgentsWindow {
 
         let nc = NotificationCenter.default
         observers = [
-            nc.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.hide(win) }
+            // #1847: weak: a block NotificationCenter holds must not keep the window (an owner gone without a teardown)
+            nc.addObserver(forName: NSWindow.willCloseNotification, object: win, queue: .main) { [weak self, weak win] _ in
+                MainActor.assumeIsolated { if let win { self?.hide(win) } }
             },
             // Miniaturized, behind other windows fully, on another Space, the app hidden:
             // the transcript stops and the age clock with it (design "Energy").
-            nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: win, queue: .main) { [weak model] _ in
-                MainActor.assumeIsolated { model?.setVisible(win.occlusionState.contains(.visible)) }
+            nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: win, queue: .main) { [weak model, weak win] _ in
+                MainActor.assumeIsolated { if let win { model?.setVisible(win.occlusionState.contains(.visible)) } }
             },
         ]
         present(win)
@@ -202,7 +203,7 @@ final class AgentsWindow {
         let island = island()
         island.onStoreChanged = nil
         island.onHoldChanged = nil
-        DispatchQueue.main.async { win.contentViewController = nil }
+        DispatchQueue.main.async { [weak win] in win?.contentViewController = nil }   // #1847: never keeps a torn-down window to the next main turn
     }
 }
 
