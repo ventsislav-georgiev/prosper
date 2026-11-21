@@ -78,10 +78,6 @@ enum ControlSessionsRead {
         }
     }
 
-    static func gate() throws {
-        guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }
-    }
-
     // MARK: - sessions.get
 
     /// dch's state as one word: "needs-you", "working", "done", "idle".
@@ -176,7 +172,6 @@ enum ControlSessionsRead {
 
     /// The session's visible screen as plain text (dch's mirror): the last `lines` non-trailing-blank lines.
     static func screen(_ args: [String: ControlJSON]) async throws -> ControlJSON {
-        try gate()
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
         let lines = try whole(args, "lines", 1...maxLines, fallback: defaultLines)
         let limit = try seconds(args, fallback: readTimeout)
@@ -203,7 +198,6 @@ enum ControlSessionsRead {
     /// The mapped Claude Code transcript's entries: with no `since` the last `limit` of its last page, else the first
     /// `limit` from byte offset `since` (a `next` from an earlier reply). {"entries": [{at, kind, text}], "next"}.
     static func transcript(_ args: [String: ControlJSON]) async throws -> ControlJSON {
-        try gate()
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
         let limit = try whole(args, "limit", 1...maxLimit, fallback: defaultLimit)
         // 2^53: the largest offset a JSON number holds exactly.
@@ -337,13 +331,13 @@ extension ControlRegistry {
             mutates: false, run: awaits, runAsync: { _, a in try await ControlSessionsRead.wait(a) }))
         r.register(ControlCommand(
             name: "sessions.screen",
-            summary: "A session's visible terminal screen as text (refused while agent control is off).",
+            summary: "A session's visible terminal screen as text.",
             args: ["name": name, "lines": ControlArg(type: "number", summary: "last lines, 60 when absent (1-500)"),
                    "timeout": timeout(ControlSessionsRead.readTimeout)],
             mutates: false, run: awaits, runAsync: { _, a in try await ControlSessionsRead.screen(a) }))
         r.register(ControlCommand(
             name: "sessions.transcript",
-            summary: "A Claude Code session's transcript entries (refused while agent control is off).",
+            summary: "A Claude Code session's transcript entries.",
             args: ["name": name,
                    "since": ControlArg(type: "number", summary: "byte offset: an earlier reply's next; the last entries when absent"),
                    "limit": ControlArg(type: "number", summary: "entries, 50 when absent (1-200)"),

@@ -1,0 +1,20 @@
+{
+ "entry": "1854",
+ "filter": "ControlSessionsReadTests",
+ "mutants": [
+  {
+   "name": "screen-gate-back",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "static func screen(_ args: [String: ControlJSON]) async throws -> ControlJSON {",
+   "new": "static func screen(_ args: [String: ControlJSON]) async throws -> ControlJSON {\n        guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }",
+   "expect": "killed"
+  },
+  {
+   "name": "transcript-gate-back",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "static func transcript(_ args: [String: ControlJSON]) async throws -> ControlJSON {",
+   "new": "static func transcript(_ args: [String: ControlJSON]) async throws -> ControlJSON {\n        guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }",
+   "expect": "killed"
+  }
+ ]
+}

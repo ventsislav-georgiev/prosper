@@ -3,13 +3,6 @@
  "filter": "ControlSessionsReadTests",
  "mutants": [
   {
-   "name": "gate-off",
-   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
-   "old": "guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }",
-   "new": "guard Preferences.agentControlEnabled || true else { throw ControlError(ControlChanges.offError) }",
-   "expect": "killed"
-  },
-  {
    "name": "idle-not-done",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
    "old": "default: s.state == .idle || s.state == .done",

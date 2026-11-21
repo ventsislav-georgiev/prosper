@@ -200,26 +200,23 @@ final class ControlSessionsReadTests: XCTestCase {
 
     // MARK: - the switch
 
-    /// A terminal can show a typed secret: screen and transcript refuse while agent control is off and start no read;
-    /// get and wait still answer.
-    func testScreenAndTranscriptRefusedWhileSwitchOff() async {
+    /// #1854: every read answers with the agent-control switch off, screen and transcript included (the mutating
+    /// commands stay gated: ControlSessionsTalkTests' say/interrupt rows).
+    func testScreenAndTranscriptAnswerWhileSwitchOff() async {
         use(base.store([base.session("api", .idle, path: "/Users/example/t.jsonl")]))
         let calls = Calls()
         ControlSessionsRead.readScreen = { _ in calls.bump(); return Data("x".utf8) }
         Preferences.agentControlEnabled = false
-        let screenOff = await Self.call("sessions.screen", name("api"))
-        XCTAssertEqual(screenOff.error, ControlChanges.offError)
-        let transcriptOff = await Self.call("sessions.transcript", name("api"))
-        XCTAssertEqual(transcriptOff.error, ControlChanges.offError)
-        XCTAssertEqual(calls.count, 0)
-        XCTAssertEqual(ControlSessionsRead.decoded.value, 0)
+        defer { Preferences.agentControlEnabled = true }
+        let screen = await Self.call("sessions.screen", name("api"))
+        XCTAssertEqual(obj(screen.result)["text"], .string("x"))
+        XCTAssertEqual(calls.count, 1)
+        // The fake path has no file: the read is reached and fails on the file, not on the switch.
+        let transcript = await Self.call("sessions.transcript", name("api"))
+        XCTAssertTrue(transcript.error != ControlChanges.offError)
+        XCTAssertEqual(transcript.error, "the transcript cannot be read")
         let got = await Self.call("sessions.get", name("api"))
         XCTAssertEqual(obj(got.result)["name"], .string("api"))
-        let waited = await Self.call("sessions.wait", name("api"))
-        XCTAssertEqual(waited.ok, true)
-        Preferences.agentControlEnabled = true
-        let on = await Self.call("sessions.screen", name("api"))
-        XCTAssertEqual(obj(on.result)["text"], .string("x"))
     }
 
     // MARK: - sessions.screen

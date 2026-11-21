@@ -2340,8 +2340,8 @@ tag from the now-released section and put it on the new top draft.
   message an agent gives a new or resumed session follows the same rules as a message to a running
   one. (#1839)
 - Agents can now look at a session through Prosper's control channel: its full details, its current
-  screen and its Claude Code transcript (the last two only while agent control is on), and they can
-  wait until a session is idle, needs you, or has ended. (#1840)
+  screen and its Claude Code transcript, and they can wait until a session is idle, needs you, or
+  has ended. (#1840, #1854)
 - sessions.wait takes changed:true, which skips the current state so a wait right after sessions.say
   no longer answers at once. (#1852)
 - prosper ctl layouts.delete is back for agents: it deletes a saved layout (never the last one) and
