@@ -1069,11 +1069,13 @@ struct XrayPanelView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: sz(4)) {
                         ForEach(s.moments(now: panel.now()), id: \.self) { faint($0) }   // #1611: first mentioned, latest
-                        ForEach(Array(s.hits.enumerated()), id: \.offset) { _, h in
-                            XraySearchRowView(row: XraySearchRow(h, now: panel.now()))
+                        // #1823: every lazy row's id is unique in the stack (XrayRefPopover.keyed, as #1816): hits part 0, groups part 1
+                        ForEach(XrayRefPopover.keyed(s.hits, part: 0), id: \.id) { r in
+                            XraySearchRowView(row: XraySearchRow(r.e, now: panel.now()))
                         }
                         // #1611: the other sessions' groups in dch's order, each under its "also discussed in" header
-                        ForEach(Array(s.others.enumerated()), id: \.offset) { _, g in
+                        ForEach(XrayRefPopover.keyed(s.others, part: 1), id: \.id) { gr in
+                            let (gi, g) = (gr.id.row, gr.e)
                             let head = XraySearch.header(g, now: panel.now())
                             Button { _ = panel.openSession(g) } label: {
                                 Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
@@ -1084,8 +1086,8 @@ struct XrayPanelView: View {
                             .accessibilityAddTraits(.isHeader)
                             .accessibilityLabel(head)
                             .accessibilityHint("Opens that session to the side")
-                            ForEach(Array(g.hits.enumerated()), id: \.offset) { _, h in
-                                XraySearchRowView(row: XraySearchRow(h, now: panel.now()))
+                            ForEach(XrayRefPopover.keyed(g.hits, part: 1, block: gi), id: \.id) { h in
+                                XraySearchRowView(row: XraySearchRow(h.e, now: panel.now()))
                             }
                         }
                     }
@@ -1133,9 +1135,12 @@ struct XrayPanelView: View {
                 .accessibilityLabel("Filter memory")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(panel.shownMemory.enumerated()), id: \.offset) { _, g in
+                    // #1823: unique lazy row ids (XrayRefPopover.keyed, as #1816): a nested per-group offset id repeated across groups
+                    ForEach(XrayRefPopover.keyed(panel.shownMemory, part: 0), id: \.id) { gr in
+                        let (gi, g) = (gr.id.row, gr.e)
                         faint("\(g.title) \(g.items.count)").padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
-                        ForEach(Array(g.items.enumerated()), id: \.offset) { _, m in
+                        ForEach(XrayRefPopover.keyed(g.items, part: 0, block: gi), id: \.id) { mr in
+                            let m = mr.e
                             XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd())) {
                                 panel.openMemoryCard(m)
                             }
