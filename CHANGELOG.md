@@ -2405,7 +2405,8 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now run the extension update check (`ctl extensions.update`, for all extensions or one
   id); an update that asks for a new permission is held for your review instead of being installed.
   (#1869)
-- Update downloads from GitHub are now capped at 4 MiB, like the other GitHub installs. (#1870)
+- Update downloads from GitHub are now capped at 4 MiB, the same cap as agent kit installs through
+  ctl and Marketplace downloads. (#1870)
 
 ## v2.174.0
 
