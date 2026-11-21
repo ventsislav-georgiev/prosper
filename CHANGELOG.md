@@ -2298,6 +2298,9 @@ tag from the now-released section and put it on the new top draft.
 - The New session form's first prompt is now always shown (no more expand/collapse), and you can
   paste one or more images into it with Command-V: each is saved as a PNG and its path is added to
   the prompt, with a small thumbnail you can remove. (#1822)
+- Agents can now list your extensions and themes, turn extensions on or off, and switch the theme
+  through the prosper command, with an Undo on every change; extensions you have not trusted still
+  need you to trust them in Settings. (#1811)
 
 ## v2.174.0
 

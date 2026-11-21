@@ -142,6 +142,7 @@ struct ControlRegistry: Sendable {
                                   args: [:], mutates: false) { reg, _ in reg.changes.logJSON })
         ControlRegistry.registerActions(&r)
         ControlRegistry.registerSettings(&r)
+        ControlRegistry.registerExtensions(&r)
         return r
     }
 

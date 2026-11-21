@@ -1,0 +1,236 @@
+import AppKit
+import Foundation
+import XCTest
+@testable import ProsperApp
+
+/// #1811: extensions.list / enable / disable over a fake registry (temp dirs, scratch defaults) and themes.list / set
+/// over ThemeStore.shared with fake descriptors (its writes land in the in-memory XCTest defaults; each row restores).
+@MainActor
+final class ControlExtensionsTests: XCTestCase {
+    private var notices: [String] = []
+    private var defaults: UserDefaults!
+
+    private func write(_ root: URL, _ sub: String, id: String, title: String, system: Bool, commands: Int) throws {
+        let dir = root.appendingPathComponent(sub, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var toml = """
+        [extension]
+        id          = "\(id)"
+        name        = "\(sub.split(separator: "/").last ?? "x")"
+        title       = "\(title)"
+        description = "Test fixture"
+        version     = "1.2.3"
+        author      = "example"
+        license     = "MIT"
+        system      = \(system)
+
+        [extension.host]
+        min_version = "2.0.0"
+        api_level   = 1
+
+        [extension.entry]
+        main = "init.lua"
+
+        """
+        for i in 0..<commands {
+            toml += """
+
+            [[contributes.commands]]
+            id    = "\(id).c\(i)"
+            title = "Command \(i)"
+            mode  = "no-view"
+            match = "^__never\(i)__"
+
+            """
+        }
+        try toml.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try "".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+    }
+
+    /// One trusted system extension with two commands, one user extension the user has not trusted.
+    private func fakeRegistry() throws -> ExtensionRegistry {
+        let root = tempDir()
+        try write(root, "system/fake", id: "com.example.fake", title: "Fake Tools", system: true, commands: 2)
+        try write(root, "user/stranger", id: "com.example.stranger", title: "Stranger", system: false, commands: 1)
+        defaults = scratchDefaults("ctlext")
+        defaults.set([String](), forKey: "trustedExtensionIDs") // the trust gate is past its first run: nothing trusted
+        let registry = ExtensionRegistry(systemDir: root.appendingPathComponent("system"),
+                                         userDir: root.appendingPathComponent("user"),
+                                         hostVersion: "2.0.0", defaults: defaults)
+        registry.discover()
+        addTeardownBlock { @MainActor in ControlExtensions.registry = { (NSApp?.delegate as? AppDelegate)?.extensionRegistry } }
+        ControlExtensions.registry = { registry }
+        return registry
+    }
+
+    private func registry() -> ControlRegistry {
+        var r = ControlRegistry()
+        ControlRegistry.registerExtensions(&r)
+        let changes = ControlChanges()
+        changes.present = { [weak self] text, _ in self?.notices.append(text) }
+        r.changes = changes
+        return r
+    }
+
+    private func call(_ reg: ControlRegistry, _ cmd: String, _ args: [String: ControlJSON] = [:]) async -> ControlReply {
+        await reg.reply(to: try! JSONEncoder().encode(ControlRequest(cmd: cmd, args: args)))
+    }
+
+    private func rows(_ reply: ControlReply, _ key: String) -> [String: [String: ControlJSON]] {
+        guard case .object(let o)? = reply.result, case .array(let list)? = o[key] else { return [:] }
+        var out: [String: [String: ControlJSON]] = [:]
+        for case .object(let a) in list { if case .string(let id)? = a["id"] { out[id] = a } }
+        return out
+    }
+
+    // MARK: extensions
+
+    func testListCarriesEveryFieldForEachExtension() async throws {
+        _ = try fakeRegistry()
+        let reply = await call(registry(), "extensions.list")
+        XCTAssertTrue(reply.ok, "\(reply)")
+        let all = rows(reply, "extensions")
+        XCTAssertEqual(all.count, 2, "\(all.keys.sorted())")
+        let fake = all["com.example.fake"]
+        XCTAssertEqual(fake?["title"], .string("Fake Tools"))
+        XCTAssertEqual(fake?["version"], .string("1.2.3"))
+        XCTAssertEqual(fake?["enabled"], .bool(true))
+        XCTAssertEqual(fake?["trusted"], .bool(true))
+        XCTAssertEqual(fake?["builtIn"], .bool(true))
+        XCTAssertEqual(fake?["commands"], .number(2))
+        let stranger = all["com.example.stranger"]
+        XCTAssertEqual(stranger?["trusted"], .bool(false))
+        XCTAssertEqual(stranger?["builtIn"], .bool(false))
+        XCTAssertEqual(stranger?["commands"], .number(1))
+        XCTAssertTrue(notices.isEmpty, "a list changes nothing")
+    }
+
+    func testDisableAndEnableGoThroughTheRegistryAndUndoFlipsBack() async throws {
+        let ext = try fakeRegistry()
+        let reg = registry()
+        let off = await call(reg, "extensions.disable", ["id": .string("com.example.fake")])
+        XCTAssertTrue(off.ok, "\(off)")
+        XCTAssertEqual(ext.record(id: "com.example.fake")?.enabled, false)
+        XCTAssertEqual(defaults.stringArray(forKey: "disabledExtensionIDs"), ["com.example.fake"], "persisted as the pane's toggle does")
+        XCTAssertTrue(ext.command(id: "com.example.fake.c0") == nil, "routes rebuilt without it")
+        XCTAssertEqual(notices.last, "Agent changed: Fake Tools off")
+        guard case .object(let row)? = off.result else { return XCTFail("\(off)") }
+        XCTAssertEqual(row["enabled"], .bool(false))
+
+        XCTAssertTrue(reg.changes.undo(reg.changes.entries.last?.id ?? -1))
+        XCTAssertEqual(ext.record(id: "com.example.fake")?.enabled, true, "undo turns it back on")
+        XCTAssertTrue(ext.command(id: "com.example.fake.c0") != nil, "routed again")
+        XCTAssertEqual(defaults.stringArray(forKey: "disabledExtensionIDs") ?? [], [])
+
+        try ext.setEnabled(false, id: "com.example.fake")
+        let on = await call(reg, "extensions.enable", ["id": .string("com.example.fake")])
+        XCTAssertTrue(on.ok, "\(on)")
+        XCTAssertEqual(ext.record(id: "com.example.fake")?.enabled, true)
+        XCTAssertEqual(notices.last, "Agent changed: Fake Tools on")
+        XCTAssertTrue(reg.changes.undo(reg.changes.entries.last?.id ?? -1))
+        XCTAssertEqual(ext.record(id: "com.example.fake")?.enabled, false, "undo of an enable turns it back off")
+    }
+
+    /// setEnabled is not a no-op (drops the async runtime, rebuilds routes), so a same-state call never reaches it.
+    func testSameStateIsRefusedWithoutTouchingTheRegistry() async throws {
+        let ext = try fakeRegistry()
+        var hits = 0
+        ext.onEnabledChanged = { hits += 1 }
+        let reg = registry()
+        let on = await call(reg, "extensions.enable", ["id": .string("com.example.fake")])
+        XCTAssertEqual(on.error, "Fake Tools is already on")
+        try ext.setEnabled(false, id: "com.example.fake")
+        XCTAssertEqual(hits, 1)
+        let off = await call(reg, "extensions.disable", ["id": .string("com.example.fake")])
+        XCTAssertEqual(off.error, "Fake Tools is already off")
+        XCTAssertEqual(hits, 1, "the registry's setEnabled was never called by the control")
+        XCTAssertTrue(reg.changes.entries.isEmpty)
+        XCTAssertTrue(notices.isEmpty)
+    }
+
+    func testUntrustedExtensionIsRefusedWithTheReasonAndNothingChanges() async throws {
+        let ext = try fakeRegistry()
+        let reg = registry()
+        for cmd in ["extensions.enable", "extensions.disable"] {
+            let reply = await call(reg, cmd, ["id": .string("com.example.stranger")])
+            XCTAssertFalse(reply.ok, cmd)
+            XCTAssertTrue(reply.error?.contains("needs a trust approval") == true, "\(reply)")
+        }
+        XCTAssertEqual(ext.record(id: "com.example.stranger")?.enabled, true)
+        XCTAssertEqual(ext.record(id: "com.example.stranger")?.trusted, false)
+        XCTAssertTrue(reg.changes.entries.isEmpty)
+        XCTAssertTrue(notices.isEmpty)
+    }
+
+    func testUnknownIdAndAMissingRegistryAreErrors() async throws {
+        _ = try fakeRegistry()
+        let reg = registry()
+        let unknown = await call(reg, "extensions.disable", ["id": .string("com.example.nope")])
+        XCTAssertTrue(unknown.error?.contains("unknown extension") == true, "\(unknown)")
+        ControlExtensions.registry = { nil }
+        let list = await call(reg, "extensions.list")
+        XCTAssertEqual(list.error, "extensions are not loaded yet")
+        XCTAssertTrue(reg.changes.entries.isEmpty)
+    }
+
+    // MARK: themes
+
+    private func fakeThemes() {
+        let store = ThemeStore.shared
+        let saved = Preferences.defaults.object(forKey: "prosper.activeThemeID")
+        addTeardownBlock { @MainActor in
+            if let saved { Preferences.defaults.set(saved, forKey: "prosper.activeThemeID") }
+            else { Preferences.defaults.removeObject(forKey: "prosper.activeThemeID") }
+            ThemeStore.shared.setAvailable([])
+        }
+        Preferences.defaults.removeObject(forKey: "prosper.activeThemeID")
+        store.setAvailable([
+            ThemeDescriptor(id: "com.example.theme.paper", title: "Paper", appearance: .light,
+                            extensionID: "com.example.fake", jsonPath: nil),
+            ThemeDescriptor(id: "com.example.theme.night", title: "Night", appearance: .dark,
+                            extensionID: "com.example.stranger", jsonPath: nil),
+        ])
+    }
+
+    func testThemesListMarksAppearanceBuiltInAndCurrent() async throws {
+        _ = try fakeRegistry()
+        fakeThemes()
+        let reply = await call(registry(), "themes.list")
+        XCTAssertTrue(reply.ok, "\(reply)")
+        let all = rows(reply, "themes")
+        XCTAssertEqual(all.count, 3, "\(all.keys.sorted())")
+        XCTAssertEqual(all[ThemeDescriptor.builtInID]?["builtIn"], .bool(true))
+        XCTAssertEqual(all[ThemeDescriptor.builtInID]?["current"], .bool(true))
+        XCTAssertEqual(all[ThemeDescriptor.builtInID]?["extension"], .null)
+        XCTAssertEqual(all["com.example.theme.paper"]?["appearance"], .string("light"))
+        XCTAssertEqual(all["com.example.theme.paper"]?["builtIn"], .bool(true), "from a system extension")
+        XCTAssertEqual(all["com.example.theme.paper"]?["current"], .bool(false))
+        XCTAssertEqual(all["com.example.theme.night"]?["builtIn"], .bool(false), "from a user extension")
+        XCTAssertEqual(all["com.example.theme.night"]?["title"], .string("Night"))
+    }
+
+    func testThemesSetGoesThroughTheThemeSettingAndUndoRestores() async throws {
+        fakeThemes()
+        let reg = registry()
+        let reply = await call(reg, "themes.set", ["id": .string("com.example.theme.paper")])
+        XCTAssertTrue(reply.ok, "\(reply)")
+        XCTAssertEqual(ThemeStore.shared.activeID, "com.example.theme.paper")
+        XCTAssertEqual(Preferences.defaults.string(forKey: "prosper.activeThemeID"), "com.example.theme.paper")
+        XCTAssertEqual(reply.result, .object(["theme": .string("com.example.theme.paper")]), "settings.set's own reply")
+        XCTAssertEqual(reg.changes.entries.last?.command, "themes.set")
+        XCTAssertTrue(reg.changes.undo(reg.changes.entries.last?.id ?? -1))
+        XCTAssertEqual(ThemeStore.shared.activeID, ThemeDescriptor.builtInID, "undo restores the previous theme")
+
+        let bad = await call(reg, "themes.set", ["id": .string("com.example.theme.none")])
+        XCTAssertFalse(bad.ok)
+        XCTAssertTrue(bad.error?.contains("theme must be one of") == true, "\(bad)")
+        XCTAssertEqual(ThemeStore.shared.activeID, ThemeDescriptor.builtInID)
+        XCTAssertEqual(reg.changes.entries.count, 1, "a refused set logs nothing")
+    }
+
+    func testDescribeMarksTheWritesAsMutating() {
+        let cmds = registry().commands
+        for name in ["extensions.enable", "extensions.disable", "themes.set"] { XCTAssertEqual(cmds[name]?.mutates, true, name) }
+        for name in ["extensions.list", "themes.list"] { XCTAssertEqual(cmds[name]?.mutates, false, name) }
+    }
+}

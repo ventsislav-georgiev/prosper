@@ -1,0 +1,69 @@
+{
+ "entry": "1811",
+ "filter": "ControlExtensionsTests",
+ "mutants": [
+  {
+   "name": "trust-guard-off",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "guard record.trusted else {",
+   "new": "guard record.trusted || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "undo-keeps-new",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "try? reg.setEnabled(was, id: id)",
+   "new": "try? reg.setEnabled(on, id: id)",
+   "expect": "killed"
+  },
+  {
+   "name": "toggle-inverted",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "try reg.setEnabled(on, id: id)",
+   "new": "try reg.setEnabled(!on, id: id)",
+   "expect": "killed"
+  },
+  {
+   "name": "themes-set-bypass",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "return try ControlSettings.apply([\"theme\": .string(id)])",
+   "new": "ThemeStore.shared.select(id: id); return ControlChange(summary: id)",
+   "expect": "killed"
+  },
+  {
+   "name": "ext-builtin-always",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "\"builtIn\": .bool(r.isSystem)",
+   "new": "\"builtIn\": .bool(true)",
+   "expect": "killed"
+  },
+  {
+   "name": "theme-builtin-default-false",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "isSystem == true } ?? true",
+   "new": "isSystem == true } ?? false",
+   "expect": "killed"
+  },
+  {
+   "name": "theme-current-inverted",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "d.id == store.activeID",
+   "new": "d.id != store.activeID",
+   "expect": "killed"
+  },
+  {
+   "name": "same-state-guard-off",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "guard record.enabled != on else {",
+   "new": "guard record.enabled != on || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "untrusted-flag-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "\"trusted\": .bool(r.trusted)",
+   "new": "\"trusted\": .bool(true)",
+   "expect": "killed"
+  }
+ ]
+}
