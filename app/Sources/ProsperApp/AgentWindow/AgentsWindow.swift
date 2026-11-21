@@ -4223,7 +4223,9 @@ final class AgentComposerTextView: NSTextView {
     /// #1822: where pasted images go and who hears of them (on main, after the path is inserted).
     struct ImagePaste: Sendable {
         var dir: URL
-        var added: @MainActor @Sendable ([AgentPromptImages.Made]) -> Void
+        /// #1836: a paste's encode starts; `added` ends it, whatever came of it.
+        var began: @MainActor @Sendable () -> Void
+        var added: @MainActor @Sendable (AgentPromptImages.Outcome) -> Void
     }
     var imagePaste: ImagePaste?
 
@@ -4241,12 +4243,14 @@ final class AgentComposerTextView: NSTextView {
             _ = readSelection(from: pb)
             return
         }
-        AgentPromptImages.store(sources, dir: sink.dir) { [weak self] made in
-            guard let self, !made.isEmpty else { return }
-            let r = self.selectedRange(), ns = self.string as NSString
-            let previous = r.location > 0 && r.location <= ns.length ? Character(ns.substring(with: NSRange(location: r.location - 1, length: 1))) : nil
-            self.insertText(AgentPromptImages.insertion(made.map(\.path), after: previous), replacementRange: r)
-            sink.added(made)
+        sink.began()
+        AgentPromptImages.store(sources, skipped: AgentPromptImages.skippedFiles(pb), dir: sink.dir) { [weak self] out in
+            if let self, !out.made.isEmpty {
+                let r = self.selectedRange(), ns = self.string as NSString
+                let previous = r.location > 0 && r.location <= ns.length ? Character(ns.substring(with: NSRange(location: r.location - 1, length: 1))) : nil
+                self.insertText(AgentPromptImages.insertion(out.made.map(\.path), after: previous), replacementRange: r)
+            }
+            sink.added(out)   // after the insert: its text change clears the note this sets
         }
     }
 

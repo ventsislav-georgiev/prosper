@@ -181,6 +181,73 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(f.m.newSession?.images.map(\.path), [last])
         }
     }
+
+    /// #1836: the paste's wait ends (the encode answers on main), however it came out.
+    @MainActor
+    func awaitPromptPasteDone(_ m: AgentWindowModel) {
+        let end = Date().addingTimeInterval(10)
+        while (m.newSession?.pasting ?? 0) > 0 && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    }
+
+    /// #1836: Start pressed while a paste is still being encoded does nothing and the form says "Adding image…"; once
+    /// the paste lands Start works and the path is in the prompt it sends. Red at base: Start went at once, without the path.
+    @MainActor
+    func testAgentWindowNewSessionPromptImageStartWaitsForThePasteInFlight() throws {
+        try withNewSessionPrefs {
+            let f = try promptImageForm()
+            defer { f.m.close(); f.win.close() }
+            f.m.setNewSessionName("web")
+            XCTAssertTrue(f.m.canStartNewSession, "startable before the paste")
+            let pb = promptPasteboard()
+            promptImageItems(pb, [(try AgentNewSessionPromptImagesTests.png(), .png)])
+            f.tv.paste(from: pb)   // the encode answers on main, which has not run since
+            XCTAssertEqual(f.m.newSession?.pasting, 1)
+            XCTAssertFalse(f.m.canStartNewSession, "Start waits for the paste")
+            XCTAssertFalse(f.m.startNewSession(), "Return too")
+            awaitPromptPasteDone(f.m)
+            XCTAssertEqual(f.m.newSession?.pasting, 0)
+            XCTAssertEqual(f.m.newSession?.images.count, 1)
+            XCTAssertTrue(f.m.canStartNewSession, "startable once it landed")
+        }
+    }
+
+    /// #1836: a paste whose every image fails says so under the prompt and adds nothing; the next edit clears the line.
+    @MainActor
+    func testAgentWindowNewSessionPromptImageFailedPasteSaysSoUntilTheNextEdit() throws {
+        try withNewSessionPrefs {
+            let f = try promptImageForm("See ")
+            defer { f.m.close(); f.win.close() }
+            let pb = promptPasteboard()
+            promptImageItems(pb, [(Data("not an image".utf8), .png), (Data("nor this".utf8), .tiff)])
+            f.tv.paste(from: pb)
+            awaitPromptPasteDone(f.m)
+            XCTAssertEqual(f.m.newSession?.imageNote, "Could not add 2 images")
+            XCTAssertEqual(f.m.newSession?.images.count, 0)
+            XCTAssertEqual(f.m.newSession?.prompt, "See ", "nothing inserted")
+            f.m.setNewSessionPrompt("See it")
+            XCTAssertTrue(f.m.newSession?.imageNote == nil, "cleared by the next edit")
+        }
+    }
+
+    /// #1836: non-image files in an image paste are skipped and counted in the status line; the image is added.
+    @MainActor
+    func testAgentWindowNewSessionPromptImageNonImageFilesInAPasteAreReported() throws {
+        try withNewSessionPrefs {
+            let f = try promptImageForm()
+            defer { f.m.close(); f.win.close() }
+            let src = tempDir("promptImageMixed")
+            let shot = src.appendingPathComponent("shot.png"), doc = src.appendingPathComponent("notes.txt")
+            try AgentNewSessionPromptImagesTests.png().write(to: shot)
+            try Data("x".utf8).write(to: doc)
+            let pb = promptPasteboard()
+            pb.clearContents()
+            pb.writeObjects([shot as NSURL, doc as NSURL])
+            f.tv.paste(from: pb)
+            awaitPromptPasteDone(f.m)
+            XCTAssertEqual(f.m.newSession?.images.count, 1, "the image went in")
+            XCTAssertEqual(f.m.newSession?.imageNote, "Skipped 1 file that is not an image")
+        }
+    }
 }
 
 /// #1822: the prompt images' pure parts: what a pasteboard holds, the prune, the inserted text. Named pasteboards only.
@@ -255,8 +322,62 @@ final class AgentNewSessionPromptImagesTests: XCTestCase {
         try Data("x".utf8).write(to: old)
         try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-AgentPromptImages.maxAge - 60)], ofItemAtPath: old.path)
         let made = AgentPromptImages.write([.data(try Self.png()), .data(Data("not an image".utf8))], dir: dir, now: now)
-        XCTAssertEqual(made.count, 1, "the non-image is skipped")
+        XCTAssertEqual(made.made.count, 1, "the non-image is not written")
+        XCTAssertEqual(made.failed, 1, "#1836: and is counted")
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+    }
+
+    /// #1836: past the image cap, or the byte cap, the rest is refused (unread); a file's size is checked before it is read.
+    func testWriteRefusesPastTheCaps() throws {
+        let dir = tempDir("promptCaps"), png = try Self.png()
+        let three: [AgentPromptImages.Source] = [.data(png), .data(png), .data(png)]
+        let byCount = AgentPromptImages.write(three, dir: dir, now: Date(), maxImages: 2)
+        XCTAssertEqual(byCount.made.count, 2)
+        XCTAssertEqual(byCount.refused, 1)
+        XCTAssertEqual(byCount.note, "Refused 1 image over the limit of 20 images or 50 MB")
+        let byBytes = AgentPromptImages.write(three, dir: dir, now: Date(), maxBytes: png.count * 2 + 1)
+        XCTAssertEqual(byBytes.made.count, 2, "two fit, the third would pass the cap")
+        XCTAssertEqual(byBytes.refused, 1)
+        let file = tempDir("promptCapFile").appendingPathComponent("big.png")
+        try png.write(to: file)
+        let big = AgentPromptImages.write([.file(file), .data(png)], dir: dir, now: Date(), maxBytes: png.count - 1)
+        XCTAssertEqual(big.made.count, 0, "a file over the cap is not read")
+        XCTAssertEqual(big.refused, 2, "it and the rest")
+        XCTAssertEqual(AgentPromptImages.write(three, dir: dir, now: Date()).refused, 0, "under the caps: all in")
+    }
+
+    /// #1836: the status line's wording, one line for all three kinds.
+    func testOutcomeNote() {
+        typealias O = AgentPromptImages.Outcome
+        XCTAssertTrue(O().note == nil)
+        XCTAssertEqual(O(failed: 1).note, "Could not add 1 image")
+        XCTAssertEqual(O(skipped: 2).note, "Skipped 2 files that are not images")
+        XCTAssertEqual(O(failed: 2, skipped: 1).note, "Could not add 2 images. Skipped 1 file that is not an image")
+    }
+
+    /// #1836: the file URLs that are not images count as skipped.
+    @MainActor
+    func testSkippedFilesCountsNonImageFileURLs() throws {
+        let pb = pasteboard(), dir = tempDir("promptSkipped")
+        let shot = dir.appendingPathComponent("shot.png"), doc = dir.appendingPathComponent("notes.txt")
+        try Self.png().write(to: shot)
+        try Data("x".utf8).write(to: doc)
+        pb.clearContents()
+        pb.writeObjects([shot as NSURL, doc as NSURL])
+        XCTAssertEqual(AgentPromptImages.skippedFiles(pb), 1)
+        pb.clearContents()
+        pb.writeObjects([shot as NSURL])
+        XCTAssertEqual(AgentPromptImages.skippedFiles(pb), 0)
+    }
+
+    /// #1836: a directory named like a PNG is left alone by the prune, however old.
+    func testPruneLeavesADirectoryNamedLikeAPNG() throws {
+        let dir = tempDir("promptPruneDir"), now = Date()
+        let sub = dir.appendingPathComponent("old.png", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-AgentPromptImages.maxAge - 3600)], ofItemAtPath: sub.path)
+        XCTAssertEqual(AgentPromptImages.prune(dir: dir, now: now), 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sub.path))
     }
 
     func testInsertionAndRemoval() {

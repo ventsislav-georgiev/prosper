@@ -29,6 +29,9 @@ struct AgentNewSessionForm: Equatable {
     var prompt = ""
     /// #1822: the images pasted into the prompt, in paste order (their paths are in `prompt`).
     var images: [AgentPromptImages.Pasted] = []
+    /// #1836: pastes still being encoded (Start waits for them), and the line a paste left (failed, skipped, refused).
+    var pasting = 0
+    var imageNote: String?
 }
 
 /// #1822: an image pasted into the New session prompt: written as a PNG to a Prosper-owned cache dir, its absolute
@@ -41,10 +44,33 @@ enum AgentPromptImages {
     struct Made: Sendable, Equatable { var path: String; var thumb: Data? }
     /// A pasted image as the form keeps it.
     struct Pasted: Equatable { var path: String; var thumb: NSImage? }
+    /// #1836: what a paste came to: the written images and the ones that did not make it.
+    struct Outcome: Sendable, Equatable {
+        var made: [Made] = []
+        /// Unreadable or not an image.
+        var failed = 0
+        /// Over the per-paste cap.
+        var refused = 0
+        /// File URLs of the paste that are not images.
+        var skipped = 0
+
+        /// The one status line under the prompt; nil: all went well.
+        var note: String? {
+            let parts = [
+                failed > 0 ? "Could not add \(failed) image\(failed == 1 ? "" : "s")" : nil,
+                refused > 0 ? "Refused \(refused) image\(refused == 1 ? "" : "s") over the limit of \(AgentPromptImages.maxImages) images or 50 MB" : nil,
+                skipped > 0 ? "Skipped \(skipped) file\(skipped == 1 ? " that is not an image" : "s that are not images")" : nil,
+            ].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: ". ")
+        }
+    }
 
     /// Pruned on each paste: older files are gone by then (a first message reads its image at once).
     static let maxAge: TimeInterval = 7 * 24 * 3600
     static let thumbPixels = 64
+    /// #1836: one paste's cap: images, and bytes read.
+    static let maxImages = 20
+    static let maxBytes = 50_000_000
 
     /// Caches/Prosper/prompt-images; nil under XCTest, so a row writes only under the temp dir it sets.
     static let defaultDir: URL? = {
@@ -56,8 +82,7 @@ enum AgentPromptImages {
     /// The paste's images; nil: not an image paste (the text path, unchanged). Image file URLs first (Finder's copy
     /// also holds the names as text); then text wins over image bytes, as in the terminal's paste.
     static func sources(_ pb: NSPasteboard) -> [Source]? {
-        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true,
-                                  .urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL] ?? []
+        let urls = fileURLs(pb, imagesOnly: true)
         if !urls.isEmpty { return urls.map(Source.file) }
         guard pb.string(forType: .string) == nil,
               pb.canReadItem(withDataConformingToTypes: [UTType.image.identifier]) else { return nil }   // AgentTerminal's test
@@ -67,35 +92,61 @@ enum AgentPromptImages {
         return datas.isEmpty ? nil : datas.map(Source.data)
     }
 
+    private static func fileURLs(_ pb: NSPasteboard, imagesOnly: Bool) -> [URL] {
+        var opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if imagesOnly { opts[.urlReadingContentsConformToTypes] = [UTType.image.identifier] }
+        return pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL] ?? []
+    }
+
+    /// #1836: the file URLs in `pb` that are not images (a paste of images drops them; the status line says so).
+    static func skippedFiles(_ pb: NSPasteboard) -> Int {
+        max(0, fileURLs(pb, imagesOnly: false).count - fileURLs(pb, imagesOnly: true).count)
+    }
+
     /// Off main: prunes `dir`, then writes each source as `<uuid>.png` (a PNG as it is, anything else re-encoded),
-    /// and hands what was written to `done` on main. A source that is not a readable image is skipped.
-    static func store(_ sources: [Source], dir: URL, now: Date = Date(), done: @escaping @MainActor @Sendable ([Made]) -> Void) {
+    /// and hands what came of it to `done` on main. A source that is not a readable image is counted in `failed`.
+    /// `skipped`: the paste's non-image files.
+    static func store(_ sources: [Source], skipped: Int = 0, dir: URL, now: Date = Date(),
+                      done: @escaping @MainActor @Sendable (Outcome) -> Void) {
         Task.detached(priority: .userInitiated) {
-            let made = write(sources, dir: dir, now: now)
-            await done(made)
+            var out = write(sources, dir: dir, now: now)
+            out.skipped = skipped
+            await done(out)
         }
     }
 
-    static func write(_ sources: [Source], dir: URL, now: Date) -> [Made] {
+    /// #1836: past `maxImages` sources, or when the next one would take the bytes read past `maxBytes`, the rest is
+    /// refused unread (a file's size is asked for before it is read).
+    static func write(_ sources: [Source], dir: URL, now: Date, maxImages: Int = maxImages, maxBytes: Int = maxBytes) -> Outcome {
         let fm = FileManager.default
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         prune(dir: dir, now: now)
-        return sources.compactMap { s in
+        var out = Outcome(), read = 0
+        for (i, s) in sources.enumerated() {
             let data: Data?
             switch s {
-            case .file(let url): data = try? Data(contentsOf: url)
-            case .data(let d): data = d
+            case .file(let url):
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if i >= maxImages || size > maxBytes - read { out.refused = sources.count - i; return out }
+                data = try? Data(contentsOf: url)
+            case .data(let d):
+                if i >= maxImages || d.count > maxBytes - read { out.refused = sources.count - i; return out }
+                data = d
             }
-            guard let data, let src = CGImageSourceCreateWithData(data as CFData, nil),
-                  CGImageSourceGetCount(src) > 0 else { return nil }
+            read += data?.count ?? 0   // at most the size checked above (a file grown since then is read in full: no overflow)
+            guard let data, let src = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(src) > 0 else {
+                out.failed += 1
+                continue
+            }
             let url = dir.appendingPathComponent(UUID().uuidString + ".png")
             if CGImageSourceGetType(src) as String? == UTType.png.identifier {
-                guard (try? data.write(to: url)) != nil else { return nil }
+                guard (try? data.write(to: url)) != nil else { out.failed += 1; continue }
             } else {
-                guard let image = CGImageSourceCreateImageAtIndex(src, 0, nil), png(image, to: url as CFURL) else { return nil }
+                guard let image = CGImageSourceCreateImageAtIndex(src, 0, nil), png(image, to: url as CFURL) else { out.failed += 1; continue }
             }
-            return Made(path: url.path, thumb: thumb(src))
+            out.made.append(Made(path: url.path, thumb: thumb(src)))
         }
+        return out
     }
 
     /// Removes the PNGs in `dir` last modified before `now - maxAge`; nothing else. Returns how many went.
@@ -105,8 +156,9 @@ enum AgentPromptImages {
         let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         var removed = 0
         for f in files where f.pathExtension == "png" {
-            guard let at = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-                  now.timeIntervalSince(at) > maxAge, (try? fm.removeItem(at: f)) != nil else { continue }
+            // #1836: a directory named *.png is not ours to remove.
+            guard let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]), v.isRegularFile == true,
+                  let at = v.contentModificationDate, now.timeIntervalSince(at) > maxAge, (try? fm.removeItem(at: f)) != nil else { continue }
             removed += 1
         }
         return removed
@@ -470,6 +522,7 @@ struct AgentNewSessionView: View {
     /// #847 D5.1-D5.3: the editor at a fixed sz(96). #1822: always shown (no disclosure), the line under it says it is
     /// optional, or why it is dimmed. Return adds a line, Command-Return is Start. Not a Claude: dimmed, the text kept.
     static let promptLabel = "Prompt"
+    static let addingImage = "Adding image…"
     static let promptHint = "Optional. \u{2318}V pastes images too"
     static let promptEditorLabel = "First prompt for the new session"   // #1392: not the composer's "Message Claude"
     static func promptEditor(text: Binding<String>, onSubmit: @escaping () -> Void, editable: Bool,
@@ -481,7 +534,8 @@ struct AgentNewSessionView: View {
     private var promptRows: some View {
         let claude = model.newSessionClaude
         let paste = model.promptImagesDir.map { dir in
-            AgentComposerTextView.ImagePaste(dir: dir) { [weak model] made in model?.addNewSessionPromptImages(made) }
+            AgentComposerTextView.ImagePaste(dir: dir, began: { [weak model] in model?.beginNewSessionPromptPaste() },
+                                                 added: { [weak model] out in model?.addNewSessionPromptImages(out) })
         }
         // A chip only while its path is still in the text (typing it away drops the chip too).
         let images = form.images.filter { form.prompt.contains($0.path) }
@@ -499,7 +553,7 @@ struct AgentNewSessionView: View {
                     }
                     .padding(.top, sz(4))
                 }
-                slot(claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))
+                slot(form.pasting > 0 ? Self.addingImage : form.imageNote ?? (claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host)))
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }

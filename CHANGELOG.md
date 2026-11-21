@@ -2304,6 +2304,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now list, start, stop, restart and focus your Agent Sessions, and put two sessions side
   by side, through the prosper command; each change shows a notice, and focus, new session and
   layout changes can be undone. (#1809)
+- New session: pasting images into the prompt now makes Start wait until the images are added, and a
+  line under the prompt says when an image could not be added, a non-image file was skipped, or a
+  paste was over 20 images or 50 MB. (#1836)
 
 ## v2.174.0
 

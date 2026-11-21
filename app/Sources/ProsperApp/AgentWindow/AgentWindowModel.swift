@@ -2557,16 +2557,24 @@ final class AgentWindowModel: ObservableObject {
     func setNewSessionPrompt(_ s: String, draft: Bool = true) {
         guard newSession != nil, newSession?.starting == nil else { return }
         newSession?.prompt = s
+        newSession?.imageNote = nil   // #1836: cleared on the next edit
         if draft { lastPrompt = s }
     }
 
     /// #1822: where a pasted prompt image is written; nil (the XCTest default): an image paste is not taken.
     var promptImagesDir: URL? = AgentPromptImages.defaultDir
 
+    /// #1836: an image paste's encode starts: Start waits until `addNewSessionPromptImages` ends it.
+    func beginNewSessionPromptPaste() { newSession?.pasting += 1 }
+
     /// #1822: images written by a paste in the prompt (their paths already inserted there); thumbnails built here, on main.
-    func addNewSessionPromptImages(_ made: [AgentPromptImages.Made]) {
+    /// #1836: ends the paste's wait and sets the status line for what failed, was skipped or refused.
+    /// shortcut: a form closed and reopened mid-paste takes the old paste's end as its own; upgrade if that shows.
+    func addNewSessionPromptImages(_ out: AgentPromptImages.Outcome) {
         guard newSession != nil else { return }
-        newSession?.images += made.map { AgentPromptImages.Pasted(path: $0.path, thumb: $0.thumb.flatMap(NSImage.init(data:))) }
+        newSession?.pasting = max(0, (newSession?.pasting ?? 0) - 1)
+        newSession?.images += out.made.map { AgentPromptImages.Pasted(path: $0.path, thumb: $0.thumb.flatMap(NSImage.init(data:))) }
+        newSession?.imageNote = out.note
     }
 
     /// #1822: a chip's x: its path leaves the prompt and the chip goes (the file stays for the age prune).
@@ -2717,7 +2725,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// Every check, against the store as it is now.
     var canStartNewSession: Bool {
-        guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
+        guard newSession?.starting == nil, (newSession?.pasting ?? 0) == 0, store?.resumeGate.isOK == true else { return false }   // #1836
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
         return !newSessionName.isEmpty && e.folder == nil && e.name == nil

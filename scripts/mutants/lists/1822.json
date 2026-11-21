@@ -40,8 +40,8 @@
   {
    "name": "no-prune-on-write",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "        prune(dir: dir, now: now)\n        return sources.compactMap",
-   "new": "        return sources.compactMap",
+   "old": "        prune(dir: dir, now: now)\n        var out = Outcome(), read = 0",
+   "new": "        var out = Outcome(), read = 0",
    "expect": "killed"
   },
   {
@@ -68,8 +68,8 @@
   {
    "name": "reason-hidden",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "slot(claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))",
-   "new": "slot(Self.promptHint)",
+   "old": "form.imageNote ?? (claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))",
+   "new": "form.imageNote ?? Self.promptHint",
    "expect": "killed"
   },
   {

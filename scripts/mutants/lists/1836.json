@@ -1,0 +1,69 @@
+{
+ "entry": "1836",
+ "filter": "AgentNewSessionPromptImagesTests|AgentWindowD1Tests/testAgentWindowNewSession",
+ "mutants": [
+  {
+   "name": "start_ignores_paste",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "(newSession?.pasting ?? 0) == 0, store",
+   "new": "true, store",
+   "expect": "killed"
+  },
+  {
+   "name": "note_never_set",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "newSession?.imageNote = out.note",
+   "new": "newSession?.imageNote = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "edit_keeps_note",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "newSession?.imageNote = nil   // #1836",
+   "new": "_ = 0   // #1836",
+   "expect": "killed"
+  },
+  {
+   "name": "pasting_never_ends",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "newSession?.pasting = max(0, (newSession?.pasting ?? 0) - 1)",
+   "new": "_ = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "failed_not_counted",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "                out.failed += 1\n                continue",
+   "new": "                continue",
+   "expect": "killed"
+  },
+  {
+   "name": "image_cap_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "if i >= maxImages || d.count",
+   "new": "if d.count",
+   "expect": "killed"
+  },
+  {
+   "name": "byte_cap_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "size > maxBytes - read",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "skipped_not_passed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "out.skipped = skipped",
+   "new": "out.skipped = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "prune_dirs",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "v.isRegularFile == true,",
+   "new": "true,",
+   "expect": "killed"
+  }
+ ]
+}
