@@ -109,6 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // drain prompts queued while the app was down. See AgentCLI.
         AgentCLI.observeAndDrain()
 
+        // #1807: the agent control socket (`ProsperApp ctl ...`); binds off main, idle until a client connects.
+        ControlServer.startShared()
+
         // Debug completion endpoint (env-gated, no-op unless PROSPER_DEBUG_ENDPOINT=1):
         // headless warm-cache latency measurement against the resident model.
         DebugCompletionEndpoint.observeIfEnabled()

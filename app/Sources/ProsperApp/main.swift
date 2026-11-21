@@ -12,6 +12,11 @@ ModelPaths.bootstrap()
 // guard or the guard would just activate the app and drop the arguments.
 AgentCLI.runIfRequested()
 
+// CLI: `ProsperApp ctl <cmd> [--json '<args>']` asks the running app over its control
+// socket and exits (#1807). Before the single-instance guard for the same reason; it
+// never launches the app.
+ControlCLI.runIfRequested()
+
 // Headless inline-completion bench (env-gated): runs the real completion pipeline
 // over a corpus and exits, no GUI/AX/ghost. For fast content/quality iteration.
 HeadlessBenchCLI.runIfRequested()

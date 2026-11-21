@@ -1,0 +1,48 @@
+{
+ "entry": "1807",
+ "filter": "ControlChannelTests",
+ "mutants": [
+  {
+   "name": "uid-check-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "guard peerUID(c) == getuid() else {",
+   "new": "guard true || peerUID(c) == getuid() else {",
+   "expect": "killed"
+  },
+  {
+   "name": "size-cap-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "guard data.count <= Self.maxRequest else {",
+   "new": "guard data.count <= Int.max else {",
+   "expect": "killed"
+  },
+  {
+   "name": "size-cap-read-loop-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "if data.count > Self.maxRequest { break }",
+   "new": "if data.count > Int.max { break }",
+   "expect": "killed"
+  },
+  {
+   "name": "mode-not-0600",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "guard chmod(path, 0o600) == 0,",
+   "new": "guard chmod(path, 0o666) == 0,",
+   "expect": "killed"
+  },
+  {
+   "name": "live-listener-replaced",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "if let live = Self.connect(path) {",
+   "new": "if false, let live = Self.connect(path) {",
+   "expect": "killed"
+  },
+  {
+   "name": "read-timeout-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlServer.swift",
+   "old": "Self.setTimeout(c, SO_RCVTIMEO, left)",
+   "new": "_ = left",
+   "expect": "killed"
+  }
+ ]
+}

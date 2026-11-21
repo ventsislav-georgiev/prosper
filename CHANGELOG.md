@@ -2253,6 +2253,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: switching back to a session no longer shifts its terminal up and down. (#1806)
 - Agent Sessions: typing no longer stops reaching every session after switching between kept
   sessions (beta.43). (#1805)
+- Agents can now talk to a running Prosper: `ProsperApp ctl describe` lists what they can ask it
+  (only ping and version so far; more commands follow). (#1807)
 
 ## v2.174.0
 
