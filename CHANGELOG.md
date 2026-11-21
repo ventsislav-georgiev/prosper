@@ -2354,6 +2354,9 @@ tag from the now-released section and put it on the new top draft.
   minute, so sessions starting together no longer all get a refusal from the same account. (#1855)
 - The README has an "Agent control" section, and the Prosper agent kit teaches agents the
   `ProsperApp ctl` commands. (#1812)
+- Agents can list, read, save and delete text snippets through Prosper's control channel; a snippet
+  an agent saves never auto-expands, clipboard placeholders are refused, and saving or deleting can
+  be undone. (#1858)
 
 ## v2.174.0
 

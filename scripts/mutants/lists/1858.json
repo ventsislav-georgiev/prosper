@@ -1,0 +1,62 @@
+{
+ "entry": "1858",
+ "filter": "ControlSnippetsTests",
+ "mutants": [
+  {
+   "name": "M1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        clipboardToken.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil",
+   "new": "        false",
+   "expect": "killed"
+  },
+  {
+   "name": "M2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "autoExpand: false, richText: false)",
+   "new": "autoExpand: true, richText: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "M3",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "if ControlSessionsTalk.hasUnseen(text, allowing: [\"\\n\", \"\\t\"]) {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "M4",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "{ if let old { storeSave(old) } else { storeRemove(name) } }",
+   "new": "{ storeRemove(name) }",
+   "expect": "killed"
+  },
+  {
+   "name": "M5",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "undo: { storeSave(old) })",
+   "new": "undo: { })",
+   "expect": "killed"
+  },
+  {
+   "name": "M6",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "guard hits.count < 2 else {",
+   "new": "guard hits.count < 99 else {",
+   "expect": "killed"
+  },
+  {
+   "name": "M7",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "== text else { throw ControlError(\"the snippet store did not save it\") }",
+   "new": "== text || true else { throw ControlError(\"the snippet store did not save it\") }",
+   "expect": "killed"
+  },
+  {
+   "name": "M8",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "\"bytes\": .number(Double(h.text.utf8.count))])\n        })])",
+   "new": "\"bytes\": .number(Double(h.text.utf8.count)), \"text\": .string(h.text)])\n        })])",
+   "expect": "killed"
+  }
+ ]
+}
