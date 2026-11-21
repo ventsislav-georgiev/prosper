@@ -1,0 +1,90 @@
+{
+ "entry": "1833",
+ "filter": "ControlSessionsHistoryTests|ControlSessionsTests",
+ "mutants": [
+  {
+   "name": "gate_skipped",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if let why = historyRefusal(r, noMessage ? .resumeNoMessage : .resume, in: st) { throw ControlError(why) }",
+   "new": "if false, let why = historyRefusal(r, noMessage ? .resumeNoMessage : .resume, in: st) { throw ControlError(why) }",
+   "expect": "killed"
+  },
+  {
+   "name": "nomessage_ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let noMessage = message != nil || args[\"noMessage\"] == .bool(true)",
+   "new": "let noMessage = false",
+   "expect": "killed"
+  },
+  {
+   "name": "message_keeps_carry_on",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let noMessage = message != nil || args[\"noMessage\"] == .bool(true)",
+   "new": "let noMessage = args[\"noMessage\"] == .bool(true)",
+   "expect": "killed"
+  },
+  {
+   "name": "message_with_nomessage_false",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard args[\"noMessage\"] != .bool(false) else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_quiet_allowed",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if verb == .resumeNoMessage, AgentWindowModel.isRemote(r) {",
+   "new": "if false, verb == .resumeNoMessage, AgentWindowModel.isRemote(r) {",
+   "expect": "killed"
+  },
+  {
+   "name": "message_to_remote",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard !remote else { throw ControlError(\"a message goes only to a session on this Mac\") }",
+   "new": "_ = remote",
+   "expect": "killed"
+  },
+  {
+   "name": "message_to_non_claude",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard AgentIsland.isInteractiveClaude(r.argv) else { throw ControlError(\"a message needs a Claude Code session\") }",
+   "new": "_ = r.argv",
+   "expect": "killed"
+  },
+  {
+   "name": "say_to_record_name",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let key = AgentSessionKey(dir: r.key.dir, name: name)",
+   "new": "let key = r.key",
+   "expect": "killed"
+  },
+  {
+   "name": "busy_ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard resumeRecord(r, noMessage) else { throw ControlError(busy) }",
+   "new": "_ = resumeRecord(r, noMessage)",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_inflight_rerun",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard m.remoteResumeText[r.id] != AgentIsland.resumingText else { throw ControlError(busy) }",
+   "new": "_ = busy",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_rows_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "st.history + (model()?.rows.compactMap { $0.host == nil ? nil : $0.record } ?? [])",
+   "new": "st.history",
+   "expect": "killed"
+  },
+  {
+   "name": "history_gate_inverted",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "\"resume\": .bool(resume == nil)",
+   "new": "\"resume\": .bool(resume != nil)",
+   "expect": "killed"
+  }
+ ]
+}

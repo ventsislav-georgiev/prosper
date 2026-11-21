@@ -2321,6 +2321,9 @@ tag from the now-released section and put it on the new top draft.
   History, Settings, Translate, Coding Agent, Agent Sessions, Agent Island, Calendar, or an
   extension's own window), so a panel can no longer pop up and take the keys you are typing in
   another app. (#1848)
+- Agents can now list your Agent Sessions History over the prosper command (sessions.history) and
+  resume a record with or without dch's carry-on message, optionally sending their own first message
+  to the resumed Claude session (sessions.resume). (#1833)
 
 ## v2.174.0
 

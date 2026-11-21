@@ -185,6 +185,97 @@ enum ControlSessions {
             _ = m?.deleteLayout(made)
         })
     }
+
+    // MARK: - sessions.history / sessions.resume (#1833)
+
+    /// A History row's Resume: the island controller's own (the window's island when there is a window, its runner and
+    /// gates); false when nothing started (busy). Tests replace it.
+    static var resumeRecord: @MainActor (DchHistoryRecord, _ noMessage: Bool) -> Bool = {
+        (ControlSessions.model()?.island() ?? AgentIslandController.shared).resume($0, noMessage: $1)
+    }
+
+    /// The History rows: this Mac's records (the store the window and the island read), then another Mac's records as
+    /// the window's History lists them (its rows with a host; none without a window).
+    static func records(_ st: AgentIslandStore) -> [DchHistoryRecord] {
+        st.history + (model()?.rows.compactMap { $0.host == nil ? nil : $0.record } ?? [])
+    }
+
+    /// The id sessions.resume takes: the record's own (an aside record's file, else its name); "host:id" for another Mac's.
+    static func recordID(_ r: DchHistoryRecord) -> String {
+        AgentWindowModel.isRemote(r) ? "\(r.key.dir.dropFirst()):\(r.id.name)" : r.id.name
+    }
+
+    /// The History menu's answer for `verb` on `r` (AgentWindowControls.historyMenu + notRun, the confirm strip's check):
+    /// nil when it runs, else its reason ("Not run: Resume (needs dch 1.23.0)"). Another Mac's record has Resume only
+    /// (AgentWindowModel.act runs nothing else for it).
+    static func historyRefusal(_ r: DchHistoryRecord, _ verb: AgentWindowVerb, in st: AgentIslandStore) -> String? {
+        if verb == .resumeNoMessage, AgentWindowModel.isRemote(r) {
+            return "Not run: " + AgentIsland.label(AgentIsland.resumeNoMessageLabel, needs: "this Mac's records only")
+        }
+        return AgentWindowControls.notRun(AgentWindowControls.historyMenu(r, store: st), verb,
+                                          absent: AgentWindowControls.historyOff(verb, r, store: st))
+    }
+
+    /// {"history": [{id, name, title, cwd, ended, status, age, pinned, host, action, resume, resumeWhyNot,
+    /// resumeNoMessage, resumeNoMessageWhyNot}]}: read on demand from the store the window keeps (no dch call).
+    static func history() throws -> ControlJSON {
+        let st = try store(), m = model(), now = m?.now() ?? Date().timeIntervalSince1970
+        func str(_ s: String?) -> ControlJSON { s.map { .string($0) } ?? .null }
+        return .object(["history": .array(records(st).map { r -> ControlJSON in
+            let remote = AgentWindowModel.isRemote(r)
+            let resume = historyRefusal(r, .resume, in: st), quiet = historyRefusal(r, .resumeNoMessage, in: st)
+            return .object([
+                "id": .string(recordID(r)), "name": .string(r.name), "title": .string(r.title),
+                "cwd": r.cwd.isEmpty ? .null : .string(r.cwd), "ended": r.ended > 0 ? .number(r.ended) : .null,
+                "status": .string(AgentIsland.endLabel(r.end)), "age": .string(r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : ""),
+                "pinned": .bool(r.pinned), "host": remote ? .string(String(r.key.dir.dropFirst())) : .null,
+                "action": str(remote ? m?.remoteResumeText[r.id] : st.historyActions[r.id]),
+                "resume": .bool(resume == nil), "resumeWhyNot": str(resume),
+                "resumeNoMessage": .bool(quiet == nil), "resumeNoMessageWhyNot": str(quiet),
+            ])
+        })])
+    }
+
+    /// A History row's Resume, or its Resume (no message): the History menu's gate, then the controller's resume (this
+    /// Mac) or the window's resumeRemote (another Mac). `message`: resumed as Resume (no message), then the New session
+    /// first prompt's path (sayFirst: it waits for the revived Claude's prompt); refused for a non-Claude record or another Mac's.
+    /// No undo: a resume is not reversible.
+    static func resume(_ args: [String: ControlJSON]) throws -> ControlChange {
+        let st = try store(), id = try required(args, "id")
+        let hits = records(st).filter { recordID($0) == id }
+        guard hits.count < 2 else { throw ControlError("\(hits.count) History records are \(id): resume it from Agent Sessions") }
+        guard let r = hits.first else { throw ControlError("no History record \(id) (sessions.history lists them)") }
+        let message = string(args, "message"), remote = AgentWindowModel.isRemote(r)
+        if message != nil {
+            // The New session form's rule (newSessionClaude): a first message only to an interactive Claude on this Mac.
+            guard !remote else { throw ControlError("a message goes only to a session on this Mac") }
+            guard AgentIsland.isInteractiveClaude(r.argv) else { throw ControlError("a message needs a Claude Code session") }
+            // #1833 r1: the agent's message replaces dch's carry-on one: Resume (no message), on its own gate.
+            guard args["noMessage"] != .bool(false) else { throw ControlError("message already resumes without dch's carry-on message") }
+        }
+        let noMessage = message != nil || args["noMessage"] == .bool(true)
+        if let why = historyRefusal(r, noMessage ? .resumeNoMessage : .resume, in: st) { throw ControlError(why) }
+        let busy = "\(r.title) is busy: try again"
+        var name = r.name
+        if remote {
+            guard let m = model() else { throw ControlError(islandOff) }   // its record came from this model's rows
+            guard m.remoteResumeText[r.id] != AgentIsland.resumingText else { throw ControlError(busy) }
+            m.resumeRemote(r)
+            // resumeRemote shows its running text only when the job started (busy: nothing ran, nothing shown).
+            guard m.remoteResumeText[r.id] == AgentIsland.resumingText else { throw ControlError(busy) }
+        } else {
+            // The name it revives as, the controller's rule (resume: a name live now revives as the next free one).
+            let live = Set(st.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
+            let taken = Set(st.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
+            name = AgentIsland.reviveAs(r, live: live, records: taken) ?? r.name
+            guard resumeRecord(r, noMessage) else { throw ControlError(busy) }
+            if let message {
+                let key = AgentSessionKey(dir: r.key.dir, name: name)
+                if let m = model() { m.sayFirst(key, message, nil) } else { AgentIslandController.shared.sayFirst(key, message) }
+            }
+        }
+        return ControlChange(summary: "\(r.title) (a resume has no undo)", result: .string(name), verb: "resumed")
+    }
 }
 
 extension ControlRegistry {
@@ -210,5 +301,14 @@ extension ControlRegistry {
             "layout": ControlArg(type: "string", required: true, allowed: ControlSessions.layouts),
             "left": name, "right": name,
         ]) { _, a in try ControlSessions.setLayout(a) })
+        // #1833: the History rows and their Resume.
+        r.register(ControlCommand(name: "sessions.history",
+                                  summary: "List History records: id, name, cwd, ended, status, age, pinned, host, and whether Resume runs.",
+                                  args: [:], mutates: false) { _, _ in try ControlSessions.history() })
+        r.register(.change(name: "sessions.resume", summary: "Resume a History record, optionally without dch's message or with your own (no undo).", args: [
+            "id": ControlArg(type: "string", required: true, summary: "the record's id from sessions.history"),
+            "noMessage": ControlArg(type: "boolean", summary: "Resume (no message): dch types no carry-on message"),
+            "message": ControlArg(type: "string", summary: "your first message once it is up, instead of dch's (a Claude session on this Mac only)"),
+        ]) { _, a in try ControlSessions.resume(a) })
     }
 }

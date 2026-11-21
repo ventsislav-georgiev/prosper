@@ -26,8 +26,8 @@
   {
    "name": "ambiguous_allowed",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard hits.count < 2 else",
-   "new": "guard hits.count < 3 else",
+   "old": "guard hits.count < 2 else { throw ControlError(\"\\(hits.count) sessions are named",
+   "new": "guard hits.count < 3 else { throw ControlError(\"\\(hits.count) sessions are named",
    "expect": "killed"
   },
   {

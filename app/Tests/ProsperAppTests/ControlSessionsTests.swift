@@ -331,15 +331,16 @@ final class ControlSessionsTests: XCTestCase {
 
     // MARK: - Registration and the wire
 
-    /// registerSessions adds the six commands (list a read, the rest mutating); over reply() the args are validated
+    /// registerSessions adds the eight commands (list and history reads, the rest mutating; #1833 added history and resume); over reply() the args are validated
     /// before the handler and a handler's refusal is the error reply.
     @MainActor
     func testRegisterSessionsDescribesTheCommandsAndRepliesOnTheWire() async throws {
         var reg = ControlRegistry()
         ControlRegistry.registerSessions(&reg)
         XCTAssertEqual(reg.commands.keys.sorted(),
-                       ["layout.set", "sessions.focus", "sessions.list", "sessions.new", "sessions.restart", "sessions.stop"])
-        XCTAssertEqual(reg.commands.values.filter(\.mutates).count, 5)
+                       ["layout.set", "sessions.focus", "sessions.history", "sessions.list", "sessions.new", "sessions.restart", "sessions.resume",
+                        "sessions.stop"])
+        XCTAssertEqual(reg.commands.values.filter(\.mutates).count, 6)
         XCTAssertEqual(reg.commands["sessions.list"]?.mutates, false)
         let st = base.store([base.session("api", .idle)])
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow)
