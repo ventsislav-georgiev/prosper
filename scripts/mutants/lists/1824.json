@@ -1,0 +1,55 @@
+{
+ "entry": "1824",
+ "filter": "XrayRefStagedOpenTests|XrayHoverTests",
+ "mutants": [
+  {
+   "name": "M1-noLight",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "m.target.dir != nil && Self.lightFirst()\n",
+   "new": "m.target.dir != nil && false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-noHit",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "let hit = early ? cache?.get(lightKey) : nil",
+   "new": "let hit = false ? cache?.get(lightKey) : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-moreStays",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if r.status != 0 { refContext?.more = false }",
+   "new": "if r.status != 0 { _ = 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-remote",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "hit == nil && m.target.dir != nil && Self.lightFirst()",
+   "new": "hit == nil && Self.lightFirst()",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-footer",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "if !c.done || c.more {",
+   "new": "if !c.done {",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-dwellKept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        dwell?.cancel()\n        dwell = nil\n        guard let key else {",
+   "new": "        dwell = nil\n        guard let key else {",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-switchKeeps",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

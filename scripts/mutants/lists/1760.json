@@ -103,8 +103,8 @@
   {
    "name": "M15-cache-hit-parses-on-main",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "m.takeRef((0, hit.out), parsed: hit.parsed, text:",
-   "new": "m.takeRef((0, hit.out), parsed: nil, text:",
+   "old": "m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, scope: scope,",
+   "new": "m.takeRef((0, hit.out), parsed: nil, text: shown ?? text, scope: scope,",
    "expect": "killed"
   }
  ]

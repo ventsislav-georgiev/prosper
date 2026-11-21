@@ -709,7 +709,7 @@ final class XrayPanelModel: ObservableObject {
         let panels = panels
         // #1489: dch keys a term by its bare text; --ref wants it in backticks (a text holding one is no ref).
         let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text
-        if panels?.runRef(sent, shown: e.text, for: self) != true {   // refused: nothing runs
+        if panels?.runRef(sent, shown: e.text, staged: true, for: self) != true {   // refused: nothing runs; #1824: light first
             refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef
         }
         let read = panels?.refReading

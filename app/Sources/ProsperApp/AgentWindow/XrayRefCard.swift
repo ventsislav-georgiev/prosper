@@ -251,6 +251,8 @@ struct XrayRefContext: Equatable {
     let done: Bool
     let partial: Bool
     var light = false
+    /// #1824: a light answer shown while the pin's full read still runs: the footer says "searching more…".
+    var more = false
 
     static let commandMark = "your define_command"
     static let othersCountPrefix = "All projects"
@@ -456,7 +458,11 @@ extension XrayPanels {
     /// with no spawn and no read in flight; an exit-0 answer goes into the cache of the window that asked.
     @discardableResult
     /// #1565: `budget` set: the hover card's light read (lightArgs), whose `first.elapsed_ms` goes to spawnCosts.
-    func runRef(_ text: String, shown: String? = nil, scope: String = "project", budget: Int? = nil, for m: XrayPanelModel) -> Bool {
+    /// #1824: `staged` (a pin or a click, openRef): dch's full project read takes about 5 s (dch, 2026-11-21), its light
+    /// one 0.5 s, so the card opens from the window's cached light answer (a hover's) at once, else from a light read run
+    /// beside the full one (local only: a remote hover runs no read, K4.1); the full answer replaces it when it lands.
+    func runRef(_ text: String, shown: String? = nil, scope: String = "project", budget: Int? = nil, staged: Bool = false,
+                for m: XrayPanelModel) -> Bool {
         let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
         guard DchCtl.refOK(text), !text.hasPrefix("-"), !Self.overStdin(input), let dch = m.dch,
               let run = m.run else { return false }
@@ -471,9 +477,20 @@ extension XrayPanels {
             m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, scope: scope, light: hit.light, cached: true)
             return true
         }
+        let early = staged && scope == "project" && budget == nil
+        let lightKey = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: true, scope: scope)
+        let hit = early ? cache?.get(lightKey) : nil   // #1824: the hover's light answer (a full one was a hit above)
+        if let hit { m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, light: true, cached: true, more: true) }
+        let lightRead = early && hit == nil && m.target.dir != nil && Self.lightFirst()
+            ? m.target.refCall(m.target.lightArgs(arg, budget: Self.budget()), version: XrayPanels.probed?.version,
+                               lookups: Preferences.xrayGithubLookups) : nil
         let plain = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope)
         let (a, env, flagged) = m.target.refCall(plain, version: XrayPanels.probed?.version, lookups: Preferences.xrayGithubLookups)   // #1623
         refReading = Task { [weak m, weak cache] in
+            // #1824: a child of this read: the card's close, or the full answer landing first, cancels (SIGTERMs) it
+            let (pm, pc): (XrayPanelModel?, XrayRefResults?) = lightRead == nil ? (nil, nil) : (m, cache)
+            async let _: Void = Self.preview(lightRead?.args, lightRead?.env ?? [:], input: input, dch: dch, run: run,
+                                             m: pm, cache: pc, key: lightKey, text: shown ?? text)
             var r = await XrayPanels.stdin.withValue(input) { await run(dch, a, env) }
             // #1623: a host older than 1.113.0 refuses --no-github (exit 1; so does no corpus, so the retry is the evidence): once more without it
             if flagged, r.status == 1, !Task.isCancelled { r = await run(dch, plain, env) }
@@ -488,6 +505,24 @@ extension XrayPanels {
         Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
         return true
     }
+
+    /// #1824: runRef's light read beside a pin's full one (nil `args`: none). Its exit-0 answer is cached, and shown only
+    /// while the card has nothing yet (no context, no note): a full answer that landed first is never replaced.
+    static func preview(_ args: [String]?, _ env: [String: String], input: Data?, dch: String, run: @escaping XrayPanels.Run,
+                        m: XrayPanelModel?, cache: XrayRefResults?, key: XrayRefResults.Key, text: String) async {
+        guard let args else { return }
+        let r = await XrayPanels.stdin.withValue(input) { await run(dch, args, env) }
+        guard r.status == 0, !Task.isCancelled else { return }
+        let out = r.out
+        let parsed = await Task.detached(priority: .userInitiated) { XrayRefStream.parse(out) }.value
+        cache?.put(key, out, parsed: parsed)
+        guard !Task.isCancelled, let m, m.refContext == nil, m.refNote == nil else { return }
+        m.takeRef(r, parsed: parsed, text: text, light: true, more: true)
+    }
+
+    /// #1824: a pin runs the light read beside the full one. Off under XCTest as XrayRefResults.on is, so rows that
+    /// count spawns keep them; rows set it and restore it.
+    static var lightFirst: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
 
     /// #1565 (6.3): dch's own start-up ms (`first.elapsed_ms`) of the last 8 light reads, oldest first.
     static var spawnCosts: [Int] = []
@@ -546,14 +581,16 @@ extension XrayPanelModel {
     /// #1565: a `light` read's `first.elapsed_ms` is kept (XrayPanels.spent). #1567: not a `cached` one (no spawn); the
     /// context says it is light (its footer's end slot).
     /// #1760: `parsed`: the stream already parsed off main (runRef's read); nil parses here (a cache hit, rows).
+    /// #1824: `more`: a light answer shown while the pin's full read runs (the footer's "searching more…").
     func takeRef(_ r: (status: Int32, out: Data), parsed: XrayRefStream? = nil, text: String, scope: String = "project",
-                 light: Bool = false, cached: Bool = false) {
+                 light: Bool = false, cached: Bool = false, more: Bool = false) {
+        if r.status != 0 { refContext?.more = false }   // #1824: the full read failed: the light answer stays, not "searching more…"
         switch r.status {
         case 0:
             let s = parsed ?? XrayRefStream.parse(r.out)
             if light, !cached { XrayPanels.spent(s.first?.elapsed) }
             var c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
-            c.light = light
+            (c.light, c.more) = (light, more)
             refContext = scope == "project" ? c : refContext?.with(others: c)
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef

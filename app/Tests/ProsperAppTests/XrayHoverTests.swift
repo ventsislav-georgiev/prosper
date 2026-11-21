@@ -283,6 +283,48 @@ final class XrayHoverTests: XCTestCase {
         }
     }
 
+    /// #1824: red with the cached light answer not served (M2-noHit): the dwell's light read (the hover-intent prefetch)
+    /// lands in the window cache, so a Command-click on the mark opens the pinned card with its rows at once.
+    func testDwellPrefetchMakesTheClickACacheHit() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            let cache = XrayRefResults()
+            r.panel.refResults = { cache }
+            dwell(r, "issue:#12")
+            await r.panels.refReading?.value
+            XCTAssertEqual(r.run.calls.count, 1)
+            XCTAssertEqual(r.run.calls.first?.contains("--budget-ms"), true)
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
+            XCTAssertEqual(r.panel.refCard?.key, "issue:#12")
+            let c = try XCTUnwrap(r.panel.refContext, "the rows before any await")
+            XCTAssertTrue(c.light && c.more)
+            await r.panels.refReading?.value
+            XCTAssertEqual(r.run.calls.count, 2, "the full read only")
+            XCTAssertEqual(r.run.calls.last?.contains("--full"), true)
+            XCTAssertEqual(r.panel.refContext?.light, false)
+        }
+    }
+
+    /// #1824: red if a move off the mark before the dwell still reads (M6-dwellKept: the dwell item not cancelled), or a
+    /// move to another mark leaves the old prefetch running (M7-switchKeeps: show's closeRef dropped).
+    func testPointerMoveCancelsThePrefetch() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            r.v.marks.hover.point("issue:#1")
+            let pending = try XCTUnwrap(r.item(0.5))
+            r.v.marks.hover.point(nil)
+            XCTAssertTrue(pending.isCancelled, "a move off the mark: no prefetch")
+            XCTAssertEqual(r.run.calls.count, 0)
+            dwell(r, "issue:#1")
+            await waitCalls(r.run, 1)
+            r.v.marks.hover.point("issue:#12")
+            await waitCancelled(r.run, 1)
+            XCTAssertEqual(r.run.cancelled, 1, "the move to #12 killed #1's light read")
+            r.v.marks.hover.close(all: true)
+            await r.panels.refReading?.value
+        }
+    }
+
     /// Red if an unpinned card shows another session's mention or passage, or a pinned one loses them.
     func testUnpinnedCardDropsOtherSessionLines() throws {
         let c = XrayRefContext(XrayRefStream.parse(Data(Self.stream.utf8)), ref: "#12", tasks: nil, memory: nil)

@@ -131,8 +131,8 @@
   {
    "name": "M-searching",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
-   "old": "        if !c.done {\n            out.append(searching)",
-   "new": "        if false {\n            out.append(searching)",
+   "old": "        if !c.done || c.more {   // #1824: a light answer while the full read runs\n            out.append(searching)",
+   "new": "        if false {   // #1824: a light answer while the full read runs\n            out.append(searching)",
    "expect": "killed"
   },
   {

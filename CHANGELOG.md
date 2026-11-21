@@ -2286,6 +2286,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now read and change Prosper's settings through the control channel (settings.schema,
   settings.get, settings.set): every change is checked first, shows the Undo notice and is logged,
   and secrets such as keys and tokens are never listed or readable. (#1810)
+- X-ray: clicking an issue or other ref now opens its card with the session's mentions in about half
+  a second (at once after hovering the ref), instead of a "Reading…" card for 5 s; the rest of the
+  project's mentions fill in when the full search ends. (#1824)
 
 ## v2.174.0
 

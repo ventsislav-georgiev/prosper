@@ -214,7 +214,7 @@ struct XrayRefPopover: View {
             out.append("This session \(ge)\(n.session)")   // #1641: a label, not "≥9 session"
             if n.projectSessions > 0 { out.append("\(ge)\(n.project) in \(n.projectSessions) others") }
         }
-        if !c.done {
+        if !c.done || c.more {   // #1824: a light answer while the full read runs
             out.append(searching)
         } else if c.light, c.partial, let n = c.rawCounts {   // the parse bounds each count to Int32.max: no overflow
             out.append("\u{2265}\(n.session + n.project) \u{00B7} \(clickForAll)")
