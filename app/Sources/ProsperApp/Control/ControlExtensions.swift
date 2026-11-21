@@ -44,6 +44,48 @@ enum ControlExtensions {
         }
     }
 
+    /// #1869: extensions.update's deadline, as kits.install's (ControlCLI gives up at 70 s).
+    static var updateDeadline: Double = 60
+    static let updateLate = "extensions.update ran past its deadline and stopped before the next extension; an update already "
+        + "installing finished (each swaps its folder whole). extensions.list shows the versions now"
+
+    /// One reply row. Every text is outside data (the manifest's and the listing's versions, an error's text): cleaned.
+    static func updateRow(_ r: ExtensionRegistry.UpdateResult, _ reg: ExtensionRegistry) -> ControlJSON {
+        var o: [String: ControlJSON] = [
+            "id": .string(OutsideText.shown(r.id, max: 80)), "outcome": .string(r.outcome.rawValue),
+            "from": .string(OutsideText.shown(r.from, max: ExtensionRowText.versionMax)),
+        ]
+        if let to = r.to { o["to"] = .string(OutsideText.shown(to, max: ExtensionRowText.versionMax)) }
+        if let why = r.reason { o["reason"] = .string(OutsideText.shown(why, max: 400)) }
+        if r.outcome == .updated, reg.record(id: r.id)?.manifest.contributes?.kit != nil {
+            o["note"] = .string("an agent kit: its applied files stay at the old version until kits.apply (kits.list shows updateAvailable)")
+        }
+        return .object(o)
+    }
+
+    /// #1869: the Check for Updates button's check (force: no 24 h wait), quiet: an update that adds a permission is held
+    /// as the daily check holds it, never asked. `id`: that extension only (a user one with an update source).
+    static func update(_ args: [String: ControlJSON]) async throws -> ControlChange {
+        let reg = try loaded()
+        let only: String? = try args["id"].map { v in
+            guard case .string(let id) = v else { throw ControlError("argument 'id' must be a string") }
+            let name = OutsideText.shown(id, max: 80)
+            guard let rec = reg.record(id: id) else { throw ControlError("unknown extension '\(name)' (extensions.list lists them)") }
+            guard !rec.isSystem else { throw ControlError("\(name) is built in: it updates with Prosper, not here") }
+            guard rec.manifest.extension.updateURL != nil else { throw ControlError("\(name) has no update source (no update_url)") }
+            return id
+        }
+        let got = try await ControlSessionsRead.within(updateDeadline, "extensions.update", late: updateLate) { @MainActor in
+            let results = await reg.checkForUpdates(force: true, quiet: true, only: only)
+            return .success(.array(results.map { updateRow($0, reg) }))
+        }
+        guard case .array(let rows) = got else { throw ControlError("extensions.update: no reply") }
+        let outcomes = rows.compactMap { row -> ControlJSON? in if case .object(let r) = row { return r["outcome"] } else { return nil } }
+        let count = { (o: String) in outcomes.filter { $0 == .string(o) }.count }
+        let summary = "checked \(rows.count): \(count("updated")) updated, \(count("held")) held, \(count("failed")) failed (no Undo: an update is a reinstall)"
+        return ControlChange(summary: summary, result: .object(["results": got]), verb: "updated extensions")
+    }
+
     static func themes() -> ControlJSON {
         let store = ThemeStore.shared
         let reg = registry()
@@ -71,6 +113,11 @@ extension ControlRegistry {
                            args: id) { _, args in try ControlExtensions.setEnabled(true, args: args) })
         r.register(.change(name: "extensions.disable", summary: "Turn an extension off, as its Settings toggle does. Untrusted ones are refused; Undo turns it back.",
                            args: id) { _, args in try ControlExtensions.setEnabled(false, args: args) })
+        r.register(ControlKits.change("extensions.update",
+                                      "Check extensions for updates now, as Settings > Extensions > Check for Updates (no daily wait), and install them. An update that asks for a new permission is held for a person's review, never asked here. Reply: results [{id, from, to, outcome (updated, upToDate, held, failed), reason}]. An updated agent kit stays applied at its old version until kits.apply (kits.list shows updateAvailable). No Undo: an update is a reinstall.",
+                                      ["id": ControlArg(type: "string", summary: "only this extension (an id from extensions.list); all updatable ones when absent")]) {
+            try await ControlExtensions.update($0)
+        })
         r.register(ControlCommand(name: "themes.list",
                                   summary: "Every theme: id, title, appearance (dark/light), builtIn, extension, current.",
                                   args: [:], mutates: false) { _, _ in ControlExtensions.themes() })

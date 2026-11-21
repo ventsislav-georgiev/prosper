@@ -1790,22 +1790,36 @@ final class ExtensionRegistry: ObservableObject {
         ("update check failed for \(id)", (error as? LocalizedError)?.errorDescription ?? String(describing: error))
     }
 
+    /// #1869: what the check did with one candidate (ctl extensions.update's reply). The texts are outside data, raw here:
+    /// the reply cleans them. `to`: the newer version found (nil when none was); `reason`: why failed or held.
+    struct UpdateResult: Sendable, Equatable {
+        enum Outcome: String, Sendable { case updated, upToDate, held, failed }
+        let id: String, from: String
+        var to: String? = nil
+        var outcome: Outcome
+        var reason: String? = nil
+    }
+
     /// Poll each user extension's `update_url` for a newer version and auto-apply
     /// it. Throttled to once per day unless `force` (the "Check for Updates"
     /// button passes force). System extensions update via the bundle, not here.
-    func checkForUpdates(force: Bool = false) async {
+    /// #1869: `quiet` (ctl extensions.update) never asks about new permissions, even with force: it holds the update as the
+    /// daily check does. `only` checks that one id and leaves the daily throttle date alone. Stops at the next candidate
+    /// once the task is cancelled (a ctl deadline); an install already started runs to its end.
+    @discardableResult
+    func checkForUpdates(force: Bool = false, quiet: Bool = false, only: String? = nil) async -> [UpdateResult] {
         if !force, let last = defaults.object(forKey: Self.updateCheckKey) as? Date,
-           Date().timeIntervalSince(last) < 86_400 { return }
-        defaults.set(Date(), forKey: Self.updateCheckKey)
+           Date().timeIntervalSince(last) < 86_400 { return [] }
+        if only == nil { defaults.set(Date(), forKey: Self.updateCheckKey) }
 
         // Snapshot candidates up front — installLocal() rebuilds `records`.
-        let candidates: [(id: String, version: SemanticVersion, url: String)] =
+        let candidates: [(id: String, version: SemanticVersion, from: String, url: String)] =
             records.compactMap { rec in
-                guard !rec.isSystem,
+                guard !rec.isSystem, only == nil || rec.id == only,
                       let url = rec.manifest.extension.updateURL else { return nil }
-                return (rec.id, SemanticVersion(rec.manifest.extension.version), url)
+                return (rec.id, SemanticVersion(rec.manifest.extension.version), rec.manifest.extension.version, url)
             }
-        guard !candidates.isEmpty else { if force { updateStatus = "No updatable extensions." }; return }
+        guard !candidates.isEmpty else { if force { updateStatus = "No updatable extensions." }; return [] }
         if force { updateStatus = "Checking…" }
 
         // Market extensions (prosper://market/<id>) share one index request rather
@@ -1816,18 +1830,34 @@ final class ExtensionRegistry: ObservableObject {
 
         // #1704: only the person's Check for Updates (force) asks about new permissions; the daily check never shows the
         // alert: it declines quietly and holds the update for review.
-        let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }
+        let asks = force && !quiet
+        let review: PermissionReview = asks ? reviewNewPermissions : { @Sendable _, _ in false }
         var tally = UpdateTally()
+        var results: [UpdateResult] = []
         for cand in candidates {
+            if Task.isCancelled { break }
             var tried: (id: String, listed: String)?   // R1182-q1: the market pair this pass downloads
             var stage = UpdateStage.install            // R1182-q6: .fetch only while RemoteInstaller.fetch runs
+            var result = UpdateResult(id: cand.id, from: cand.from, outcome: .upToDate)
+            defer { results.append(result) }
             do {
                 if cand.url.hasPrefix(marketPrefix) {
                     let pkgID = String(cand.url.dropFirst(marketPrefix.count))
                     let step = Self.marketStep(index: marketIndex, id: pkgID, current: cand.version, refused: refusedUpdates)
                     tally.record(step)
+                    result.to = step == .nothing ? nil : marketIndex?[pkgID]
+                    switch step {
+                    case .skipRefused: result.outcome = .failed; result.reason = "this version's package was refused before"
+                    case .unchecked: result.outcome = .failed; result.reason = "the Marketplace index could not be read"
+                    case .nothing, .install: break
+                    }
                     guard step == .install, let latest = marketIndex?[pkgID] else { continue }
-                    if !force, refusedUpdates.waits(id: cand.id, listed: latest) { tally.waitingOne(); continue }
+                    if !asks, refusedUpdates.waits(id: cand.id, listed: latest) {
+                        tally.waitingOne()
+                        result.outcome = .held
+                        result.reason = refusedUpdates.waiting[cand.id]?.note
+                        continue
+                    }
                     tried = (pkgID, latest)
                     // An installed kit gets its listing read whatever the new archive is (it may have turned into a non-kit).
                     let wasKit = record(id: cand.id)?.manifest.contributes?.kit != nil
@@ -1836,6 +1866,7 @@ final class ExtensionRegistry: ObservableObject {
                     defer { discard(prepared) }
                     _ = try install(prepared, review: review)
                     tally.record(Self.outcome(threwAt: nil))
+                    result.outcome = .updated
                     log.info("auto-updated market extension \(cand.id, privacy: .public) to \(latest, privacy: .public)")
                     continue
                 }
@@ -1844,6 +1875,7 @@ final class ExtensionRegistry: ObservableObject {
                 stage = .install
                 defer { RemoteInstaller.removeWorkFolder(holding: remoteDir) }
                 guard let remote = Self.manifestVersion(at: remoteDir), cand.version < remote else { continue }
+                result.to = "\(remote.major).\(remote.minor).\(remote.patch)"
                 // Same clobber guard as the market path: installLocal installs under the
                 // tarball's OWN manifest id, so a (compromised) update feed for A that ships
                 // a tarball declaring id B would overwrite userDir/B and inherit B's trust.
@@ -1852,10 +1884,13 @@ final class ExtensionRegistry: ObservableObject {
                 injectUpdateURL(cand.url, intoManifestAt: remoteDir)   // keep origin sticky
                 try installLocal(from: remoteDir, review: review)
                 tally.record(Self.outcome(threwAt: nil))
+                result.outcome = .updated
                 log.info("auto-updated extension \(cand.id, privacy: .public) to a newer version")
             } catch ExtensionError.newPermissionsDeclined(_, let added) {
                 tally.waitingOne()
                 refusedUpdates.hold(id: cand.id, listed: tried?.listed, added: added)
+                result.outcome = .held
+                result.reason = refusedUpdates.waiting[cand.id]?.note
                 objectWillChange.send()   // the row's note; an automatic check sets no status
                 log.info("update of \(cand.id, privacy: .public) waits for review: it asks for new permissions")
             } catch {
@@ -1863,9 +1898,12 @@ final class ExtensionRegistry: ObservableObject {
                 if let tried { refusedUpdates.note(error, id: tried.id, listed: tried.listed) }
                 let line = Self.updateFailureLog(id: cand.id, error: error)
                 log.error("\(line.shown, privacy: .public): \(line.why, privacy: .private)")
+                result.outcome = .failed
+                result.reason = line.why
             }
         }
         if let status = tally.status(force: force) { updateStatus = status }
+        return results
     }
 
     /// Persist the GitHub origin as `update_url` in the extension's manifest so

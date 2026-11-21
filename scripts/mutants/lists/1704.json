@@ -47,14 +47,14 @@
   {
    "name": "daily_asks",
    "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
-   "old": "let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }",
+   "old": "let review: PermissionReview = asks ? reviewNewPermissions : { @Sendable _, _ in false }",
    "new": "let review: PermissionReview = reviewNewPermissions",
    "expect": "killed"
   },
   {
    "name": "user_quiet",
    "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
-   "old": "let review: PermissionReview = force ? reviewNewPermissions : { @Sendable _, _ in false }",
+   "old": "let review: PermissionReview = asks ? reviewNewPermissions : { @Sendable _, _ in false }",
    "new": "let review: PermissionReview = { @Sendable _, _ in false }",
    "expect": "killed"
   },

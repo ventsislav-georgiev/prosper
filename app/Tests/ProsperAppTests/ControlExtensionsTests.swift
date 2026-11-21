@@ -173,6 +173,148 @@ final class ControlExtensionsTests: XCTestCase {
         XCTAssertTrue(reg.changes.entries.isEmpty)
     }
 
+    // MARK: extensions.update (#1869): market seams only (index, download into the row's tempDir), never the network
+
+    private struct UpdateFixture { let ext: ExtensionRegistry; let root: URL; let fetched: FetchLog }
+
+    private func writeUser(_ dir: URL, id: String, version: String, permissions: [String] = [], market: Bool = true) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let perms = permissions.isEmpty ? "" : "permissions = [" + permissions.map { "\"\($0)\"" }.joined(separator: ", ") + "]\n"
+        try """
+        [extension]
+        id = "\(id)"
+        name = "\(id.split(separator: ".").last ?? "x")"
+        title = "Upd \(id.split(separator: ".").last ?? "x")"
+        description = "Test fixture"
+        version = "\(version)"
+        author = "example"
+        \(perms)\(market ? "update_url = \"prosper://market/\(id)\"\n" : "")
+        [extension.host]
+        min_version = "2.0.0"
+        api_level = 1
+
+        [extension.entry]
+        main = "init.lua"
+        """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        try "-- \(version)".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
+    }
+
+    /// A system extension, two trusted market extensions at 1.0.0 (alpha, beta) and one with no update source. The index
+    /// lists `listed`; a download of <id> copies the source written by `offer` (1.1.0 with `newPerms` for alpha).
+    private func updateFixture(listed: [String: String], newPerms: [String] = [], fail: Bool = false) throws -> UpdateFixture {
+        let root = tempDir()
+        try write(root, "system/fake", id: "com.example.fake", title: "Fake Tools", system: true, commands: 0)
+        let user = root.appendingPathComponent("user")
+        for id in ["com.example.alpha", "com.example.beta"] {
+            try writeUser(user.appendingPathComponent(id), id: id, version: "1.0.0")
+            try writeUser(root.appendingPathComponent("offer/\(id)"), id: id, version: "1.1.0",
+                          permissions: id == "com.example.alpha" ? newPerms : [])
+        }
+        try writeUser(user.appendingPathComponent("com.example.local"), id: "com.example.local", version: "1.0.0", market: false)
+        defaults = scratchDefaults("ctlext-update")
+        defaults.set([String](), forKey: "trustedExtensionIDs")
+        let ext = ExtensionRegistry(systemDir: root.appendingPathComponent("system"), userDir: user,
+                                    hostVersion: "2.0.0", defaults: defaults)
+        ext.discover()
+        for id in ["com.example.alpha", "com.example.beta"] { try ext.trust(id: id) }
+        let work = root.appendingPathComponent("work"), fetched = FetchLog()
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        ext.marketTempRoot = work
+        ext.marketIndex = { listed }
+        ext.marketFetch = { id, _ in
+            let n = fetched.add(id)
+            if fail { throw FakeDownloadError() }
+            let folder = work.appendingPathComponent("prosper-market-\(n)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let dir = folder.appendingPathComponent("src", isDirectory: true)
+            try FileManager.default.copyItem(at: root.appendingPathComponent("offer/\(id)"), to: dir)
+            return dir
+        }
+        addTeardownBlock { @MainActor in ControlExtensions.registry = { (NSApp?.delegate as? AppDelegate)?.extensionRegistry } }
+        ControlExtensions.registry = { ext }
+        return UpdateFixture(ext: ext, root: root, fetched: fetched)
+    }
+
+    private func version(_ f: UpdateFixture, _ id: String) -> String? { f.ext.record(id: id)?.manifest.extension.version }
+
+    func testUpdateInstallsANewerVersionReportsUpToDateAndHasNoUndo() async throws {
+        let f = try updateFixture(listed: ["com.example.alpha": "1.1.0", "com.example.beta": "1.0.0"])
+        let reg = registry()
+        let reply = await call(reg, "extensions.update")
+        XCTAssertTrue(reply.ok, "\(reply)")
+        let all = rows(reply, "results")
+        XCTAssertEqual(all.keys.sorted(), ["com.example.alpha", "com.example.beta"], "user extensions with an update source only")
+        XCTAssertEqual(all["com.example.alpha"], ["id": .string("com.example.alpha"), "from": .string("1.0.0"),
+                                                  "to": .string("1.1.0"), "outcome": .string("updated")])
+        XCTAssertEqual(all["com.example.beta"], ["id": .string("com.example.beta"), "from": .string("1.0.0"), "outcome": .string("upToDate")])
+        XCTAssertEqual(version(f, "com.example.alpha"), "1.1.0")
+        XCTAssertEqual(version(f, "com.example.beta"), "1.0.0")
+        XCTAssertEqual(f.fetched.ids, ["com.example.alpha"])
+        XCTAssertEqual(reg.changes.entries.last?.command, "extensions.update")
+        XCTAssertTrue(notices.last?.contains("1 updated, 0 held, 0 failed (no Undo") == true, "\(notices)")
+        XCTAssertFalse(reg.changes.undo(reg.changes.entries.last?.id ?? -1), "an update is a reinstall: no Undo")
+        XCTAssertTrue(defaults.object(forKey: "extensionsUpdateLastCheck") != nil, "a check of all of them sets the daily date")
+    }
+
+    /// The person's alert is the registry's seam: a recorder that would accept, so an asked update would install.
+    func testUpdateAddingAPermissionIsHeldWithoutAnAlert() async throws {
+        let f = try updateFixture(listed: ["com.example.alpha": "1.1.0"], newPerms: ["full-disk-access"])
+        var asked = 0
+        f.ext.reviewNewPermissions = { _, _ in asked += 1; return true }
+        let reg = registry()
+        for pass in 1...2 {
+            let reply = await call(reg, "extensions.update")
+            XCTAssertTrue(reply.ok, "\(reply)")
+            let alpha = rows(reply, "results")["com.example.alpha"]
+            XCTAssertEqual(alpha?["outcome"], .string("held"), "pass \(pass)")
+            XCTAssertEqual(alpha?["to"], .string("1.1.0"))
+            guard case .string(let why)? = alpha?["reason"] else { return XCTFail("pass \(pass): \(reply)") }
+            XCTAssertTrue(why.contains("full-disk-access"), why)
+        }
+        XCTAssertEqual(asked, 0, "extensions.update never shows the new-permissions alert")
+        XCTAssertEqual(f.fetched.ids, ["com.example.alpha"], "a held pair is not downloaded again")
+        XCTAssertEqual(version(f, "com.example.alpha"), "1.0.0")
+        XCTAssertTrue(f.ext.updateWaitingNote(id: "com.example.alpha") != nil, "held for the person's Check for Updates")
+        XCTAssertTrue(f.ext.isTrusted(id: "com.example.alpha"))
+    }
+
+    func testFailedDownloadIsReportedWithACleanedReason() async throws {
+        let f = try updateFixture(listed: ["com.example.alpha": "1.1.0"], fail: true)
+        let reply = await call(registry(), "extensions.update", ["id": .string("com.example.alpha")])
+        XCTAssertTrue(reply.ok, "\(reply)")
+        let alpha = rows(reply, "results")["com.example.alpha"]
+        XCTAssertEqual(alpha?["outcome"], .string("failed"))
+        XCTAssertEqual(alpha?["to"], .string("1.1.0"))
+        guard case .string(let why)? = alpha?["reason"] else { return XCTFail("\(reply)") }
+        XCTAssertTrue(why.contains("the server said no") && !why.contains("\u{7}"), why)
+        XCTAssertEqual(version(f, "com.example.alpha"), "1.0.0")
+    }
+
+    func testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone() async throws {
+        let f = try updateFixture(listed: ["com.example.alpha": "1.1.0", "com.example.beta": "1.1.0"])
+        let reply = await call(registry(), "extensions.update", ["id": .string("com.example.beta")])
+        XCTAssertTrue(reply.ok, "\(reply)")
+        XCTAssertEqual(rows(reply, "results").keys.sorted(), ["com.example.beta"])
+        XCTAssertEqual(version(f, "com.example.beta"), "1.1.0")
+        XCTAssertEqual(version(f, "com.example.alpha"), "1.0.0", "the other updatable extension is untouched")
+        XCTAssertEqual(f.fetched.ids, ["com.example.beta"])
+        XCTAssertTrue(defaults.object(forKey: "extensionsUpdateLastCheck") == nil, "one id does not postpone the daily check")
+    }
+
+    func testUpdateRefusesAnUnknownABuiltInAndANonUpdatableId() async throws {
+        let f = try updateFixture(listed: ["com.example.alpha": "1.1.0"])
+        let reg = registry()
+        let cases = [("com.example.nope", "unknown extension 'com.example.nope'"), ("com.example.fake", "com.example.fake is built in"),
+                     ("com.example.local", "com.example.local has no update source")]
+        for (id, text) in cases {
+            let reply = await call(reg, "extensions.update", ["id": .string(id)])
+            XCTAssertTrue(reply.error?.contains(text) == true, "\(id): \(reply)")
+        }
+        XCTAssertTrue(f.fetched.ids.isEmpty)
+        XCTAssertEqual(version(f, "com.example.alpha"), "1.0.0")
+        XCTAssertTrue(reg.changes.entries.isEmpty, "a refusal logs nothing")
+    }
+
     // MARK: themes
 
     private func fakeThemes() {
@@ -230,7 +372,19 @@ final class ControlExtensionsTests: XCTestCase {
 
     func testDescribeMarksTheWritesAsMutating() {
         let cmds = registry().commands
-        for name in ["extensions.enable", "extensions.disable", "themes.set"] { XCTAssertEqual(cmds[name]?.mutates, true, name) }
+        for name in ["extensions.enable", "extensions.disable", "extensions.update", "themes.set"] { XCTAssertEqual(cmds[name]?.mutates, true, name) }
         for name in ["extensions.list", "themes.list"] { XCTAssertEqual(cmds[name]?.mutates, false, name) }
     }
+}
+
+/// #1869: the ids the fake market download was asked for (called off the main actor).
+private final class FetchLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [String] = []
+    var ids: [String] { lock.withLock { list } }
+    func add(_ id: String) -> Int { lock.withLock { list.append(id); return list.count } }
+}
+
+private struct FakeDownloadError: LocalizedError {
+    var errorDescription: String? { "the server said no\u{7}" }
 }

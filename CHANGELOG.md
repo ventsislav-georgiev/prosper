@@ -2402,6 +2402,9 @@ tag from the now-released section and put it on the new top draft.
   now blocks the tool call when Prosper's kit runner cannot run it: a bad argument, a missing or
   unsafe kit.env, input over 1 MiB, a failing .pre hook or a missing script. Before, the call was
   let through. Every other hook still lets the call through when it fails. (#1868)
+- Agents can now run the extension update check (`ctl extensions.update`, for all extensions or one
+  id); an update that asks for a new permission is held for your review instead of being installed.
+  (#1869)
 
 ## v2.174.0
 

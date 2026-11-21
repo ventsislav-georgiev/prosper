@@ -1,0 +1,46 @@
+{
+ "entry": "1869",
+ "filter": "ControlExtensionsTests",
+ "mutants": [
+  {
+   "name": "no-alert",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "        let asks = force && !quiet\n",
+   "new": "        let asks = force\n",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateAddingAPermissionIsHeldWithoutAnAlert"
+  },
+  {
+   "name": "id-scope",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "guard !rec.isSystem, only == nil || rec.id == only,",
+   "new": "guard !rec.isSystem,",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone"
+  },
+  {
+   "name": "refuse-system",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "            guard !rec.isSystem else {",
+   "new": "            guard true else {",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateRefusesAnUnknownABuiltInAndANonUpdatableId"
+  },
+  {
+   "name": "refuse-unknown",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "            guard let rec = reg.record(id: id) else { throw ControlError(\"unknown extension",
+   "new": "            guard let rec = reg.record(id: id) ?? reg.records.first else { throw ControlError(\"unknown extension",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateRefusesAnUnknownABuiltInAndANonUpdatableId"
+  },
+  {
+   "name": "throttle-only",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "        if only == nil { defaults.set(Date(), forKey: Self.updateCheckKey) }",
+   "new": "        defaults.set(Date(), forKey: Self.updateCheckKey)",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone"
+  }
+ ]
+}
