@@ -1,0 +1,83 @@
+{
+ "entry": "1866",
+ "filter": "ControlKitsTests",
+ "mutants": [
+  {
+   "name": "source_check",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "guard parts.count == 2 || (parts.count >= 4 && parts[2] == \"tree\") else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "setting_key",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "guard keys.contains(k) else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "piece_check",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "guard ids.contains(id) else { throw ControlError(\"unknown piece",
+   "new": "guard true else { throw ControlError(\"unknown piece",
+   "expect": "killed"
+  },
+  {
+   "name": "gate",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "ControlCommand(name: name, summary: summary, args: args, mutates: true,",
+   "new": "ControlCommand(name: name, summary: summary, args: args, mutates: false,",
+   "expect": "killed"
+  },
+  {
+   "name": "closure_refusal",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if let off, case .refused(let why) = KitPieceSelection(v).closure(off: off) {",
+   "new": "if false, let off, case .refused(let why) = KitPieceSelection(v).closure(off: off) {",
+   "expect": "killed"
+  },
+  {
+   "name": "undo",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if let rt = o.runtime(for: id), let ext = o.record(id)?.loaded { _ = await Task.detached { await rt.remove(ext) }.value }",
+   "new": "_ = o",
+   "expect": "killed"
+  },
+  {
+   "name": "put_back",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if fresh { try? await reg.uninstall(id: id) }",
+   "new": "if false { try? await reg.uninstall(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "real_consent",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "return ManagedConfig(roots: c.roots, consent: agent, writer: c.writer, now: c.now)",
+   "new": "_ = agent; return c",
+   "expect": "killed"
+  },
+  {
+   "name": "consent_leak",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "    private static func consenting(_ c: ManagedConfig, _ agent: KitAgentConsent?) -> ManagedConfig {\n        guard let agent else { return c }",
+   "new": "    nonisolated(unsafe) private static var leaked: KitAgentConsent?\n    private static func consenting(_ c: ManagedConfig, _ agent: KitAgentConsent?) -> ManagedConfig {\n        if let agent { leaked = agent }\n        guard let agent = agent ?? leaked else { return c }",
+   "expect": "killed"
+  },
+  {
+   "name": "trust_putback",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if !wasTrusted { try? ControlExtensions.loaded().untrust(id: id) }",
+   "new": "if false { try? ControlExtensions.loaded().untrust(id: id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "undo_scope",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "            if done.first {\n                undo = { @MainActor in",
+   "new": "            if true {\n                undo = { @MainActor in",
+   "expect": "killed"
+  }
+ ]
+}

@@ -129,11 +129,16 @@ final class KitPaneModel: ObservableObject {
             installOff.formUnion(KitPieceSelection(v).optIn)
             optInSeeded = true
         }
+        settings = Self.form(kit, env: f.settingsEnv)
+    }
+
+    /// The settings form: manifest key -> its .settings.env value, else the manifest default (the pane and kits.list).
+    nonisolated static func form(_ kit: KitManifest?, env: [String: String]) -> [String: String] {
         var form: [String: String] = [:]
         for s in kit?.settings ?? [] {
-            form[s.key] = f.settingsEnv["KIT_" + s.key.uppercased()] ?? Self.text(s.defaultValue)
+            form[s.key] = env["KIT_" + s.key.uppercased()] ?? text(s.defaultValue)
         }
-        settings = form
+        return form
     }
 
     nonisolated private static func text(_ v: TOMLValue?) -> String {
@@ -146,7 +151,7 @@ final class KitPaneModel: ObservableObject {
         }
     }
 
-    nonisolated private static func read(_ rt: KitRuntime, _ ext: LoadedExtension, source: KitInstallSource, others: Set<String>,
+    nonisolated static func read(_ rt: KitRuntime, _ ext: LoadedExtension, source: KitInstallSource, others: Set<String>,
                                          loginPath: @Sendable () -> String?, now: Date) async -> Facts {
         let status = await rt.refresh(ext)
         let kit = ext.manifest.contributes?.kit.map { KitManifest.parse($0).kit }
@@ -203,7 +208,7 @@ final class KitPaneModel: ObservableObject {
 
     nonisolated private static let notWritten = "not written: "
 
-    nonisolated private static func line(_ r: KitRuntimeResult) -> String {
+    nonisolated static func line(_ r: KitRuntimeResult) -> String {
         // R1409-i1: after a relaunch whose re-validation failed, the runtime answers "nothing applied" with the reason
         // in its notes: show that note; a restore refusal reads "not validated again"
         if let why = r.refused {
@@ -217,7 +222,7 @@ final class KitPaneModel: ObservableObject {
     }
 
     /// The checked selection write (#1428: it may throw while busy). nil: written; else the line to show.
-    nonisolated private static func select(_ rt: KitRuntime, _ v: KitValidated, off: Set<String>, offTools: [String: Set<String>]) -> String? {
+    nonisolated static func select(_ rt: KitRuntime, _ v: KitValidated, off: Set<String>, offTools: [String: Set<String>]) -> String? {
         do {
             if case .refused(let why) = try rt.setSelection(v, off: off, offTools: offTools) { return why.description }
             return nil
@@ -242,13 +247,21 @@ final class KitPaneModel: ObservableObject {
     func apply() -> Task<Void, Never>? {
         let src = installSource
         let first = live == nil, off = installOff, others = owner.otherKitSlugs(except: extID)
-        return act(needsTrust: true) { rt, ext in
-            if first {
-                guard case .ok(let v) = rt.preview(ext, source: src, otherKitSlugs: others) else { return "the kit is refused: see its checks" }
-                if let why = Self.select(rt, v, off: off, offTools: rt.offTools()) { return why }
-            }
-            return Self.line(await rt.apply(ext, source: src, otherKitSlugs: others))
+        return act(needsTrust: true) { rt, ext in await Self.applyRun(rt, ext, first: first, off: off, source: src, others: others).line }
+    }
+
+    nonisolated static let refusedText = "the kit is refused: see its checks"
+
+    /// #1866: apply's work, shared with kits.install / kits.apply: the line, and the runtime's result when apply ran (nil:
+    /// refused before it, nothing written). `agent`: the ctl call's consent; the pane passes none (the sheet asks).
+    nonisolated static func applyRun(_ rt: KitRuntime, _ ext: LoadedExtension, first: Bool, off: Set<String>, source src: KitInstallSource,
+                                     others: Set<String>, agent: KitAgentConsent? = nil) async -> (line: String, ran: KitRuntimeResult?) {
+        if first {
+            guard case .ok(let v) = rt.preview(ext, source: src, otherKitSlugs: others) else { return (refusedText, nil) }
+            if let why = select(rt, v, off: off, offTools: rt.offTools()) { return (why, nil) }
         }
+        let r = await rt.apply(ext, source: src, otherKitSlugs: others, agent: agent)
+        return (line(r), r)
     }
 
     @discardableResult
@@ -289,18 +302,22 @@ final class KitPaneModel: ObservableObject {
     func confirmToggle() -> Task<Void, Never>? {
         guard let asked = pendingOff, let v = validated else { return nil }
         let before = facts?.status?.off ?? [], applied = live != nil, tools = facts?.offTools ?? [:]
-        let t = act(needsTrust: true) { rt, ext in
-            if let why = Self.select(rt, v, off: asked, offTools: tools) { return why }
-            guard applied else { return "done" }
-            let after = rt.off(v)
-            let gone = after.subtracting(before), back = before.subtracting(after)
-            var line = "done"
-            if !gone.isEmpty { line = Self.line(await rt.remove(ext, ids: gone.sorted())) }
-            if !back.isEmpty, line == "done" { line = Self.line(await rt.repair(ext)) }
-            return line
-        }
+        let t = act(needsTrust: true) { rt, ext in await Self.toggleRun(rt, ext, v, off: asked, before: before, applied: applied, tools: tools).line }
         if t != nil { cancelToggle() }
         return t
+    }
+
+    /// #1866: confirmToggle's work, shared with kits.apply: the line and the runtime's notes of the remove and repair it ran.
+    nonisolated static func toggleRun(_ rt: KitRuntime, _ ext: LoadedExtension, _ v: KitValidated, off asked: Set<String>, before: Set<String>,
+                                      applied: Bool, tools: [String: Set<String>], agent: KitAgentConsent? = nil) async -> (line: String, notes: [String]) {
+        if let why = select(rt, v, off: asked, offTools: tools) { return (why, []) }
+        guard applied else { return ("done", []) }
+        let after = rt.off(v)
+        let gone = after.subtracting(before), back = before.subtracting(after)
+        var line = "done", notes: [String] = []
+        if !gone.isEmpty { let r = await rt.remove(ext, ids: gone.sorted(), agent: agent); line = Self.line(r); notes += r.notes }
+        if !back.isEmpty, line == "done" { let r = await rt.repair(ext, agent: agent); line = Self.line(r); notes += r.notes }
+        return (line, notes)
     }
 
     /// One tool of a tools piece on or off (G1 c), then (an applied kit) a repair writes the shims again.

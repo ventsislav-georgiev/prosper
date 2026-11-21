@@ -231,7 +231,9 @@ struct ManagedConfigChangeSet: Equatable, Sendable {
 }
 
 /// The seam every user-file write goes through. The real implementation (P2) is a native SwiftUI
-/// sheet; tests use a recording fake. Never "always allow": each non-noop change set asks.
+/// sheet; tests use a recording fake. Never "always allow": each non-noop change set asks. The one exception (#1866):
+/// a `ctl kits.*` call passes KitAgentConsent for that one runtime call, which approves its change sets under the
+/// "Let agents control Prosper" switch and records them for the reply and the agent-change log; nothing else does.
 protocol ManagedConfigConsent: Sendable {
     func confirm(_ changes: ManagedConfigChangeSet) async -> Bool
 }

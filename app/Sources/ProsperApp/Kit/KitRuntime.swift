@@ -27,6 +27,36 @@ struct KitRuntimeResult: Sendable {
     var config: ManagedConfigResult? = nil
 }
 
+/// #1866: one file an agent-approved run's change set touched: its path, the action (apply, remove, repair) and the change.
+struct KitApprovedFile: Equatable, Sendable {
+    var path: String
+    var action: String
+    var change: String
+}
+
+/// #1866: the consent of ONE kit runtime call made through `ctl kits.*`: it approves every change set of that call (the
+/// person's consent for the agent path is the "Let agents control Prosper" switch, checked before the call) and keeps
+/// what it approved for the reply and the log. Passed per call (`agent:`), never stored on the runtime: the pane's
+/// calls, and any other call, still ask the real sheet.
+final class KitAgentConsent: ManagedConfigConsent, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sets: [ManagedConfigChangeSet] = []
+
+    func confirm(_ changes: ManagedConfigChangeSet) async -> Bool {
+        lock.withLock { sets.append(changes) }
+        return true
+    }
+
+    var files: [KitApprovedFile] {
+        lock.withLock { sets }.flatMap { set in
+            set.files.map { f in
+                KitApprovedFile(path: f.path, action: set.action.rawValue,
+                                change: f.leftAsItIs ? "record only" : f.deletesFile ? "delete" : f.newFile ? "new file" : "edit")
+            }
+        }
+    }
+}
+
 struct KitRuntimeStatus: Sendable {
     var pieces: [ManagedConfigPieceStatus]
     var off: Set<String>
@@ -295,16 +325,23 @@ final class KitRuntime: @unchecked Sendable {
         return .success(config)
     }
 
+    /// #1866: this call's managed config with the agent consent in place of the sheet (same roots, writer and clock, as
+    /// the wiring's copy below); nil: the provider's own, the sheet. Local to the call: nothing is kept on the runtime.
+    private static func consenting(_ c: ManagedConfig, _ agent: KitAgentConsent?) -> ManagedConfig {
+        guard let agent else { return c }
+        return ManagedConfig(roots: c.roots, consent: agent, writer: c.writer, now: c.now)
+    }
+
     // MARK: apply / update
 
     /// Apply or update from the extension's own dir. Nothing happens for the version already live.
-    func apply(_ ext: LoadedExtension, source: KitInstallSource = .local, otherKitSlugs: Set<String> = []) async -> KitRuntimeResult {
+    func apply(_ ext: LoadedExtension, source: KitInstallSource = .local, otherKitSlugs: Set<String> = [], agent: KitAgentConsent? = nil) async -> KitRuntimeResult {
         guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
         defer { end() } // apply
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") } // spec 4.9
         let config: ManagedConfig
         switch self.config(for: ext) {
-        case .success(let c): config = c
+        case .success(let c): config = Self.consenting(c, agent)
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
         let meta = ext.manifest.extension
@@ -328,13 +365,13 @@ final class KitRuntime: @unchecked Sendable {
         return newer
     }
 
-    func rollback(_ ext: LoadedExtension) async -> KitRuntimeResult {
+    func rollback(_ ext: LoadedExtension, agent: KitAgentConsent? = nil) async -> KitRuntimeResult {
         guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
         defer { end() } // rollback
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") }
         let config: ManagedConfig
         switch self.config(for: ext) {
-        case .success(let c): config = c
+        case .success(let c): config = Self.consenting(c, agent)
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
         guard let s = current else { return KitRuntimeResult(refused: restoreRefusal ?? "nothing applied") }
@@ -488,12 +525,12 @@ final class KitRuntime: @unchecked Sendable {
     // MARK: remove / repair / status
 
     /// ManagedConfig's remove (its own sheet), then the shims of the removed pieces. `ids` nil: the whole kit.
-    func remove(_ ext: LoadedExtension, ids: [String]? = nil) async -> KitRuntimeResult {
+    func remove(_ ext: LoadedExtension, ids: [String]? = nil, agent: KitAgentConsent? = nil) async -> KitRuntimeResult {
         guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
         defer { end() } // remove
         let config: ManagedConfig
         switch self.config(for: ext) {
-        case .success(let c): config = c
+        case .success(let c): config = Self.consenting(c, agent)
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
         let host = await ExtensionRegistry.bundleVersion
@@ -510,13 +547,13 @@ final class KitRuntime: @unchecked Sendable {
     }
 
     /// The live version's declared pieces through ManagedConfig's repair (its own sheet), then its shims again.
-    func repair(_ ext: LoadedExtension) async -> KitRuntimeResult {
+    func repair(_ ext: LoadedExtension, agent: KitAgentConsent? = nil) async -> KitRuntimeResult {
         guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
         defer { end() } // repair
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") }
         let config: ManagedConfig
         switch self.config(for: ext) {
-        case .success(let c): config = c
+        case .success(let c): config = Self.consenting(c, agent)
         case .failure(let why): return KitRuntimeResult(refused: why.text)
         }
         let host = await ExtensionRegistry.bundleVersion

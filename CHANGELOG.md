@@ -2388,6 +2388,9 @@ tag from the now-released section and put it on the new top draft.
 - An agent's sessions.focus no longer moves your typing: when no pane shows the session and your
   keys are in the focused pane's terminal, it is refused (pick the session yourself), and its Undo
   never swaps that pane's session out from under your keys.
+- Agents can install, update, repair, roll back and remove an agent kit through the prosper command
+  (kits.list, kits.install, kits.apply, kits.repair, kits.rollback, kits.remove), behind Let agents
+  control Prosper.
 
 ## v2.174.0
 
