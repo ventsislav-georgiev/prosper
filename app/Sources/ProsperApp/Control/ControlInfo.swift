@@ -3,7 +3,8 @@ import StatsCore
 
 /// #1859: four small commands: notify (a visible notice from the agent), stats.get (the System Stats headline numbers),
 /// diagnostics (the Agent Sessions Diagnostics text, scrubbed) and updates.check (an information-only Sparkle check:
-/// it never downloads or installs). On demand only: no observer, no poll, no timer.
+/// it never downloads or installs); #1871 updates.install (the menu's Check for Updates without UI). On demand only: no
+/// observer, no poll, no timer.
 @MainActor
 enum ControlInfo {
     // MARK: - Seams (rows swap these; the defaults are the app's)
@@ -17,6 +18,7 @@ enum ControlInfo {
         return AgentDiagnostics.text(prosper: AppInfo.shortVersion, dch: "", version: nil, counts: [:], errors: [])
     }
     static var probe: @MainActor () async -> AppUpdater.Probe? = { await AppUpdater.shared.probeForUpdate() }
+    static var install: @MainActor () async -> AppUpdater.Install = { await AppUpdater.shared.installNow() }
 
     // MARK: - notify
 
@@ -114,6 +116,27 @@ enum ControlInfo {
         }
         return .object(o)
     }
+
+    // MARK: - updates.install
+
+    static let installNote = "Prosper relaunches by itself when the update is installed; read version afterwards"
+
+    /// #1871: the menu's Check for Updates without UI. Replies at once (never waits for the relaunch, which ends the
+    /// process that answers). nil change: nothing started (up to date), so no notice and no log line.
+    static func updatesInstall() async throws -> (ControlJSON, ControlChange?) {
+        let current = AppInfo.shortVersion
+        switch await install() {
+        case .off: throw ControlError("updates are off for this build (no updater or no SUFeedURL)")
+        case .busy: throw ControlError("an update check or download is already running; try again when it ends")
+        case .failed(let why): throw ControlError("update check failed: \(OutsideText.shown(why, max: 200))")
+        case .upToDate: return (.object(["started": .bool(false), "reason": .string("up to date"), "current": .string(current)]), nil)
+        case .started(let v):
+            let latest = OutsideText.shown(v, max: 32)
+            lastProbe = nil // the kept updates.check answer is stale once an install starts
+            let o: ControlJSON = .object(["started": .bool(true), "current": .string(current), "latest": .string(latest), "note": .string(installNote)])
+            return (o, ControlChange(summary: "\(current) to \(latest); Prosper relaunches by itself (no Undo)", result: o, verb: "started an update install"))
+        }
+    }
 }
 
 extension ControlRegistry {
@@ -131,5 +154,14 @@ extension ControlRegistry {
                                   args: [:], mutates: false,
                                   run: { _, _ in throw ControlError("updates.check awaits its answer: send it through the control channel") },
                                   runAsync: { _, _ in try await ControlInfo.updatesCheck() }))
+        // #1871: as ControlCommand.change (switch-gated in reply), but the log line and notice only when an install started.
+        r.register(ControlCommand(name: "updates.install", summary: "Check for a newer Prosper and, when one exists, download and install it now; Prosper relaunches by itself. No Undo.",
+                                  args: [:], mutates: true,
+                                  run: { _, _ in throw ControlError("updates.install awaits its answer: send it through the control channel") },
+                                  runAsync: { reg, _ in
+            let (o, c) = try await ControlInfo.updatesInstall()
+            if let c { reg.changes.record(command: "updates.install", summary: c.summary, verb: c.verb, undo: nil) }
+            return o
+        }))
     }
 }

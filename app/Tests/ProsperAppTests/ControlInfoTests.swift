@@ -10,11 +10,11 @@ import XCTest
 final class ControlInfoTests: XCTestCase {
     private var shown: [String] = []
     private var saved: (now: () -> Date, snap: @MainActor () -> StatsSnapshot, text: @MainActor () -> String,
-                        probe: @MainActor () async -> AppUpdater.Probe?)?
+                        probe: @MainActor () async -> AppUpdater.Probe?, install: @MainActor () async -> AppUpdater.Install)?
     private var clock = Date(timeIntervalSince1970: 1_000)
 
     override func setUp() async throws {
-        saved = (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe)
+        saved = (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe, ControlInfo.install)
         ControlInfo.resetNotify()
         ControlInfo.resetProbe()
         ControlInfo.now = { [unowned self] in clock }
@@ -22,7 +22,9 @@ final class ControlInfoTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        if let s = saved { (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe) = (s.now, s.snap, s.text, s.probe) }
+        if let s = saved {
+            (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe, ControlInfo.install) = (s.now, s.snap, s.text, s.probe, s.install)
+        }
         ControlInfo.resetNotify()
         ControlInfo.resetProbe()
         Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
@@ -174,6 +176,59 @@ final class ControlInfoTests: XCTestCase {
         XCTAssertEqual(again.error, "update check failed: offline")
     }
 
+    // MARK: - updates.install (#1871)
+
+    func testUpdatesInstallStartsRepliesAtOnceAndLogsWithoutUndo() async {
+        var runs = 0
+        ControlInfo.install = { runs += 1; return .started("9.9.9") }
+        let r = await call("updates.install")
+        XCTAssertTrue(r.ok, "\(r)")
+        let o = obj(r)
+        XCTAssertEqual(o["started"], .bool(true))
+        XCTAssertEqual(o["current"], .string(AppInfo.shortVersion))
+        XCTAssertEqual(o["latest"], .string("9.9.9"))
+        XCTAssertEqual(o["note"], .string(ControlInfo.installNote))
+        XCTAssertEqual(runs, 1)
+        XCTAssertEqual(shown.count, 1)
+        XCTAssertTrue(shown.last?.hasPrefix("Agent started an update install: ") == true, "\(shown)")
+    }
+
+    func testUpdatesInstallUpToDateStartsNothingAndShowsNothing() async {
+        ControlInfo.install = { .upToDate }
+        let o = obj(await call("updates.install"))
+        XCTAssertEqual(o["started"], .bool(false))
+        XCTAssertEqual(o["reason"], .string("up to date"))
+        XCTAssertTrue(shown.isEmpty)
+    }
+
+    func testUpdatesInstallRefusesOffBusyAndFailed() async {
+        ControlInfo.install = { .off }
+        var r = await call("updates.install")
+        XCTAssertEqual(r.error, "updates are off for this build (no updater or no SUFeedURL)")
+        ControlInfo.install = { .busy }
+        r = await call("updates.install")
+        XCTAssertEqual(r.error, "an update check or download is already running; try again when it ends")
+        ControlInfo.install = { .failed("offline") }
+        r = await call("updates.install")
+        XCTAssertEqual(r.error, "update check failed: offline")
+        XCTAssertTrue(shown.isEmpty)
+    }
+
+    func testUpdatesInstallIsRefusedWhileTheSettingsSwitchIsOff() async {
+        Preferences.agentControlEnabled = false
+        var runs = 0
+        ControlInfo.install = { runs += 1; return .started("9.9.9") }
+        let r = await call("updates.install")
+        XCTAssertEqual(r.error, ControlChanges.offError)
+        XCTAssertEqual(runs, 0)
+    }
+
+    /// Under XCTest no Sparkle updater exists: the real install seam answers off and starts nothing.
+    func testTheRealInstallIsOffUnderTests() async {
+        let r = await AppUpdater.shared.installNow()
+        XCTAssertEqual(r, .off)
+    }
+
     // MARK: - Sparkle cycle -> probe answer (n178)
 
     private let noUpdate = NSError(domain: SUSparkleErrorDomain, code: 1001, userInfo: [NSLocalizedDescriptionKey: "You're up to date!"])
@@ -205,10 +260,10 @@ final class ControlInfoTests: XCTestCase {
         XCTAssertTrue(p == nil)
     }
 
-    func testOnlyNotifyChangesState() async {
+    func testOnlyNotifyAndUpdatesInstallChangeState() async {
         var r = ControlRegistry()
         ControlRegistry.registerInfo(&r)
-        XCTAssertEqual(r.commands.filter { $0.value.mutates }.keys.sorted(), ["notify"])
-        XCTAssertEqual(r.commands.keys.sorted(), ["diagnostics", "notify", "stats.get", "updates.check"])
+        XCTAssertEqual(r.commands.filter { $0.value.mutates }.keys.sorted(), ["notify", "updates.install"])
+        XCTAssertEqual(r.commands.keys.sorted(), ["diagnostics", "notify", "stats.get", "updates.check", "updates.install"])
     }
 }

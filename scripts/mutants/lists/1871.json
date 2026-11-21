@@ -1,0 +1,102 @@
+{
+ "entry": "1871",
+ "filter": "AppUpdaterInstallTests|ControlInfoTests",
+ "mutants": [
+  {
+   "name": "off-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "guard let s = sparkle else { return .off }",
+   "new": "guard let s = sparkle else { return .busy }",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testOffWhenNoSparkle"
+  },
+  {
+   "name": "probing-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "guard probing == nil, !isActive, s.canCheck() else { return .busy }",
+   "new": "guard !isActive, s.canCheck() else { return .busy }",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testBusyWhileAnUpdatesCheckProbeRuns"
+  },
+  {
+   "name": "active-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "guard probing == nil, !isActive, s.canCheck() else { return .busy }",
+   "new": "guard probing == nil, s.canCheck() else { return .busy }",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testBusyWhileADownloadRuns"
+  },
+  {
+   "name": "cancheck-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "guard probing == nil, !isActive, s.canCheck() else { return .busy }",
+   "new": "guard probing == nil, !isActive else { return .busy }",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testBusyWhileSparkleCannotCheck"
+  },
+  {
+   "name": "user-initiated",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "driver.userInitiated = false // never UI",
+   "new": "// mutant: driver.userInitiated = false // never UI",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testFoundStartsTheSilentInstallOnce"
+  },
+  {
+   "name": "arm-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "if installAfterProbe, case .found = p {",
+   "new": "if case .found = p {",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testAPlainProbeThatFindsNeverInstalls"
+  },
+  {
+   "name": "found-guard",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "if installAfterProbe, case .found = p {",
+   "new": "if installAfterProbe {",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testUpToDateAndFailedInstallNothing"
+  },
+  {
+   "name": "disarm-defer",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "defer { installAfterProbe = false }",
+   "new": "// mutant: defer removed",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testAnUpToDateInstallLeavesTheNextCheckInformationOnly"
+  },
+  {
+   "name": "delegate-unwired",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "guard let take = onInstallOnQuit else { return false }",
+   "new": "guard let take = onInstallOnQuit else { return true }",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testTheDelegateTakesTheStagedUpdateOnlyWhenWired"
+  },
+  {
+   "name": "staged-no-hold",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "func installOnQuit(_ install: @escaping () -> Void) {\n        dirtyViewers.holdUpdate {",
+   "new": "func installOnQuit(_ install: @escaping () -> Void) {\n        do {",
+   "expect": "killed",
+   "filter": "AppUpdaterInstallTests/testStagedUpdateWaitsForAnUnsavedTextViewerFile"
+  },
+  {
+   "name": "uptodate-logs",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "return (.object([\"started\": .bool(false), \"reason\": .string(\"up to date\"), \"current\": .string(current)]), nil)",
+   "new": "return (.object([\"started\": .bool(false), \"reason\": .string(\"up to date\"), \"current\": .string(current)]), ControlChange(summary: \"x\"))",
+   "expect": "killed",
+   "filter": "ControlInfoTests/testUpdatesInstallUpToDateStartsNothingAndShowsNothing"
+  },
+  {
+   "name": "not-mutating",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "args: [:], mutates: true,\n                                  run: { _, _ in throw ControlError(\"updates.install",
+   "new": "args: [:], mutates: false,\n                                  run: { _, _ in throw ControlError(\"updates.install",
+   "expect": "killed",
+   "filter": "ControlInfoTests/testUpdatesInstallIsRefusedWhileTheSettingsSwitchIsOff"
+  }
+ ]
+}

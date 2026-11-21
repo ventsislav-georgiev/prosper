@@ -33,8 +33,8 @@
   {
    "name": "showready-ignores-seam",
    "file": "app/Sources/ProsperApp/AppUpdater.swift",
-   "old": "        dirtyViewers.holdUpdate {",
-   "new": "        TextViewerDirty().holdUpdate {",
+   "old": "        dirtyViewers.holdUpdate {\n            NSLog(\"AppUpdater: update ready",
+   "new": "        TextViewerDirty().holdUpdate {\n            NSLog(\"AppUpdater: update ready",
    "expect": "killed"
   },
   {

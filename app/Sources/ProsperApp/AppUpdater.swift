@@ -18,7 +18,7 @@ import UserNotifications
 final class AppUpdater: NSObject {
     static let shared = AppUpdater()
 
-    private let driver = SilentUserDriver()
+    let driver = SilentUserDriver()
 
     /// Gates the `beta` appcast channel on `Preferences.allowBetaUpdates`. Kept as a
     /// stored property so Sparkle's weak `delegate` reference stays alive.
@@ -32,6 +32,15 @@ final class AppUpdater: NSObject {
     private let updater: SPUUpdater?
     /// #344: false under XCTest — the gate that keeps Sparkle off the real defaults domain.
     var isConfigured: Bool { updater != nil }
+
+    /// #1871: the three Sparkle calls probeForUpdate and installNow make; rows swap them (no SPUUpdater under XCTest).
+    struct SparkleCalls {
+        var canCheck: @MainActor () -> Bool
+        var probe: @MainActor () -> Void     // checkForUpdateInformation: find only
+        var install: @MainActor () -> Void   // checkForUpdatesInBackground: the poll timer's silent check-and-install
+    }
+    /// nil: no updater (XCTest), it did not start, or no SUFeedURL (start() accepts a missing feed: requireFeedURL:NO).
+    var sparkle: SparkleCalls?
 
     /// Background appcast poll interval. Sparkle's own scheduler clamps small
     /// `updateCheckInterval` values to ~1h, so we drive a silent background check
@@ -83,13 +92,13 @@ final class AppUpdater: NSObject {
         )
         super.init()
         channelDelegate.onProbe = { [weak self] in self?.probeEvent($0) }
-        guard let updater else { return }
-
-        // Mirror the driver's download/extract state so the menu can show it.
+        channelDelegate.onInstallOnQuit = { [weak self] install in self?.driver.installOnQuit(install) }
+        // Mirror the driver's download/extract state so the menu can show it (before the guard: #1871 rows feed it).
         driver.onDownloadingChanged = { [weak self] downloading in
             self?.isDownloadingUpdate = downloading
             if !downloading { self?.downloadProgress = nil }
         }
+        guard let updater else { return }
 
         // Live download/extract fraction for the About pane's progress bar.
         driver.onProgressChanged = { [weak self] progress in
@@ -109,6 +118,11 @@ final class AppUpdater: NSObject {
 
         do {
             try updater.start()
+            if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
+                sparkle = SparkleCalls(canCheck: { updater.canCheckForUpdates },
+                                       probe: { updater.checkForUpdateInformation() },
+                                       install: { updater.checkForUpdatesInBackground() })
+            }
         } catch {
             NSLog("AppUpdater: startUpdater failed — \(error.localizedDescription)")
         }
@@ -133,6 +147,8 @@ final class AppUpdater: NSObject {
     enum ProbeEvent: Sendable { case found(String), notFound, aborted(any Error) }
     private var probing: CheckedContinuation<Probe, Never>?
     private var probeEvents: [ProbeEvent] = []
+    /// #1871: the running probe is installNow's: a found update starts the install inside Sparkle's cycle-end callback.
+    private var installAfterProbe = false
 
     /// #1859 n178: a cycle's events in, its answer out. Sparkle 2.10 calls updaterDidNotFindUpdate and THEN
     /// didAbortWithError(SUNoUpdateError) (SPUUpdater.m notifyDelegateOfDriverCompletion), so that abort is not a
@@ -160,21 +176,50 @@ final class AppUpdater: NSObject {
     /// asked), unlike checkForUpdates(). nil: no updater (XCTest) or a check is already running.
     /// shortcut: no deadline of our own, Sparkle's network timeout ends the cycle; add one if a hang is ever seen.
     func probeForUpdate() async -> Probe? {
-        guard let updater, probing == nil, updater.canCheckForUpdates else { return nil }
+        guard let s = sparkle, probing == nil, s.canCheck() else { return nil }
+        return await probe(s)
+    }
+
+    private func probe(_ s: SparkleCalls) async -> Probe {
         probeEvents = []
         return await withCheckedContinuation { c in
             probing = c
-            updater.checkForUpdateInformation()
+            s.probe()
+        }
+    }
+
+    /// #1871 updates.install: what installNow did.
+    enum Install: Equatable, Sendable { case off, busy, upToDate, failed(String), started(String) }
+
+    /// #1871 updates.install: the menu's Check for Updates without its UI. A find-only probe first; a found update then
+    /// starts the poll timer's silent check-and-install (automatic driver: download, stage, relaunch through
+    /// willInstallUpdateOnQuit). The install starts inside the probe's cycle-end callback, so the two never overlap:
+    /// Sparkle sees the new session and skips its own reschedule (SPUUpdater.m "Ensure the delegate doesn't start a
+    /// new session"), which an awaited start would race (that reschedule holds the session while it probes the installer).
+    func installNow() async -> Install {
+        guard let s = sparkle else { return .off }
+        guard probing == nil, !isActive, s.canCheck() else { return .busy }
+        installAfterProbe = true
+        defer { installAfterProbe = false }
+        switch await probe(s) {
+        case .upToDate: return .upToDate
+        case .failed(let why): return .failed(why)
+        case .found(let v): return .started(v)
         }
     }
 
     /// Events of a cycle nobody probes (a background check) are dropped, so nothing grows between probes.
-    private func probeEvent(_ e: ProbeEvent?) {
+    func probeEvent(_ e: ProbeEvent?) {
         guard let c = probing else { return }
         if let e { probeEvents.append(e); return }
         let p = Self.probe(from: probeEvents)
         probeEvents = []
         probing = nil
+        if installAfterProbe, case .found = p {
+            installAfterProbe = false
+            driver.userInitiated = false // never UI: a menu check's leftover true would post its notices
+            sparkle?.install()
+        }
         c.resume(returning: p)
     }
 
@@ -252,11 +297,27 @@ final class UpdaterChannelDelegate: NSObject, SPUUpdaterDelegate {
 
     /// #1859: Sparkle's callbacks (main thread) for AppUpdater.probeForUpdate: a result, or nil when the cycle ended.
     var onProbe: (@MainActor (AppUpdater.ProbeEvent?) -> Void)?
+    /// #1871: the automatic (background) driver staged an update to install on quit; this takes it and installs now.
+    var onInstallOnQuit: (@MainActor (@escaping () -> Void) -> Void)?
     private func tell(_ e: AppUpdater.ProbeEvent?) { MainActor.assumeIsolated { onProbe?(e) } }
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) { tell(.found(item.displayVersionString)) }
     func updaterDidNotFindUpdate(_ updater: SPUUpdater) { tell(.notFound) }
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) { tell(.aborted(error)) }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) { tell(nil) }
+
+    /// #1871: without this a background check only stages the update for install on quit and the NEXT poll (30 min on
+    /// beta) resumes and installs it. YES: Prosper installs and relaunches now (Sparkle still installs on a quit).
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        takeStagedUpdate(immediateInstallHandler)
+    }
+
+    func takeStagedUpdate(_ install: @escaping () -> Void) -> Bool {
+        guard let take = onInstallOnQuit else { return false }
+        nonisolated(unsafe) let install = install // Sparkle's block, called on main only (the hold runs it there)
+        MainActor.assumeIsolated { take(install) }
+        return true
+    }
 }
 
 // MARK: - Silent user driver
@@ -368,6 +429,14 @@ final class SilentUserDriver: NSObject, SPUUserDriver {
         dirtyViewers.holdUpdate {
             NSLog("AppUpdater: update ready — installing + relaunching.")
             reply(.install)
+        }
+    }
+
+    /// #1871: a background-staged update installs at once too, or once the last unsaved Text Viewer file is saved or closed.
+    func installOnQuit(_ install: @escaping () -> Void) {
+        dirtyViewers.holdUpdate {
+            NSLog("AppUpdater: update staged in the background — installing + relaunching.")
+            install()
         }
     }
 

@@ -2407,6 +2407,9 @@ tag from the now-released section and put it on the new top draft.
   (#1869)
 - Update downloads from GitHub are now capped at 4 MiB, the same cap as agent kit installs through
   ctl and Marketplace downloads. (#1870)
+- New `prosper ctl updates.install` lets an agent install a found Prosper update right away (Prosper
+  relaunches by itself), and an update found in the background now installs in the same check
+  instead of waiting for the next one, so new betas arrive up to 30 minutes sooner. (#1871)
 
 ## v2.174.0
 
