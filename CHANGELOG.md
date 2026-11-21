@@ -2314,6 +2314,8 @@ tag from the now-released section and put it on the new top draft.
   gone; the proxy line shows how many sessions are spread over how many accounts and which account
   other clients use, each account shows its live session count, and an account's usage appears as
   soon as its first reply arrives. (#1838)
+- Agents can now talk to a running agent session through the control channel: send it a message,
+  interrupt it, or read the question it is waiting on (answering stays with you). (#1839)
 
 ## v2.174.0
 

@@ -1,0 +1,76 @@
+{
+ "entry": "1839",
+ "filter": "ControlSessionsTalkTests",
+ "mutants": [
+  {
+   "name": "cap",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard raw.utf8.count <= maxBytes else",
+   "new": "guard raw.utf8.count <= maxBytes + 1 else",
+   "expect": "killed"
+  },
+  {
+   "name": "control",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "$0 != \"\\n\" && $0 != \"\\t\" && $0.properties.generalCategory == .control",
+   "new": "$0 == \"\\u{0}\"",
+   "expect": "killed"
+  },
+  {
+   "name": "say-state",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard s.state == .idle || s.state == .done else {",
+   "new": "guard s.state != .working else {",
+   "expect": "killed"
+  },
+  {
+   "name": "lock",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "if let lock = AgentWindowControls.lock(st.actions[s.key]) { return AgentWindowControls.lockPlaceholder(lock) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "foreground",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "return s.claudeForeground == false ? AgentWindowText.notForeground : nil",
+   "new": "return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "busy",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard ok else { throw ControlError(AgentWindowText.busy) }",
+   "new": "_ = ok",
+   "expect": "killed"
+  },
+  {
+   "name": "interrupt-state",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard s.state == .working else { throw ControlError(AgentWindowText.notWorking) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "one-read",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "if reading.insert(key).inserted {",
+   "new": "if true { reading.insert(key)",
+   "expect": "killed"
+  },
+  {
+   "name": "activity",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "cached.activity == s.activity {",
+   "new": "true {",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "\"question\": .string(OutsideText.shown(p.question, max: maxLine))",
+   "new": "\"question\": .string(p.question)",
+   "expect": "killed"
+  }
+ ]
+}

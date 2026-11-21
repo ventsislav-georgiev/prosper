@@ -147,6 +147,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerExtensions(&r)
         ControlRegistry.registerSessions(&r)
         ControlRegistry.registerXray(&r)
+        ControlRegistry.registerSessionsTalk(&r)
         return r
     }
 
