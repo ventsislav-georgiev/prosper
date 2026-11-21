@@ -2352,6 +2352,8 @@ tag from the now-released section and put it on the new top draft.
 - Account pool: when an account briefly refuses a starting session's quota check with nothing spent,
   the check is tried once on another account, and new sessions avoid that account for up to a
   minute, so sessions starting together no longer all get a refusal from the same account. (#1855)
+- The README has an "Agent control" section, and the Prosper agent kit teaches agents the
+  `ProsperApp ctl` commands. (#1812)
 
 ## v2.174.0
 
