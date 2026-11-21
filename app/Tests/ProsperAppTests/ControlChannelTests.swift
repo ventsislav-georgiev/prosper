@@ -133,13 +133,16 @@ final class ControlChannelTests: XCTestCase {
         XCTAssertEqual(r?.ok, true)
         guard case .object(let o)? = r?.result, case .array(let cmds)? = o["commands"] else { return XCTFail(String(describing: r)) }
         let names = cmds.compactMap { c -> String? in if case .object(let d) = c, case .string(let n)? = d["name"] { return n }; return nil }
-        XCTAssertEqual(names, ["describe", "log", "ping", "version"])
+        // The core four; area commands (#1818 actions.*, #1809, #1810) register beside them and pin their own schemas.
+        let core = ["describe", "log", "ping", "version"]
+        XCTAssertTrue(Set(core).isSubset(of: names), "\(names)")
         XCTAssertEqual(names, ControlRegistry.standard().commands.keys.sorted())
         for c in cmds {
             guard case .object(let d) = c else { return XCTFail("not an object: \(c)") }
-            XCTAssertEqual(d["mutates"], .bool(false))
             if case .string(let summary)? = d["summary"] { XCTAssertFalse(summary.isEmpty) } else { XCTFail("no summary: \(d)") }
-            XCTAssertEqual(d["args"], .object(["type": .string("object"), "properties": .object([:]), "required": .array([])]))
+            guard case .string(let n)? = d["name"], core.contains(n) else { continue }
+            XCTAssertEqual(d["mutates"], .bool(false), n)
+            XCTAssertEqual(d["args"], .object(["type": .string("object"), "properties": .object([:]), "required": .array([])]), n)
         }
     }
 
