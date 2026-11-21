@@ -79,17 +79,10 @@ final class ControlLayoutsTests: XCTestCase {
         }
     }
 
-    /// Delete: no undo, the last layout is refused; the 9-layout cap refuses new; the gate off refuses all.
+    /// The 9-layout cap refuses new; the gate off refuses all.
     @MainActor
-    func testDeleteCapAndGate() throws {
+    func testCapAndGate() throws {
         try withModel { m in
-            let first = m.layout.id
-            refused(try ControlLayouts.delete(args(["id": first.uuidString])), "the only layout cannot be deleted")
-            let made = try ControlLayouts.new([:])
-            let del = try ControlLayouts.delete(args(["id": m.layout.id.uuidString]))
-            XCTAssertNil(del.undo, "no inverse")
-            XCTAssertEqual(m.layout.id, first)
-            _ = made
             for _ in 0..<8 { _ = try ControlLayouts.new([:]) }
             XCTAssertEqual(m.layouts?.layouts.count, 9)
             refused(try ControlLayouts.new([:]), PaneRefusal.layoutCap.notice ?? "")
@@ -115,13 +108,13 @@ final class ControlLayoutsTests: XCTestCase {
             XCTAssertThrowsError(try ControlLayouts.new([:]))
             XCTAssertFalse(m.layoutEditing, "off after a refusal too")
             m.setLayoutEditing(true)
-            _ = try ControlLayouts.delete(args(["id": m.layout.id.uuidString]))
+            _ = m.deleteLayout(m.layout.id)   // the model's own op: the control channel has no delete
             _ = try ControlLayouts.new([:])
             XCTAssertTrue(m.layoutEditing, "on before, on after")
         }
     }
 
-    /// QA n135: none of switch, new, delete closes an open New session form.
+    /// QA n135: none of switch, new, or a person's delete closes an open New session form.
     @MainActor
     func testOpenNewSessionFormSurvivesSwitchNewAndDelete() throws {
         try withModel { m in
@@ -134,7 +127,7 @@ final class ControlLayoutsTests: XCTestCase {
             XCTAssertTrue(m.newSession != nil, "switch")
             _ = try ControlLayouts.new([:])
             XCTAssertTrue(m.newSession != nil, "new")
-            _ = try ControlLayouts.delete(args(["id": m.layout.id.uuidString]))
+            _ = m.deleteLayout(m.layout.id)
             XCTAssertTrue(m.newSession != nil, "delete")
         }
     }
@@ -145,6 +138,8 @@ final class ControlLayoutsTests: XCTestCase {
         var r = ControlRegistry()
         ControlRegistry.registerLayouts(&r)
         XCTAssertEqual(r.commands["layouts.list"]?.mutates, false)
-        for n in ["switch", "new", "rename", "delete"] { XCTAssertEqual(r.commands["layouts.\(n)"]?.mutates, true) }
+        for n in ["switch", "new", "rename"] { XCTAssertEqual(r.commands["layouts.\(n)"]?.mutates, true) }
+        // n148: delete stays human-only; exactly this set, written out.
+        XCTAssertEqual(Set(r.commands.keys), ["layouts.list", "layouts.new", "layouts.rename", "layouts.switch"])
     }
 }

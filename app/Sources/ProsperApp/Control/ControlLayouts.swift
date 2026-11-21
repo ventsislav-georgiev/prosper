@@ -1,10 +1,10 @@
 import Foundation
 
-/// #1841: saved layouts over the control channel: layouts.list/switch/new/rename/delete. Every command goes through the
-/// window model's own ops (switchLayout, previousLayout, newLayout, renameLayout, deleteLayout), so the 9-layout cap, the
+/// #1841: saved layouts over the control channel: layouts.list/switch/new/rename. Every command goes through the
+/// window model's own ops (switchLayout, previousLayout, newLayout, renameLayout), so the 9-layout cap, the
 /// split gate and the store's refusals are the window's. Pane changes only: no session is started, stopped or attached.
 /// The lock (#1817/#1826/#1832) only gates picks into the focused pane and structural pane edits, none of which these
-/// commands do; `layouts.new` puts Edit layout back as it was. None of them closes an open New session form (adopt never clears it, unlike select(manual:)). On demand only: no observer, no poll.
+/// commands do. Deleting a saved layout is human-only (no undo exists; QA n148); the undo of `layouts.new` removes only the layout it made. `layouts.new` puts Edit layout back as it was. None of them closes an open New session form (adopt never clears it, unlike select(manual:)). On demand only: no observer, no poll.
 @MainActor
 enum ControlLayouts {
     static let off = "split panes are off in this build"
@@ -24,7 +24,6 @@ enum ControlLayouts {
     static func message(_ r: PaneRefusal) -> String {
         if let n = r.notice { return n }
         switch r {
-        case .lastLayout: return "the only layout cannot be deleted"
         case .noSuchLayout: return "no such layout (layouts.list lists them)"
         case .layoutsOff: return off
         default: return "refused: \(r)"
@@ -116,17 +115,6 @@ enum ControlLayouts {
         return ControlChange(summary: "\(r.name) to \(now)", result: .string(r.id.uuidString), verb: "renamed a layout",
                              undo: { [weak m] in _ = m?.renameLayout(r.id, to: old) })
     }
-
-    // MARK: - layouts.delete
-
-    /// The store's delete: refused on the last layout; a deleted active layout hands over to the MRU's next.
-    /// No undo: the model has no public way to put a deleted layout (its panes) back.
-    static func delete(_ args: [String: ControlJSON]) throws -> ControlChange {
-        let m = try openModel()
-        let r = try find(id: try ControlSessions.required(args, "id"), name: nil, in: m)
-        if let why = m.deleteLayout(r.id) { throw ControlError(message(why)) }
-        return ControlChange(summary: r.name, result: .string(r.id.uuidString), verb: "deleted a layout")
-    }
 }
 
 extension ControlRegistry {
@@ -146,7 +134,5 @@ extension ControlRegistry {
         r.register(.change(name: "layouts.rename", summary: "Rename a saved layout (empty name: automatic).", args: [
             "id": id, "name": ControlArg(type: "string", required: true, summary: "the new name"),
         ]) { _, a in try ControlLayouts.rename(a) })
-        r.register(.change(name: "layouts.delete", summary: "Delete a saved layout (not the last one; no undo).",
-                           args: ["id": id]) { _, a in try ControlLayouts.delete(a) })
     }
 }

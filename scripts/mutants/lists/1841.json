@@ -24,13 +24,6 @@
    "expect": "killed"
   },
   {
-   "name": "delete_gets_undo",
-   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
-   "old": "verb: \"deleted a layout\")",
-   "new": "verb: \"deleted a layout\", undo: {})",
-   "expect": "killed"
-  },
-  {
    "name": "new_leaves_editing_on",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
    "old": "defer { if !wasEditing { m.setLayoutEditing(false) } }",

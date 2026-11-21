@@ -2326,8 +2326,8 @@ tag from the now-released section and put it on the new top draft.
   to the resumed Claude session (sessions.resume). (#1833)
 - Agents can now rename a session and switch a Claude session's model or effort (while it is idle or
   done) over the prosper command, each with Undo. (#1842)
-- Agents can now list, switch, make, rename and delete your saved Agent Sessions layouts over the
-  prosper command (delete cannot be undone). (#1841)
+- Agents can now list, switch, make and rename your saved Agent Sessions layouts over the prosper
+  command; deleting a layout stays with you. (#1841)
 - Agents can now read ccpool through Prosper's control channel: the proxy state and each account's
   status and usage (ccpool.status), token totals per account and session (ccpool.usage), and which
   account a session is pinned to (ccpool.pin). Labels only; tokens and account changes stay with you
