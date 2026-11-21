@@ -1,0 +1,20 @@
+{
+ "entry": "1816",
+ "filter": "XrayRefPopoverTests/testEveryRowInTheVisibleRectDrawsWithoutAScroll",
+ "mutants": [
+  {
+   "name": "lazy-row-offset-ids",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "ForEach(Self.keyed(t.mentions, part: 0, block: i), id: \\.id) { mentionRow($0.e, c, q) }",
+   "new": "ForEach(Array(t.mentions.enumerated()), id: \\.offset) { mentionRow($0.element, c, q) }",
+   "expect": "killed"
+  },
+  {
+   "name": "rowid-drops-block",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "(RowID(part: part, block: block, row: $0.offset), $0.element)",
+   "new": "(RowID(part: part, block: 0, row: $0.offset), $0.element)",
+   "expect": "killed"
+  }
+ ]
+}

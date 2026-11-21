@@ -215,6 +215,46 @@ final class XrayRefPopoverTests: XCTestCase {
         }
     }
 
+    /// #1816: a card with more turn blocks than fit: after layout, every row of the blocks that fit is realized inside
+    /// the visible rect at once, no scroll; the last block is not built (the list stays lazy). Red with lazy-row-offset-ids
+    /// (the rows keyed by their offset in the block: each block's row 0 shared the first block's view and drew blank).
+    func testEveryRowInTheVisibleRectDrawsWithoutAScroll() throws {
+        let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
+        let sizes = [2, 1, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]   // turns 12...1, newest first
+        var lines: [String] = [], offset = 0
+        for (b, n) in sizes.enumerated() {
+            for r in 0..<n {
+                offset += 1
+                lines.append(XrayRefTurnTests.mention(turn: sizes.count - b, offset: offset, sentence: "Work on #12 row \(b)-\(r)"))
+            }
+        }
+        p.refContext = XrayRefTurnTests.context(lines)
+        XCTAssertEqual(p.refContext?.turns?.count, sizes.count, "one block per turn")
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        ThemeRuntime.scale = 1
+        let box = Box()
+        AgentPaneArea.probe = { k, _, r in box.d[k] = r }
+        let v = XrayRefPopover(panel: p, entry: try entry("#12"), complete: true)
+            .environment(\.agentPaneID, UUID()).coordinateSpace(.named(agentPaneAreaSpace))
+        let (win, host) = AXTreeSupport.hosted(v, XrayRefPopover.size)
+        for _ in 0..<20 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        AgentPaneArea.probe = nil
+        win.contentView = nil
+        win.close()
+        let scroll = box.d["xrayRefScroll"] ?? .zero
+        XCTAssertGreaterThan(scroll.height, 0, "the scroll view is laid out")
+        for row in ["0-0", "0-1", "1-0", "2-0"] {   // the first three blocks: they fit the card's list at scale 1
+            let f = box.d["xrayRefRow:Work on #12 row \(row)"] ?? .zero
+            XCTAssertGreaterThan(f.height, 0, "row \(row) is built without a scroll")
+            XCTAssertTrue(f.height == 0 || scroll.contains(CGPoint(x: f.midX, y: f.minY)), "row \(row) lies in the visible rect")
+        }
+        XCTAssertTrue(box.d["xrayRefRow:Work on #12 row \(sizes.count - 1)-1"] == nil, "the last block is not built: still lazy")
+    }
+
     /// VoiceOver: the header's spoken row, a tab group with each tab's count and the shown one selected, the filter.
     /// #1760: no Copy and no Search button (selectable text and the inline filter replace them); Mentions is shown first.
     func testAccessibilityTabGroupAndLabels() throws {

@@ -2255,6 +2255,8 @@ tag from the now-released section and put it on the new top draft.
   sessions (beta.43). (#1805)
 - Agents can now talk to a running Prosper: `ProsperApp ctl describe` lists what they can ask it
   (only ping and version so far; more commands follow). (#1807)
+- X-ray: the ref card's Mentions list draws every row in view at once; rows under later turn headers
+  no longer stay blank until scrolled. (#1816)
 
 ## v2.174.0
 

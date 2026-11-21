@@ -164,6 +164,7 @@ struct XrayRefPopover: View {
                 LazyVStack(alignment: .leading, spacing: sz(8)) { tabBody(q) }
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .modifier(AgentPaneProbe(kind: "xrayRefScroll"))   // tests only (#1816: the visible rect)
             hairline
             HStack(spacing: sz(8)) {
                 if let c = context { footerRow(c) }
@@ -324,7 +325,8 @@ struct XrayRefPopover: View {
         if let turns = c.turns {
             let shown = Self.filtered(turns, q)
             if shown.isEmpty, !c.groups.isEmpty { faint(Self.noMatch) }
-            ForEach(Array(shown.enumerated()), id: \.offset) { i, t in
+            ForEach(Self.keyed(shown, part: 0), id: \.id) { r in
+                let (i, t) = (r.id.row, r.e)
                 if i > 0 { hairline.padding(.vertical, sz(2)) }
                 if let s = Self.sessionHeader(t, now: panel.now()) {   // #1589: another session of this project
                     Text(verbatim: s).font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(1)
@@ -338,10 +340,10 @@ struct XrayRefPopover: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityLabel(head)
-                ForEach(Array(t.mentions.enumerated()), id: \.offset) { _, m in mentionRow(m, c, q) }
+                ForEach(Self.keyed(t.mentions, part: 0, block: i), id: \.id) { mentionRow($0.e, c, q) }
             }
         } else {
-            flatMentions(Self.filtered(c.groups, q), c, q)
+            flatMentions(Self.filtered(c.groups, q), c, q, part: 1)
         }
         if hover == nil, q.isEmpty, let title = Self.othersTitle(panel) { others(title, c) }   // #1565: unpinned, no other project
     }
@@ -365,6 +367,7 @@ struct XrayRefPopover: View {
             .help("Show it in the transcript")
             .accessibilityLabel(Self.spokenRow(m))
         }
+        .modifier(AgentPaneProbe(kind: "xrayRefRow:" + m.line))   // tests only (#1816: which rows are realized)
     }
 
     /// #1760: the house selectable snippet: the cached runs drawn, selection on (Command-C copies the plain text).
@@ -393,7 +396,7 @@ struct XrayRefPopover: View {
         if othersOpen {
             if let o = c.others {
                 if let n = c.othersCount { faint(n) }
-                flatMentions(o, c)
+                flatMentions(o, c, part: 2)
             } else if panel.refNote == nil {
                 faint("Reading\u{2026}")
             }
@@ -449,13 +452,23 @@ struct XrayRefPopover: View {
     }
 
     /// Today's list (a dch before 1.100.0): per session, its header, a hairline between sessions, each mention's line.
-    @ViewBuilder func flatMentions(_ groups: [XrayRefContext.Group], _ c: XrayRefContext, _ q: String = "") -> some View {
-        ForEach(Array(groups.enumerated()), id: \.offset) { i, g in
+    @ViewBuilder func flatMentions(_ groups: [XrayRefContext.Group], _ c: XrayRefContext, _ q: String = "", part: Int) -> some View {
+        ForEach(Self.keyed(groups, part: part), id: \.id) { r in
+            let (i, g) = (r.id.row, r.e)
             if i > 0 { hairline.padding(.vertical, sz(2)) }
             Text(verbatim: Self.groupTitle(g.session, own: c.session, target: panel.target)).font(Neon.font(10.5, weight: .semibold))
                 .foregroundStyle(Neon.textSecondary).lineLimit(1).accessibilityAddTraits(.isHeader)
-            ForEach(Array(g.mentions.enumerated()), id: \.offset) { _, m in mentionRow(m, c, q) }
+            ForEach(Self.keyed(g.mentions, part: part, block: i), id: \.id) { mentionRow($0.e, c, q) }
         }
+    }
+
+    /// #1816: a lazy row's id, unique in the whole stack (part: turns 0, flat groups 1, other projects 2; block -1 for a
+    /// block itself). The LazyVStack keyed a nested ForEach's row by its own offset alone, so every block's row 0 shared
+    /// one view: only the first drew, the rest stayed blank (their height kept) until the first scrolled away.
+    struct RowID: Hashable { let part: Int, block: Int, row: Int }
+
+    static func keyed<E>(_ xs: [E], part: Int, block: Int = -1) -> [(id: RowID, e: E)] {
+        xs.enumerated().map { (RowID(part: part, block: block, row: $0.offset), $0.element) }
     }
 
     /// #1568 (4.5): a remote card's other-session group names its host ("example-host:api-qa"): those sessions are the
