@@ -125,9 +125,12 @@ enum AgentPromptImages {
         for (i, s) in sources.enumerated() {
             let data: Data?
             switch s {
-            case .file(let url):
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if i >= maxImages || size > maxBytes - read { out.refused = sources.count - i; return out }
+            case .file(let named):
+                // #1863: a link is read as its target; a FIFO or device (an agent's path) is never opened: a read would block.
+                let url = named.resolvingSymlinksInPath()
+                let v = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                if i >= maxImages || (v?.fileSize ?? 0) > maxBytes - read { out.refused = sources.count - i; return out }
+                guard v?.isRegularFile == true else { out.failed += 1; continue }
                 data = try? Data(contentsOf: url)
             case .data(let d):
                 if i >= maxImages || d.count > maxBytes - read { out.refused = sources.count - i; return out }

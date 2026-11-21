@@ -47,7 +47,7 @@
   {
    "name": "byte_cap_off",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "size > maxBytes - read",
+   "old": "(v?.fileSize ?? 0) > maxBytes - read",
    "new": "false",
    "expect": "killed"
   },

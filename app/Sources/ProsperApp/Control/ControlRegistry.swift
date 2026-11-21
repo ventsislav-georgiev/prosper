@@ -158,6 +158,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerCCPoolHold(&r)
         ControlRegistry.registerClipboard(&r)
         ControlRegistry.registerSessionGroups(&r)
+        ControlRegistry.registerRemote(&r)
         return r
     }
 

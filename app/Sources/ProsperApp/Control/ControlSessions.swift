@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// #1809: Agent Sessions over the control channel: sessions.list/new/stop/restart/focus and layout.set. Every command
 /// takes the window's own path (the agent window is the superset): Stop and Restart the confirm strip's gate check and
@@ -115,15 +116,51 @@ enum ControlSessions {
 
     // MARK: - sessions.new
 
+    /// #1863: the image files' writer, AgentPromptImages.store (off main, its result on main); rows run `write` in place.
+    static var storeImages: @MainActor ([AgentPromptImages.Source], URL, @escaping @MainActor @Sendable (AgentPromptImages.Outcome) -> Void) -> Void = {
+        AgentPromptImages.store($0, dir: $1, done: $2)
+    }
+
+    /// #1863: sessions.new's images: absolute paths whose extension is an image type, at most AgentPromptImages.maxImages,
+    /// no control or hidden character. Checked here without touching the disk; the writer then refuses what is not a
+    /// regular file, is past the paste's byte cap or does not decode as an image (AgentPromptImages.write).
+    static func imagePaths(_ args: [String: ControlJSON]) throws -> [URL] {
+        guard let v = args["images"] else { return [] }
+        guard case .array(let a) = v, !a.isEmpty else { throw ControlError("images is an empty list") }
+        guard a.count <= AgentPromptImages.maxImages else { throw ControlError("at most \(AgentPromptImages.maxImages) images") }
+        return try a.map { item in
+            guard case .string(let p) = item, p.hasPrefix("/"), !ControlSessionsTalk.hasUnseen(p) else {
+                throw ControlError("each image is an absolute file path with no control or hidden character")
+            }
+            let url = URL(fileURLWithPath: p)
+            guard UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true else {
+                throw ControlError("\(OutsideText.shown(url.lastPathComponent, max: 80)) is not an image file (png, jpeg, heic, ...)")
+            }
+            return url
+        }
+    }
+
     /// The New session form, filled and started: what ⌘N, typing and Start do. A refusal closes the form (Cancel) and
     /// is the reply's error. Undo stops the new session once it is listed.
-    static func new(_ args: [String: ControlJSON]) throws -> ControlChange {
+    /// #1863: `host` picks another Mac in the form's host picker (its remote start; no prompt or images there, no undo:
+    /// its session is that Mac's). `images` go through the prompt's image paste path (written as PNGs, their paths
+    /// after the prompt), then Start; that write runs off main, so a failure after the reply is a notice and the form
+    /// is cancelled.
+    static func new(_ args: [String: ControlJSON], changes: ControlChanges = .shared) throws -> ControlChange {
         let (m, _) = try window()
         guard m.newSession == nil else { throw ControlError(formOpen) }
-        let agent = try required(args, "agent"), prompt = string(args, "prompt")
+        let agent = try required(args, "agent"), prompt = string(args, "prompt"), host = string(args, "host")
         // An agent's first message is outside text: the same cap and refusals as sessions.say, before anything opens.
         if prompt != nil { _ = try ControlSessionsTalk.text(args, key: "prompt") }
+        let images = try imagePaths(args)
         guard agent == "claude" || prompt == nil else { throw ControlError("a prompt needs agent claude") }
+        guard host == nil || (prompt == nil && images.isEmpty) else { throw ControlError(AgentNewSessionView.notClaude(command: "", host: host)) }
+        // The paths follow the prompt: alone, a leading "/" would read as a slash command.
+        guard images.isEmpty || prompt != nil else { throw ControlError("images need a prompt") }
+        if let host, !m.newSessionHosts.contains(host) {
+            throw ControlError("no host \(OutsideText.shown(host, max: 80)) to start on (remote.list lists them)")
+        }
+        guard images.isEmpty || m.promptImagesDir != nil else { throw ControlError("images are not available here") }
         m.openNewSession()
         guard let f = m.newSession else {
             throw ControlError(m.store?.resumeGate.refusal.map { "Controls \($0)" } ?? "New session is not available")
@@ -132,6 +169,7 @@ enum ControlSessions {
             m.cancelNewSession()
             return ControlError(why ?? "New session refused")
         }
+        if let host { m.setNewSessionHost(host) }
         if let cwd = string(args, "cwd") { m.setNewSessionFolder(cwd) }
         // claude: the form's own command when it runs a Claude (the person's saved flags), else plain claude.
         switch agent {
@@ -140,8 +178,11 @@ enum ControlSessions {
         default: if !m.newSessionClaude { m.setNewSessionCommand("claude") }
         }
         let folder = AgentNewSession.expand(m.newSession?.folder ?? f.folder, home: m.home)
+        // Another Mac's free name: from the names its list and History hold (the form's remoteTaken).
+        let taken = host.map { h in Set(m.remoteSessions.filter { $0.host == h }.map(\.name)
+                                        + m.remoteHistory.filter { $0.host == h }.map(\.record.name)) } ?? m.spawnTaken
         m.setNewSessionName(string(args, "name")
-            ?? AgentNewSession.autoName(folder: folder, taken: m.spawnTaken, dir: m.island().spawnDir()))
+            ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: m.island().spawnDir()))
         // #1809 (a): the form's prompt only; the person's kept draft (lastPrompt) is never touched.
         m.setNewSessionPrompt(prompt ?? "", draft: false)
         guard m.canStartNewSession else {
@@ -149,12 +190,36 @@ enum ControlSessions {
             throw refuse(e.name ?? e.folder ?? m.newSessionStatus)
         }
         let name = m.newSessionName
+        if let dir = m.promptImagesDir, !images.isEmpty {
+            m.beginNewSessionPromptPaste()   // Start waits for it, as for a paste
+            storeImages(images.map(AgentPromptImages.Source.file), dir) { [weak m] out in
+                guard let m, m.newSession != nil else { return }
+                // Only into the form this call filled (its name): another one gets the paste's end and nothing else.
+                guard m.newSession?.starting == nil, m.newSessionName == name, let text = m.newSession?.prompt else {
+                    m.addNewSessionPromptImages(AgentPromptImages.Outcome())
+                    return changes.present("Agent's new session \(OutsideText.shown(name, max: 60)) did not start: the New session form changed", nil)
+                }
+                m.setNewSessionPrompt(text + AgentPromptImages.insertion(out.made.map(\.path), after: text.last), draft: false)
+                m.addNewSessionPromptImages(out)
+                let why: String? = out.made.count < images.count ? out.note ?? "Could not add the images"
+                    : m.startNewSession(persist: false) ? nil : m.newSession?.status ?? m.newSessionStatus ?? "New session refused"
+                guard let why else { return }
+                m.cancelNewSession()
+                changes.present("Agent's new session \(OutsideText.shown(name, max: 60)) did not start: \(OutsideText.shown(why, max: 200))", nil)
+            }
+            return ControlChange(summary: name, result: .string(name), verb: "is starting a session", undo: undo(name, m))
+        }
         guard m.startNewSession(persist: false) else { throw refuse(m.newSession?.status) }
-        return ControlChange(summary: name, result: .string(name), verb: "started a session", undo: { [weak m] in
+        guard let host else { return ControlChange(summary: name, result: .string(name), verb: "started a session", undo: undo(name, m)) }
+        return ControlChange(summary: "\(name) on \(host) (no undo on another Mac)", result: .string(name), verb: "started a session")
+    }
+
+    private static func undo(_ name: String, _ m: AgentWindowModel) -> @MainActor () -> Void {
+        { [weak m] in
             // shortcut: by name in the store as listed at undo time; a session not listed yet is not stopped.
             guard let m, let s = m.store?.sessions.first(where: { $0.name == name }) else { return }
             _ = m.stopSession(s)
-        })
+        }
     }
 
     // MARK: - layout.set
@@ -293,7 +358,9 @@ extension ControlRegistry {
             "name": ControlArg(type: "string", summary: "its name; a free one from the folder when absent"),
             "cwd": ControlArg(type: "string", summary: "its folder; the form's default when absent"),
             "prompt": ControlArg(type: "string", summary: "the first message (claude only)"),
-        ]) { _, a in try ControlSessions.new(a) })
+            "host": ControlArg(type: "string", summary: "another Mac from remote.list (canStart) to start it on; this Mac when absent"),
+            "images": ControlArg(type: "array", summary: "image file paths (absolute) added to the prompt, as a paste adds them (claude on this Mac, with a prompt)"),
+        ]) { reg, a in try ControlSessions.new(a, changes: reg.changes) })
         r.register(.change(name: "sessions.stop", summary: "Stop a session (Claude Code paused, the session ends; no undo).",
                            args: ["name": name]) { _, a in try ControlSessions.run(.stop, a) })
         r.register(.change(name: "sessions.restart", summary: "Restart a session's agent on the same conversation (no undo).",

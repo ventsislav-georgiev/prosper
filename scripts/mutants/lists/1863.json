@@ -1,0 +1,104 @@
+{
+ "entry": "1863",
+ "filter": "ControlRemoteTests",
+ "mutants": [
+  {
+   "name": "host_allows_prompt",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard host == nil || (prompt == nil && images.isEmpty) else",
+   "new": "guard true || host == nil || (prompt == nil && images.isEmpty) else",
+   "expect": "killed"
+  },
+  {
+   "name": "host_keeps_undo",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard let host else { return ControlChange(",
+   "new": "guard let host, false else { return ControlChange(",
+   "expect": "killed"
+  },
+  {
+   "name": "host_not_listed",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if let host, !m.newSessionHosts.contains(host) {",
+   "new": "if let host, false && !m.newSessionHosts.contains(host) {",
+   "expect": "killed"
+  },
+  {
+   "name": "host_skips_picker",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if let host { m.setNewSessionHost(host) }",
+   "new": "if let host { _ = host }",
+   "expect": "killed"
+  },
+  {
+   "name": "images_link_not_resolved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "let url = named.resolvingSymlinksInPath()",
+   "new": "let url = named",
+   "expect": "killed"
+  },
+  {
+   "name": "images_no_count_cap",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard a.count <= AgentPromptImages.maxImages else",
+   "new": "guard a.count <= Int.max else",
+   "expect": "killed"
+  },
+  {
+   "name": "images_no_type_check",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true else {",
+   "new": "guard true || UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "images_other_form_started",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard m.newSession?.starting == nil, m.newSessionName == name, let text",
+   "new": "guard m.newSession?.starting == nil, let text",
+   "expect": "killed"
+  },
+  {
+   "name": "images_relative_ok",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard case .string(let p) = item, p.hasPrefix(\"/\"), !ControlSessionsTalk.hasUnseen(p) else {",
+   "new": "guard case .string(let p) = item, !p.isEmpty else {",
+   "expect": "killed"
+  },
+  {
+   "name": "images_start_on_failure",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let why: String? = out.made.count < images.count ?",
+   "new": "let why: String? = false ?",
+   "expect": "killed"
+  },
+  {
+   "name": "images_without_prompt",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard images.isEmpty || prompt != nil else",
+   "new": "guard true || images.isEmpty || prompt != nil else",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_list_canstart_all",
+   "file": "app/Sources/ProsperApp/Control/ControlRemote.swift",
+   "old": "\"canStart\": .bool(canStart.contains(h)),",
+   "new": "\"canStart\": .bool(true),",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_list_no_history",
+   "file": "app/Sources/ProsperApp/Control/ControlRemote.swift",
+   "old": "history[host, default: []].append(.object(h))",
+   "new": "_ = host",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_resume_any_host",
+   "file": "app/Sources/ProsperApp/Control/ControlRemote.swift",
+   "old": "AgentWindowModel.isRemote($0) && $0.key.dir.dropFirst() == host",
+   "new": "AgentWindowModel.isRemote($0)",
+   "expect": "killed"
+  }
+ ]
+}

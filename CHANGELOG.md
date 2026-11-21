@@ -2365,6 +2365,9 @@ tag from the now-released section and put it on the new top draft.
   records, each with Undo; Forget and Clear unpinned stay yours only. (#1856)
 - Agents can read a session's X-ray chapters, tasks, memory notes and recap (read only, capped at 20
   rows, memory bodies cut to a short snippet). (#1860)
+- Agents can list remote sessions and History, resume another Mac's session by host and name, and
+  start a new session on a remote host or with images attached; an image that is not a regular file
+  (a link is read as its target) is skipped, for pasted images too. (#1863)
 
 ## v2.174.0
 
