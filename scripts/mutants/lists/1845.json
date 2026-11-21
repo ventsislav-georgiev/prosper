@@ -19,8 +19,8 @@
   {
    "name": "setShrinks",
    "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
-   "old": "[.copyScreenText, .pickColor]",
-   "new": "[.copyScreenText]",
+   "old": "        .copyScreenText, .pickColor,\n",
+   "new": "        .copyScreenText,\n",
    "expect": "killed"
   }
  ]

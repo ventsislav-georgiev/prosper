@@ -1,0 +1,104 @@
+{
+ "entry": "1848",
+ "filter": "ControlActionsTests",
+ "mutants": [
+  {
+   "name": "drop_runner_group",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .runner, .runnerSpace, .runnerBackslash,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_translate",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .translate,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_settings",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .settings,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_clipboard",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .clipboard,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_agent_group",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .agent, .agentSessions,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_agentIsland",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .agentIsland,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_calendar",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        .calendarTogglePopup,\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_builtin_list_filter",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "ShortcutAction.allCases.filter { !humanOnly.contains($0) && ",
+   "new": "ShortcutAction.allCases.filter { ",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_builtin_run_refusal",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            guard !humanOnly.contains(action) else {\n",
+   "new": "            guard true else {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_ext_list_filter",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": ".map { opensPanel($0.command) } != true",
+   "new": ".map { _ in false } != true",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_ext_input_filter",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "where takesInput(command) && !opensPanel(command) && ",
+   "new": "where takesInput(command) && ",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_ext_run_refusal",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            guard !opensPanel(hit.command) else { throw ControlError(",
+   "new": "            guard true else { throw ControlError(",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_quickdirs_clause",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": " || command.id == \"quickdirs.run\"",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "launches_window_only_runner",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "{ command.launchesWindow || ",
+   "new": "{ false || ",
+   "expect": "killed"
+  }
+ ]
+}

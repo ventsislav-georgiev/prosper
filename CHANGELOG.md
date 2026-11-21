@@ -2317,6 +2317,10 @@ tag from the now-released section and put it on the new top draft.
   alphabetically first account, no longer the first in your old order. (#1838)
 - Agents can now talk to a running agent session through the control channel: send it a message,
   interrupt it, or read the question it is waiting on (answering stays with you). (#1839)
+- Agents using actions.run can no longer open Prosper's panels or windows (Command Runner, Clipboard
+  History, Settings, Translate, Coding Agent, Agent Sessions, Agent Island, Calendar, or an
+  extension's own window), so a panel can no longer pop up and take the keys you are typing in
+  another app. (#1848)
 
 ## v2.174.0
 

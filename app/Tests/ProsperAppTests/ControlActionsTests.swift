@@ -49,9 +49,27 @@ final class ControlActionsTests: XCTestCase {
         prefix         = "fk "
         list_on_empty  = true
         bindable_items = true
+
+        [[contributes.commands]]
+        id              = "fake.win"
+        title           = "Open Window"
+        description     = "Opens its own window"
+        mode            = "no-view"
+        icon            = "macwindow"
+        launches_window = true
+
+        [[contributes.commands]]
+        id              = "quickdirs.run"
+        title           = "Quickdir"
+        description     = "Stands in for the bundled one, which opens the runner"
+        mode            = "no-view"
+        match           = "^qd( |$)"
+        prefix          = "qd "
         """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
         try """
         function fake_ping(query) return "pong" end
+        function fake_win(query) return "" end
+        function quickdirs_run(query) return "" end
         function fake_pick(query)
             return host.ui.render(host.ui.list{ title = "Fake", items = {
                 { id = "a", title = "Alpha" }, { id = "b", title = "Beta" } } })
@@ -105,8 +123,8 @@ final class ControlActionsTests: XCTestCase {
         guard case .object(let o)? = reply.result else { return XCTFail("\(reply)") }
         XCTAssertEqual(o["complete"], .bool(true))
         let all = actions(reply)
-        let settings = all["prosper\u{1}settings"]
-        XCTAssertEqual(settings?["takesInput"], .bool(false), "\(all.keys.sorted())")
+        let center = all["prosper\u{1}windowCenter"]
+        XCTAssertEqual(center?["takesInput"], .bool(false), "\(all.keys.sorted())")
         let ping = all["extensionItem\u{1}fake.ping\u{1}"]
         XCTAssertEqual(ping?["title"], .string("Ping"))
         XCTAssertEqual(ping?["category"], .string("Fake Tools"))
@@ -144,8 +162,8 @@ final class ControlActionsTests: XCTestCase {
         XCTAssertTrue(ping.ok, "\(ping)")
         XCTAssertEqual(ping.result, .bool(true))
         _ = await call(reg, "actions.run", ["id": .string("extensionItem\u{1}fake.pick\u{1}Alpha")])
-        _ = await call(reg, "actions.run", ["id": .string("prosper\u{1}settings")])
-        XCTAssertEqual(fired, ["ext:fake.ping|", "ext:fake.pick|Alpha", "builtin:settings"])
+        _ = await call(reg, "actions.run", ["id": .string("prosper\u{1}windowCenter")])
+        XCTAssertEqual(fired, ["ext:fake.ping|", "ext:fake.pick|Alpha", "builtin:windowCenter"])
         XCTAssertEqual(try ControlActions.run(id: "extensionItem\u{1}fake.pick\u{1}Alpha", input: nil), "Fake Tools \u{203A} Alpha")
     }
 
@@ -176,10 +194,14 @@ final class ControlActionsTests: XCTestCase {
         XCTAssertTrue(fired.isEmpty, "\(fired)")
     }
 
-    /// #1845: the interactive screen readers stay human-only: pinned set, not listed, refused with the reason.
+    /// #1845/#1848: the screen readers and the panel openers stay human-only: pinned set, not listed, refused with
+    /// the reason (an opener whose extension the fake registry lacks is refused as human-only, not as unknown).
     func testScreenReadersAreHumanOnly() async throws {
         useRecorder(try fakeRegistry())
-        XCTAssertEqual(ControlActions.humanOnly.map(\.rawValue), ["copyScreenText", "pickColor"])
+        XCTAssertEqual(ControlActions.humanOnly.map(\.rawValue), [
+            "copyScreenText", "pickColor", "runner", "runnerSpace", "runnerBackslash", "translate", "settings",
+            "clipboard", "agent", "agentSessions", "agentIsland", "calendarTogglePopup",
+        ])
         let reg = registry()
         let list = actions(await listed(reg))
         XCTAssertFalse(list.isEmpty)
@@ -190,6 +212,58 @@ final class ControlActionsTests: XCTestCase {
             XCTAssertFalse(r.ok, id)
             XCTAssertTrue(r.error?.contains("human-only") == true, "\(r)")
         }
+        XCTAssertTrue(fired.isEmpty, "\(fired)")
+    }
+
+    /// #1848: the literal set an agent may run: every built-in that acts without a Prosper panel taking the keyboard.
+    /// A built-in added to ShortcutAction lands here or in humanOnly by a written choice, never by default.
+    func testAgentRunnableBuiltInsArePinned() async throws {
+        useRecorder(try fakeRegistry())
+        let runnable = [
+            "toggleAutocomplete", "windowLeftHalf", "windowRightHalf", "windowTopHalf", "windowBottomHalf",
+            "windowMaximize", "windowCenter", "menuBarToggleHidden", "mixerCycleOutput", "mixerToggleMicMute",
+        ]
+        XCTAssertEqual(ShortcutAction.allCases.filter { !ControlActions.humanOnly.contains($0) }.map(\.rawValue), runnable)
+        let listed = Set(actions(await listed(registry())).keys.compactMap { id -> String? in
+            let (kind, key) = ShortcutCatalog.splitExtensionKey(id)
+            return kind == BindableActionKind.prosper.rawValue ? key : nil
+        })
+        XCTAssertTrue(listed.isSubset(of: Set(runnable)), "\(listed.subtracting(runnable).sorted())")
+        // No owning extension and no setting gates these, so the fake registry lists every one.
+        let ungated = ["toggleAutocomplete", "windowLeftHalf", "windowRightHalf", "windowTopHalf", "windowBottomHalf",
+                       "windowMaximize", "windowCenter"]
+        XCTAssertTrue(Set(ungated).isSubset(of: listed), "\(listed.sorted())")
+    }
+
+    /// #1848 (QA n137): a panel opener is refused with its reason and its hotkey payload never runs.
+    func testRunOfAPanelOpenerIsRefusedAndNotFired() async throws {
+        useRecorder(try fakeRegistry())
+        let reg = registry()
+        let clip = await call(reg, "actions.run", ["id": .string("prosper\u{1}clipboard")])
+        XCTAssertFalse(clip.ok)
+        XCTAssertEqual(clip.error, "Open Clipboard History is human-only: it opens a panel that takes the keyboard")
+        let runner = await call(reg, "actions.run", ["id": .string("prosper\u{1}runner")])
+        XCTAssertEqual(runner.error, "Open Command Runner is human-only: it opens a panel that takes the keyboard")
+        let pick = await call(reg, "actions.run", ["id": .string("prosper\u{1}pickColor")])
+        XCTAssertEqual(pick.error, "Screen: Pick Color is human-only: it reads the screen through a selection the person makes")
+        XCTAssertTrue(fired.isEmpty, "\(fired)")
+    }
+
+    /// #1848: an extension command that opens its own window (launches_window) is not listed and a run is refused
+    /// before the hotkey press; quickdirs.run, which opens the runner, counts as one too.
+    func testExtensionWindowCommandIsNotListedAndIsRefused() async throws {
+        useRecorder(try fakeRegistry())
+        let reg = registry()
+        let all = actions(await listed(reg))
+        XCTAssertTrue(all["extensionItem\u{1}fake.ping\u{1}"] != nil, "\(all.keys.sorted())")
+        XCTAssertTrue(all["extensionItem\u{1}fake.win\u{1}"] == nil, "\(all.keys.sorted())")
+        let r = await call(reg, "actions.run", ["id": .string("extensionItem\u{1}fake.win\u{1}")])
+        XCTAssertFalse(r.ok)
+        XCTAssertEqual(r.error, "Fake Tools \u{203A} Open Window is human-only: it opens a panel that takes the keyboard")
+        // quickdirs.run takes input, so without opensPanel it would be an input row.
+        XCTAssertTrue(all["extensionItem\u{1}quickdirs.run\u{1}"] == nil, "\(all.keys.sorted())")
+        let qd = await call(reg, "actions.run", ["id": .string("extensionItem\u{1}quickdirs.run\u{1}"), "input": .string("work")])
+        XCTAssertEqual(qd.error, "Fake Tools \u{203A} work is human-only: it opens a panel that takes the keyboard")
         XCTAssertTrue(fired.isEmpty, "\(fired)")
     }
 
@@ -206,7 +280,7 @@ final class ControlActionsTests: XCTestCase {
         let r = await call(reg, "actions.run", ["id": .string("extensionItem\u{1}fake.pick\u{1}"), "input": .string("Beta")])
         XCTAssertTrue(r.ok, "\(r)")
         XCTAssertEqual(fired, ["ext:fake.pick|Beta"])
-        for id in ["extensionItem\u{1}fake.ping\u{1}", "extensionItem\u{1}fake.pick\u{1}Alpha", "prosper\u{1}settings"] {
+        for id in ["extensionItem\u{1}fake.ping\u{1}", "extensionItem\u{1}fake.pick\u{1}Alpha", "prosper\u{1}windowCenter"] {
             let refused = await call(reg, "actions.run", ["id": .string(id), "input": .string("x")])
             XCTAssertTrue(refused.error?.hasSuffix("takes no input") == true, "\(id): \(refused)")
         }

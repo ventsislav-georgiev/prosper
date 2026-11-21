@@ -30,9 +30,25 @@ enum ControlActions {
 
     static var source = Source.app
 
-    /// #1845: built-ins that read another app's screen through a selection the person makes; an agent cannot drive
-    /// them, so they are neither listed nor run here.
-    static let humanOnly: [ShortcutAction] = [.copyScreenText, .pickColor]
+    /// Built-ins an agent must not fire, so they are neither listed nor run here. #1845: the screen readers read
+    /// another app's screen through a selection the person makes. #1848: the rest open a Prosper panel or window that
+    /// takes the keyboard (DockPolicy.present activates Prosper), so the person's typing in another app would land
+    /// in it; the structured control commands cover what they do.
+    static let humanOnly: [ShortcutAction] = [
+        .copyScreenText, .pickColor,
+        .runner, .runnerSpace, .runnerBackslash,
+        .translate,
+        .settings,
+        .clipboard,
+        .agent, .agentSessions,
+        .agentIsland,
+        .calendarTogglePopup,
+    ]
+
+    /// #1848: an extension command that opens a Prosper panel that takes the keyboard: its own window
+    /// (launches_window, ExtensionShortcuts.toggleWindow) or the runner (quickdirs.run opens it prefilled,
+    /// ExtensionShortcuts.nativeFireAction). Neither listed nor run, like humanOnly.
+    static func opensPanel(_ command: CommandContribution) -> Bool { command.launchesWindow || command.id == "quickdirs.run" }
 
     /// The last ExtensionShortcuts.bindableActions result; nil until the first list's refresh ends.
     private(set) static var extensionActions: [BindableExtensionAction]?
@@ -57,14 +73,16 @@ enum ControlActions {
     static func list(query: String) -> ControlJSON {
         let registry = source.registry()
         if let registry { refreshExtensionActions(registry) }
-        let cached = extensionActions ?? []
+        let cached = (extensionActions ?? []).filter { action in
+            registry?.command(id: action.commandID).map { opensPanel($0.command) } != true
+        }
         var rows = ShortcutCatalog.build(
             prosperActions: ShortcutAction.allCases.filter { !humanOnly.contains($0) && $0.isAvailable(registry: registry) },
             combos: [:], extensionActions: cached)
         var inputIDs = Set<String>()
         for record in registry?.records ?? [] where record.isLive {
             for command in record.manifest.contributes?.allCommands ?? []
-            where takesInput(command) && !ExtensionRegistry.dedicatedCommandIDs.contains(command.id) {
+            where takesInput(command) && !opensPanel(command) && !ExtensionRegistry.dedicatedCommandIDs.contains(command.id) {
                 let row = BindableAction(kind: .extensionItem, key: command.id + "\u{1}", title: command.title,
                                          category: record.manifest.extension.title,
                                          icon: command.icon ?? "puzzlepiece.extension", combo: unsetKeyCombo)
@@ -97,10 +115,14 @@ enum ControlActions {
         let (kind, key) = ShortcutCatalog.splitExtensionKey(id)   // the same \u{1} split, kind first
         switch BindableActionKind(rawValue: kind) {
         case .prosper?:
-            guard let action = ShortcutAction(rawValue: key), action.isAvailable(registry: source.registry()) else { throw unknown }
+            guard let action = ShortcutAction(rawValue: key) else { throw unknown }
+            // #1848: refused ahead of availability, so a human-only id reads the same with its extension off.
             guard !humanOnly.contains(action) else {
-                throw ControlError("\(action.title) is human-only: it reads the screen through a selection the person makes")
+                let why = action == .copyScreenText || action == .pickColor
+                    ? "it reads the screen through a selection the person makes" : "it opens a panel that takes the keyboard"
+                throw ControlError("\(action.title) is human-only: \(why)")
             }
+            guard action.isAvailable(registry: source.registry()) else { throw unknown }
             guard input == nil else { throw ControlError("\(action.title) takes no input") }
             guard source.fireBuiltIn(action) else { throw ControlError("\(action.title) is not available right now") }
             return action.title
@@ -112,6 +134,7 @@ enum ControlActions {
             let label = BindableExtensionAction(commandID: commandID, item: takes ? input ?? "" : item,
                                                 extensionTitle: hit.record.manifest.extension.title,
                                                 commandTitle: hit.command.title, icon: "").label
+            guard !opensPanel(hit.command) else { throw ControlError("\(label) is human-only: it opens a panel that takes the keyboard") }
             guard input == nil || takes else { throw ControlError("\(label) takes no input") }
             source.fireExtension(commandID, takes ? input ?? "" : item)
             return label
