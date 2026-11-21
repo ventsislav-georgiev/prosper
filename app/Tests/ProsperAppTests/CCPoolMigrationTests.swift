@@ -389,7 +389,7 @@ final class CCPoolMigrationTests: XCTestCase {
 
     // MARK: #1264 a person moving from the Python proxy
 
-    /// A reference-shaped home: the vault in a custom order (C, A, B: the Python pick order is the vault's key
+    /// A reference-shaped home: the vault in a custom order (C, A, B: the pool's member list keeps the vault's key
     /// order, there is no "order" key) and a state.json as the Python writes it (indent 2): current, a bench and a
     /// reset at a fixed time after `now`, and pins (one bad key, one to an account not in the vault, one not a text).
     private func referenceHome(vaultText: String? = nil, stateText: String? = nil) throws -> URL {
@@ -438,7 +438,7 @@ final class CCPoolMigrationTests: XCTestCase {
         XCTAssertEqual(out.imported, names)
         XCTAssertEqual(out.notes, [])
         for snap in [st.snapshot, CCPoolStore(directory: st.directory).snapshot] {   // in memory, then read back from the file
-            XCTAssertEqual(snap.order, names, "the vault's order is the pick order")
+            XCTAssertEqual(snap.order, names, "the vault's order is the member list order")
             XCTAssertEqual(snap.current, "Example Org A")
             XCTAssertEqual(snap.accounts["Example Org B"]?.cooldown, ["five_hour": Int(t0) + 7200])
             XCTAssertEqual(snap.accounts["Example Org B"]?.reset, ["five_hour": Int(t0) + 7200])

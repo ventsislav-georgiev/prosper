@@ -111,7 +111,7 @@ enum CCPoolMigration {
         CCPoolStore.labelProblem(label) == nil ? label : "entry \(index + 1) (unusable label)"
     }
 
-    /// Labels and tokens in vault order (the Python pick order breaks ties by it).
+    /// Labels and tokens in vault order (the pool's member list; #1838: ties go by label, not by this order).
     private static func readVault(_ url: URL) throws -> [(label: String, token: String?)] {
         let read = readCapped(url)
         if read.tooLarge { throw ReadError.tooLarge }

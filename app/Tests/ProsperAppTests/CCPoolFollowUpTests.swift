@@ -163,7 +163,7 @@ final class CCPoolFollowUpTests: XCTestCase {
     }
 
     // (f): removing the current account clears `current` (on disk too); removing another leaves
-    // it; rename carries it; reorder never touches it.
+    // it; rename carries it; rewriting the member list never touches it.
     func testCCPoolCurrentFollowsRemoveRenameAndMove() throws {
         let dir = tempDir()
         let store = CCPoolStore(directory: dir)
@@ -177,7 +177,7 @@ final class CCPoolFollowUpTests: XCTestCase {
         XCTAssertEqual(CCPoolStore(directory: dir).snapshot.current, "bee", "after a reload too")
         store.mutate { $0.order = ["c", "bee"] }   // #1838: moveAccount is gone; a rewritten order is the same write
         XCTAssertEqual(store.snapshot.order, ["c", "bee"])
-        XCTAssertEqual(store.snapshot.current, "bee", "reorder leaves current alone")
+        XCTAssertEqual(store.snapshot.current, "bee", "rewriting the member list leaves current alone")
 
         try store.removeAccount(label: "bee", secrets: secrets)
         XCTAssertNil(store.snapshot.current, "removing the current account clears it")

@@ -54,7 +54,7 @@ final class CCPoolCoreTests: XCTestCase {
         st.accounts["d"]?.reset = ["five_hour": Int(now) + 100]
         XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: [], now: now), "d", "soonest rollover first")
         XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: ["d"], now: now), "c")
-        XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: ["d", "c"], now: now), "a", "unseen windows last, ties by order")
+        XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: ["d", "c"], now: now), "a", "unseen windows last, ties by label")
         st.accounts["d"]?.reset = ["five_hour": Int(now) - 1]
         XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: [], now: now), "c", "a past reset counts as unseen")
         XCTAssertNil(CCPoolCore.pick(st, model: nil, exclude: ["a", "b", "c", "d"], now: now))
