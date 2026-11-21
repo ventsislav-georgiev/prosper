@@ -2280,6 +2280,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent control: an action an agent runs shows "Agent ran: <action>" with no Undo button (a fired
   action cannot be undone), and every agent notice and `ctl log` entry drops hidden and direction-
   flipping characters and is cut to 200 characters. (#1825)
+- Agent Sessions: pairs are gone: no Pairs setting, no Stop both / Resume both, no sidekick box or
+  sidekick prompt in New session, and no Control-Tab "Next in Group" / "Previous in Group"; session
+  groups replace them. (#1820)
 
 ## v2.174.0
 

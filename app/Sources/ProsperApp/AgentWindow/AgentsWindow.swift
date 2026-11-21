@@ -363,8 +363,6 @@ final class AgentsNSWindow: NSWindow {
         case stopOrRemove
         /// #1110: Command-1...9, the numbered row at that position (1-based). #1470: Option-Command-1...9 are rows 10...18.
         case jump(Int)
-        /// #1111: Control-Tab (1) and Control-Shift-Tab (-1), the selected group's next or previous member.
-        case member(Int)
         /// #895: the terminal's text size: +1, -1, 0 (back to today's size).
         case font(Int)
         /// Up, down, left, right, Return for the sidebar (sendEvent).
@@ -392,7 +390,7 @@ final class AgentsNSWindow: NSWindow {
     /// row keys, Command-T, F, G, Up, Down and any shortcut added later stand down).
     /// #887 (QA #747 INFO-4): while the New session `form` covers the pane, a chord that acts on the session under it
     /// (Command-T, 1...9, F, G, Up, Down, Option-Command-1...9, Shift-Command-G) is swallowed; Command-W, Command-N and
-    /// Shift-Command-N stay the window's. #1602: Control-Tab and Control-Shift-Tab pass on to the form.
+    /// Shift-Command-N stay the window's.
     /// #1110: ⌘1…⌘9 from every responder, the terminal and a text view too; it stands down for the rename field and is
     /// swallowed under the form, as ⌘↑/⌘↓.
     static func route(_ event: NSEvent, responder: ResponderKind, sidebarFocused: Bool, terminalMode: Bool,
@@ -400,9 +398,6 @@ final class AgentsNSWindow: NSWindow {
         let r = paneRoute(event, responder: responder, sidebarFocused: sidebarFocused, terminalMode: terminalMode,
                           renaming: renaming)
         switch r {
-        // #1602 (QA #1486 B9): under the form Control-Tab is the form's (its prompt is a text view where Tab types a tab,
-        // so Control-Tab is the keyboard way out), in a group too: the form covers the pane, so no member step either.
-        case .member: return form ? .pass : r
         case .session, .jump, .find, .findNext, .font, .stopOrRemove, .xray:
             return form ? .swallow : r
         default: return r
@@ -423,10 +418,6 @@ final class AgentsNSWindow: NSWindow {
         // #1470: Option-Command-1...9 jump to rows 10...18 in both modes, by key code as Command-1...9 (the old detail-level
         // keys are gone).
         if mods == [.command, .option], let n = digit(event.keyCode) { return .jump(n + 9) }
-        // #1111 (operator 2026-11-13): Control-Tab / Control-Shift-Tab from every responder, by key code (Tab on any layout).
-        // Not Option-Left/Right: those move by a word in the terminal, a shell and the composer. Acted on only inside a group
-        // (perform); elsewhere the key goes on as before (#901's previous layout with the split gate on, the terminal's Tab).
-        if event.keyCode == 48, mods == [.control] || mods == [.control, .shift] { return .member(mods.contains(.shift) ? -1 : 1) }
         if mods == [.command] {
             if let n = digit(event.keyCode) { return .jump(n) }
             // #1289: Cmd-Backspace with the sidebar focused only; a text field, the composer and the terminal keep it.
@@ -515,7 +506,6 @@ final class AgentsNSWindow: NSWindow {
         case .close: performClose(nil)
         case .session(let d): model.move(d)
         case .jump(let n): model.selectNumbered(n)   // no row there: nothing, and the key stops here (no beep, not the terminal's)
-        case .member(let step): return model.stepGroupMember(step)   // #1111: no group: false, the key goes on
         case .find: model.terminal.openFind()
         case .findNext(let forward): model.terminal.findNext(forward)
         case .font(let step): model.terminal.zoomFont(step)
@@ -547,7 +537,6 @@ final class AgentsNSWindow: NSWindow {
         ("f", .command, 3, .find), ("g", .command, 5, .findNext(true)), ("g", [.command, .shift], 5, .findNext(false)),
         ("=", .command, 24, .font(1)), ("-", .command, 27, .font(-1)), ("0", .command, 29, .font(0)),
         ("\u{F700}", .command, 126, .session(-1)), ("\u{F701}", .command, 125, .session(1)),
-        ("\t", .control, 48, .member(1)), ("\t", [.control, .shift], 48, .member(-1)),   // #1111
         ("x", [.command, .shift], 7, .xray),
     ]
 
@@ -695,9 +684,6 @@ final class AgentsNSWindow: NSWindow {
             Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused, terminalMode: m.paneHasTerminal,
                        renaming: m.renaming != nil || m.layoutRenaming != nil, form: m.newSession != nil)
         }
-        // #1111: inside a group Control-Tab is the group's, before #901's previous layout (gate on) and the responder's keyDown
-        // (the terminal's Tab, AppKit's key-view step out of a text view); outside a group both keep it, as before.
-        if case .member(let step)? = routed, perform(.member(step)) { return }
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
         if let model, routed == .some(.sidebar), Self.handle(event, model) { return }
@@ -1042,10 +1028,8 @@ struct AgentSidebarView: View {
                 AgentNoSessionsState(store: store)
             } else {
                 ScrollViewReader { proxy in
-                    // #909 (R909-1): the groups once per draw, never per row (every row's menu reads them).
-                    let groups = model.store?.groups   // #1785: the store's cache, built once per change of its inputs
-                    let drawn = model.drawnItems   // #1342: a group is one row (#1785: cached on the model)
-                    let numbers = model.numbers   // #1111: a group's one number, on its first line
+                    let drawn = model.drawnItems   // #1785: cached on the model
+                    let numbers = model.numbers
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: sz(2)) {
                             // #901 B3 step 4a (8.1): the first section; nil (gate off, one layout of one pane): no view.
@@ -1056,7 +1040,6 @@ struct AgentSidebarView: View {
                                 // #828: Sessions, Sidekicks and History fold on a header click
                                 // (remembered per Mac); a folded section keeps its selection.
                                 let folded = !mini && model.isCollapsed(section.id), inView = model.inViewRows
-                                // #1342: a section whose rows all joined a group drawn above draws nothing.
                                 let items = drawn[section.id] ?? []
                                 if !mini && !items.isEmpty {
                                     AgentSectionHeader(title: section.title, count: items.reduce(0) { $0 + $1.rows.count },
@@ -1067,16 +1050,8 @@ struct AgentSidebarView: View {
                                 if !folded {
                                     ForEach(items) { item in
                                         Group {
-                                            if let stem = item.stem {
-                                                let add = model.addableGroup(item)   // #1400: once per group row
-                                                AgentSidebarGroupRow(stem: stem, count: item.rows.count) {
-                                                    ForEach(item.rows) {
-                                                        line($0, number: numbers[$0.id], mini: mini, inView: inView, groups: groups,
-                                                             addTo: add)
-                                                    }
-                                                }
-                                            } else if let row = item.rows.first {
-                                                line(row, number: numbers[row.id], mini: mini, inView: inView, groups: groups)
+                                            if let row = item.rows.first {
+                                                line(row, number: numbers[row.id], mini: mini, inView: inView)
                                             }
                                         }
                                         .id(ItemID(section: section.id, row: item.id))
@@ -1106,8 +1081,7 @@ struct AgentSidebarView: View {
         let row: AgentSidebar.RowID
     }
 
-    /// The selection's scroll target: its row in the section that holds it now (nil: not listed). #1342: a group member's
-    /// is its group's row.
+    /// The selection's scroll target: its row in the section that holds it now (nil: not listed).
     func item(_ id: AgentSidebar.RowID, _ drawn: [String: [AgentSidebar.Item]]) -> ItemID? {
         for s in model.sections {
             if let i = drawn[s.id]?.first(where: { $0.rows.contains { $0.id == id } }) { return ItemID(section: s.id, row: i.id) }
@@ -1115,10 +1089,8 @@ struct AgentSidebarView: View {
         return nil
     }
 
-    /// One session's row (#1342: a group's member line too): its click, its number and its context menu, as before.
-    /// #1400: `addTo`, a group row's running group: its lines' menus end with "Add session to this group".
-    func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>, groups: [AgentGroup]?,
-              addTo: String? = nil) -> some View {
+    /// One session's row: its click, its number and its context menu, as before.
+    func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>) -> some View {
         Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: number, inView: inView.contains(row.id),
@@ -1133,15 +1105,9 @@ struct AgentSidebarView: View {
                 // #1103: the header's list, Open in terminal first (selects the row, as ask does).
                 AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
                                       open: { open(s) }, row: model,
-                                      side: { model.openToTheSide(row.id) }, groups: groups)
+                                      side: { model.openToTheSide(row.id) })
             } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
-                AgentHistoryMenuItems(store: store, record: r, groups: groups) { model.act($0, r) }
-            }
-            if let stem = addTo {
-                Divider()
-                Button { model.addSession(toGroup: stem) } label: {
-                    Label(AgentWindowModel.addToGroupItem, systemImage: AgentMenuSymbol.newSession)
-                }
+                AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
             }
         }
     }
@@ -1151,40 +1117,6 @@ struct AgentSidebarView: View {
         model.select(.live(s.key))
         model.openSelected()
     }
-}
-
-/// #1342: a group's one sidebar row: its live members' lines, each today's row (its own button, number, selection and
-/// menu) stacked with no gap, framed together; VoiceOver reads "Group <stem>, N sessions" around the lines.
-struct AgentSidebarGroupRow<Lines: View>: View {
-    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
-    let stem: String
-    let count: Int
-    let lines: Lines
-
-    init(stem: String, count: Int, @ViewBuilder lines: () -> Lines) {
-        self.stem = stem
-        self.count = count
-        self.lines = lines()
-    }
-
-    static func words(stem: String, count: Int) -> String { "Group \(stem), \(count) sessions" }
-    /// #1111: the group's keys, its help (the nvim note: a Control-Tab mapping no longer reaches the terminal here).
-    static var help: String {
-        "Command-<number> selects this group. Control-Tab and Control-Shift-Tab move between its sessions "
-            + "(inside this window they no longer reach the terminal)."
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) { lines }
-            .padding(.vertical, Self.padding)
-            .background(RoundedRectangle(cornerRadius: sz(6)).strokeBorder(Neon.faded(Neon.textSecondary, 0.3), lineWidth: 1))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(Self.words(stem: stem, count: count))
-            .help(Self.help)
-    }
-
-    /// The row's own padding above the first line and below the last.
-    static var padding: CGFloat { sz(2) }
 }
 
 /// #1378: the Agent Sessions window's style (Settings > Agent Island > Agent Sessions).
@@ -2726,7 +2658,7 @@ struct AgentDetailView: View {
     /// R5: the question, re-read from the store each draw (a gone session or record draws none).
     @ViewBuilder var confirmStrip: some View {
         if let c = model.confirming {
-            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0, others: model.confirmingOthers) }
+            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
                 ?? model.confirmingRecord.map { AgentWindowControls.removeQuestion($0, in: model.store?.history ?? []) }
             if let text {
                 AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),

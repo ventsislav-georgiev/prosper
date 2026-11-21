@@ -75,56 +75,13 @@ struct AgentIslandPane: View {
         c.rowDetailsChanged()   // #1455
     }
 
-    /// #1338: the Pairs field, what it last read or saved (leaving commits only an edit), and why its last commit
-    /// was refused (nil: saved).
-    @State private var suffix = Preferences.agentIslandSidekickSuffix
-    @State private var suffixSaved = Preferences.agentIslandSidekickSuffix
-    @State private var suffixRefusal: String?
-    static let suffixRule = "1 to 16 letters, digits, \".\", \"_\" or \"-\", with at least one letter"   // R909-2
-
-    /// #1338: the Pairs row's line for the stored suffix: what it does, off, or why a value written from outside is
-    /// not used (AgentIsland.groups reads it as off; it is never rewritten).
-    static func suffixHint(_ s: String) -> String {
-        if s.isEmpty { return "Off: no pairs by name. Type a suffix to turn pairs on" }
-        guard AgentIsland.suffixOK(s) else { return "Not used, pairs are off: " + suffixRule }
-        return "<name> and <name>\(s) act as a pair: Stop both, Resume both. Empty turns pairs off"
-    }
-
-    /// #1338 (spec-pairs S6): the Pairs field's commit: trimmed; empty is stored as "" (pairs off); a value suffixOK
-    /// refuses is not saved (the previous one stays) and the reason comes back. A save regroups the island at once.
-    static func commitSuffix(_ text: String, _ c: AgentIslandController = .shared) -> String? {
-        let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard v.isEmpty || AgentIsland.suffixOK(v) else { return "Not saved: " + suffixRule }
-        Preferences.agentIslandSidekickSuffix = v
-        c.rowDetailsChanged()
-        return nil
-    }
-
-    private func saveSuffix() {
-        suffixRefusal = Self.commitSuffix(suffix)
-        if suffixRefusal == nil { suffix = Preferences.agentIslandSidekickSuffix; suffixSaved = suffix }
-    }
-
     /// #751: the Always allow toggle's hook (#754 INFO-R3: a function so a test drives it).
     static func autoAllowToggled(_ on: Bool, _ c: AgentIslandController = .shared) {
         Preferences.agentIslandAutoAllow = on
         c.autoAllowChanged()   // QA #581 F3: off drops every hold now
     }
 
-    /// #847 D4.2: the Sidekick prompt field, and what it last read or saved (leaving commits only an edit, so an
-    /// unset prompt is never stored as a copy of the default).
-    @State private var sidekickPrompt = Preferences.agentIslandSidekickPrompt
-    @State private var sidekickPromptSaved = Preferences.agentIslandSidekickPrompt
-
-    /// #847 D4.1: the Sidekick prompt's commit: stored trimmed; empty removes it, so the field shows the default again.
-    static func commitSidekickPrompt(_ text: String) -> String {
-        Preferences.agentIslandSidekickPrompt = text
-        return Preferences.agentIslandSidekickPrompt
-    }
-
-    static let newSessionFooter = "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome. "
-        + "A sidekick runs the same command in the same folder as <name><suffix>, the suffix under Pairs. Its first message "
-        + "is the sidekick prompt, with $name replaced by the main session's name."
+    static let newSessionFooter = "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome."
 
     /// #606: the field's commit: stored trimmed, empty = unset; the field shows
     /// what was stored.
@@ -189,13 +146,6 @@ struct AgentIslandPane: View {
                     .frame(width: sz(260))
             }
             NeonDivider()
-            NeonRow("Sidekick prompt") {
-                TextField(AgentNewSession.sidekickPromptDefault, text: $sidekickPrompt, axis: .vertical)
-                    .font(Neon.font(.body)).lineLimit(3...6).frame(width: sz(260))
-                    .accessibilityLabel("Sidekick prompt")
-                    .onSubmit { sidekickPrompt = Self.commitSidekickPrompt(sidekickPrompt); sidekickPromptSaved = sidekickPrompt }
-            }
-            NeonDivider()
             // The subtitle is one slot: the hint, or the refusal in its place (nothing moves).
             NeonRow("Default model", subtitle: modelRefusal ?? Self.modelHint) {
                 HStack(spacing: sz(6)) {
@@ -233,17 +183,6 @@ struct AgentIslandPane: View {
         .onDisappear {
             _ = Self.commit(command)
             if model != modelSaved { _ = Self.commitModel(model) }
-            if sidekickPrompt != sidekickPromptSaved { _ = Self.commitSidekickPrompt(sidekickPrompt) }
         }
-        // #1338: per Mac; not the Sidekicks tab pattern (synced), which only picks that tab.
-        NeonSection("Pairs", footer: "Not the Sidekick pattern, which only picks the Sidekicks tab.") {
-            NeonRow("Sidekick suffix", subtitle: suffixRefusal ?? Self.suffixHint(suffixSaved)) {
-                // #1450: our own field, as the Command and Default model ones (#1250).
-                ScaledTextField(placeholder: AgentIsland.sidekickDefault, text: $suffix, onSubmit: { saveSuffix() })
-                    .frame(width: sz(80))
-                    .accessibilityLabel("Sidekick suffix")
-            }
-        }
-        .onDisappear { if suffix != suffixSaved { _ = Self.commitSuffix(suffix) } }
     }
 }

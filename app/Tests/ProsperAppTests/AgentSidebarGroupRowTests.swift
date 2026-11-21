@@ -3,14 +3,13 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1342 (#847 P1e Step C2): in the Agent Sessions sidebar a group is ONE row of its live members in group order; a session
-/// in no group is its own row; with no groups the sidebar is unchanged. Offscreen only: every window is built and never
+/// #1342, #1820: the pair groups are gone, so in the Agent Sessions sidebar every session is its own row (the group row
+/// and its rows went with them); the helpers stay for the sidebar rows of other classes. Offscreen only: every window is built and never
 /// shown, ordered in or made key; a line is pressed through this process's own accessibility tree (no event is posted).
 /// Every row saves the sidebar mode, the split gate and the UI scale, and puts them back in a defer.
 @MainActor
 final class AgentSidebarGroupRowTests: XCTestCase {
     private let d1 = AgentWindowD1Tests()
-    static let scales: [CGFloat] = [0.7, 0.85, 1.0]
 
     func withRow(_ body: () throws -> Void) rethrows {
         let d = Preferences.defaults
@@ -30,16 +29,15 @@ final class AgentSidebarGroupRowTests: XCTestCase {
         try body()
     }
 
-    /// A shown model over `sessions` and `history` with the pair suffix "-qa" (or `suffix`).
-    func model(_ sessions: [AgentSession], history: [DchHistoryRecord] = [], suffix: String = "-qa") -> (AgentWindowModel, AgentIslandStore) {
+    /// A shown model over `sessions` and `history`.
+    func model(_ sessions: [AgentSession], history: [DchHistoryRecord] = []) -> (AgentWindowModel, AgentIslandStore) {
         let st = d1.store(sessions, history: history)
-        st.pairSuffix = suffix
         let m = d1.windowModel(st)
         m.setVisible(true)
         return (m, st)
     }
 
-    /// The group fixture: api (working), api-2 (idle), web (idle) and api-qa blocked, so the group starts in Needs you.
+    /// api (working), api-2 (idle), web (idle) and api-qa blocked (Needs you).
     var grouped: [AgentSession] {
         [d1.session("api", .working), d1.session("api-qa", .blocked), d1.session("api-2", .idle), d1.session("web", .idle)]
     }
@@ -59,23 +57,19 @@ final class AgentSidebarGroupRowTests: XCTestCase {
 
     // MARK: The rows
 
-    /// No group (no sidekick live or in History; the suffix off too): every section's items are its rows, one each, the
-    /// same rows byte for byte; the sidebar draws each row at its own row's height, sz(2) apart, and no group element.
-    func testNoGroupKeepsTheRowListAndTheFrames() throws {
+    /// #1820: api, api-qa and api-2 (once one pair group) and a History record: every section's items are its rows, one
+    /// each, the same rows byte for byte; the sidebar draws each row at its own row's height, sz(2) apart, and no group
+    /// element. Red at base with the suffix "-qa": api, api-2 and api-qa were one item of three rows.
+    func testEveryRowIsItsOwnItemAndFrame() throws {
         try withRow {
-            for suffix in ["-qa", ""] {
-                let (m, st) = model([d1.session("api", .idle), d1.session("web", .idle), d1.session("docs", .idle)],
-                                    history: [d1.record("old")], suffix: suffix)
-                defer { m.close() }
-                XCTAssertTrue(st.groups.isEmpty, "no group with suffix \(suffix)")
-                let drawn = AgentSidebar.items(m.sections) { st.groups }
-                XCTAssertEqual(drawn.count, m.sections.count)
-                for s in m.sections {
-                    let items = drawn[s.id] ?? []
-                    XCTAssertEqual(items.map(\.rows), s.rows.map { [$0] }, "\(s.title): the rows, one per item")
-                    XCTAssertEqual(items.map(\.id), s.rows.map(\.id))
-                    XCTAssertTrue(items.allSatisfy { $0.stem == nil })
-                }
+            let (gm, _) = model(grouped, history: [d1.record("web-qa")])
+            defer { gm.close() }
+            let drawn = AgentSidebar.items(gm.sections)
+            XCTAssertEqual(drawn.count, gm.sections.count)
+            for s in gm.sections {
+                let items = drawn[s.id] ?? []
+                XCTAssertEqual(items.map(\.rows), s.rows.map { [$0] }, "\(s.title): the rows, one per item")
+                XCTAssertEqual(items.map(\.id), s.rows.map(\.id))
             }
             let (m, _) = model([d1.session("api", .idle), d1.session("web", .idle), d1.session("docs", .idle)])
             defer { m.close() }
@@ -101,80 +95,8 @@ final class AgentSidebarGroupRowTests: XCTestCase {
         }
     }
 
-    /// api, api-2 and api-qa (main, second main, sidekick) are one row at api-qa's place (Needs you: it is blocked), in group
-    /// order: api, api-2, then api-qa; Sessions keeps web alone and draws none of the members.
-    func testGroupIsOneRowInGroupOrderAndASoloSessionIsItsOwnRow() throws {
-        try withRow {
-            let (m, st) = model(grouped)
-            defer { m.close() }
-            let drawn = AgentSidebar.items(m.sections) { st.groups }
-            let needs = drawn[AgentSidebar.needsYouTitle] ?? []
-            XCTAssertEqual(needs.count, 1, "one row")
-            XCTAssertEqual(needs.first?.stem, "api")
-            XCTAssertEqual(needs.first?.rows.map(\.id), [key("api"), key("api-2"), key("api-qa")], "group order: mains, then the sidekick")
-            XCTAssertEqual(needs.first?.id, key("api"))
-            let sessions = drawn["Sessions"] ?? []
-            XCTAssertEqual(sessions.map(\.id), [key("web")], "web alone, as today")
-            XCTAssertEqual(sessions.first?.rows.count, 1)
-            XCTAssertTrue(sessions.first?.stem == nil)
-            XCTAssertEqual(drawn.values.flatMap { $0 }.flatMap(\.rows).count, m.rows.count, "every row drawn once")
-        }
-    }
-
-    /// api live, api-qa ended (its record in History): the group has one live member, so api is its plain row and the
-    /// record stays its own History row.
-    func testGroupWithOneLiveMemberIsAPlainRow() throws {
-        try withRow {
-            let (m, st) = model([d1.session("api", .idle), d1.session("web", .idle)], history: [d1.record("api-qa")])
-            defer { m.close() }
-            XCTAssertEqual(st.groups.count, 1, "the group is there (live + History keys)")
-            let drawn = AgentSidebar.items(m.sections) { st.groups }
-            let all = drawn.values.flatMap { $0 }
-            XCTAssertTrue(all.allSatisfy { $0.stem == nil && $0.rows.count == 1 }, "\(all.map { ($0.stem, $0.rows.map(\.title)) })")
-            XCTAssertEqual(all.count, m.rows.count, "every row its own item")
-            XCTAssertEqual((drawn["History"] ?? []).map(\.rows), (m.sections.first { $0.title == "History" }?.rows ?? []).map { [$0] })
-        }
-    }
-
-    /// R909-1: the groups are computed once for the whole list, never per row.
-    func testGroupsAreComputedOncePerDraw() throws {
-        try withRow {
-            let (m, st) = model(grouped + [d1.session("ios", .idle), d1.session("ios-qa", .idle)])
-            defer { m.close() }
-            var calls = 0
-            let drawn = AgentSidebar.items(m.sections) { calls += 1; return st.groups }
-            XCTAssertEqual(calls, 1, "once for \(m.rows.count) rows")
-            XCTAssertEqual(drawn.values.flatMap { $0 }.compactMap(\.stem).sorted(), ["api", "ios"])
-        }
-    }
-
-    // MARK: Drawn: the accessibility tree, a click and the frames
-
-    /// VoiceOver: the group reads "Group api, 3 sessions" and holds each member's line, named as today's row, top to bottom
-    /// in group order; web's row is outside it.
-    func testGroupAndLinesAreNamedForVoiceOver() throws {
-        try withRow {
-            let (m, _) = model(grouped)
-            defer { m.close() }
-            let names = ["api", "api-2", "api-qa"].map { words(m, $0) }
-            let group = AgentSidebarGroupRow<EmptyView>.words(stem: "api", count: 3)
-            XCTAssertEqual(group, "Group api, 3 sessions")
-            let tree = AXTreeSupport.tree(AgentSidebarView(model: m).frame(width: AgentWindowModel.fullSidebarWidth, height: 900), CGSize(width: AgentWindowModel.fullSidebarWidth, height: 900)) { t in
-                t.contains { $0.label == group } && names.allSatisfy { w in t.contains { $0.label == w } }
-            }
-            let g = try XCTUnwrap(tree.first { $0.label == group && !$0.ignored }, "\(tree.map(\.label))")
-            let lines = names.compactMap { w in tree.first { $0.label == w && !$0.ignored } }
-            XCTAssertEqual(lines.count, 3, "each line its own element: \(tree.map(\.label))")
-            XCTAssertEqual(lines.map(\.frame.minY), lines.map(\.frame.minY).sorted(by: >), "group order, top to bottom")
-            for l in lines { XCTAssertTrue(g.frame.contains(CGPoint(x: l.frame.midX, y: l.frame.midY)), "\(l.label) in the group") }
-            let web = try XCTUnwrap(tree.first { $0.label == words(m, "web") && !$0.ignored })
-            XCTAssertFalse(g.frame.contains(CGPoint(x: web.frame.midX, y: web.frame.midY)), "web is its own row")
-        }
-    }
-
-    /// A press on api-qa's line selects api-qa, then one on api-2's selects api-2: the selection is on that line (its
-    /// element reads selected, the others not). Each line is its own button with its own frame (TIP draws no hover on a
-    /// row: the pointer's target is the line's button).
+    /// A press on api-qa's row selects api-qa, then one on api-2's selects api-2: the selection is on that row (its
+    /// element reads selected, the others not). Each row is its own button with its own frame.
     func testMemberLineClickSelectsThatSession() throws {
         try withRow {
             let (m, _) = model(grouped)
@@ -204,36 +126,6 @@ final class AgentSidebarGroupRowTests: XCTestCase {
                 }
             }
             XCTAssertFalse(win.isVisible, "never shown")
-        }
-    }
-
-    /// At 0.7, 0.85 and 1.0: the lines do not overlap, the group's height is its lines' plus its own padding, and nothing is
-    /// drawn past the sidebar's width.
-    func testGroupRowAtEveryScale() throws {
-        try withRow {
-            let (m, _) = model(grouped)
-            defer { m.close() }
-            let pixel = AXTreeSupport.devicePixel
-            for scale in Self.scales {
-                ThemeRuntime.scale = scale
-                let width = AgentWindowModel.fullSidebarWidth, group = AgentSidebarGroupRow<EmptyView>.words(stem: "api", count: 3)
-                let names = ["api", "api-2", "api-qa"].map { words(m, $0) }
-                let tree = AXTreeSupport.tree(AgentSidebarView(model: m).frame(width: width, height: 900), CGSize(width: width, height: 900)) { t in
-                    t.contains { $0.label == group } && names.allSatisfy { w in t.contains { $0.label == w } }
-                }
-                let g = try XCTUnwrap(tree.first { $0.label == group && !$0.ignored }, "the group at \(scale)")
-                let lines = names.compactMap { w in tree.first { $0.label == w && !$0.ignored }?.frame }
-                XCTAssertEqual(lines.count, 3, "at \(scale)")
-                for (a, b) in zip(lines, lines.dropFirst()) {
-                    XCTAssertLessThanOrEqual(b.maxY, a.minY + pixel, "no overlap at \(scale): \(a) \(b)")
-                }
-                XCTAssertEqual(g.frame.height, lines.map(\.height).reduce(0, +) + 2 * AgentSidebarGroupRow<EmptyView>.padding,
-                               accuracy: pixel, "the lines plus the padding at \(scale)")
-                for f in [g.frame] + lines {
-                    XCTAssertGreaterThanOrEqual(f.minX, -pixel, "inside the sidebar at \(scale)")
-                    XCTAssertLessThanOrEqual(f.maxX, width + pixel, "inside sz(290) at \(scale): \(f)")
-                }
-            }
         }
     }
 

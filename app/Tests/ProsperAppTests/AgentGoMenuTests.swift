@@ -31,7 +31,7 @@ final class AgentGoMenuTests: XCTestCase {
         XCTAssertEqual(keyed.count, table.count, "one item per table chord")
         XCTAssertEqual(entries.count, keyed.count, "splits off: no pane item")
         XCTAssertEqual(entries.map(\.title), [
-            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
+            "Previous Session", "Next Session", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
             "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
             "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
             "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",
@@ -44,7 +44,7 @@ final class AgentGoMenuTests: XCTestCase {
 
     /// Every table chord, built as a key-down, is what `route` returns (a terminal pane or none; the sidebar focused).
     func testKeyTableIsWhatRouteReturns() {
-        XCTAssertEqual(AgentsNSWindow.keyTable.count, 33)   // #1470: the 3 level keys out, Option-Command-1...9 in; #1471: Command-T, L out; #1111: Control-Tab, Control-Shift-Tab
+        XCTAssertEqual(AgentsNSWindow.keyTable.count, 31)   // #1470: the 3 level keys out, Option-Command-1...9 in; #1471: Command-T, L out; #1820: #1111's Control-Tab, Control-Shift-Tab out
         for c in AgentsNSWindow.keyTable {
             guard let e = AgentsNSWindow.keyEvent(c.key, c.mods, c.keyCode) else { return XCTFail("event \(c.route)") }
             let routes = [true, false].map {
@@ -76,7 +76,7 @@ final class AgentGoMenuTests: XCTestCase {
             AgentGoMenu.Kind.session: ["New Session", "New Shell", "Stop or Remove", "Close Window"],
             .view: ["Bigger Text", "Smaller Text", "Actual Size", "Toggle Sidebar", "Zoom Pane", "Full Sidebar", "Mini Sidebar",
                     "Slide-In Sidebar"],
-            .go: ["Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2",
+            .go: ["Previous Session", "Next Session", "Jump to Session 1", "Jump to Session 2",
                   "Jump to Session 3", "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7",
                   "Jump to Session 8", "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12",
                   "Jump to Session 13", "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17",
@@ -98,11 +98,11 @@ final class AgentGoMenuTests: XCTestCase {
             XCTAssertFalse(go.menuHasKeyEquivalent(menu, for: e, target: &target, action: &action), "\(c.route)")
         }
         }
-        XCTAssertEqual(all.count, 44, "#1379: the 33 keyed items (#1471, #1111) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
+        XCTAssertEqual(all.count, 42, "#1379: the 31 keyed items (#1471; #1820: #1111's two out) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
         // #1586: the list itself, literal (no model: one pane, so #1367's Command-W item reads Close Window); #1726: as a set
         XCTAssertEqual(all.count, Set(all).count, "no item in two menus")
         XCTAssertEqual(Set(all), Set([
-            "Previous Session", "Next Session", "Next in Group", "Previous in Group", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
+            "Previous Session", "Next Session", "Jump to Session 1", "Jump to Session 2", "Jump to Session 3",
             "Jump to Session 4", "Jump to Session 5", "Jump to Session 6", "Jump to Session 7", "Jump to Session 8",
             "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12", "Jump to Session 13",
             "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17", "Jump to Session 18",

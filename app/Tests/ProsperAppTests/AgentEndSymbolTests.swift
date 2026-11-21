@@ -224,11 +224,9 @@ final class AgentEndSymbolTests: XCTestCase {
         XCTAssertEqual(AgentSidebarVerb.restartAll(force: true).symbol, AgentWindowVerb.restart.symbol)
         XCTAssertEqual(AgentSidebarVerb.restartAll(force: false).symbol, AgentWindowVerb.restart.symbol)
         XCTAssertEqual(AgentSidebarVerb.stopAll.symbol, AgentWindowVerb.stop.symbol)
-        XCTAssertEqual(AgentWindowVerb.stopGroup(["a", "b"]).symbol, AgentWindowVerb.stop.symbol)
         XCTAssertEqual(AgentSidebarVerb.killAll.symbol, AgentWindowVerb.kill.symbol)
         XCTAssertEqual(AgentWindowVerb.kill.symbol, Self.door)
         XCTAssertEqual(AgentSidebarVerb.resumeInterrupted(noMessage: false).symbol, AgentWindowVerb.resume.symbol)
-        XCTAssertEqual(AgentWindowVerb.resumeGroup.symbol, AgentWindowVerb.resume.symbol)
         XCTAssertEqual(AgentSidebarVerb.resumeInterrupted(noMessage: true).symbol, AgentWindowVerb.resumeNoMessage.symbol)
         XCTAssertEqual(AgentSidebarVerb.clearUnpinned.symbol, AgentWindowVerb.remove.symbol)
         for verb in [AgentLayoutVerb.rename, .duplicate, .delete] {

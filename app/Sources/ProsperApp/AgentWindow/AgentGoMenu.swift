@@ -78,8 +78,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         var e: [Entry?] = [
             Entry("Previous Session", "\u{F700}", c, .key(.session(-1))),
             Entry("Next Session", "\u{F701}", c, .key(.session(1))),
-            Entry("Next in Group", "\t", .control, .key(.member(1))),   // #1111
-            Entry("Previous in Group", "\t", [.control, .shift], .key(.member(-1))),
         ]
         e += (1...9).map { Entry("Jump to Session \($0)", "\($0)", c, .key(.jump($0))) }
         e += (1...9).map { Entry("Jump to Session \($0 + 9)", "\($0)", oc, .key(.jump($0 + 9))) }   // #1470
@@ -208,7 +206,6 @@ extension AgentsNSWindow {
         case .editLayout: return AgentPaneLayout.splitsEnabled && !renaming && (model.layoutShown || model.layoutEditing)
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form
         case .key(.xray) where XrayPanels.dch() == nil: return false   // #1351: below the gate the item is off (no process)
-        case .key(.member) where model.selectionGroup == nil: return false   // #1111: off outside a group
         case .key(let r):
             guard let c = Self.keyTable.first(where: { $0.route == r }), let e = Self.keyEvent(c.key, c.mods, c.keyCode) else {
                 return false

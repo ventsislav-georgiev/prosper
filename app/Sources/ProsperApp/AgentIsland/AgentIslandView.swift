@@ -264,7 +264,7 @@ struct AgentIslandGeometry: Equatable {
 final class AgentIslandStore: ObservableObject {
     /// Every session, in the poller's order: the collapsed island and the
     /// header summarize these; the list draws `visible`.
-    @Published var sessions: [AgentSession] = [] { didSet { resetTab(); dropStaleQuestions(); if sessions.map(\.key) != oldValue.map(\.key) { groupsGeneration &+= 1 } } }
+    @Published var sessions: [AgentSession] = [] { didSet { resetTab(); dropStaleQuestions() } }
     @Published var expanded = false
     @Published var geometry: AgentIslandGeometry
     /// Inline row notes: "Attach command copied", "Attached in tmux/ssh …".
@@ -286,17 +286,9 @@ final class AgentIslandStore: ObservableObject {
     }
     /// #1759: the chosen group tab's id; nil: Sessions.
     @Published var groupTab: String? = nil { didSet { dropStaleQuestions() } }
-    /// #908: the pair suffix (Settings > Pairs) the groups are read with; "" (pairing by name off) until
-    /// the controller sets it, so a store a test builds outright draws no group item.
-    @Published var pairSuffix = "" { didSet { if pairSuffix != oldValue { groupsGeneration &+= 1 } } }
     /// #578: `dch --history --json`'s records, newest first, read on open and
     /// after an action; the History tab is chosen (it wins over `groupTab`).
-    @Published var history: [DchHistoryRecord] = [] { didSet { resetTab(); if history.map(\.key) != oldValue.map(\.key) { groupsGeneration &+= 1 } } }
-    /// #1785: bumped by a change of the keys (not every set) of `groups`' inputs (sessions, history, pairSuffix); `groups` (AgentIslandPairs.swift)
-    /// is built once per generation, `groupsBuilds` counts the builds (the counting rows).
-    private(set) var groupsGeneration = 0
-    var groupsMemo: (generation: Int, groups: [AgentGroup])?
-    var groupsBuilds = 0
+    @Published var history: [DchHistoryRecord] = [] { didSet { resetTab() } }
     @Published var historyTab = false
     /// #1536: the row the launcher command or its shortcut opened on (lit and scrolled to); nil once the island closes.
     @Published var focusKey: AgentSessionKey?
@@ -620,10 +612,6 @@ struct AgentIslandView: View {
     var onConfirmRestartAll: (Bool) -> Void = { _ in }
     /// #580: a row's Stop and the inline Stop all answer.
     var onStop: (AgentSession) -> Void = { _ in }
-    /// #908: a row's Stop both / Stop all N (no question, as Stop): the row and its group's live names drawn, in group order.
-    var onStopGroup: (AgentSession, [String]) -> Void = { _, _ in }
-    /// #908: a History row's Resume both / Resume all N.
-    var onResumeGroup: (DchHistoryRecord) -> Void = { _ in }
     var onConfirmStopAll: (Bool) -> Void = { _ in }
     /// #744: a row's Kill (it only asks), and the inline row Kill and Kill all answers.
     var onKill: (AgentSession) -> Void = { _ in }
@@ -751,11 +739,6 @@ struct AgentIslandView: View {
         var kill: () -> Void = {}
         /// #584: its Message… (opens the composer); the base gate and a passable name, any master.
         var message: () -> Void = {}
-        /// #908: Stop both / Stop all N with its group's other live sessions; nil (no item) outside a group
-        /// or with no other member live. `othersCanStop`: each of those passes canStop.
-        var stopBoth: (() -> Void)? = nil
-        var stopBothTitle = ""
-        var othersCanStop = false
         var id: AgentSessionKey { session.key }
         var restartTitle: String { AgentIsland.label(AgentIsland.restartLabel, needs: needs) }
         /// One hint, never both: the dch one wins over "restart this session first".
@@ -766,25 +749,16 @@ struct AgentIslandView: View {
         var controls: Bool { AgentIsland.passable(session.name) }
         var restartEnabled: Bool { refused == nil && needs == nil && controls }
         var stopEnabled: Bool { restartEnabled && canStop }
-        var stopBothEnabled: Bool { stopEnabled && othersCanStop }
         var killEnabled: Bool { refused == nil && AgentIsland.killArgs(session.name) != nil }
         var messageEnabled: Bool { refused == nil && controls }
     }
 
     var drawn: [Drawn] {
-        let refused = store.resumeGate.refusal, needs = store.restartNeeds, groups = store.groups
+        let refused = store.resumeGate.refusal, needs = store.restartNeeds
         return store.visible.map { s in
-            var d = Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
-                          restart: { onRestart(s) }, refused: refused, stop: { onStop(s) }, canStop: AgentIsland.canStop(s),
-                          needs: needs, kill: { onKill(s) }, message: { onMessage(s) })
-            let group = store.liveGroup(s, groups) ?? [], others = group.filter { $0.key != s.key }
-            if !others.isEmpty {
-                let names = group.map(\.name)
-                d.stopBoth = { onStopGroup(s, names) }
-                d.stopBothTitle = AgentIsland.groupLabel(.stop, others: others.map(\.name))
-                d.othersCanStop = others.allSatisfy(AgentIsland.canStop)
-            }
-            return d
+            Drawn(session: s, card: store.card(for: s), open: { onRow(s) }, answer: { onAnswer(s, $0, $1) },
+                  restart: { onRestart(s) }, refused: refused, stop: { onStop(s) }, canStop: AgentIsland.canStop(s),
+                  needs: needs, kill: { onKill(s) }, message: { onMessage(s) })
         }
     }
 
@@ -799,7 +773,6 @@ struct AgentIslandView: View {
             Button(AgentIsland.messageLabel, action: r.message).disabled(!r.messageEnabled)   // #584
             Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
             Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
-            if let both = r.stopBoth { Button(r.stopBothTitle, action: both).disabled(!r.stopBothEnabled) }   // #908
             Button(AgentIsland.killLabel, action: r.kill).disabled(!r.killEnabled)   // #744
         }
         if let why = r.refused { Text(verbatim: "Controls \(why)") }
@@ -909,9 +882,6 @@ struct AgentIslandView: View {
         var remove: (() -> Void)? = nil
         /// #669: Resume (no message), nil (not drawn) under 1.27.0.
         var resumeNoMessage: (() -> Void)? = nil
-        /// #908: Resume both / Resume all N, nil (not drawn) unless its group has no member live in its dir.
-        var resumeBoth: (() -> Void)? = nil
-        var resumeBothTitle = ""
         /// #714, #743: the older records of the row's name, folded in; its pin and X act on them too.
         var older = 0
         /// #716 L-2: of those, the unpinned ones, the ones its X removes (dch keeps a pinned one).
@@ -924,7 +894,6 @@ struct AgentIslandView: View {
         struct MenuItem { let title: String; let action: () -> Void }
         var menu: [MenuItem] {
             [enabled ? MenuItem(title: AgentIsland.resumeLabel, action: resume) : nil,
-             resumeBoth.map { MenuItem(title: resumeBothTitle, action: $0) },
              resumeNoMessage.map { MenuItem(title: AgentIsland.resumeNoMessageLabel, action: $0) },
              pin.map { MenuItem(title: AgentIsland.editLabel(record.pinned ? AgentIsland.unpinLabel : AgentIsland.pinLabel,
                                                               older: older), action: $0) },
@@ -935,24 +904,17 @@ struct AgentIslandView: View {
 
     var historyDrawn: [HistoryDrawn] {
         let on = store.resumeGate.isOK, edits = store.historyEditGate.isOK, quiet = store.reviveNoMessageGate.isOK
-        let groups = store.groups
         return store.shownHistory.map { r in
             // #627: a name dch would read as a flag: no Resume, pin or X.
             let ok = AgentIsland.passable(r.name)
             // #743: the name's older records fold into its one row; its pin and X act on them too, at every gate.
             let asides = AgentIsland.older(r, in: store.history)
-            var d = HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
-                                 remove: edits && ok && !r.pinned ? { onRemove(r) } : nil,
-                                 resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: asides.count,
-                                 olderUnpinned: asides.filter { !$0.pinned }.count,
-                                 // #743: statuses stay per record (--all lands on the one dch took); its own first.
-                                 status: ([r] + asides).lazy.compactMap { store.historyActions[$0.id] }.first)
-            // #908 (S5): offered only when no member of its group is live in its dir.
-            if on && ok, let g = store.historyGroup(r, groups), g.live.isEmpty {
-                d.resumeBoth = { onResumeGroup(r) }
-                d.resumeBothTitle = AgentIsland.groupLabel(.resume, others: (g.mains + g.sidekicks).filter { $0.id != r.id }.map(\.name))
-            }
-            return d
+            return HistoryDrawn(record: r, enabled: on && ok, resume: { onResume(r) }, pin: edits && ok ? { onPin(r) } : nil,
+                                remove: edits && ok && !r.pinned ? { onRemove(r) } : nil,
+                                resumeNoMessage: quiet && ok ? { onResumeNoMessage(r) } : nil, older: asides.count,
+                                olderUnpinned: asides.filter { !$0.pinned }.count,
+                                // #743: statuses stay per record (--all lands on the one dch took); its own first.
+                                status: ([r] + asides).lazy.compactMap { store.historyActions[$0.id] }.first)
         }
     }
 

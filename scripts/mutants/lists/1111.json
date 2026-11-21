@@ -1,56 +1,7 @@
 {
  "entry": 1111,
- "filter": "AgentWindowGroupChordTests/testGroupChordRouteIsALiteralTable|AgentWindowGroupChordTests/testGroupTakesOneNumber|AgentWindowGroupChordTests/testCommandNumberPicksTheGroupMemberPickedLast|AgentWindowGroupChordTests/testControlTabStepsThroughTheGroupAndWraps|AgentWindowGroupChordTests/testControlTabThroughTheWindow|AgentWindowGroupChordTests/testDigitChipIsTheSharedKeycap|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentWindowGroupChordTests/testDigitChipIsTheSharedKeycap|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
-  {
-   "name": "member-route-off",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "{ return .member(mods.contains(.shift) ? -1 : 1) }",
-   "new": "{ return .pass }",
-   "expect": "killed"
-  },
-  {
-   "name": "member-swallowed-under-form",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "case .member: return form ? .pass : r",
-   "new": "case .member: return form ? .swallow : r",
-   "expect": "killed"
-  },
-  {
-   "name": "number-per-row",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "var numberedIDs: [AgentSidebar.RowID] { numberedItems().map(\\.id) }",
-   "new": "var numberedIDs: [AgentSidebar.RowID] { numberedItems().flatMap { $0.rows.map(\\.id) } }",
-   "expect": "killed"
-  },
-  {
-   "name": "last-selected-off",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "recentSelections.last(where: ids.contains) ?? ids.first",
-   "new": "ids.first",
-   "expect": "killed"
-  },
-  {
-   "name": "step-no-wrap",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "click(ids[((i + step.signum()) % n + n) % n])",
-   "new": "click(ids[min(max(i + step.signum(), 0), n - 1)])",
-   "expect": "killed"
-  },
-  {
-   "name": "sendevent-member-after-layout",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "        if case .member(let step)? = routed, perform(.member(step)) { return }\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "go-menu-member-always-on",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
-   "old": "        case .key(.member) where model.selectionGroup == nil: return false   // #1111: off outside a group\n",
-   "new": "",
-   "expect": "killed"
-  },
   {
    "name": "chip-own-glyph",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",

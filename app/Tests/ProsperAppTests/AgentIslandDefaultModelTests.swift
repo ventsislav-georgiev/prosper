@@ -184,8 +184,8 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                 for (stored, line) in cases {
                     Preferences.agentIslandDefaultModel = stored
                     func model(_ t: [AXNode]) -> AXNode? { t.first { $0.label == "Default model" && $0.role == "AXTextField" } }
-                    func command(_ t: [AXNode]) -> AXNode? {   // #1338: not the Pairs field either
-                        t.first { $0.role == "AXTextField" && !["Default model", "Sidekick suffix", "Sidekick prompt"].contains($0.label) }
+                    func command(_ t: [AXNode]) -> AXNode? {
+                        t.first { $0.role == "AXTextField" && $0.label != "Default model" }
                     }
                     // Settled at THIS scale: the menu and the subtitle on the tree, and both fields laid out at this
                     // scale's widths (a pass right after another scale's could read a frame of the old layout).
@@ -214,11 +214,9 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     XCTAssertTrue(menu != nil, "the aliases menu, named, at \(scale)")
                     XCTAssertTrue(sub != nil, "\(line) at \(scale)")
                     XCTAssertTrue(title != nil, "the row's title at \(scale)")
-                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" && $0.label != "Sidekick prompt" }.count, 3,
-                                   "Command, Default model and (#1338) Sidekick suffix at \(scale)")
-                    XCTAssertEqual(tree.filter { ["AXTextField", "AXTextArea"].contains($0.role) && $0.label == "Sidekick prompt" }.count, 1,
-                                   "#907: the Sidekick prompt field, named, once at \(scale)")
-                    XCTAssertTrue(tree.contains { $0.role == "AXTextField" && $0.label == "Sidekick suffix" }, "#1338: the Pairs field, named, at \(scale)")
+                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.count, 2,
+                                   "Command and Default model at \(scale) (#1820: the Sidekick suffix and prompt fields are gone)")
+                    XCTAssertFalse(tree.contains { $0.label.hasPrefix("Sidekick") }, "#1820: no Pairs or Sidekick prompt field at \(scale)")
                     guard let f = field?.frame, let o = other?.frame, let m = menu?.frame, let ti = title?.frame, let s = sub?.frame
                     else { continue }
                     XCTAssertEqual(f.height, o.height, accuracy: 1, "same control height at \(scale)")
@@ -353,15 +351,15 @@ final class AgentIslandDefaultModelTests: XCTestCase {
     }
 
     /// #1250: the pane's Command and Default model fields are ScaledTextField's (their delegate is its coordinator), so
-    /// their heights come from the measure above, not from a SwiftUI TextField's placement.
+    /// their heights come from the measure above, not from a SwiftUI TextField's placement. #1820: no Sidekick suffix field.
     @MainActor
-    func testThePanesCommandDefaultModelAndSuffixFieldsAreScaledTextFields() {
+    func testThePanesCommandAndDefaultModelFieldsAreScaledTextFields() {
         _ = ThemeStore.shared
         let size = CGSize(width: sz(560), height: sz(900))
         let (win, host) = AXTreeSupport.hosted(AgentIslandPane().frame(width: size.width), size)
         defer { win.close() }
         let ours = nativeFields(host).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString)
-        XCTAssertEqual(ours.sorted(), ["-qa", "Claude Code's default", "claude"], "#1450: the Sidekick suffix field too")
+        XCTAssertEqual(ours.sorted(), ["Claude Code's default", "claude"], "#1820: the Sidekick suffix field is gone")
     }
 
     /// #1250: ScaledTextField looks and measures as the stock SwiftUI TextField it replaced (itself an NSTextField
@@ -432,7 +430,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(compared, 4, "the heights were compared at most scales")
     }
 
-    /// #1450: the Sidekick suffix, the Layouts row's name field and the terminal's Find field (once stock SwiftUI
+    /// #1450: the Layouts row's name field and the terminal's Find field (once stock SwiftUI
     /// TextFields with a scaled font, the same fault as #1250's) are ScaledTextField's, and each matches the stock field
     /// it replaced in font size and height at the six scales (read offscreen side by side; a stock read equal to ours at
     /// another scale is the fault itself in the reference and is skipped and said, as above).
@@ -443,16 +441,12 @@ final class AgentIslandDefaultModelTests: XCTestCase {
         defer { ThemeRuntime.scale = savedScale }
         let pixel = AXTreeSupport.devicePixel
         let size = CGSize(width: 400, height: 120)
-        for site in ["suffix", "layout", "find"] {
+        for site in ["layout", "find"] {   // #1820: the Sidekick suffix site is gone
             var heights: [(scale: CGFloat, ours: CGFloat, stock: CGFloat)] = []
             for scale in [0.7, 0.85, 1.0, 1.15, 1.3, 1.45] as [CGFloat] {
                 ThemeRuntime.scale = scale
                 let stock: AnyView, ours: AnyView
                 switch site {
-                case "suffix":
-                    stock = AnyView(TextField("-qa", text: .constant("-qa")).font(Neon.font(.body, design: .monospaced))
-                        .lineLimit(1).frame(width: sz(80)))
-                    ours = AnyView(ScaledTextField(placeholder: "-qa", text: .constant("-qa")).frame(width: sz(80)))
                 case "layout":
                     stock = AnyView(TextField("api", text: .constant("api")).textFieldStyle(.plain)
                         .font(Neon.font(12.5, weight: .medium)).lineLimit(1).frame(width: sz(160)))

@@ -178,45 +178,18 @@ enum AgentSidebar {
         init(title: String, rows: [Row], id: String? = nil) { self.title = title; self.rows = rows; self.id = id ?? title }
     }
 
-    /// #1342: one drawn sidebar row: a row alone, or a group's live members (two or more) in group order, drawn as one row.
+    /// #1342: one drawn sidebar row. #1820: pairs are gone, so an item is always one row; `rows` keeps the drawn list's
+    /// shape (numbers, scroll targets).
     struct Item: Identifiable, Equatable {
-        /// The row's id; a group's is its first live member's.
         let id: RowID
         let rows: [Row]
-        /// The group's (folded) stem; nil for a row alone.
-        var stem: String?
     }
 
-    /// #1342 (S7, D5): the drawn rows of each section, by id (#1759: a group section's is its fold key). `compute` (the groups) is called once (R909-1: never per row). A group
-    /// with two live members or more is one item at its first member's place in the list (Needs you, Sessions, Sidekicks),
-    /// its live members in group order, each taken from its own place; a group with one live member, a row in no group,
-    /// History and other machines: each row its own item. No groups: one item per row, the rows `sections` holds. The
-    /// selection and the arrow keys still walk `sections`; #1111 numbers these items (a group: one number).
-    static func items(_ sections: [Section], groups compute: () -> [AgentGroup]) -> [String: [Item]] {
-        let groups = compute()
-        var live: [AgentSessionKey: Row] = [:]   // by dir and folded name, the first one (liveGroup's fold limit)
-        for r in sections.flatMap(\.rows) where r.session != nil {
-            guard let k = r.session?.key ?? r.record?.key else { continue }
-            let folded = AgentSessionKey(dir: k.dir, name: k.name.lowercased())
-            if live[folded] == nil { live[folded] = r }
-        }
-        var at: [RowID: Int] = [:], members: [(stem: String, rows: [Row])] = []
-        for g in groups {
-            let rows = (g.mains + g.sidekicks).compactMap { live[AgentSessionKey(dir: g.dir, name: $0)] }
-            guard rows.count > 1 else { continue }   // one live member: its plain row
-            for r in rows { at[r.id] = members.count }
-            members.append((g.stem, rows))
-        }
-        var placed = Set<Int>(), out: [String: [Item]] = [:]
-        for s in sections {
-            out[s.id] = s.rows.compactMap { r in
-                guard let i = at[r.id] else { return Item(id: r.id, rows: [r]) }
-                guard placed.insert(i).inserted, let first = members[i].rows.first else { return nil }
-                return Item(id: first.id, rows: members[i].rows, stem: members[i].stem)
-            }
-        }
-        return out
+    /// #1342: the drawn rows of each section, by id (#1759: a group section's is its fold key): one item per row.
+    static func items(_ sections: [Section]) -> [String: [Item]] {
+        Dictionary(sections.map { s in (s.id, s.rows.map { Item(id: $0.id, rows: [$0]) }) }) { a, _ in a }
     }
+
 
     /// #1558: the shells chip's list, every text through OutsideText.shown: "2 running shells", then by owner (main first,
     /// then each subagent in dch's order under its description, else its id, then the shells dch could not place), each
@@ -458,11 +431,6 @@ final class AgentWindowModel: ObservableObject {
     /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
     /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
-    /// #1111: the human's picks (`select` with `manual`: a click, a key, a menu; never the first fill or a follow), oldest
-    /// first, each once; a group's Command-<n> takes the member picked last. shortcut: capped at `recentCap`; a group whose
-    /// members all fell off selects its first member again, upgrade to a per-group store if that ever shows.
-    private(set) var recentSelections: [AgentSidebar.RowID] = []
-    static let recentCap = 64
     /// #831: the window's active layout. B1 step 3 (8.1): restored from the store on open (init, `layouts`), else a
     /// fresh one; every change is saved (`autosave`). Every selection change goes into its focused pane through the
     /// browse rule (`show`, 7.1). 15.0: a multi-pane layout keeps its whole tree here with the split gate off;
@@ -1161,10 +1129,6 @@ final class AgentWindowModel: ObservableObject {
     lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0, noMessage: true) }
     lazy var pinRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().pin($0) }
     lazy var removeRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().remove($0) }
-    /// #909 (#847 P1e Step C): Stop both / Stop all N and Resume both / Resume all N, the island controller's own (#908:
-    /// its re-read at the click, its busy check, its one dir line).
-    lazy var stopGroup: (AgentSession, [String]) -> Bool = { [weak self] in self?.island().stopGroup($0, with: $1) ?? false }
-    lazy var resumeGroup: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resumeGroup($0) }
     /// #897 (G9): "Agent Island Settings...": Settings on Agent Island's pane, through the extension host's one opener.
     var openIslandSettings: () -> Void = {
         LiveExtensionHostServices.shared.openSettings(extensionID: AgentWindowControls.islandExtensionID,
@@ -1748,9 +1712,8 @@ final class AgentWindowModel: ObservableObject {
             if let k = newSession?.starting {
                 // R2 F5: answered and waiting for its row: it started, so the form goes; else no answer will come.
                 if pendingSpawn?.key == k { newSession = nil } else {
-                    let asked = newSession?.startingSidekick ?? k   // #847: the sidekick's answer is the one awaited
-                    newSession?.starting = nil; newSession?.startingSidekick = nil
-                    newSession?.status = "No answer for \(asked.name): Agent Island is off"
+                    newSession?.starting = nil
+                    newSession?.status = "No answer for \(k.name): Agent Island is off"
                 }
             }
             pendingSpawn = nil   // #1096 1b: the island back later would expire it over a session that runs
@@ -2167,7 +2130,6 @@ final class AgentWindowModel: ObservableObject {
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
         if manual { removing = nil; pendingSpawn = nil; newSession = nil }
-        if manual, let id { noteSelected(id) }   // #1111
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
@@ -2370,18 +2332,16 @@ final class AgentWindowModel: ObservableObject {
         select(ids[min(max(i + delta, 0), ids.count - 1)])
     }
 
-    /// #1342: the sidebar's drawn rows by section, the store's groups computed once (no store: no group).
-    /// #1785: built once per real change, never per selection or draw. Inputs: `sections` and `store` (their didSets clear
-    /// it) and the store's groups (`groupsGeneration`: its sessions, history, pairSuffix). `drawnBuilds` counts the builds.
+    /// #1342: the sidebar's drawn rows by section. #1785: built once per real change, never per selection or draw.
+    /// Inputs: `sections` and `store` (their didSets clear it). `drawnBuilds` counts the builds.
     var drawnItems: [String: [AgentSidebar.Item]] {
-        let gen = store?.groupsGeneration ?? -1
-        if let m = drawnMemo, m.groups == gen { return m.drawn }
-        let drawn = AgentSidebar.items(sections) { store?.groups ?? [] }
-        drawnMemo = (gen, drawn)
+        if let m = drawnMemo { return m }
+        let drawn = AgentSidebar.items(sections)
+        drawnMemo = drawn
         drawnBuilds += 1
         return drawn
     }
-    private var drawnMemo: (groups: Int, drawn: [String: [AgentSidebar.Item]])? { didSet { numberedMemo = nil } }
+    private var drawnMemo: [String: [AgentSidebar.Item]]? { didSet { numberedMemo = nil } }
     private(set) var drawnBuilds = 0
 
     /// #1785: the numbered items and their chips, rebuilt only when `drawnItems` is (its memo's didSet clears this one),
@@ -2402,56 +2362,28 @@ final class AgentWindowModel: ObservableObject {
 
     /// #1110: the rows Command-1...9 select (#1470: then Option-Command-1...9), from the list the sidebar draws: the live rows
     /// it shows, top to bottom across its sections, the first 18. A folded section's rows are not shown, so not numbered;
-    /// History never is. #1111: a group (#1342: two live members or more) is one drawn row, so one number (#1785: cached).
+    /// History never is (#1785: cached).
     func numberedItems() -> [AgentSidebar.Item] { numbered.items }
 
-    /// The numbered rows' ids (a group's: its first member's, the line that wears the chip).
+    /// The numbered rows' ids.
     var numberedIDs: [AgentSidebar.RowID] { numberedItems().map(\.id) }
 
-    /// The sidebar row's chip: its 1-based number, nil for an unnumbered row (#1111: a group's other members too).
+    /// The sidebar row's chip: its 1-based number, nil for an unnumbered row.
     func number(_ id: AgentSidebar.RowID) -> Int? { numbers[id] }
 
     /// #1111: every chip by row id (#1785: built with the numbered items, not per draw).
     var numbers: [AgentSidebar.RowID: Int] { numbered.numbers }
 
     /// ⌘<n>: the n-th numbered row, the human's pick, and the keyboard into its pane (as a click). False: no row there,
-    /// nothing changes. #1111: a group's number picks its member selected last, its first member (the main) the first time.
+    /// nothing changes.
     @discardableResult
     func selectNumbered(_ n: Int) -> Bool {
         let items = numberedItems()
-        guard n >= 1, n <= items.count, let id = lastSelected(items[n - 1].rows.map(\.id)) else { return false }
+        guard n >= 1, n <= items.count, let id = items[n - 1].rows.first?.id else { return false }
         click(id)
         return true
     }
 
-    /// #1111: of `ids`, the one selected last; none of them ever (or since the cap): the first.
-    func lastSelected(_ ids: [AgentSidebar.RowID]) -> AgentSidebar.RowID? {
-        recentSelections.last(where: ids.contains) ?? ids.first
-    }
-
-    private func noteSelected(_ id: AgentSidebar.RowID) {
-        recentSelections.removeAll { $0 == id }
-        recentSelections.append(id)
-        if recentSelections.count > Self.recentCap { recentSelections.removeFirst(recentSelections.count - Self.recentCap) }
-    }
-
-    /// #1111: the selection's group as drawn (#1342: two live members or more, in group order); nil: no selection, or a
-    /// row in no group (a session alone, a group with one live member, History, another machine).
-    var selectionGroup: [AgentSidebar.RowID]? {
-        guard let sel = selection else { return nil }
-        return drawnItems.values.lazy.flatMap { $0 }.first { $0.stem != nil && $0.rows.contains { $0.id == sel } }?.rows.map(\.id)
-    }
-
-    /// #1111: Control-Tab (`step` 1) and Control-Shift-Tab (-1): the selection's group's next or previous member, round the
-    /// end, selected with the keyboard in its pane (as a click; #831's browse rule focuses a pane already showing it).
-    /// False, nothing changes: the selection is in no group (the key goes on to the responder).
-    @discardableResult
-    func stepGroupMember(_ step: Int) -> Bool {
-        guard let ids = selectionGroup, let sel = selection, let i = ids.firstIndex(of: sel) else { return false }
-        let n = ids.count   // two or more (a group as drawn)
-        click(ids[((i + step.signum()) % n + n) % n])
-        return true
-    }
 
     /// The "Open in terminal" buttons: a live session only. False: nothing to open (a History
     /// row, none). QA #668 F1: nor an ended
@@ -2572,8 +2504,7 @@ final class AgentWindowModel: ObservableObject {
         newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
                                          command: typed.isEmpty ? "claude" : typed,
-                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty,   // #847 D2.4, D5.1
-                                         openedOn: focusedEnded ? nil : selectedRow?.session?.name)   // #1214
+                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty)   // #847 D2.4, D5.1
         follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
@@ -2617,11 +2548,6 @@ final class AgentWindowModel: ObservableObject {
 
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
 
-    /// #847 D6.1: the box turns on only for a command the form can name and brief (newSessionClaude).
-    func setNewSessionSidekick(_ on: Bool) {
-        guard newSession?.starting == nil, newSession?.group == nil else { return }   // #1214: one session joins a group
-        newSession?.sidekick = on && newSessionClaude
-    }
 
     func setNewSessionPrompt(_ s: String) {
         guard newSession != nil, newSession?.starting == nil else { return }
@@ -2632,29 +2558,20 @@ final class AgentWindowModel: ObservableObject {
     func toggleNewSessionPrompt() { newSession?.promptShown.toggle() }
 
     /// #847 D6.1: an interactive Claude (AgentIsland.isInteractiveClaude, the rule naming() uses) on this Mac.
-    /// shortcut: another Mac (#1323) gets neither the sidekick nor the prompt (the say seam is this Mac's); upgrade
-    /// when the remote spawn learns both.
+    /// shortcut: another Mac (#1323) gets no first prompt (the say seam is this Mac's); upgrade when the remote spawn
+    /// learns it.
     var newSessionClaude: Bool {
         guard let f = newSession, f.host == nil else { return false }
         return AgentIsland.isInteractiveClaude(AgentNewSession.argv(f.command, shell: shell))
     }
 
-    /// The box as Start reads it: checked and allowed.
-    var newSessionSidekickOn: Bool { newSession?.sidekick == true && newSessionClaude }
+    static let plainShellRefusal = "Clear the prompt to start a plain shell"
 
-    /// #847 D3.2: the main name (typed) and the Settings suffix.
-    var newSessionSidekickName: String {
-        AgentNewSession.sidekickName(newSessionName, suffix: Preferences.agentIslandSidekickSuffix)
-    }
-
-    static let sidekickSuffixUnusable = "Sidekick suffix in Settings isn't usable"
-    static let plainShellRefusal = "Clear the prompt and sidekick to start a plain shell"
-
-    /// #847 D6.2: the form's New shell would drop a checked box or a typed prompt silently: refused while either holds
-    /// and takes effect (#1392: the effective values, as the box and the editor show them; Start ignores both when not Claude).
+    /// #847 D6.2: the form's New shell would drop a typed prompt silently: refused while it holds and takes effect
+    /// (#1392: the effective value, as the editor shows it; Start ignores it when not Claude).
     var newSessionShellRefusal: String? {
         guard let f = newSession,
-              newSessionSidekickOn || newSessionClaude && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              newSessionClaude && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return Self.plainShellRefusal
     }
 
@@ -2675,90 +2592,6 @@ final class AgentWindowModel: ObservableObject {
             .union(claimed.filter { t - $0.value <= Self.spawnSlack }.keys).filter { $0.lowercased() != own }
     }
 
-    // MARK: #1214 Add to group
-
-    /// The live records of sessions (their commands): the island's file read; none under XCTest (tests set it).
-    var memberRecords: ([AgentSession]) -> [DchHistoryRecord] = {
-        NSClassFromString("XCTestCase") == nil ? AgentIsland.liveRecords($0) : []
-    }
-
-    /// The groups running in the spawn dir: the #1116 rule over the live sessions only (nothing stored); none for
-    /// another Mac.
-    var newSessionGroups: [AgentGroup] { newSession?.host == nil ? spawnGroups : [] }
-
-    /// The groups running in the spawn dir, whatever Mac an open form is on.
-    private var spawnGroups: [AgentGroup] {
-        guard let store else { return [] }
-        let dir = island().spawnDir()
-        return AgentIsland.groups(store.sessions.map(\.key).filter { $0.dir == dir }, suffix: store.pairSuffix)
-    }
-
-    /// The live sessions of folded `names` in `g`'s dir, in that order.
-    private func live(_ names: [String], in g: AgentGroup) -> [AgentSession] {
-        names.compactMap { n in store?.sessions.first { $0.key.dir == g.dir && $0.name.lowercased() == n } }
-    }
-
-    /// The choice: the group's folder, its role member's command and (a sidekick) the template first prompt naming its
-    /// main; the name is the group's next (newSessionAutoName), the preview. nil stem: no group, the fills taken back
-    /// only where untouched (the prompt).
-    func setNewSessionGroup(_ stem: String?, sidekick: Bool) {
-        guard var f = newSession, f.starting == nil, f.host == nil else { return }
-        if let filled = f.groupPrompt, f.prompt == filled { f.prompt = lastPrompt; f.promptShown = !lastPrompt.isEmpty }
-        f.groupPrompt = nil
-        guard let stem, let g = newSessionGroups.first(where: { $0.stem == stem }) else {
-            f.group = nil
-            // #1400 (R1214-i1): the name typed before the choice, unless one was typed since.
-            if let typed = f.groupTypedName, !f.nameEdited { f.name = typed; f.nameEdited = true }
-            f.groupTypedName = nil
-            newSession = f
-            return
-        }
-        f.group = AgentNewSessionForm.GroupPick(stem: stem, sidekick: sidekick)
-        f.sidekick = false
-        if f.nameEdited { f.groupTypedName = f.name }   // #1400: kept aside as groupPrompt keeps the prompt
-        f.name = ""
-        f.nameEdited = false
-        if let cwd = live(g.mains + g.sidekicks, in: g).first(where: { !$0.cwd.isEmpty })?.cwd {
-            f.folder = AgentNewSession.abbreviate(cwd, home: home)
-        }
-        let role = sidekick ? g.sidekicks : g.mains
-        if let argv = AgentIsland.inferredCommand(live: memberRecords(live(role, in: g)), history: []) {
-            f.command = AgentIsland.shellLine(argv)
-        }
-        if sidekick {
-            let main = g.mains.first { $0 == f.openedOn?.lowercased() } ?? g.mains.first
-            let spelled = main.flatMap { m in live([m], in: g).first?.name } ?? main ?? stem
-            f.prompt = AgentNewSession.render(Preferences.agentIslandSidekickPrompt, name: spelled)
-            f.promptShown = true
-            f.groupPrompt = f.prompt
-        }
-        newSession = f
-    }
-
-    static let addToGroupItem = "Add session to this group"
-
-    /// #1400: the stem a group row's "Add session to this group" chooses: the row's group running in the spawn dir;
-    /// nil (no group row, or its group no longer runs here): no item.
-    func addableGroup(_ item: AgentSidebar.Item) -> String? {
-        guard let stem = item.stem, let dir = item.rows.first?.session?.key.dir,
-              spawnGroups.contains(where: { $0.stem == stem && $0.dir == dir }) else { return nil }
-        return stem
-    }
-
-    /// #1400: the form (opened, or the open one) on this Mac with group `stem` chosen as a main: its folder and harness
-    /// filled; the person picks the role.
-    func addSession(toGroup stem: String) {
-        openNewSession()
-        setNewSessionHost(nil)   // groups are this Mac's; a no-op on this Mac
-        setNewSessionGroup(stem, sidekick: false)
-    }
-
-    /// The group row's slot: the chosen group stopped.
-    var newSessionGroupError: String? {
-        guard let p = newSession?.group else { return nil }
-        return newSessionGroups.contains(where: { $0.stem == p.stem }) ? nil : "\(p.stem) is not running any more"
-    }
-
     // MARK: #1323 New session on another Mac
 
     /// The picker's hosts: every host the remote list or remote History names, sorted; none below dch 1.41.0 (no
@@ -2775,9 +2608,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// The picker: the folder becomes that Mac's newest known folder (this Mac: the usual default).
     func setNewSessionHost(_ host: String?) {
-        guard let cur = newSession, cur.starting == nil, cur.host != host else { return }
-        setNewSessionGroup(nil, sidekick: false)   // #1214: groups are this Mac's; takes back an untouched group prompt as None does
-        guard var f = newSession else { return }
+        guard var f = newSession, f.starting == nil, f.host != host else { return }
         f.host = host
         f.folder = host.map { AgentNewSession.remoteRecents(host: $0, sessions: remoteSessions, history: remoteHistory).first ?? "" }
             ?? AgentNewSession.abbreviate(newSessionDefaultFolder, home: home)
@@ -2833,18 +2664,14 @@ final class AgentWindowModel: ObservableObject {
         (newSession?.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var newSessionErrors: (folder: String?, name: String?, sidekick: String?) {
-        guard let f = newSession else { return (nil, nil, nil) }
+    var newSessionErrors: (folder: String?, name: String?) {
+        guard let f = newSession else { return (nil, nil) }
         if let host = f.host {
             return (AgentNewSession.remoteFolderError(newSessionFolder),
-                    AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()), nil)
+                    AgentNewSession.nameError(newSessionName, taken: remoteTaken(host), dir: island().spawnDir()))
         }
-        // #847 D3.3: the sidekick's slot, only with the box on: the suffix first, then the main's rules on main + suffix.
-        let sidekick: String? = !newSessionSidekickOn || newSessionName.isEmpty ? nil   // #1731: no name yet: nothing to check
-            : !AgentIsland.suffixOK(Preferences.agentIslandSidekickSuffix) ? Self.sidekickSuffixUnusable
-            : AgentNewSession.nameError(newSessionSidekickName, taken: spawnTaken, dir: island().spawnDir())
         return (AgentNewSession.folderError(AgentNewSession.expand(f.folder, home: home), exists: folderExists),
-                AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()), sidekick)
+                AgentNewSession.nameError(newSessionName, taken: spawnTaken, dir: island().spawnDir()))
     }
 
     /// #847 D7.4: the argv that runs, `--name` included.
@@ -2864,7 +2691,7 @@ final class AgentWindowModel: ObservableObject {
     /// The status slot: starting, else the gate's refusal, else the last failure or busy text.
     var newSessionStatus: String? {
         guard let f = newSession else { return nil }
-        if let k = f.startingSidekick ?? f.starting { return "Starting \(k.name)…" }
+        if let k = f.starting { return "Starting \(k.name)…" }
         if let why = store?.resumeGate.refusal { return "Controls \(why)" }
         return f.status
     }
@@ -2874,7 +2701,7 @@ final class AgentWindowModel: ObservableObject {
         guard newSession?.starting == nil, store?.resumeGate.isOK == true else { return false }
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
-        return !newSessionName.isEmpty && e.folder == nil && e.name == nil && e.sidekick == nil && newSessionGroupError == nil   // #1214
+        return !newSessionName.isEmpty && e.folder == nil && e.name == nil
     }
 
     /// Start or Return: nothing runs unless every check passes now.
@@ -2884,10 +2711,9 @@ final class AgentWindowModel: ObservableObject {
         if let host = f.host {
             return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
         }
-        // #847 D3.5, D6.1: the sidekick and the prompt only for a Claude; the prompt never joins the spawn's argv.
+        // #847 D6.1: the prompt only for a Claude; it never joins the spawn's argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
-                     name: newSessionName, command: f.command, sidekick: newSessionSidekickOn ? newSessionSidekickName : nil,
-                     prompt: newSessionClaude ? f.prompt : "")
+                     name: newSessionName, command: f.command, prompt: newSessionClaude ? f.prompt : "")
     }
 
     /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
@@ -2909,14 +2735,13 @@ final class AgentWindowModel: ObservableObject {
                      command: nil)
     }
 
-    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, sidekick: String? = nil,
-                       prompt: String = "") -> Bool {
+    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, prompt: String = "") -> Bool {
         requests += 1
         unlisted = nil
         let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
             self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked,
-                          argv: argv, sidekick: sidekick, prompt: prompt)
+                          prompt: prompt)
         }) else {
             let why = spawnRefusal(name)
             // never dropped silently; #948 F2: a gate refusal goes when the gate opens, a name or busy one with the form
@@ -2999,7 +2824,7 @@ final class AgentWindowModel: ObservableObject {
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
-                         request: Int?, asked: TimeInterval, argv: [String], sidekick: String?, prompt: String) {
+                         request: Int?, asked: TimeInterval, prompt: String) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
@@ -3016,58 +2841,21 @@ final class AgentWindowModel: ObservableObject {
             Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)
         }
         if request != nil {
-            guard mine else { return }   // closed or replaced meanwhile: the human moved on (no sidekick, no message)
+            guard mine else { return }   // closed or replaced meanwhile: the human moved on (no message)
             newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands
             if !prompt.isEmpty { lastPrompt = "" }   // #847 D2.4: this start took it
-            // #847 D3.5: main first, then the sidekick, same folder and argv; the form waits for both answers.
-            if let sidekick { spawnSidekick(sidekick, main: key, folder: folder, argv: argv, prompt: prompt, request: request, asked: asked); return }
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
         pendingSpawn = (key, now(), asked)
         refresh()
-        firstMessages(main: key, prompt: prompt, sidekick: nil)
+        firstMessages(main: key, prompt: prompt)
     }
 
-    /// #847 D3.5: the second spawn; a refusal (busy, gate) is its failure at once.
-    private func spawnSidekick(_ name: String, main: AgentSessionKey, folder: String, argv: [String], prompt: String,
-                               request: Int?, asked: TimeInterval) {
-        guard let side = spawnSession(folder, argv, name, { [weak self] key, failure in
-            self?.sidekickSpawned(key, failure, name: name, main: main, prompt: prompt, request: request, asked: asked)
-        }) else {
-            sidekickSpawned(nil, spawnRefusal(name), name: name, main: main, prompt: prompt, request: request, asked: asked)
-            return
-        }
-        claimed[name] = .infinity
-        newSession?.startingSidekick = side
-    }
-
-    /// #847 D3.5: the sidekick's answer. The main runs either way (never killed behind the user's back): the form goes
-    /// the main's way (pendingSpawn main, its row selected); a failure is the dir line, naming which one failed. Then
-    /// the first messages (D3.7), the sidekick's only when it started. A form closed meanwhile keeps the messages: both
-    /// sessions were asked for.
-    private func sidekickSpawned(_ key: AgentSessionKey?, _ failure: String?, name: String, main: AgentSessionKey, prompt: String,
-                                 request: Int?, asked: TimeInterval) {
-        claimed[name] = key == nil ? nil : now()
-        if key == nil {
-            let p = "New session failed: ", why = failure.map { $0.hasPrefix(p) ? String($0.dropFirst(p.count)) : $0 } ?? "no answer"
-            sayOnDirLine("\(main.name) started; sidekick \(name) failed: \(why)")
-        }
-        if newSession?.request == request, newSession?.starting == main {   // the form that asked, still open
-            newSession?.startingSidekick = nil
-            pendingSpawn = (main, now(), asked)
-            refresh()
-        }
-        firstMessages(main: main, prompt: prompt, sidekick: key)
-    }
-
-    /// #847 D3.7: sayFirst(main, prompt), then sayFirst(sidekick, the Settings prompt rendered for main); a blank
-    /// prompt skips the main's call. The text goes only through the seam, never into the spawn's argv.
-    private func firstMessages(main: AgentSessionKey, prompt: String, sidekick: AgentSessionKey?) {
-        let say = sayFirst, brief = AgentNewSession.render(Preferences.agentIslandSidekickPrompt, name: main.name)
-        var next: (@MainActor () -> Void)?
-        if let sidekick { next = { say(sidekick, brief, nil) } }
-        if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next?() } else { say(main, prompt, next) }
+    /// #847 D3.7: sayFirst(main, prompt); a blank prompt skips the call. The text goes only through the seam, never into
+    /// the spawn's argv.
+    private func firstMessages(main: AgentSessionKey, prompt: String) {
+        if !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sayFirst(main, prompt, nil) }
     }
 
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.
@@ -3207,11 +2995,10 @@ final class AgentWindowModel: ObservableObject {
         case .resume where Self.isRemote(r): resumeRemote(r)
         case _ where Self.isRemote(r): break
         case .resume: resume(r)
-        case .resumeGroup: resumeGroup(r)   // #909: at once, as Resume (S5)
         case .resumeNoMessage: resumeNoMessage(r)
         case .pin: pinRecord(r)
         case .remove: confirming = AgentWindowConfirm(verb: .remove, key: r.id)
-        case .restart, .stop, .kill, .rename, .stopGroup, .switchTo: break
+        case .restart, .stop, .kill, .rename, .switchTo: break
         }
     }
 
@@ -3254,12 +3041,6 @@ final class AgentWindowModel: ObservableObject {
         confirming.flatMap { c in c.verb == .remove ? nil : store?.sessions.first { $0.key == c.key } }
     }
 
-    /// #909: Stop both's other asked members live now, for the question's blocked sentence.
-    var confirmingOthers: [AgentSession] {
-        guard case .stopGroup(let names)? = confirming?.verb, let s = confirmingSession, let store else { return [] }
-        let asked = Set(names.map { $0.lowercased() })
-        return store.sessions.filter { $0.key.dir == s.key.dir && $0.key != s.key && asked.contains($0.name.lowercased()) }
-    }
 
     /// The asked History record as it is now (nil: it went).
     var confirmingRecord: DchHistoryRecord? {
@@ -3284,10 +3065,7 @@ final class AgentWindowModel: ObservableObject {
             return
         }
         guard let s else { return }
-        // #909 (S4 step 2): Stop both answers to Stop's gate; a member gone since the question is the controller's call.
-        var gate = c.verb
-        if case .stopGroup = gate { gate = .stop }
-        if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: store), gate) {
+        if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: store), c.verb) {
             refusal = AgentWindowRefusal(id: .live(s.key), text: why)
             return
         }
@@ -3295,8 +3073,7 @@ final class AgentWindowModel: ObservableObject {
         case .restart: _ = restartSession(s)
         case .stop: _ = stopSession(s)   // #831 B1: the pane goes Ended, then its record by resolve (4.5)
         case .kill: _ = killSession(s)
-        case .stopGroup(let names): _ = stopGroup(s, names)
-        case .resume, .resumeNoMessage, .pin, .remove, .rename, .resumeGroup, .switchTo: break
+        case .resume, .resumeNoMessage, .pin, .remove, .rename, .switchTo: break
         }
     }
 

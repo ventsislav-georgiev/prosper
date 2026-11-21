@@ -173,22 +173,4 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome", "the saved command never takes the flag")
         }
     }
-
-    @MainActor
-    func testAgentWindowNewSessionDefaultEffortReachesTheSidekick() throws {
-        try withNewSessionPrefs {
-            Preferences.agentIslandDefaultEffort = "max"
-            let st = store([]), spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(st, spawns, says)
-            defer { m.close() }
-            m.openNewSessionNamed(folder: "/Users/example/api")
-            m.setNewSessionCommand("claude --chrome")
-            m.setNewSessionSidekick(true)
-            XCTAssertTrue(m.startNewSession())
-            spawns.done.first?(spawnKey("api"), nil)
-            XCTAssertEqual(spawns.calls.map(\.name), ["api", "api-qa"], "the main, then the sidekick")
-            XCTAssertEqual(spawns.calls.first?.argv, ["claude", "--effort", "max", "--chrome"], "the main gets it")
-            XCTAssertEqual(spawns.calls.last?.argv, ["claude", "--effort", "max", "--chrome"], "the sidekick gets it")
-            spawns.done.last?(spawnKey("api-qa"), nil)
-        }
-    }
 }

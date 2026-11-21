@@ -24,13 +24,6 @@
    "expect": "killed"
   },
   {
-   "name": "sidekick-line-no-article",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "\"Also start a \\(suffix) sidekick\"",
-   "new": "\"Also start \\(suffix)\"",
-   "expect": "killed"
-  },
-  {
    "name": "name-untrimmed",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "(newSession?.name ?? \"\").trimmingCharacters(in: .whitespacesAndNewlines)",

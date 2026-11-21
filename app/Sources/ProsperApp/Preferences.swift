@@ -457,8 +457,7 @@ enum Preferences {
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
-        static let agentIslandSidekickSuffix = "agentIslandSidekickSuffix"   // #847, per Mac
-        static let agentIslandSidekickPrompt = "agentIslandSidekickPrompt"   // #847 P1d, per Mac
+        // #1820: agentIslandSidekickSuffix and agentIslandSidekickPrompt (#847) are no longer read; a stored value stays.
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         static let agentIslandFollowsTheme = "agentIslandFollowsTheme"   // #1452, per Mac
         static let agentIslandShowPlanUsage = "agentIslandShowPlanUsage"   // #1552, per Mac
@@ -1475,23 +1474,6 @@ enum Preferences {
         }
     }
 
-    /// #847: the pair suffix (X and X<suffix> are a pair); unset reads "-qa". Stored trimmed;
-    /// "" is kept and means no pairs by name. Per Mac, not synced.
-    static var agentIslandSidekickSuffix: String {
-        get { defaults.string(forKey: Keys.agentIslandSidekickSuffix) ?? AgentIsland.sidekickDefault }
-        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.agentIslandSidekickSuffix) }
-    }
-
-    /// #847 D4.1: the sidekick's first message, "$name" for the main session's name; unset reads the default.
-    /// Stored trimmed; empty removes the key (a sidekick with no brief is pointless). Per Mac, not synced.
-    static var agentIslandSidekickPrompt: String {
-        get { defaults.string(forKey: Keys.agentIslandSidekickPrompt) ?? AgentNewSession.sidekickPromptDefault }
-        set {
-            let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandSidekickPrompt) }
-            else { defaults.set(v, forKey: Keys.agentIslandSidekickPrompt) }
-        }
-    }
 
     /// #1456: Agent Sessions' "Terminal colours": "ghostty" (My Ghostty theme) or "prosper"; unset or unknown reads as Prosper.
     static var agentTerminalColours: String {

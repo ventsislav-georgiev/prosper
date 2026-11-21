@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1370 (#847 P1d part 3): the New session form's Sidekick row, Prompt disclosure and editor, the New shell guard,
+/// #1370 (#847 P1d part 3), #1820 (the Sidekick row gone): the New session form's Prompt disclosure and editor, the New shell guard,
 /// Command-Return on Start, and the unsent first message seeded at the failure. Offscreen only: an AgentsNSWindow that
 /// is never shown, ordered or made key; the accessibility tree is read through AXTreeSupport (flags put back); keys
 /// are built events handed to the editor's own keyDown, never posted. No dch runs: the spawn is `spawnSession`'s
@@ -11,7 +11,7 @@ import XCTest
 extension AgentWindowD1Tests {
 
     struct FormRows: Equatable {
-        var start, cancel, shell, box: CGRect
+        var start, cancel, shell: CGRect
     }
 
     /// The form alone (AgentDetailView, no ScrollView) in a never-shown AgentsNSWindow of `size`.
@@ -27,39 +27,33 @@ extension AgentWindowD1Tests {
         return (win, host)
     }
 
-    /// Start (or "Starting..."), Cancel, New shell and the Sidekick box, from the accessibility tree.
+    /// Start (or "Starting..."), Cancel and New shell, from the accessibility tree.
     @MainActor
     func formRows(_ host: NSView, starting: Bool = false) -> (rows: FormRows?, tree: [AXTreeNode]) {
         let startName = starting ? "Starting\u{2026}" : "Start"
         func pick(_ t: [AXTreeNode]) -> FormRows? {
             func button(_ n: String) -> CGRect? { t.last { $0.role == "AXButton" && $0.named(n) && $0.frame.width > 0 }?.frame }
-            guard let s = button(startName), let c = button("Cancel"), let sh = button("New shell"),
-                  let b = t.last(where: isBox)?.frame
-            else { return nil }
-            return FormRows(start: s, cancel: c, shell: sh, box: b)
+            guard let s = button(startName), let c = button("Cancel"), let sh = button("New shell") else { return nil }
+            return FormRows(start: s, cancel: c, shell: sh)
         }
         settle(host)
         let tree = AXTreeSupport.poll(host) { pick($0) != nil }
         return (pick(tree), tree)
     }
 
-    /// The Sidekick checkbox: not the field's "Sidekick" label text (SwiftUI may name it "Sidekick" or "Sidekick, ...").
-    func isBox(_ n: AXTreeNode) -> Bool { n.role != "AXStaticText" && n.named(prefix: "Sidekick") && n.frame.width > 0 }
-
     @MainActor
     func assertRows(_ a: FormRows?, _ b: FormRows?, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let a, let b else { return XCTFail("\(what): \(String(describing: a)) vs \(String(describing: b))", file: file, line: line) }
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
-        for (x, y, n) in [(a.start, b.start, "Start"), (a.cancel, b.cancel, "Cancel"), (a.shell, b.shell, "New shell"), (a.box, b.box, "Sidekick")] {
+        for (x, y, n) in [(a.start, b.start, "Start"), (a.cancel, b.cancel, "Cancel"), (a.shell, b.shell, "New shell")] {
             assertRect(x, y, accuracy: pixel, "\(what): \(n)", file: file, line: line)
         }
     }
 
     // MARK: T29: fixed rows
 
-    /// T29: at UI scale 1.0, 0.85 and 0.7, Start, Cancel, New shell and the Sidekick box keep their frames with the box
-    /// on and no error, with a sidekick-only slot error (the name "api": its sidekick api-qa is taken), with both slots
-    /// holding an error, and while "Starting..." shows.
+    /// T29: at UI scale 1.0, 0.85 and 0.7, Start, Cancel and New shell keep their frames with no error, with the name
+    /// slot's error (a taken name, then a bad one), and while "Starting..." shows.
     @MainActor
     func testAgentWindowNewSessionFormRowsHoldWithSlotErrorsAndStarting() {
         let saved = ThemeRuntime.scale
@@ -74,17 +68,15 @@ extension AgentWindowD1Tests {
                 let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(700)))
                 defer { win.close() }
                 m.openNewSession()
-                m.setNewSessionSidekick(true)
-                XCTAssertTrue(m.newSessionSidekickOn, "the box is on at \(scale)")
                 let base = formRows(host)
                 XCTAssertTrue(base.rows != nil, "every row is there at \(scale): \(base.tree.map(\.name))")
-                m.setNewSessionName("api")
-                XCTAssertTrue(m.newSessionErrors.name == nil && m.newSessionErrors.sidekick != nil, "the sidekick's slot only at \(scale)")
-                assertRows(formRows(host).rows, base.rows, "sidekick slot error at \(scale)")
+                m.setNewSessionName("a")
+                XCTAssertTrue(m.newSessionErrors.name != nil, "a taken name at \(scale)")
+                assertRows(formRows(host).rows, base.rows, "taken name error at \(scale)")
                 m.setNewSessionName("a:b")
-                XCTAssertTrue(m.newSessionErrors.name != nil && m.newSessionErrors.sidekick != nil, "both slots at \(scale)")
-                assertRows(formRows(host).rows, base.rows, "both slot errors at \(scale)")
-                m.setNewSessionName("web")   // #1731: the name is required; "web" and its sidekick web-qa are free
+                XCTAssertTrue(m.newSessionErrors.name != nil, "a bad name at \(scale)")
+                assertRows(formRows(host).rows, base.rows, "bad name error at \(scale)")
+                m.setNewSessionName("web")   // #1731: the name is required; "web" is free
                 XCTAssertTrue(m.startNewSession())
                 XCTAssertEqual(spawns.calls.count, 1)
                 assertRows(formRows(host, starting: true).rows, base.rows, "Starting\u{2026} at \(scale)")
@@ -95,7 +87,7 @@ extension AgentWindowD1Tests {
     // MARK: T30: the one reflow
 
     /// T30: expanding the prompt grows the form by one delta, sz(96) + the column's sz(6); the form is centred (#1479), so
-    /// Start, Cancel and New shell move down by half of it and the fields and the box up by half (was: down by all of it, nothing above moved); 12 typed lines keep the editor's frame; collapsing puts every row back.
+    /// Start, Cancel and New shell move down by half of it and the fields up by half (was: down by all of it, nothing above moved); 12 typed lines keep the editor's frame; collapsing puts every row back.
     @MainActor
     func testAgentWindowNewSessionFormPromptOpensByOneFixedDeltaAndTypingKeepsTheEditor() throws {
         let saved = ThemeRuntime.scale
@@ -130,7 +122,6 @@ extension AgentWindowD1Tests {
                     XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(n) same size at \(scale)")
                     XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(n) same size at \(scale)")
                 }
-                XCTAssertEqual(open.box.minY - base.box.minY, delta, accuracy: pixel, "the box above moves up by the same half at \(scale)")
                 let moved = formFields(host).map { host.convert($0.bounds, from: $0) }
                 XCTAssertEqual(moved.count, fields.count, "\(scale)")
                 for (a, b) in zip(moved, fields) { XCTAssertEqual(abs(a.minY - b.minY), delta, accuracy: pixel, "each field moves by the half at \(scale)") }
@@ -209,10 +200,10 @@ extension AgentWindowD1Tests {
         }
     }
 
-    // MARK: D6.2: New shell refused while the box or the prompt holds
+    // MARK: D6.2: New shell refused while the prompt holds
 
     @MainActor
-    func testAgentWindowNewSessionFormNewShellDimsWhileTheBoxOrThePromptHolds() throws {
+    func testAgentWindowNewSessionFormNewShellDimsWhileThePromptHolds() throws {
         let restore = AXTreeSupport.axOn()
         defer { restore() }
         try withNewSessionPrefs {
@@ -225,23 +216,20 @@ extension AgentWindowD1Tests {
                 let tree = formRows(host).tree
                 return try XCTUnwrap(tree.last { $0.role == "AXButton" && $0.named("New shell") }, "\(tree.map(\.name))")
             }
-            XCTAssertTrue(try shell().enabled, "neither: New shell is there to press")
-            m.setNewSessionSidekick(true)
-            XCTAssertFalse(try shell().enabled, "the box on")
-            XCTAssertEqual(try shell().help, AgentWindowModel.plainShellRefusal, "it says why")
-            m.setNewSessionSidekick(false)
+            XCTAssertTrue(try shell().enabled, "no prompt: New shell is there to press")
             m.setNewSessionPrompt("Example task")
             XCTAssertFalse(try shell().enabled, "text in the prompt")
+            XCTAssertEqual(try shell().help, AgentWindowModel.plainShellRefusal, "it says why")
             m.setNewSessionPrompt("")
-            XCTAssertTrue(try shell().enabled, "both cleared")
+            XCTAssertTrue(try shell().enabled, "cleared")
             XCTAssertTrue(spawns.calls.isEmpty)
         }
     }
 
-    // MARK: Not a Claude: the box and the prompt dimmed, the reason shown
+    // MARK: Not a Claude: the prompt dimmed, the reason shown
 
     @MainActor
-    func testAgentWindowNewSessionFormNonClaudeDimsTheBoxAndThePromptWithTheReason() throws {
+    func testAgentWindowNewSessionFormNonClaudeDimsThePromptWithTheReason() throws {
         let restore = AXTreeSupport.axOn()
         defer { restore() }
         try withNewSessionPrefs {
@@ -250,26 +238,21 @@ extension AgentWindowD1Tests {
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
             m.openNewSession()
-            for (command, why) in [("", "The login shell has no Claude to name, brief or prompt"),
+            for (command, why) in [("", "The login shell has no Claude to name or prompt"),
                                    ("/bin/zsh -l", "Needs a claude command (claude, or a wrapper that runs claude)")] {
                 m.setNewSessionCommand(command)
                 XCTAssertFalse(m.newSessionClaude, command)
                 XCTAssertEqual(AgentNewSessionView.notClaude(command: command, host: nil), why)
                 let tree = formRows(host).tree
-                let box = try XCTUnwrap(tree.last(where: isBox), "\(command): \(tree.map(\.name))")
-                XCTAssertFalse(box.enabled, "the box dimmed: \(command)")
-                XCTAssertTrue(tree.contains { $0.named(why) }, "the reason on the line: \(command)")
                 let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named("Prompt, optional") }, command)
                 XCTAssertFalse(disclosure.enabled, "the disclosure dimmed: \(command)")
+                XCTAssertEqual(disclosure.help, why, "#1820: the reason is the disclosure's help (the Sidekick line that showed it is gone): \(command)")
             }
             m.setNewSessionCommand("claude")
             let tree = formRows(host).tree
-            XCTAssertTrue(tree.last(where: isBox)?.enabled == true, "a Claude: the box is live")
-            XCTAssertTrue(tree.contains { $0.named(prefix: "Also start a -qa sidekick, briefed by the sidekick prompt") }, "#1731: no name yet: \(tree.map(\.name))")
-            m.setNewSessionName("api")
-            settle(host)
-            let named = formRows(host).tree
-            XCTAssertTrue(named.contains { $0.named(prefix: "Also start api-qa") }, "the line names the sidekick: \(named.map(\.name))")
+            XCTAssertFalse(tree.contains { $0.named(prefix: "Sidekick") || $0.named(prefix: "Also start") }, "#1820: no Sidekick row: \(tree.map(\.name))")
+            let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named("Prompt, optional") })
+            XCTAssertTrue(disclosure.enabled, "a Claude: the disclosure is live")
         }
     }
 

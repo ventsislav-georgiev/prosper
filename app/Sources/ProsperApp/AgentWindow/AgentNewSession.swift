@@ -23,25 +23,9 @@ struct AgentNewSessionForm: Equatable {
     var status: String?
     /// #1323: the Mac it starts on: nil this one, else a host from the remote list (raw, as argv takes it).
     var host: String?
-    /// #847 P1d: also start main + suffix (off on every open), the first message, and whether its editor is open.
-    var sidekick = false
+    /// #847 P1d: the first message, and whether its editor is open.
     var prompt = ""
     var promptShown = false
-    /// Set while the second spawn (the sidekick's) runs; `starting` stays the main's.
-    var startingSidekick: AgentSessionKey?
-    /// #1214: "Add to group": the running group's stem (folded) and the role the new session takes; nil: no group.
-    var group: GroupPick?
-    /// #1214: the selected live session's name when the form opened (the main a new sidekick works for).
-    var openedOn: String?
-    /// #1214: the first prompt the group choice filled in, so another choice can take it back.
-    var groupPrompt: String?
-    /// #1400 (R1214-i1): the name typed before a group choice cleared it, so None can bring it back.
-    var groupTypedName: String?
-
-    struct GroupPick: Equatable {
-        var stem: String
-        var sidekick: Bool
-    }
 }
 
 /// The form's rules. Pure.
@@ -95,30 +79,9 @@ enum AgentNewSession {
 
     /// The folder's free name, compared case-folded (freeName). Cut to leave room for a "-N" under `nameLimit`
     /// (sessionName is ASCII: characters are bytes).
-    /// #847 D3.4: with `suffix` (the sidekick box on), the first free name whose sidekick is free too: a taken
-    /// "<t><suffix>" (case-folded) takes "<t>", and the stem leaves room for the suffix as well.
-    static func autoName(folder: String, taken: Set<String>, dir: String, suffix: String? = nil) -> String {
-        guard let suffix, !suffix.isEmpty else { return freeStem(AgentIsland.sessionName(folder: folder), taken: taken, dir: dir) }
-        let s = suffix.lowercased()
-        let mains = taken.compactMap { t in t.lowercased().hasSuffix(s) ? String(t.lowercased().dropLast(s.count)) : nil }
-        return freeStem(AgentIsland.sessionName(folder: folder), taken: taken.union(mains), dir: dir, room: suffix.utf8.count)
+    static func autoName(folder: String, taken: Set<String>, dir: String) -> String {
+        freeStem(AgentIsland.sessionName(folder: folder), taken: taken, dir: dir)
     }
-
-    /// #847 S9: the sidekick's name: the main's (typed or automatic) and the Settings suffix.
-    static func sidekickName(_ main: String, suffix: String) -> String { main + suffix }
-
-    /// #847 D4.3: "$name" replaced by the main session's name where the next character is not [A-Za-z0-9_]
-    /// ("$names" stays). The only placeholder.
-    static func render(_ template: String, name: String) -> String {
-        template.replacingOccurrences(of: "\\$name(?![A-Za-z0-9_])", with: NSRegularExpression.escapedTemplate(for: name),
-                                      options: .regularExpression)
-    }
-
-    /// #847 D4.5: the sidekick's first message when Settings holds none.
-    static let sidekickPromptDefault = "You are the QA sidekick of the Claude Code session $name, in this same folder. "
-        + "Get all your context from $name: read its screen and scrollback with `dch --read $name --recent 500`, and "
-        + "look again as it works. QA and review their work. Talk to me only through them: send each finding or "
-        + "question with `dch --say $name -- \"QA: <message>\"`, never to me directly."
 
     /// QA #736 INFO-3: the quick shell starts in every folder: a folder name dch refuses (id-shaped, too long for
     /// `dir`) gives way to the stem "shell".
@@ -127,8 +90,8 @@ enum AgentNewSession {
         return nameError(n, taken: taken, dir: dir) == nil ? n : freeStem("shell", taken: taken, dir: dir)
     }
 
-    private static func freeStem(_ stem: String, taken: Set<String>, dir: String, room: Int = 0) -> String {
-        AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4 - room))), taken: taken)
+    private static func freeStem(_ stem: String, taken: Set<String>, dir: String) -> String {
+        AgentIsland.freeName(String(stem.prefix(max(1, nameLimit(dir: dir) - 4))), taken: taken)
     }
 
     /// nil: the name can be spawned into socket dir `dir`. Empty (after trim): no error here (the form shows none while it is untouched); #1731 canStartNewSession refuses it.
@@ -161,7 +124,7 @@ enum AgentNewSession {
     /// The command's argv as it runs; empty: the login shell (OQ-2: like Terminal.app).
     /// #1228: with the Default model (AgentIsland.withModel); Start, the "Runs:" line and the ccpool hint all read
     /// this one argv, so what is shown is what starts. The typed text (saved on success) never gets the flag.
-    /// #1454: and the Default effort; the sidekick spawns this same argv (AgentWindowModel.spawnSidekick).
+    /// #1454: and the Default effort.
     static func argv(_ command: String, shell: String?, model: String = Preferences.agentIslandDefaultModel,
                      effort: String = Preferences.agentIslandDefaultEffort) -> [String] {
         let words = AgentIsland.shellWords(command)
@@ -316,9 +279,6 @@ struct AgentNewSessionView: View {
                     .accessibilityLabel("On")
                 }
             }
-            // #1214: only while a group runs (this Mac): no row, no gap otherwise.
-            let groups = model.newSessionGroups
-            if !groups.isEmpty { groupRow(groups) }
             field("Folder", error: errors.folder) {
                 HStack(spacing: sz(6)) {
                     TextField(form.host == nil ? "~" : "/Users/you/project", text: Binding(get: { form.folder }, set: { model.setNewSessionFolder($0) }))
@@ -355,11 +315,10 @@ struct AgentNewSessionView: View {
                     }
                 }
             }
-            sidekickRow(errors.sidekick)
             promptRows
             Divider().padding(.vertical, sz(4))
             HStack(spacing: sz(8)) {
-                // QA #736 INFO-3: Start's condition; it dims in place. #847 D6.2: also while the box or the prompt holds.
+                // QA #736 INFO-3: Start's condition; it dims in place. #847 D6.2: also while the prompt holds.
                 let shellWhy = model.newSessionShellRefusal
                 AgentPillButton(title: "New shell", icon: "apple.terminal", tint: Neon.terminal,
                                 enabled: model.canStartNewSession && shellWhy == nil) { model.startShell() }
@@ -387,62 +346,12 @@ struct AgentNewSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)   // #1479: centred when it fits; a ScrollView gives it its own height, so it stays top-aligned there
     }
 
-    /// #847 D6.1: why the box and the prompt are dimmed (newSessionClaude false), shown on the Sidekick line.
+    /// #847 D6.1: why the prompt is dimmed (newSessionClaude false), its help.
     static func notClaude(command: String, host: String?) -> String {
-        if host != nil { return "A sidekick and a first prompt start on this Mac only" }
+        if host != nil { return "A first prompt starts on this Mac only" }
         return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "The login shell has no Claude to name, brief or prompt"
+            ? "The login shell has no Claude to name or prompt"
             : "Needs a claude command (claude, or a wrapper that runs claude)"
-    }
-
-    /// #1731: the Sidekick line; with no name typed yet it reads "a -qa sidekick" (the same words reach VoiceOver).
-    static func sidekickLine(name: String, suffix: String) -> String {
-        (name.isEmpty ? "Also start a \(suffix) sidekick" : "Also start " + AgentNewSession.sidekickName(name, suffix: suffix))
-            + ", briefed by the sidekick prompt"
-    }
-
-    /// #847 D3, D5.4: the box in a fixed sz(18) row, its line (the sidekick's name, or why it is dimmed) and its slot.
-    private func sidekickRow(_ error: String?) -> some View {
-        let claude = model.newSessionClaude
-        let line = claude ? Self.sidekickLine(name: model.newSessionName, suffix: Preferences.agentIslandSidekickSuffix)
-            : Self.notClaude(command: form.command, host: form.host)
-        return field("Sidekick", error: error) {
-            HStack(spacing: sz(6)) {
-                Toggle("Sidekick", isOn: Binding(get: { form.sidekick && claude }, set: { model.setNewSessionSidekick($0) }))
-                    .toggleStyle(.checkbox).labelsHidden()
-                    .disabled(!claude || form.group != nil)   // #1214: one session joins a group
-                Text(verbatim: line).font(Neon.font(11.5)).foregroundStyle(claude ? Neon.textPrimary : Neon.textSecondary)
-                    .lineLimit(1).truncationMode(.tail).help(line)
-            }
-            .frame(height: sz(18))
-        }
-    }
-
-    /// #1214: "Add to group": the running groups by stem, then the role. Both menus have fixed widths in points (a
-    /// pop-up's text does not follow the UI scale), so a choice never resizes the row.
-    static let groupChoiceLabel = "Add to group"
-    static let groupRoleLabel = "Role in the group"
-    static let groupNone = "None"
-
-    private func groupRow(_ groups: [AgentGroup]) -> some View {
-        let pick = form.group
-        return field("Group", error: model.newSessionGroupError) {
-            HStack(spacing: sz(6)) {
-                Picker(Self.groupChoiceLabel, selection: Binding(get: { pick?.stem },
-                                                                 set: { model.setNewSessionGroup($0, sidekick: pick?.sidekick ?? false) })) {
-                    Text(verbatim: Self.groupNone).tag(String?.none)
-                    ForEach(groups, id: \.stem) { g in Text(verbatim: g.stem).tag(Optional(g.stem)) }
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: 150)   // the title is its AX label (a second one reads twice)
-                Picker(Self.groupRoleLabel, selection: Binding(get: { pick?.sidekick ?? false },
-                                                               set: { model.setNewSessionGroup(pick?.stem, sidekick: $0) })) {
-                    Text(verbatim: "Main").tag(false)
-                    Text(verbatim: "Sidekick").tag(true)
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: 100)
-                .disabled(pick == nil)
-            }
-        }
     }
 
     /// #847 D5.1-D5.3: the disclosure, and the editor at a fixed sz(96) under it (the one accepted reflow). Return adds
