@@ -6,7 +6,7 @@
    "name": "m1-old-pair",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
    "old": "        _ = perform(Self.resignKey, with: Notification(name: NSWindow.didResignKeyNotification, object: window))\n        _ = perform(Self.becomeKey, with: Notification(name: NSWindow.didBecomeKeyNotification, object: window))\n",
-   "new": "        unfocusSurface()\n        _ = super.becomeFirstResponder()\n",
+   "new": "        surfaceResigns += 1\n        _ = super.resignFirstResponder()\n        _ = super.becomeFirstResponder()\n",
    "expect": "killed"
   },
   {

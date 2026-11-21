@@ -1,0 +1,13 @@
+{
+ "entry": "1813",
+ "filter": "AgentTerminalKeepTests/testUnfocusOnTheFirstResponderOfAnUnfocusedPaneRunsNoResponderResign",
+ "mutants": [
+  {
+   "name": "unfocus-direct-resign",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            return\n        }\n        _ = perform(Self.resignKey, with: Notification(name: NSWindow.didResignKeyNotification, object: window))\n",
+   "new": "            return\n        }\n        surfaceResigns += 1\n        _ = super.resignFirstResponder()\n",
+   "expect": "killed"
+  }
+ ]
+}

@@ -1163,11 +1163,19 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// #1656: focus false through the wrapper's own call (its resign hook runs core.setFocus(false); NSView's answers yes
     /// and changes nothing): the responder chain, the grid and the pty stay as they are.
     /// Hosted through the wrapper's TerminalViewRepresentable instead, this would also flip its FocusState (QA R1656 n3).
+    /// #1813: through the wrapper's window-key handler (core.setFocus(false) only), as refocusSurface since #1805: the
+    /// NSView resign on a view that stays first responder in a key window is beta.43's typing bug. The handler ignores
+    /// the window, so a view with none goes the same way. Handler missing (a wrapper update): the old resign, so the pane
+    /// still loses its solid caret; the #1813 row then goes red.
     private func unfocusSurface() {
-        surfaceResigns += 1
-        _ = super.resignFirstResponder()
+        guard responds(to: Self.resignKey) else {
+            surfaceResigns += 1
+            _ = super.resignFirstResponder()
+            return
+        }
+        _ = perform(Self.resignKey, with: Notification(name: NSWindow.didResignKeyNotification, object: window))
     }
-    /// #1805: NSView resigns run by unfocusSurface (rows: a refocus runs none).
+    /// #1805: NSView resigns run by unfocusSurface (rows: a refocus runs none; #1813: nor an unfocus).
     private(set) var surfaceResigns = 0
 
     /// #1803: a focus false then true, so libghostty writes the program its focus-out then focus-in itself; only while the

@@ -544,4 +544,38 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertEqual(va.surfaceResigns, resigns, "no NSView resign on the first responder")
         XCTAssertTrue(win.firstResponder === va, "the keys stay where they were")
     }
+
+    /// #1813 (#1805 follow-up): the first responder in a key window that is not the focused pane loses libghostty focus
+    /// (#1656) through the wrapper's window-key handler, never the NSView resign on a view that stays first responder,
+    /// on both unfocus paths: becomeFirstResponder and a new surface (surfaceStarted).
+    @MainActor
+    func testUnfocusOnTheFirstResponderOfAnUnfocusedPaneRunsNoResponderResign() {
+        _ = NSApplication.shared
+        let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
+        var sent: [Bool] = []
+        let c = rig.c
+        c.passiveToggle = { _, _ in }
+        c.focusSent = { sent.append($0) }
+        c.paneFocused = { false }
+        let slot = AgentTerminalHostSlot(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        let win = AgentWindowD1Tests.CaretWindow(contentRect: slot.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.key = true
+        win.contentView = slot
+        defer { c.attach(nil); win.contentView = nil; win.close() }
+        c.attach(Self.key("api"))
+        let v = c.hostView()
+        slot.hold(v)
+        v.owner = c
+        c.view = v
+        XCTAssertTrue(v.responds(to: AgentTerminalHostView.resignKey), "the wrapper's window-key handler is there")
+        XCTAssertTrue(win.makeFirstResponder(v))
+        XCTAssertEqual(sent.last, false, "not the focused pane: focus false after the become")
+        XCTAssertEqual(v.surfaceResigns, 0, "becomeFirstResponder: no NSView resign on the first responder")
+        sent = []
+        v.surfaceStarted()
+        XCTAssertEqual(sent, [false], "a new surface: one focus false")
+        XCTAssertEqual(v.surfaceResigns, 0, "surfaceStarted: no NSView resign on the first responder")
+        XCTAssertTrue(win.firstResponder === v, "the keys stay where they were")
+    }
 }
