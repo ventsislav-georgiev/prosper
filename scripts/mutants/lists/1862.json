@@ -107,6 +107,41 @@
    "old": "for \\(applied) h\"",
    "new": "for \\(String(format: \"%.1f\", hours)) h\"",
    "expect": "killed"
+  },
+  {
+   "name": "nav-fallthrough-retargets",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            guard !(keysStay && wouldRetargetFocusedPane(next)) else { return false }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "nav-undo-retargets",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": ", selection != m.selection, !m.wouldRetargetFocusedPane(selection) {",
+   "new": ", selection != m.selection {",
+   "expect": "killed"
+  },
+  {
+   "name": "retarget-never",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return shownIn(l) != shownIn(layout)",
+   "new": "return false",
+   "expect": "killed"
+  },
+  {
+   "name": "nav-nopane-says-nobody",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "throw ControlError(noPane)",
+   "new": "throw ControlError(nobody)",
+   "expect": "killed"
+  },
+  {
+   "name": "nav-nobody-check-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "        guard m.nextNeedingYou() != nil else { throw ControlError(nobody) }\n",
+   "new": "",
+   "expect": "killed"
   }
  ]
 }

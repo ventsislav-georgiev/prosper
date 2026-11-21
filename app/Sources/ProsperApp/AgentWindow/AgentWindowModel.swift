@@ -1539,14 +1539,12 @@ final class AgentWindowModel: ObservableObject {
     /// window's pane runtimes stop and start. Main actor (the window's key route).
     /// R901-s6-q1: a refused stored-layout switch moves no keys and falls through to the focused pane (rule 2).
     /// `switching` (tests): the switch, nil = switchLayout(_:focus:); no refusal is reachable through the model's own store.
+    /// #1862 n180: under keepingKeys (an agent's jump) the fall-through into the focused pane is refused (false, nothing
+    /// changed): its retarget swaps the pane's terminal view and AgentTerminalHostSlot.hold hands the new one the keys.
     @discardableResult
     func nextNeedsYou(switching: ((UUID, UUID) -> PaneRefusal?)? = nil) -> Bool {
-        guard AgentPaneLayout.splitsEnabled, !closed else { return false }
-        let rows = sections.first { $0.id == AgentSidebar.needsYouTitle }?.rows ?? []
-        let mine = layout.panes.first { $0.id == layout.focused }?.target
-        let after = rows.firstIndex { target($0.id) == mine }.map { Array(rows[($0 + 1)...] + rows[..<$0]) } ?? rows
-        guard let next = after.first(where: { $0.state == .blocked }) ?? after.first, case .live = next.id else { return false }
-        let t = target(next.id)
+        guard AgentPaneLayout.splitsEnabled, !closed, let next = nextNeedingYou() else { return false }
+        let t = target(next)
         func shown(_ l: PaneLayout) -> UUID? { l.panes.first { $0.target == t }?.id }   // a session, never a History pane
         if let p = shown(layout) {
             focusPane(p)
@@ -1555,11 +1553,33 @@ final class AgentWindowModel: ObservableObject {
             // The keys move only once switched; adopt's own focusSelection ran only if they were the pane's already.
             if keyFocus != .pane { keyFocus = .pane; focusSelection() }
         } else {
+            guard !(keysStay && wouldRetargetFocusedPane(next)) else { return false }
             keyFocus = .pane
-            select(next.id)
+            select(next)
             focusSelection()
         }
         return true
+    }
+
+    /// ⌘J's pick (nextNeedsYou's): the Needs you rows after the focused pane's session, wrapping, the first blocked one,
+    /// else the first done one; nil: no other live session needs you. Reads only.
+    func nextNeedingYou() -> AgentSidebar.RowID? {
+        let rows = sections.first { $0.id == AgentSidebar.needsYouTitle }?.rows ?? []
+        let mine = layout.panes.first { $0.id == layout.focused }?.target
+        let after = rows.firstIndex { target($0.id) == mine }.map { Array(rows[($0 + 1)...] + rows[..<$0]) } ?? rows
+        guard let next = after.first(where: { $0.state == .blocked }) ?? after.first, case .live = next.id else { return nil }
+        return next.id
+    }
+
+    /// #1862 n180 (#1864 reuses it for sessions.focus): `select(id)` would put another target into the focused pane (the
+    /// browse rule's answer, `showing`), so its terminal view is swapped and takes the keys the old one had. An agent path
+    /// (keepingKeys) skips such a select. A refused show retargets nothing: false.
+    /// shortcut: reads the unlocked browse rule; a locked layout's pick (lockedShowing) parks it for a single-pane view
+    /// instead, which this counts as a retarget too (the conservative answer), upgrade if an agent path must pick there.
+    func wouldRetargetFocusedPane(_ id: AgentSidebar.RowID) -> Bool {
+        guard case let .success(l) = showing(id) else { return false }
+        func shownIn(_ p: PaneLayout) -> PaneTarget? { p.panes.first { $0.id == layout.focused }?.target }
+        return shownIn(l) != shownIn(layout)
     }
 
     /// 8.1: the layout numbered `n`, 1 to 9 in the list's order. `n` is outside data (a key): compared, never trapped on;

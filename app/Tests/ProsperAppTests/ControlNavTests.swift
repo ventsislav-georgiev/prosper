@@ -186,4 +186,88 @@ final class ControlNavTests: XCTestCase {
             XCTAssertFalse(win.isKeyWindow, "never key")
         }
     }
+
+    /// n180: one layout of one pane (api) with the keys in its terminal, web blocked and shown by no pane. `body` gets the
+    /// model and api's view once the keys are in it (a fake-client terminal in a never-shown window, as above).
+    @MainActor
+    func withOnePaneKeys(_ body: (AgentWindowModel, AgentTerminalHostView, AgentsNSWindow, NSView) throws -> Void) throws {
+        try base.withPaneMenu(true) {
+            let saved = ControlSessions.model
+            defer { ControlSessions.model = saved }
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .blocked)]), layouts: base.layoutSuite())
+            let log = base.splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            m.adopt(base.paneLayout([base.paneTarget("api")]))
+            ControlSessions.model = { m }
+            let (win, host) = base.focusWindow(m)
+            defer { win.close() }
+            base.endRests(log)
+            base.paneFocusSettle(host) { m.terminal.phase == .live && m.terminal.view?.window === win }
+            let apiView = try XCTUnwrap(m.terminal.view)
+            XCTAssertEqual(m.layout.panes.count, 1)
+            XCTAssertTrue((m.layouts?.layouts.count ?? 0) <= 1, "no other layout")
+            XCTAssertEqual(needsYou(m), ["web"])
+            XCTAssertTrue(m.focusSelection())
+            base.paneFocusSettle(host) { win.firstResponder === apiView }
+            XCTAssertTrue(win.firstResponder === apiView, "the keys in api's terminal")
+            try body(m, apiView, win, host)
+            XCTAssertFalse(win.isVisible, "never shown")
+            XCTAssertFalse(win.isKeyWindow, "never key")
+        }
+    }
+
+    /// n180: no pane shows web, so the agent's jump is refused and the focused pane keeps api (its retarget would swap in
+    /// web's terminal view, which AgentTerminalHostSlot.hold hands the keys): target, layout, row and keys unchanged.
+    @MainActor
+    func testAgentJumpRefusedWhenNoPaneShowsTheSession() throws {
+        try withOnePaneKeys { m, apiView, win, host in
+            let layout = m.layout, selection = m.selection, keys = m.keyFocus, writes = m.layoutWrites
+            refused(try ControlNav.nextNeedsYou(), ControlNav.noPane)
+            base.paneFocusSettle(host) { false }
+            XCTAssertEqual(focusedName(m), "api", "the focused pane is not retargeted")
+            XCTAssertEqual(m.layout, layout)
+            XCTAssertTrue(m.selection == selection, "the row is unchanged")
+            XCTAssertEqual(m.keyFocus, keys)
+            XCTAssertEqual(m.layoutWrites, writes)
+            XCTAssertFalse(m.keysStay)
+            XCTAssertTrue(win.firstResponder === apiView, "the keys stay in api's terminal")
+        }
+    }
+
+    /// n180: the same setup through the person's own ⌘J (no keepingKeys): the fall-through still retargets the focused
+    /// pane to web, as before.
+    @MainActor
+    func testHumansKeyStillRetargetsTheFocusedPane() throws {
+        try withOnePaneKeys { m, _, _, host in
+            let pane = m.layout.focused
+            XCTAssertTrue(m.nextNeedsYou())
+            base.paneFocusSettle(host) { false }
+            XCTAssertEqual(m.layout.focused, pane)
+            XCTAssertEqual(focusedName(m), "web", "the key puts web into the focused pane")
+        }
+    }
+
+    /// n180: after the agent's jump switched to layout B, the person goes back to A and drops web into the focused pane
+    /// (api's). The undo's row restore (api) would now retarget that pane: skipped, the pane keeps web.
+    @MainActor
+    func testUndoNeverRetargetsTheFocusedPane() throws {
+        try withModel((.idle, .idle, .blocked)) { m, _, a, b in
+            let pane = m.layout.focused
+            let before = try XCTUnwrap(m.selection)
+            XCTAssertEqual(focusedName(m), "api")
+            let c = try ControlNav.nextNeedsYou()
+            XCTAssertEqual(m.layout.id, b.id, "web is only in layout B: switched")
+            let web = try XCTUnwrap(m.selection)
+            XCTAssertTrue(m.switchLayout(a.id) == nil)
+            m.choose(web, into: pane, drop: true)
+            XCTAssertEqual(m.layout.focused, pane)
+            XCTAssertEqual(focusedName(m), "web", "the person's drop")
+            XCTAssertTrue(m.wouldRetargetFocusedPane(before), "the restore would retarget the focused pane")
+            c.undo?()
+            XCTAssertEqual(m.layout.id, a.id)
+            XCTAssertEqual(m.layout.focused, pane)
+            XCTAssertEqual(focusedName(m), "web", "the undo never retargets the focused pane")
+        }
+    }
 }

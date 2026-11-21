@@ -2361,7 +2361,9 @@ tag from the now-released section and put it on the new top draft.
   your phone's snippets or a macOS Text Replacement already use; Undo leaves a snippet alone once
   you have edited it since. (#1858)
 - Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
-  release an account in the account pool, each with Undo. (#1862)
+  release an account in the account pool, each with Undo. The agent's jump only shows a session one
+  of your panes or layouts already shows and never moves your keyboard; if none shows it, the jump
+  is refused and asks you to press Command-J yourself. (#1862)
 - Agents can put plain text on the clipboard; Undo puts back what was there unless you copied
   something since, the agent's text stays out of your clipboard history, and reading the clipboard
   stays yours only. It is refused, your clipboard left as it was, when Prosper is not allowed to
