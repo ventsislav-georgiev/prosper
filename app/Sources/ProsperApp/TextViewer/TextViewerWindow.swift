@@ -531,6 +531,8 @@ final class TextViewerWindows {
     var present: (NSWindow) -> Void = { win in
         DockPolicy.present(win)
     }
+    /// #1857 n174: an agent's open (textviewer.open): on screen, not key, Prosper not activated (DockPolicy.presentQuietly).
+    var presentQuietly: (NSWindow) -> Void = { DockPolicy.presentQuietly($0) }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
     var actions: () -> TextViewerActions = { .live }
     var imageLoader: TextViewerImageLoader = ImagePolicy.load
@@ -546,7 +548,9 @@ final class TextViewerWindows {
 
     /// Opens `url` in its own window, or focuses the one already showing that file: the same path
     /// through symlinks, or the same file resource id (another case of the name, a hard link).
-    func open(_ url: URL) {
+    /// `quietly`: an agent's open (#1857 n174), through `presentQuietly`; else the person's, through `present`.
+    func open(_ url: URL, quietly: Bool = false) {
+        let present = quietly ? presentQuietly : self.present
         let resolved = url.resolvingSymlinksInPath()
         let fileID = (try? resolved.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier as? NSObject
         if let open = entries.first(where: {

@@ -2376,9 +2376,10 @@ tag from the now-released section and put it on the new top draft.
 - Agents can show you a short notice (at most one every 10 seconds), read the System Stats headline
   numbers, fetch the Agent Sessions Diagnostics text with key- and path-shaped text removed, and ask
   whether a newer Prosper exists (check only: nothing downloads or installs). (#1859)
-- Agents can open a file for you in Text Viewer's read mode; it is off while agent control is off
-  and shows a notice, and paths that hold keys, credentials, .env files or keychains are refused.
-  (#1857)
+- Agents can open a plain-text file for you in Text Viewer's read mode without taking your keyboard:
+  the window appears in the background and Prosper is not brought forward. It is off while agent
+  control is off and shows a notice; key, credential, token, browser-profile and settings files,
+  hard links and anything that is not a plain-text file are refused. (#1857)
 
 ## v2.174.0
 

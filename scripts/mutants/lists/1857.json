@@ -50,6 +50,139 @@
    "old": "guard raw.unicodeScalars.allSatisfy({ !OutsideText.isUnseen($0) }) else",
    "new": "guard true else",
    "expect": "killed"
+  },
+  {
+   "name": "quiet_ctl",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "windows.open(url, quietly: true)",
+   "new": "windows.open(url, quietly: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "quiet_switch",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "let present = quietly ? presentQuietly : self.present",
+   "new": "let present = self.present",
+   "expect": "killed"
+  },
+  {
+   "name": "no_allow",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "if let why = typeRefusal(p) {",
+   "new": "if let why = typeRefusal(p), false {",
+   "expect": "killed"
+  },
+  {
+   "name": "no_dotfolder",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "return parts.contains(where: { $0.hasPrefix(\".\") }) ? \"an extensionless",
+   "new": "return false ? \"an extensionless",
+   "expect": "killed"
+  },
+  {
+   "name": "open_url",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "        return resolved\n    }",
+   "new": "        return url\n    }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_nlink",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "guard st.st_nlink <= 1 else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "no_newdirs",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": ", \".kube\", \".docker\", \".ccpool\"]",
+   "new": "]",
+   "expect": "killed"
+  },
+  {
+   "name": "no_newwords",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": ", \"password\", \"bitwarden\", \"lastpass\", \"keepass\"]",
+   "new": "]",
+   "expect": "killed"
+  },
+  {
+   "name": "no_pypirc",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "\".pypirc\", ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_authjson",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "\"auth.json\",",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_supporter",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "\"supporter.dat\"]",
+   "new": "]",
+   "expect": "killed"
+  },
+  {
+   "name": "no_homepaths",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "if secretHomePaths.contains(where: { under.starts(with: $0) }) {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "no_gh",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\".config\", \"gh\"], ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_gcloud",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\".config\", \"gcloud\"], ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_personal_ccpool",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\"personal\", \"ccpool\"]",
+   "new": "[\"personal\", \"zzz\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "no_chrome",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\"library\", \"application support\", \"google\", \"chrome\"], ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_prefs",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\"library\", \"preferences\"]",
+   "new": "[\"library\", \"zzz\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "no_prosper_support",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "[\"library\", \"application support\", \"prosper\"], ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "mutates_false",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "mutates: true, run:",
+   "new": "mutates: false, run:",
+   "expect": "killed"
   }
  ]
 }
