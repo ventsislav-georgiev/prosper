@@ -142,7 +142,8 @@ final class ControlSettingsTests: XCTestCase {
         XCTAssertEqual(change.summary, "History size to 42, Length to long, Don't complete when a typo is suspected to on")
         XCTAssertEqual(change.result, .object(["suppressOnTypo": .bool(true), "completionLength": .string("long"),
                                                "clipboardHistoryMaxItems": .number(42)]))
-        change.undo()
+        XCTAssertNotNil(change.undo, "settings.set always has an inverse")
+        change.undo?()   // #1825 made undo optional
         XCTAssertFalse(Preferences.suppressOnTypo)
         XCTAssertEqual(Preferences.completionLength, .medium)
         XCTAssertEqual(Preferences.clipboardHistoryMaxItems, 500)
