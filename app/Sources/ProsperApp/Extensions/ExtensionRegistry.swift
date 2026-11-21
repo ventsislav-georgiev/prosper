@@ -1871,7 +1871,7 @@ final class ExtensionRegistry: ObservableObject {
                     continue
                 }
                 stage = .fetch
-                let remoteDir = try await RemoteInstaller.fetch(cand.url)
+                let remoteDir = try await remoteFetch(cand.url, RemoteInstaller.maxArtifactBytes)   // #1870: capped like the other GitHub downloads
                 stage = .install
                 defer { RemoteInstaller.removeWorkFolder(holding: remoteDir) }
                 guard let remote = Self.manifestVersion(at: remoteDir), cand.version < remote else { continue }

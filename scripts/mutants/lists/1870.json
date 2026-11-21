@@ -1,0 +1,22 @@
+{
+ "entry": "1870",
+ "filter": "ControlExtensionsTests",
+ "mutants": [
+  {
+   "name": "cap-nil",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "remoteFetch(cand.url, RemoteInstaller.maxArtifactBytes)",
+   "new": "remoteFetch(cand.url, nil)",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdateFromGitHubInstallsTheNewerVersionWithTheDownloadCapped"
+  },
+  {
+   "name": "cancel-break",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "            if Task.isCancelled { break }\n            var tried",
+   "new": "            var tried",
+   "expect": "killed",
+   "filter": "ControlExtensionsTests/testUpdatePastTheDeadlineStopsBeforeTheNextExtensionAndChangesNothing"
+  }
+ ]
+}

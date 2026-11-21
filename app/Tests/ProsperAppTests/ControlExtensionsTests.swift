@@ -177,10 +177,12 @@ final class ControlExtensionsTests: XCTestCase {
 
     private struct UpdateFixture { let ext: ExtensionRegistry; let root: URL; let fetched: FetchLog }
 
-    private func writeUser(_ dir: URL, id: String, version: String, permissions: [String] = [], market: Bool = true) throws {
+    private func writeUser(_ dir: URL, id: String, version: String, permissions: [String] = [], market: Bool = true,
+                           url: String? = nil, tail: String = "") throws {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let perms = permissions.isEmpty ? "" : "permissions = [" + permissions.map { "\"\($0)\"" }.joined(separator: ", ") + "]\n"
-        try """
+        let source = url ?? (market ? "prosper://market/\(id)" : nil)
+        try ("""
         [extension]
         id = "\(id)"
         name = "\(id.split(separator: ".").last ?? "x")"
@@ -188,14 +190,14 @@ final class ControlExtensionsTests: XCTestCase {
         description = "Test fixture"
         version = "\(version)"
         author = "example"
-        \(perms)\(market ? "update_url = \"prosper://market/\(id)\"\n" : "")
+        \(perms)\(source.map { "update_url = \"\($0)\"\n" } ?? "")
         [extension.host]
         min_version = "2.0.0"
         api_level = 1
 
         [extension.entry]
         main = "init.lua"
-        """.write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
+        """ + "\n" + tail).write(to: dir.appendingPathComponent("extension.toml"), atomically: true, encoding: .utf8)
         try "-- \(version)".write(to: dir.appendingPathComponent("init.lua"), atomically: true, encoding: .utf8)
     }
 
@@ -313,6 +315,117 @@ final class ControlExtensionsTests: XCTestCase {
         XCTAssertTrue(f.fetched.ids.isEmpty)
         XCTAssertEqual(version(f, "com.example.alpha"), "1.0.0")
         XCTAssertTrue(reg.changes.entries.isEmpty, "a refusal logs nothing")
+    }
+
+    // MARK: extensions.update, the GitHub path (#1870): the registry's remoteFetch seam, never the network
+
+    private struct GitHubFixture {
+        let ext: ExtensionRegistry; let root: URL; let fetched: FetchLog; let caps: FetchLog
+        func installedManifest(_ id: String) throws -> String {
+            try String(contentsOf: root.appendingPathComponent("user/\(id)/extension.toml"), encoding: .utf8)
+        }
+    }
+
+    private static let kitTail = """
+    [contributes.kit]
+    schema = 1
+
+    [[contributes.kit.pieces]]
+    id = "perms"
+    kind = "permissions"
+    allow = ["Bash(calm-note:*)"]
+    """
+
+    /// Trusted alpha and beta at 1.0.0 with a github.com update_url; a fetch of one copies its 1.1.0 offer (no update_url:
+    /// the registry stamps it). `fetch` replaces the copy (a refusal, a wait for cancellation); `kit` makes both agent kits.
+    private func githubFixture(kit: Bool = false, fetch: (@Sendable (String) async throws -> Void)? = nil) throws -> GitHubFixture {
+        let root = tempDir(), user = root.appendingPathComponent("user")
+        try write(root, "system/fake", id: "com.example.fake", title: "Fake Tools", system: true, commands: 0)
+        let ids = ["com.example.alpha", "com.example.beta"]
+        for id in ids {
+            try writeUser(user.appendingPathComponent(id), id: id, version: "1.0.0", market: false,
+                          url: "https://github.com/example/\(id)", tail: kit ? Self.kitTail : "")
+            try writeUser(root.appendingPathComponent("offer/\(id)"), id: id, version: "1.1.0", market: false, tail: kit ? Self.kitTail : "")
+        }
+        defaults = scratchDefaults("ctlext-github")
+        defaults.set([String](), forKey: "trustedExtensionIDs")
+        let ext = ExtensionRegistry(systemDir: root.appendingPathComponent("system"), userDir: user, hostVersion: "2.0.0", defaults: defaults)
+        ext.discover()
+        for id in ids { try ext.trust(id: id) }
+        let work = root.appendingPathComponent("work"), fetched = FetchLog(), caps = FetchLog()
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        ext.remoteFetch = { url, maxBytes in
+            let id = String(url.split(separator: "/").last ?? "")
+            let n = fetched.add(id)
+            _ = caps.add(maxBytes.map(String.init) ?? "nil")
+            try await fetch?(id)
+            let folder = work.appendingPathComponent("prosper-github-\(n)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let dir = folder.appendingPathComponent("src", isDirectory: true)
+            try FileManager.default.copyItem(at: root.appendingPathComponent("offer/\(id)"), to: dir)
+            return dir
+        }
+        addTeardownBlock { @MainActor in ControlExtensions.registry = { (NSApp?.delegate as? AppDelegate)?.extensionRegistry } }
+        ControlExtensions.registry = { ext }
+        return GitHubFixture(ext: ext, root: root, fetched: fetched, caps: caps)
+    }
+
+    /// The GitHub branch: a newer manifest version installs, the download is capped at the artifact cap, the origin stays.
+    func testUpdateFromGitHubInstallsTheNewerVersionWithTheDownloadCapped() async throws {
+        let f = try githubFixture()
+        let reply = await call(registry(), "extensions.update", ["id": .string("com.example.alpha")])
+        XCTAssertTrue(reply.ok, "\(reply)")
+        XCTAssertEqual(rows(reply, "results")["com.example.alpha"], ["id": .string("com.example.alpha"), "from": .string("1.0.0"),
+                                                                    "to": .string("1.1.0"), "outcome": .string("updated")])
+        XCTAssertEqual(f.fetched.ids, ["com.example.alpha"])
+        XCTAssertEqual(f.caps.ids, [String(RemoteInstaller.maxArtifactBytes)], "the download is capped")
+        XCTAssertEqual(f.ext.record(id: "com.example.alpha")?.manifest.extension.version, "1.1.0")
+        XCTAssertTrue(try f.installedManifest("com.example.alpha").contains("update_url = \"https://github.com/example/com.example.alpha\""),
+                      "the origin stays")
+    }
+
+    /// RemoteInstaller's own refusal of an over-cap download is the row's reason; nothing changes.
+    func testAnOverCapGitHubDownloadIsAFailedRowWithItsReason() async throws {
+        let f = try githubFixture { _ in throw RemoteInstaller.InstallError.unsafeArchive("download over \(RemoteInstaller.maxArtifactBytes) bytes") }
+        let reply = await call(registry(), "extensions.update", ["id": .string("com.example.alpha")])
+        XCTAssertTrue(reply.ok, "\(reply)")
+        let alpha = rows(reply, "results")["com.example.alpha"]
+        XCTAssertEqual(alpha?["outcome"], .string("failed"))
+        guard case .string(let why)? = alpha?["reason"] else { return XCTFail("\(reply)") }
+        XCTAssertTrue(why.contains("download over \(RemoteInstaller.maxArtifactBytes) bytes"), why)
+        XCTAssertEqual(f.ext.record(id: "com.example.alpha")?.manifest.extension.version, "1.0.0")
+    }
+
+    /// An updated agent kit carries the note about kits.apply; a plain extension's row has none.
+    func testAnUpdatedKitHasTheNoteAndAPlainExtensionHasNone() async throws {
+        for kit in [true, false] {
+            let f = try githubFixture(kit: kit)
+            let reply = await call(registry(), "extensions.update", ["id": .string("com.example.alpha")])
+            let alpha = rows(reply, "results")["com.example.alpha"]
+            XCTAssertEqual(alpha?["outcome"], .string("updated"), "kit \(kit): \(reply)")
+            XCTAssertEqual(f.ext.record(id: "com.example.alpha")?.manifest.contributes?.kit != nil, kit)
+            if kit {
+                guard case .string(let note)? = alpha?["note"] else { return XCTFail("no note: \(reply)") }
+                XCTAssertTrue(note.contains("kits.apply"), note)
+            } else {
+                XCTAssertNil(alpha?["note"])
+            }
+        }
+    }
+
+    /// The deadline passes while the first download waits: the reply is the late error, the cancelled pass stops before the
+    /// next extension, and no extension changed version.
+    func testUpdatePastTheDeadlineStopsBeforeTheNextExtensionAndChangesNothing() async throws {
+        let f = try githubFixture { _ in try await Task.sleep(nanoseconds: 30_000_000_000) } // ends early, by the cancel
+        let deadline = ControlExtensions.updateDeadline
+        defer { ControlExtensions.updateDeadline = deadline }
+        ControlExtensions.updateDeadline = 0.2
+        let reply = await call(registry(), "extensions.update")
+        XCTAssertEqual(reply.error, ControlExtensions.updateLate)
+        XCTAssertLessThanOrEqual(f.fetched.ids.count, 1, "the second extension was never fetched: \(f.fetched.ids)") // 0 when the deadline beats the first fetch
+        for id in ["com.example.alpha", "com.example.beta"] {
+            XCTAssertEqual(f.ext.record(id: id)?.manifest.extension.version, "1.0.0", id)
+        }
     }
 
     // MARK: themes
