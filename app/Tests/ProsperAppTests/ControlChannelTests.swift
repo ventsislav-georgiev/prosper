@@ -180,6 +180,22 @@ final class ControlChannelTests: XCTestCase {
         ])]))
     }
 
+    /// #1834: red if reply(to:) calls `run` instead of awaiting `runAsync`: the async run's answer (after a suspension;
+    /// main by its type) is the reply, its error an error reply; the sync run is never called.
+    func testAnAsyncCommandIsAwaitedOnMain() async {
+        var reg = ControlRegistry()
+        reg.register(ControlCommand(name: "wait", summary: "w", args: ["fail": ControlArg(type: "boolean")], mutates: false,
+                                    run: { _, _ in .string("sync") }, runAsync: { _, args in
+            try? await Task.sleep(nanoseconds: 1_000_000)
+            if args["fail"] == .bool(true) { throw ControlError("no answer") }
+            return .string("async")
+        }))
+        let ok = await reg.reply(to: Data(#"{"cmd":"wait"}"#.utf8))
+        let bad = await reg.reply(to: Data(#"{"cmd":"wait","args":{"fail":true}}"#.utf8))
+        XCTAssertEqual(ok.result, .string("async"))
+        XCTAssertEqual(bad.error, "no answer")
+    }
+
     // MARK: - CLI
 
     func testCLIParsesCommandAndJSONArgs() throws {

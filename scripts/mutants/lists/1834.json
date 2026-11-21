@@ -1,0 +1,90 @@
+{
+ "entry": "1834",
+ "filter": "ControlXrayTests|ControlChannelTests",
+ "mutants": [
+  {
+   "name": "M1-noGate",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "guard let dch = XrayPanels.dch() else {",
+   "new": "guard let dch = XrayPanels.dch() ?? Optional(\"/fake/dch\") else {",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-oneTarget",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "guard (name == nil) != (cwd == nil) else",
+   "new": "guard name != nil || cwd != nil else",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-cwdExact",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "let s = st.sessions.first { std($0.cwd) == f } ?? st.sessions.first",
+   "new": "let s = st.sessions.first { false } ?? st.sessions.first",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-clean",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "\"snippet\": clean(XraySearch.withoutLeadingEllipsis(h.snippet), snippetCap),",
+   "new": "\"snippet\": .string(XraySearch.withoutLeadingEllipsis(h.snippet)),",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-cap",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "\"hits\": .array(s.hits.prefix(maxRows).map(hit)),",
+   "new": "\"hits\": .array(s.hits.map(hit)),",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-cache",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "let hit = cache?.get(key) ?? (fast ? cache?.get(lightKey) : nil)",
+   "new": "let hit: (out: Data, light: Bool, parsed: XrayRefStream?)? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-noLight",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "let light = fast && hit == nil && !remote && XrayPanels.lightFirst()",
+   "new": "let light = false && hit == nil && !remote && XrayPanels.lightFirst()",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-noCancel",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "g.cancelAll()",
+   "new": "_ = g.isEmpty",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-line",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "guard n.isFinite, n >= 1,",
+   "new": "guard n.isFinite, n >= 0,",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-timeoutRange",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "guard t.isFinite, t >= 1, t <= maxTimeout else",
+   "new": "guard t.isFinite else",
+   "expect": "killed"
+  },
+  {
+   "name": "M11-exit2",
+   "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
+   "old": "case 2: return .failure(ControlError(XrayPanelModel.refNotARef))",
+   "new": "case 2: return .failure(ControlError(XrayPanelModel.refFailed))",
+   "expect": "killed"
+  },
+  {
+   "name": "M12-syncRun",
+   "file": "app/Sources/ProsperApp/Control/ControlRegistry.swift",
+   "old": "if let a = cmd.runAsync { return try await a(registry, args) }",
+   "new": "if let a = cmd.runAsync, false { return try await a(registry, args) }",
+   "expect": "killed"
+  }
+ ]
+}

@@ -2307,6 +2307,9 @@ tag from the now-released section and put it on the new top draft.
 - New session: pasting images into the prompt now makes Start wait until the images are added, and a
   line under the prompt says when an image could not be added, a non-image file was skipped, or a
   paste was over 20 images or 50 MB. (#1836)
+- Agents can search a session's X-ray history and look up what a session and its project said about
+  a file or ref through the prosper command (xray.search, xray.ref), read-only, naming the session
+  or its project folder; no X-ray drawer needs to be open. (#1834)
 
 ## v2.174.0
 

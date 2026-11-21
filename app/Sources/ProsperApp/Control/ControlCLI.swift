@@ -5,8 +5,9 @@ import Foundation
 /// It never launches the app.
 enum ControlCLI {
     static let usage = "usage: ProsperApp ctl <command> [--json '<args object>']   (ProsperApp ctl describe lists the commands)"
-    /// How long the CLI waits for a reply (a handler waits for main).
-    static let replyTimeout: TimeInterval = 10
+    /// How long the CLI waits for a reply (a handler waits for main). QA n139: past ControlXray.maxTimeout (60 s), so an
+    /// awaited read's own deadline answers first.
+    static let replyTimeout: TimeInterval = 70
     static let maxReply = 16 << 20
 
     struct Outcome: Equatable {

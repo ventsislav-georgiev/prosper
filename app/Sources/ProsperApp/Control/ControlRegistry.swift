@@ -88,6 +88,8 @@ struct ControlCommand: Sendable {
     /// `ControlCommand.change` (ControlNotice.swift), which adds the notice, the undo and the log line.
     let mutates: Bool
     let run: @MainActor @Sendable (_ registry: ControlRegistry, _ args: [String: ControlJSON]) throws -> ControlJSON
+    /// #1834: a command that awaits its answer (a dch read): run on main in place of `run`; nil for the rest.
+    var runAsync: (@MainActor @Sendable (_ registry: ControlRegistry, _ args: [String: ControlJSON]) async throws -> ControlJSON)? = nil
 
     /// JSON-schema-like description: {"type":"object","properties":{...},"required":[...]}.
     var argsSchema: ControlJSON {
@@ -144,6 +146,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerSettings(&r)
         ControlRegistry.registerExtensions(&r)
         ControlRegistry.registerSessions(&r)
+        ControlRegistry.registerXray(&r)
         return r
     }
 
@@ -164,16 +167,20 @@ struct ControlRegistry: Sendable {
         do {
             try cmd.validate(args)
             let registry = self
-            let result = try await MainActor.run { () throws -> ControlJSON in
-                // Checked on main with the run itself, so a flip of the switch cannot land between check and change.
-                if cmd.mutates, !Preferences.agentControlEnabled { throw ControlError(ControlChanges.offError) }
-                return try cmd.run(registry, args)
-            }
+            let result = try await Self.run(cmd, registry, args)
             return ControlReply(ok: true, result: result, error: nil)
         } catch let e as ControlError {
             return .failure(e.message)
         } catch {
             return .failure(String(describing: error))
         }
+    }
+
+    /// Checked on main with the run itself, so a flip of the switch cannot land between check and change.
+    @MainActor
+    private static func run(_ cmd: ControlCommand, _ registry: ControlRegistry, _ args: [String: ControlJSON]) async throws -> ControlJSON {
+        if cmd.mutates, !Preferences.agentControlEnabled { throw ControlError(ControlChanges.offError) }
+        if let a = cmd.runAsync { return try await a(registry, args) }
+        return try cmd.run(registry, args)
     }
 }
