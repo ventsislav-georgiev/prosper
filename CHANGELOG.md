@@ -2354,9 +2354,12 @@ tag from the now-released section and put it on the new top draft.
   minute, so sessions starting together no longer all get a refusal from the same account. (#1855)
 - The README has an "Agent control" section, and the Prosper agent kit teaches agents the
   `ProsperApp ctl` commands. (#1812)
-- Agents can list, read, save and delete text snippets through Prosper's control channel; a snippet
-  an agent saves never auto-expands, clipboard placeholders are refused, and saving or deleting can
-  be undone. (#1858)
+- Agents can list, read, save and delete text snippets through Prosper's control channel, with Undo.
+  A snippet an agent saves is marked as the agent's, never auto-expands and may only use the
+  {cursor}, {date}, {time}, {datetime}, {uuid} and {argument} placeholders. An agent can change or
+  delete only the snippets it saved, never yours, and cannot take a name or keyword your snippets,
+  your phone's snippets or a macOS Text Replacement already use; Undo leaves a snippet alone once
+  you have edited it since. (#1858)
 - Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
   release an account in the account pool, each with Undo. (#1862)
 - Agents can put plain text on the clipboard; Undo puts back what was there unless you copied

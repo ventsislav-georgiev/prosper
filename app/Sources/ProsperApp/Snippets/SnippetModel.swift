@@ -21,12 +21,15 @@ struct SnippetHit: Sendable, Equatable, Identifiable {
     let richText: Bool
     /// #732: inserted exactly as stored, never through `PlaceholderEngine` (macOS Text Replacements).
     let literal: Bool
+    /// #1858: saved by an agent over the control channel (snippets.set); the only snippets an agent may replace or remove.
+    let agentMade: Bool
 
     /// Identity is the (unique) name — the same convention `QuicklinkHit` uses.
     var id: String { name }
 
     init(name: String, keyword: String = "", text: String, collection: String = "",
-         description: String = "", autoExpand: Bool = true, richText: Bool = false, literal: Bool = false) {
+         description: String = "", autoExpand: Bool = true, richText: Bool = false, literal: Bool = false,
+         agentMade: Bool = false) {
         self.name = name
         self.keyword = keyword
         self.text = text
@@ -35,6 +38,7 @@ struct SnippetHit: Sendable, Equatable, Identifiable {
         self.autoExpand = autoExpand
         self.richText = richText
         self.literal = literal
+        self.agentMade = agentMade
     }
 }
 

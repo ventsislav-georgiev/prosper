@@ -3,17 +3,10 @@
  "filter": "ControlSnippetsTests",
  "mutants": [
   {
-   "name": "M1",
-   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
-   "old": "        clipboardToken.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil",
-   "new": "        false",
-   "expect": "killed"
-  },
-  {
    "name": "M2",
    "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
-   "old": "autoExpand: false, richText: false)",
-   "new": "autoExpand: true, richText: false)",
+   "old": "autoExpand: false, richText: false, agentMade: true)",
+   "new": "autoExpand: true, richText: false, agentMade: true)",
    "expect": "killed"
   },
   {
@@ -26,15 +19,15 @@
   {
    "name": "M4",
    "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
-   "old": "{ if let old { storeSave(old) } else { storeRemove(name) } }",
-   "new": "{ storeRemove(name) }",
+   "old": "            if let old { storeSave(old) } else { storeRemove(name) }",
+   "new": "            storeRemove(name)",
    "expect": "killed"
   },
   {
    "name": "M5",
    "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
-   "old": "undo: { storeSave(old) })",
-   "new": "undo: { })",
+   "old": "            storeSave(old)\n        })",
+   "new": "            _ = old\n        })",
    "expect": "killed"
   },
   {
@@ -56,6 +49,90 @@
    "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
    "old": "\"bytes\": .number(Double(h.text.utf8.count))])\n        })])",
    "new": "\"bytes\": .number(Double(h.text.utf8.count)), \"text\": .string(h.text)])\n        })])",
+   "expect": "killed"
+  },
+  {
+   "name": "C1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        return [name, keyword, trigger(keyword, collection)].first { taken.contains($0) }",
+   "new": "        return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "C2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        for (_, set) in phoneSets() {",
+   "new": "        for (_, set) in phoneSets().prefix(0) {",
+   "expect": "killed"
+  },
+  {
+   "name": "C3",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        var taken = Set(replacements().keys)",
+   "new": "        var taken = Set<String>()",
+   "expect": "killed"
+  },
+  {
+   "name": "C4",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "taken.formUnion([h.name, h.keyword, trigger(h.keyword, h.collection)])",
+   "new": "taken.formUnion([h.name])",
+   "expect": "killed"
+  },
+  {
+   "name": "P1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        if let old, !old.agentMade {",
+   "new": "        if let old, false, !old.agentMade {",
+   "expect": "killed"
+  },
+  {
+   "name": "P2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "        guard old.agentMade else {",
+   "new": "        guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "P3",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "richText: false, agentMade: true)",
+   "new": "richText: false, agentMade: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "S1",
+   "file": "app/Sources/ProsperApp/Snippets/SnippetStore.swift",
+   "old": "            agentMade: hit.agentMade ? true : nil)",
+   "new": "            agentMade: hit.agentMade)",
+   "expect": "killed"
+  },
+  {
+   "name": "A1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "first(where: { !allowedPlaceholders.contains($0) })",
+   "new": "first(where: { _ in false })",
+   "expect": "killed"
+  },
+  {
+   "name": "A2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "[\"cursor\", \"date\", \"time\", \"datetime\", \"uuid\", \"argument\"]",
+   "new": "[\"cursor\", \"date\", \"time\", \"datetime\", \"uuid\", \"argument\", \"snippet\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "U1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "            guard storeAll().first(where: { $0.name == name }) == saved else { return }",
+   "new": "            guard true else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "U2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "            guard !storeAll().contains(where: { $0.name == old.name }) else { return }",
+   "new": "            guard true else { return }",
    "expect": "killed"
   }
  ]

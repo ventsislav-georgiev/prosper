@@ -57,6 +57,8 @@ enum SnippetStore {
         var description: String?
         var autoExpand: Bool?
         var richText: Bool?
+        /// #1858: true only for a snippet an agent saved; absent (nil) otherwise, so a person's file stays as it was.
+        var agentMade: Bool?
     }
     struct CollectionEntry: Codable, Equatable {
         var name: String
@@ -277,13 +279,14 @@ enum SnippetStore {
 
     // MARK: - Internals
 
-    private static func hit(from e: Entry) -> SnippetHit {
+    static func hit(from e: Entry) -> SnippetHit {
         SnippetHit(name: e.name, keyword: e.keyword ?? "", text: e.text,
                    collection: e.collection ?? "", description: e.description ?? "",
-                   autoExpand: e.autoExpand ?? true, richText: e.richText ?? false)
+                   autoExpand: e.autoExpand ?? true, richText: e.richText ?? false,
+                   agentMade: e.agentMade ?? false)
     }
 
-    private static func entry(from hit: SnippetHit) -> Entry {
+    static func entry(from hit: SnippetHit) -> Entry {
         let kw = sanitizeKeyword(hit.keyword)
         return Entry(
             name: hit.name.trimmingCharacters(in: .whitespaces),
@@ -292,7 +295,8 @@ enum SnippetStore {
             collection: hit.collection.isEmpty ? nil : hit.collection,
             description: hit.description.isEmpty ? nil : hit.description,
             autoExpand: hit.autoExpand ? nil : false,  // default true; persist only the off case
-            richText: hit.richText ? true : nil)       // default false; persist only the on case
+            richText: hit.richText ? true : nil,       // default false; persist only the on case
+            agentMade: hit.agentMade ? true : nil)     // default false; persist only the on case
     }
 
     /// Collection name → affixes, for trigger composition.

@@ -103,6 +103,13 @@ enum PlaceholderEngine {
         return out
     }
 
+    /// Every token's name, lowercased, as `resolve` reads it (#1858: the agent text allow-list).
+    static func tokenNames(in template: String) -> [String] {
+        var out: [String] = []
+        forEachToken(template) { out.append(split($0).name.lowercased()) }
+        return out
+    }
+
     // MARK: - Core
 
     private static func render(_ template: String, _ ctx: inout PlaceholderContext,
