@@ -1,0 +1,76 @@
+{
+ "entry": "1860",
+ "filter": "ControlXrayReadsTests",
+ "mutants": [
+  {
+   "name": "M-argv",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "argv: { $0.chaptersArgs }",
+   "new": "argv: { $0.args(\"tasks\") }",
+   "expect": "killed"
+  },
+  {
+   "name": "M-bodyCap",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "$0.unicodeScalars.prefix(ControlXray.snippetCap)) }",
+   "new": "$0.unicodeScalars.prefix(100000)) }",
+   "expect": "killed"
+  },
+  {
+   "name": "M-chapterCap",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "list.suffix(ControlXray.maxRows).map",
+   "new": "list.map",
+   "expect": "killed"
+  },
+  {
+   "name": "M-clean",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "s.map { .string(OutsideText.shown($0, max: max)) } ?? .null",
+   "new": "s.map { .string($0) } ?? .null",
+   "expect": "killed"
+  },
+  {
+   "name": "M-noPath",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "\"id\": str(i.id, 64),",
+   "new": "\"path\": .string(i.path), \"id\": str(i.id, 64),",
+   "expect": "killed"
+  },
+  {
+   "name": "M-recapGate",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "guard XrayRecap.supported(XrayPanels.probed?.version) else { throw ControlError(recapNeeds) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M-sinceRange",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "s.isFinite, s >= 0, s <= 1e10 else",
+   "new": "true else",
+   "expect": "killed"
+  },
+  {
+   "name": "M-status",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "            case 6: return .failure(ControlError(refused))\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M-taskCap",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "all.prefix(ControlXray.maxRows).map { k",
+   "new": "all.map { k",
+   "expect": "killed"
+  },
+  {
+   "name": "M-taskOrder",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "t.groups.flatMap(\\.tasks)",
+   "new": "t.tasks",
+   "expect": "killed"
+  }
+ ]
+}

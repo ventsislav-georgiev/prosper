@@ -2363,6 +2363,8 @@ tag from the now-released section and put it on the new top draft.
   something since, and reading the clipboard stays yours only. (#1861)
 - Agents can list and set session groups, show a group tab on the island, and pin or unpin History
   records, each with Undo; Forget and Clear unpinned stay yours only. (#1856)
+- Agents can read a session's X-ray chapters, tasks, memory notes and recap (read only, capped at 20
+  rows, memory bodies cut to a short snippet). (#1860)
 
 ## v2.174.0
 
