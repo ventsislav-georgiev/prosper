@@ -1,0 +1,70 @@
+{
+ "entry": "1862",
+ "filter": "ControlNavTests|ControlCCPoolHoldTests",
+ "mutants": [
+  {
+   "name": "hold-no-cap",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "hours > 0, hours <= maxHours else",
+   "new": "hours > 0 else",
+   "expect": "killed",
+   "filter": "ControlCCPoolHoldTests"
+  },
+  {
+   "name": "hold-no-undo",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "verb: \"held a ccpool account\",\n                             undo: undo(m, label, before))",
+   "new": "verb: \"held a ccpool account\")",
+   "expect": "killed",
+   "filter": "ControlCCPoolHoldTests"
+  },
+  {
+   "name": "nav-no-form-guard",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "guard m.newSession == nil else { throw ControlError(ControlSessions.formOpen) }",
+   "new": "",
+   "expect": "killed",
+   "filter": "ControlNavTests"
+  },
+  {
+   "name": "nav-no-undo",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "m.focusPane(pane)",
+   "new": "_ = pane",
+   "expect": "killed",
+   "filter": "ControlNavTests"
+  },
+  {
+   "name": "nav-opens-window",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "guard let m = ControlSessions.model(), !m.closed",
+   "new": "guard let m = ControlSessions.model() ?? ControlSessions.showWindow(), !m.closed",
+   "expect": "killed",
+   "filter": "ControlNavTests"
+  },
+  {
+   "name": "nav-undo-skips-switch",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "guard m.switchLayout(layout, focus: pane) == nil else { return }",
+   "new": "_ = layout",
+   "expect": "killed",
+   "filter": "ControlNavTests"
+  },
+  {
+   "name": "release-anything",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "guard before.refused != nil ||",
+   "new": "guard true || before.refused != nil ||",
+   "expect": "killed",
+   "filter": "ControlCCPoolHoldTests"
+  },
+  {
+   "name": "release-no-undo",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "verb: \"released a ccpool account\", undo: undo(m, label, before))",
+   "new": "verb: \"released a ccpool account\")",
+   "expect": "killed",
+   "filter": "ControlCCPoolHoldTests"
+  }
+ ]
+}

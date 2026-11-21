@@ -2357,6 +2357,8 @@ tag from the now-released section and put it on the new top draft.
 - Agents can list, read, save and delete text snippets through Prosper's control channel; a snippet
   an agent saves never auto-expands, clipboard placeholders are refused, and saving or deleting can
   be undone. (#1858)
+- Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
+  release an account in the account pool, each with Undo. (#1862)
 
 ## v2.174.0
 

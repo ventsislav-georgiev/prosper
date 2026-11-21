@@ -153,6 +153,8 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerLayouts(&r)
         ControlRegistry.registerCCPool(&r)
         ControlRegistry.registerSnippets(&r)
+        ControlRegistry.registerNav(&r)
+        ControlRegistry.registerCCPoolHold(&r)
         return r
     }
 

@@ -24,3 +24,23 @@ extension ControlRegistry {
         })
     }
 }
+
+extension ControlRegistry {
+    /// #1862: ccpool.hold and ccpool.release through the pane's own hold and release (CCPoolControl); wired in
+    /// ControlRegistry.standard().
+    static func registerCCPoolHold(_ r: inout ControlRegistry) {
+        let label = ControlArg(type: "string", required: true, summary: "the account's label (ccpool.status)")
+        r.register(.change(name: "ccpool.hold", summary: "Hold a ccpool account out of rotation for some hours, as the pane's Hold does. Undo releases it as it was.",
+                           args: ["label": label,
+                                  "hours": ControlArg(type: "number", required: true, summary: "above 0, at most 192")]) { _, a in
+            guard case .string(let l)? = a["label"] else { throw ControlError("argument 'label' is empty") }
+            guard case .number(let h)? = a["hours"] else { throw ControlError(CCPoolControl.badHours) }
+            return try CCPoolControl.hold(label: l, hours: h)
+        })
+        r.register(.change(name: "ccpool.release", summary: "Release a ccpool account: every limit and hold on it, as the pane's Release does. Undo puts them back.",
+                           args: ["label": label]) { _, a in
+            guard case .string(let l)? = a["label"] else { throw ControlError("argument 'label' is empty") }
+            return try CCPoolControl.release(label: l)
+        })
+    }
+}
