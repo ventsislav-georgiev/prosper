@@ -1,0 +1,48 @@
+{
+ "entry": "1841",
+ "filter": "ControlLayoutsTests",
+ "mutants": [
+  {
+   "name": "switch_allows_active",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "guard m.parked != nil || target.id != m.layout.id else",
+   "new": "guard false || target.id != m.layout.id || true else",
+   "expect": "killed"
+  },
+  {
+   "name": "new_skips_gate",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "guard AgentPaneLayout.splitsEnabled else { throw ControlError(off) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "undo_new_noop",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "undo: { [weak m] in _ = m?.deleteLayout(made) })",
+   "new": "undo: nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "delete_gets_undo",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "verb: \"deleted a layout\")",
+   "new": "verb: \"deleted a layout\", undo: {})",
+   "expect": "killed"
+  },
+  {
+   "name": "new_leaves_editing_on",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "defer { if !wasEditing { m.setLayoutEditing(false) } }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "rename_undo_wrong",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "m?.renameLayout(r.id, to: old)",
+   "new": "m?.renameLayout(r.id, to: nil)",
+   "expect": "killed"
+  }
+ ]
+}

@@ -2326,6 +2326,8 @@ tag from the now-released section and put it on the new top draft.
   to the resumed Claude session (sessions.resume). (#1833)
 - Agents can now rename a session and switch a Claude session's model or effort (while it is idle or
   done) over the prosper command, each with Undo. (#1842)
+- Agents can now list, switch, make, rename and delete your saved Agent Sessions layouts over the
+  prosper command (delete cannot be undone). (#1841)
 
 ## v2.174.0
 
