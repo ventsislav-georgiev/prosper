@@ -112,13 +112,12 @@ final class ControlSettingsTests: XCTestCase {
     }
 
     func testSetChecksEveryValueBeforeWritingAny() {
-        keep(["suppressOnTypo", "clipboardHistoryMaxItems", "completionLength"])
+        keep(["suppressOnTypo", "completionLength"])
         Preferences.suppressOnTypo = false
         let bad: [(String, [String: ControlJSON], String)] = [
             ("enum", ["suppressOnTypo": .bool(true), "completionLength": .string("huge")], "completionLength must be one of short, medium, long"),
             ("type", ["suppressOnTypo": .string("yes")], "suppressOnTypo must be boolean, got string"),
             ("range", ["agentTopP": .number(0.05), "suppressOnTypo": .bool(true)], "agentTopP must be between 0.1 and 1.0"),
-            ("whole", ["clipboardHistoryMaxItems": .number(20.5)], "clipboardHistoryMaxItems must be a whole number"),
             ("read-only", ["launchAtLogin": .bool(false), "suppressOnTypo": .bool(true)], "launchAtLogin is changed in Settings only"),
             ("unknown", ["suppressOnTypo": .bool(true), "zzz": .bool(true)], "unknown setting 'zzz' (settings.schema lists them)"),
             ("empty", [:], "values is empty"),
@@ -130,23 +129,60 @@ final class ControlSettingsTests: XCTestCase {
     }
 
     func testSetWritesThroughTheStoreAndUndoPutsEveryValueBack() throws {
-        keep(["suppressOnTypo", "completionLength", "clipboardHistoryMaxItems"])
+        keep(["suppressOnTypo", "completionLength", "emojiSuggestionsEnabled"])
         Preferences.suppressOnTypo = false
         Preferences.completionLength = .medium
-        Preferences.clipboardHistoryMaxItems = 500
+        Preferences.emojiSuggestionsEnabled = false
         let change = try ControlSettings.apply(["suppressOnTypo": .bool(true), "completionLength": .string("long"),
-                                                "clipboardHistoryMaxItems": .number(42)])
+                                                "emojiSuggestionsEnabled": .bool(true)])
         XCTAssertTrue(Preferences.suppressOnTypo)
         XCTAssertEqual(Preferences.completionLength, .long)
-        XCTAssertEqual(Preferences.clipboardHistoryMaxItems, 42)
-        XCTAssertEqual(change.summary, "History size to 42, Length to long, Don't complete when a typo is suspected to on")
+        XCTAssertTrue(Preferences.emojiSuggestionsEnabled)
+        XCTAssertEqual(change.summary, "Length to long, Emoji suggestions (:name inline + in the command runner) to on, Don't complete when a typo is suspected to on")
         XCTAssertEqual(change.result, .object(["suppressOnTypo": .bool(true), "completionLength": .string("long"),
-                                               "clipboardHistoryMaxItems": .number(42)]))
+                                               "emojiSuggestionsEnabled": .bool(true)]))
         XCTAssertNotNil(change.undo, "settings.set always has an inverse")
         change.undo?()   // #1825 made undo optional
         XCTAssertFalse(Preferences.suppressOnTypo)
         XCTAssertEqual(Preferences.completionLength, .medium)
+        XCTAssertFalse(Preferences.emojiSuggestionsEnabled)
+    }
+
+    func testWholeNumberIsRequiredForAnIntegerSetting() {
+        let s = ControlSetting.number("k", "K", "S", 5, 1...10, integer: true, get: { 5 }, set: { _ in })
+        XCTAssertThrowsError(try s.checked(.number(2.5))) { XCTAssertEqual(($0 as? ControlError)?.message, "k must be a whole number") }
+    }
+
+    /// #1831: the writable set is pinned to a literal list; a setting that becomes (or stops being) writable fails here.
+    func testWritableKeySetIsThePinnedLiteralList() {
+        let pinned = [
+            "agentEnabled", "agentTemperature", "agentTopP", "autocompleteEnabled", "completionLength",
+            "completionsEnabledByDefault", "dismissOverlaysOnClick", "doubleTapQuitEnabled", "dragSnapCornerSize",
+            "dragSnapEdgeMargin", "dragSnapModifier", "emojiGender", "emojiSkinTone", "emojiSuggestionsEnabled",
+            "finderCutPasteEnabled", "finderF2RenameEnabled", "finderPasteImageEnabled", "hyperKeyEnabled",
+            "improveAppearanceFromScreenshot", "layoutGap", "menuBarIconSize", "midlineCompletionsEnabled", "mixerHideInactiveApps",
+            "personalizeWordChoice", "prosper.uiFrost", "prosper.uiOpacity", "prosper.uiScale", "quickSelectModifier",
+            "runnerPlacement", "showAccessoryButton", "showSuggestedFixes", "snapMode", "suppressOnTypo", "theme",
+            "trailingSpaceAfterWordAccept", "useClipboardContext",
+        ]
+        XCTAssertEqual(pinned, pinned.sorted())
+        XCTAssertEqual(ControlSettings.all().filter { $0.set != nil }.map(\.key).sorted(), pinned)
+    }
+
+    /// #1831 n124/n125: history size and the privacy switches are refused and nothing is written, not even a sibling.
+    func testHistorySizeAndPhoneCommandsAreRefusedAndWriteNothing() {
+        keep(["clipboardHistoryMaxItems", "runCommandsFromPhone", "suppressOnTypo"])
+        Preferences.clipboardHistoryMaxItems = 500
+        Preferences.runCommandsFromPhone = false
+        Preferences.suppressOnTypo = false
+        for (key, v) in [("clipboardHistoryMaxItems", ControlJSON.number(20)), ("runCommandsFromPhone", .bool(true))] {
+            XCTAssertThrowsError(try ControlSettings.apply(["suppressOnTypo": .bool(true), key: v]), key) {
+                XCTAssertEqual(($0 as? ControlError)?.message, "\(key) is changed in Settings only", key)
+            }
+        }
         XCTAssertEqual(Preferences.clipboardHistoryMaxItems, 500)
+        XCTAssertFalse(Preferences.runCommandsFromPhone)
+        XCTAssertFalse(Preferences.suppressOnTypo)
     }
 
     func testSetGoesThroughTheRegistryAsAMutatingCommandAndReadsDoNot() async {

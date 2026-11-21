@@ -1,0 +1,62 @@
+{
+ "entry": "1831",
+ "filter": "ControlSettingsTests/testWritableKeySetIsThePinnedLiteralList",
+ "mutants": [
+  {
+   "name": "ro-clipboardHistoryMaxItems",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Double(Preferences.clipboardHistoryMaxItems) }, set: nil)",
+   "new": "get: { Double(Preferences.clipboardHistoryMaxItems) }, set: { Preferences.clipboardHistoryMaxItems = Int($0) })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-isolateRemoteSessions",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.isolateRemoteSessions }, set: nil)",
+   "new": "get: { Preferences.isolateRemoteSessions }, set: { Preferences.isolateRemoteSessions = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-clipboardSyncWithPhone",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.clipboardSyncWithPhone }, set: nil)",
+   "new": "get: { Preferences.clipboardSyncWithPhone }, set: { Preferences.clipboardSyncWithPhone = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-runCommandsFromPhone",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.runCommandsFromPhone }, set: nil)",
+   "new": "get: { Preferences.runCommandsFromPhone }, set: { Preferences.runCommandsFromPhone = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-remoteAllowWhenTailscaleDown",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.remoteAllowWhenTailscaleDown }, set: nil)",
+   "new": "get: { Preferences.remoteAllowWhenTailscaleDown }, set: { Preferences.remoteAllowWhenTailscaleDown = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-useScreenshotContext",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.useScreenshotContext }, set: nil)",
+   "new": "get: { Preferences.useScreenshotContext }, set: { Preferences.useScreenshotContext = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-useOCRContext",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.useOCRContext }, set: nil)",
+   "new": "get: { Preferences.useOCRContext }, set: { Preferences.useOCRContext = $0 })",
+   "expect": "killed"
+  },
+  {
+   "name": "ro-collectTypingHistory",
+   "file": "app/Sources/ProsperApp/Control/ControlSettings.swift",
+   "old": "get: { Preferences.collectTypingHistory }, set: nil)",
+   "new": "get: { Preferences.collectTypingHistory }, set: { Preferences.collectTypingHistory = $0 })",
+   "expect": "killed"
+  }
+ ]
+}
