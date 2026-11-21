@@ -1,0 +1,34 @@
+{
+ "entry": "1853",
+ "filter": "ControlLayoutsTests",
+ "mutants": [
+  {
+   "name": "delete_skips_model",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "if let why = m.deleteLayout(r.id) { throw ControlError(message(why)) }",
+   "new": "if let why = Optional<PaneRefusal>.none { throw ControlError(message(why)) }",
+   "expect": "killed"
+  },
+  {
+   "name": "delete_ignores_refusal",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "if let why = m.deleteLayout(r.id) { throw ControlError(message(why)) }",
+   "new": "_ = m.deleteLayout(r.id)",
+   "expect": "killed"
+  },
+  {
+   "name": "delete_not_final_summary",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "summary: \"\\(r.name) (final: it cannot be undone)\"",
+   "new": "summary: \"\\(r.name)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "delete_gets_undo",
+   "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
+   "old": "verb: \"deleted a layout\")",
+   "new": "verb: \"deleted a layout\", undo: {})",
+   "expect": "killed"
+  }
+ ]
+}
