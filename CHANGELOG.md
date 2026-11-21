@@ -2289,6 +2289,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray: clicking an issue or other ref now opens its card with the session's mentions in about half
   a second (at once after hovering the ref), instead of a "Reading…" card for 5 s; the rest of the
   project's mentions fill in when the full search ends. (#1824)
+- Agents window: Split (Command-D), Open to the Side and dragging a pane divider now work on a saved
+  layout without clicking Edit layout first, and are saved. (#1826)
 
 ## v2.174.0
 

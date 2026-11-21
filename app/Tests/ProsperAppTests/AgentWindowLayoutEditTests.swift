@@ -161,31 +161,96 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
-    /// Locked: Split, a pane retarget (title switcher), Open to the Side and the dividers are refused with "Edit layout to
-    /// change it"; the layout and the blob stay. A focus move still works. #1817: Close Pane and a drop are not refused
-    /// (testAgentWindowLayoutEditLockedClosePaneActsWithNoNotice and its neighbours).
+    /// Locked: a pane retarget (the title switcher's pick) is still refused with "Edit layout to change it"; the layout and
+    /// the blob stay. A focus move still works. #1817, #1826: Close Pane, a drop, Split, Open to the Side and the dividers
+    /// are not refused (the rows below).
     @MainActor
-    func testAgentWindowLayoutEditLockedStructuralChangesAreRefused() throws {
+    func testAgentWindowLayoutEditLockedTitleSwitcherPickIsRefused() throws {
         try withGate(true) {
             let (m, d, two, bytes) = try locked()
             defer { m.close() }
             let second = try XCTUnwrap(two.order.last)
-            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             XCTAssertEqual(PaneRefusal.layoutLocked.notice, "Edit layout to change it")
-            XCTAssertTrue(m.perform(.split(.columns)), "the chord is swallowed")
-            XCTAssertEqual(m.paneRefusal, .layoutLocked)
-            XCTAssertEqual(m.layout.order, two.order, "no split")
             m.choose(row("docs"), into: second)
+            XCTAssertEqual(m.paneRefusal, .layoutLocked)
             XCTAssertTrue(m.layout.panes.last?.target == t("web"), "no retarget")
-            m.openToTheSide(row("docs"))
-            XCTAssertEqual(m.layout.order, two.order, "no side split")
-            XCTAssertTrue(m.dividers(in: CGSize(width: 3000, height: 1000)).isEmpty, "no divider to drag")
             XCTAssertEqual(d.data(forKey: Self.blobKey), bytes)
             XCTAssertTrue(m.perform(.cycle(1)), "a focus move still acts")
             XCTAssertEqual(m.layout.focused, second)
             m.setLayoutEditing(true)
             m.closePane(second)
             XCTAssertEqual(m.layout.panes.count, 1, "editing: Close Pane acts")
+        }
+    }
+
+    /// #1826 (operator 2026-11-21): locked, Split (Command-D, the Split menu items: perform) splits at once: no notice, saved.
+    /// Edit layout turns on for the new empty pane's pick (the decision in the report): the next sidebar click fills it.
+    @MainActor
+    func testAgentWindowLayoutEditLockedSplitActsWithNoNotice() throws {
+        try withGate(true) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            XCTAssertTrue(m.layoutLocked)
+            if case .failure = m.splitting(.columns) { XCTFail("the dry run answers a split, not a refusal") }
+            XCTAssertTrue(m.perform(.split(.columns)))
+            XCTAssertTrue(m.paneRefusal == nil, "no Edit layout notice")
+            XCTAssertEqual(m.layout.panes.count, 3, "split")
+            XCTAssertNotEqual(m.layout.order, two.order)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the split is saved")
+            m.click(row("docs"))
+            XCTAssertTrue(m.parked == nil && m.layout.panes.contains { $0.target == t("docs") }, "the pick fills the new pane")
+            XCTAssertEqual(m.layout.panes.count, 3)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "and is saved")
+        }
+    }
+
+    /// #1826: locked, Open to the Side (Option-click, the row menu) splits at once: no notice, Edit layout stays off, saved.
+    @MainActor
+    func testAgentWindowLayoutEditLockedOpenToTheSideActsWithNoNotice() throws {
+        try withGate(true) {
+            let (m, _, _, _) = try locked()
+            defer { m.close() }
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            if case .failure = m.showing(row("docs"), placement: .side) { XCTFail("the dry run answers a split") }
+            m.openToTheSide(row("docs"))
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
+            XCTAssertEqual(m.layout.panes.count, 3, "the side split")
+            XCTAssertTrue(m.layout.panes.contains { $0.target == t("docs") })
+            XCTAssertTrue(m.parked == nil)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
+        }
+    }
+
+    /// #1826: locked, a divider drag moves the ratio, no notice, Edit layout stays off, and the drag's end saves it. The
+    /// double-click equalize and the keyboard nudge save too.
+    @MainActor
+    func testAgentWindowLayoutEditLockedDividerDragNudgeAndEqualizeAreSaved() throws {
+        try withGate(true) {
+            let (m, _, _, _) = try locked()
+            defer { m.close() }
+            let size = CGSize(width: 3000, height: 1000)
+            m.paneArea = CGRect(origin: .zero, size: size)
+            XCTAssertTrue(m.layoutLocked)
+            let div = try XCTUnwrap(m.dividers(in: size).first, "a divider is drawn while locked")
+            let start = CGPoint(x: div.line.midX, y: div.line.midY)
+            let writes = m.layoutWrites
+            XCTAssertTrue(m.dragBegan(at: start, in: size))
+            m.dragMoved(to: CGPoint(x: start.x + 300, y: start.y))
+            XCTAssertEqual(m.layoutWrites, writes, "nothing written mid-drag")
+            m.dragEnded()
+            XCTAssertEqual(m.layoutWrites, writes + 1, "the drag's end saves once")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the dragged ratio is saved")
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked)
+            m.nudge(div.path, up: false, in: size)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the nudge is saved")
+            let moved = m.layout
+            let again = try XCTUnwrap(m.dividers(in: size).first)
+            XCTAssertTrue(m.dragBegan(at: CGPoint(x: again.line.midX, y: again.line.midY), in: size, clicks: 2))
+            XCTAssertTrue(m.layout != moved, "the double-click equalizes")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the equalize is saved")
+            m.dragEnded()
+            XCTAssertFalse(m.layoutEditing)
         }
     }
 

@@ -24,13 +24,6 @@
    "expect": "killed"
   },
   {
-   "name": "split-unlocked",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, parked == nil { return .failure(.layoutLocked) }",
-   "new": "if layoutLocked, parked == nil, false { return .failure(.layoutLocked) }",
-   "expect": "killed"
-  },
-  {
    "name": "choose-unlocked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "if layoutLocked, !drop || parked != nil {",

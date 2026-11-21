@@ -478,7 +478,8 @@ final class AgentWindowModel: ObservableObject {
     /// #1538: the layout is locked: the split gate on, a store loaded, Edit layout off and a layout the person made (the
     /// Layouts section's show rule: two panes or more, or two layouts or more; the lone one-pane layout behaves as before).
     /// Locked: nothing autosaves, a pick outside the layout opens the single-pane view, structural changes are refused.
-    /// #1817: but Close Pane and a drop act and are saved; Edit layout gates the sidebar pick into the focused pane.
+    /// #1817, #1826: but Close Pane, a drop, Split, Open to the Side and a divider act and are saved; Edit layout gates only
+    /// the pick of a session into the focused pane (the sidebar click, the title switcher).
     var layoutLocked: Bool {
         guard AgentPaneLayout.splitsEnabled, !layoutEditing, let s = layouts else { return false }
         return parked != nil || layout.panes.count >= 2 || s.layouts.count >= 2
@@ -846,7 +847,8 @@ final class AgentWindowModel: ObservableObject {
             if paneRefusal != nil { paneRefusal = nil }
             keyFocus = .pane   // 7.2: every pane focus action, split and close
             // #1617: a split (Command-D, the Split menu items) edits the layout it makes, so the next sidebar pick fills
-            // the new empty pane; set before adopt, so its autosave saves the split (locked, it would not).
+            // the new empty pane (a locked click would park it instead); set before adopt, so its autosave saves the split.
+            // #1826: the split itself needs no Edit layout; only that pick does.
             if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }
             adopt(l)
             if closing != nil { autosave(explicit: true) }   // #1817: a close is saved while locked too
@@ -864,8 +866,7 @@ final class AgentWindowModel: ObservableObject {
     /// unfocused pane focuses it first): perform's own call, so the menu and the key share one cap and one room rule.
     func splitting(_ axis: PaneNode.Axis, pane: UUID? = nil) -> Result<PaneLayout, PaneRefusal> {
         countDryRun()
-        // #1538: the key, the menu's dry run and a drop's edge. #1700: the single-pane view splits (perform's unpark).
-        if layoutLocked, parked == nil { return .failure(.layoutLocked) }
+        // #1826 (operator 2026-11-21): Split is explicit and acts locked too (perform saves it); #1700: the single-pane view splits (unpark).
         let l = pane.flatMap { try? layout.focus($0).get() } ?? layout
         // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
         return l.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
@@ -953,8 +954,8 @@ final class AgentWindowModel: ObservableObject {
     /// 7.5: the dividers in a pane area of `size`, parents before children. None with the gate off, one pane, zoomed,
     /// too small (3.4: the focused pane alone) or a size that is not finite (refused before any use).
     func dividers(in size: CGSize) -> [Divider] {
-        // #1538: locked, no divider: no resize cursor, no drag, no equalize, no nudge (a ratio is the layout's structure)
-        guard AgentPaneLayout.splitsEnabled, !layoutLocked, size.width.isFinite, size.height.isFinite, layout.zoomed == nil
+        // #1826: a divider drag, equalize and nudge act locked too (saved explicitly, like #1817's close)
+        guard AgentPaneLayout.splitsEnabled, size.width.isFinite, size.height.isFinite, layout.zoomed == nil
         else { return [] }
         let area = CGRect(origin: .zero, size: size)
         guard case let .tiled(f) = layout.frames(in: area, minimum: paneMinimum, splitsEnabled: true), f.count > 1 else { return [] }
@@ -993,7 +994,7 @@ final class AgentWindowModel: ObservableObject {
     func dragBegan(at p: CGPoint, in size: CGSize, clicks: Int = 1) -> Bool {
         if dividerDrag != nil { dragEnded() }
         guard !closed, let d = divider(at: p, in: size) else { return false }
-        if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l) }
+        if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l); autosave(explicit: true) }
         guard case let .split(_, ratio, _, _)? = layout.tree.locate(d.path[...], in: .zero)?.node else { return false }
         dividerDrag = (d, d.axis == .columns ? p.x : p.y, ratio, size)
         for t in allTerminals { t.liveResizeStarted() }   // 7.5: each terminal re-grids at the drag's end only (one setSize)
@@ -1021,7 +1022,7 @@ final class AgentWindowModel: ObservableObject {
         guard dividerDrag != nil else { return }
         dividerDrag = nil
         for t in allTerminals { t.liveResizeEnded() }
-        autosave()
+        autosave(explicit: true)   // #1826: saved while locked too
     }
 
     /// 13: a divider's value: its split's ratio in whole percent, rounded. nil: no split at `path`, or a ratio (outside
@@ -1044,6 +1045,7 @@ final class AgentWindowModel: ObservableObject {
               case let .success(l) = layout.setRatio(path: path, r + (up ? 0.05 : -0.05), minimum: paneMinimum,
                                                      in: CGRect(origin: .zero, size: size)), l != layout else { return }
         adopt(l)
+        autosave(explicit: true)   // #1826: saved while locked too
     }
 
     private(set) var store: AgentIslandStore? { didSet { drawnMemo = nil } }
@@ -2141,7 +2143,10 @@ final class AgentWindowModel: ObservableObject {
         case let .success(l):
             if paneRefusal != nil { paneRefusal = nil }
             // #1700: Open to the Side from the single-pane view: a new layout of the view and the side pane
-            if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else { layout = l }
+            if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else {
+                layout = l
+                if placement == .side { autosave(explicit: true) }   // #1826: Open to the Side is explicit: saved while locked too
+            }
         case let .failure(r):
             paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
         }
@@ -2189,7 +2194,6 @@ final class AgentWindowModel: ObservableObject {
     /// in the pane area at the minimum paneFrames tiles with; `.focused` never reads the area.
     func showing(_ id: AgentSidebar.RowID, placement: PaneLayout.Placement = .focused) -> Result<PaneLayout, PaneRefusal> {
         countDryRun()
-        if placement == .side, layoutLocked, parked == nil { return .failure(.layoutLocked) }   // #1538: Open to the Side splits
         return layout.show(target(id), placement: placement, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size),
                     splitsEnabled: AgentPaneLayout.splitsEnabled)
     }

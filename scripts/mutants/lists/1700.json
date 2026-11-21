@@ -10,24 +10,10 @@
    "expect": "killed"
   },
   {
-   "name": "splitting-locked-in-view",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, parked == nil { return .failure(.layoutLocked) }",
-   "new": "if layoutLocked { return .failure(.layoutLocked) }",
-   "expect": "killed"
-  },
-  {
    "name": "side-no-unpark",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else { layout = l }",
-   "new": "layout = l",
-   "expect": "killed"
-  },
-  {
-   "name": "showing-side-locked-in-view",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if placement == .side, layoutLocked, parked == nil { return",
-   "new": "if placement == .side, layoutLocked { return",
+   "old": "if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else {",
+   "new": "if false { unpark(l) } else {",
    "expect": "killed"
   },
   {
