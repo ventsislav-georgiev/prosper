@@ -150,6 +150,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerSessionsTalk(&r)
         ControlRegistry.registerSessionsEdit(&r)
         ControlRegistry.registerLayouts(&r)
+        ControlRegistry.registerCCPool(&r)
         return r
     }
 

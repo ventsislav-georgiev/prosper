@@ -79,6 +79,7 @@ final class CCPoolGuardTests: XCTestCase {
     // P2b-1: outside CCPool/, AppDelegate owns the runtime (launch, enable/disable, quit) and
     // SettingsWindow mounts the pane. P2b-2: the island's --spawn asks the runtime for its routing
     // contributor, and the New session form for its hint (CCPool.Routing). Nothing outside calls sessionEnv.
+    // #1843: the agent-control reads register through CCPoolControl, which builds every reply inside CCPool/.
     func testCCPoolNoCallSiteOutsideItsDirectory() throws {
         let symbol = try NSRegularExpression(pattern: #"\bCCPool\w*|\bsessionEnv\b"#)
         var hits: Set<String> = []
@@ -91,7 +92,7 @@ final class CCPoolGuardTests: XCTestCase {
         XCTAssertFalse(swiftFiles(under: sourcesDir.appendingPathComponent("CCPool")).isEmpty, "the guard found the sources")
         XCTAssertEqual(hits, ["AppDelegate.swift: CCPoolRuntime", "SettingsWindow.swift: CCPoolRuntime", "SettingsWindow.swift: CCPoolPane",
                               "AgentIslandController.swift: CCPoolRuntime", "AgentNewSession.swift: CCPool",
-                              "AgentNewSession.swift: CCPoolRuntime"])
+                              "AgentNewSession.swift: CCPoolRuntime", "ControlCCPool.swift: CCPoolControl"])
     }
 
     // P2b-1: under XCTest the app's runtime is never built, not even by a live push.

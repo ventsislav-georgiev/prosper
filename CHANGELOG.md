@@ -2328,6 +2328,10 @@ tag from the now-released section and put it on the new top draft.
   done) over the prosper command, each with Undo. (#1842)
 - Agents can now list, switch, make, rename and delete your saved Agent Sessions layouts over the
   prosper command (delete cannot be undone). (#1841)
+- Agents can now read ccpool through Prosper's control channel: the proxy state and each account's
+  status and usage (ccpool.status), token totals per account and session (ccpool.usage), and which
+  account a session is pinned to (ccpool.pin). Labels only; tokens and account changes stay with you
+  in Settings. (#1843)
 
 ## v2.174.0
 
