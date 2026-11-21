@@ -42,6 +42,8 @@ final class CCPoolPaneModel: ObservableObject {
         var state: RowState
         var stateText: String
         var usageText: String
+        /// #1838: live sessions on this account (CCPoolState.liveSessions); 0 when none.
+        var sessions = 0
         var id: String { label }
     }
 
@@ -180,25 +182,38 @@ final class CCPoolPaneModel: ObservableObject {
 
     var currentText: String { store.snapshot.current ?? "none yet" }
 
-    /// The proxy row's second line: with no account the proxy does not run (spec 3.2).
+    /// The proxy row's second line: with no account the proxy does not run (spec 3.2). #1838: each session has its own
+    /// account (CCPoolCore.place); only requests without a session id (other clients) share `current` (CCPoolCore.pick).
     var proxySubtitle: String {
-        store.hasAccounts ? "Current account: \(currentText)" : "Starts when the first account is added."
+        guard store.hasAccounts else { return "Starts when the first account is added." }
+        return "\(Self.spreadText(store.snapshot.liveSessions(now: clock())))\nOther clients: \(currentText)"
     }
+
+    /// "3 sessions over 3 accounts"; a session with agents on two accounts counts once.
+    nonisolated static func spreadText(_ sessions: [String: Set<String>]) -> String {
+        let n = sessions.values.reduce(into: Set<String>()) { $0.formUnion($1) }.count
+        guard n > 0 else { return "No sessions yet: each new session gets the account with the most room." }
+        return "\(count(n, "session")) over \(count(sessions.count, "account"))"
+    }
+
+    nonisolated static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
 
     /// QA #734 INFO-4: state.json exists but could not be read; account changes are refused.
     var storeProblem: String? { store.unreadable ? CCPoolStore.unreadableNote : nil }
 
     // MARK: Accounts
 
+    /// #1838: alphabetical by label (CCPoolCore.labelFirst), never a hand order.
     var rows: [Row] {
         let now = clock()
         let st = store.snapshot
-        return st.order.compactMap { label in
+        let sessions = st.liveSessions(now: now)
+        return st.order.sorted(by: CCPoolCore.labelFirst).compactMap { label in
             guard let acct = st.accounts[label] else { return nil }
             let state = Self.rowState(label: label, account: acct, current: st.current, now: now,
                                       rejected: rejected, unverified: unverified)
             return Row(label: label, state: state, stateText: Self.stateText(state, timeZone: timeZone),
-                       usageText: Self.usageText(store.usageSample(label), now: now))
+                       usageText: Self.usageText(store.usageSample(label), now: now), sessions: sessions[label]?.count ?? 0)
         }
     }
 
@@ -441,11 +456,6 @@ final class CCPoolPaneModel: ObservableObject {
         } catch {
             notice = "\(error)"
         }
-        objectWillChange.send()
-    }
-
-    func move(_ label: String, by offset: Int) {
-        store.moveAccount(label, by: offset)
         objectWillChange.send()
     }
 

@@ -195,7 +195,7 @@ final class CCPoolPinsTests: XCTestCase {
         let before = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let store = CCPoolStore(directory: dir, clock: { 1_800_000_000 })
         XCTAssertTrue(store.snapshot.pins.isEmpty)
-        XCTAssertTrue(store.moveAccount(orgB, by: -1))
+        store.mutate { $0.order = [orgB, orgA] }   // a write (#1838: was moveAccount, removed)
         let after = try fileObject(store)
         XCTAssertEqual(Set(after.keys), ["accounts", "current", "order"], "no pins key is added")
         XCTAssertEqual(after["order"] as? [String], [orgB, orgA])

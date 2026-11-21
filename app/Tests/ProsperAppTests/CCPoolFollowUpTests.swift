@@ -175,7 +175,7 @@ final class CCPoolFollowUpTests: XCTestCase {
         try store.renameAccount("b", to: "bee")
         XCTAssertEqual(store.snapshot.current, "bee", "rename carries current")
         XCTAssertEqual(CCPoolStore(directory: dir).snapshot.current, "bee", "after a reload too")
-        XCTAssertTrue(store.moveAccount("c", by: -1))
+        store.mutate { $0.order = ["c", "bee"] }   // #1838: moveAccount is gone; a rewritten order is the same write
         XCTAssertEqual(store.snapshot.order, ["c", "bee"])
         XCTAssertEqual(store.snapshot.current, "bee", "reorder leaves current alone")
 

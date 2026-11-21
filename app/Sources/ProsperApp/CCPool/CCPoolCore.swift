@@ -5,7 +5,7 @@ import Foundation
 
 /// Persisted pool state (`state.json`). Same shape as the Python ccpool's state (`current`,
 /// `accounts.<label>.cooldown`, `accounts.<label>.reset`) so a migration can carry it, plus `order`
-/// (pick order = Settings list order) and the per-account Keychain `id`. Never holds a token.
+/// (the pool's members; #1838: never a ranking input, ties go by label) and the per-account Keychain `id`. Never holds a token.
 struct CCPoolState: Codable, Equatable, Sendable {
     struct Account: Codable, Equatable, Sendable {
         /// Opaque Keychain account key (a UUID), so a rename never rewrites the secret.
@@ -217,20 +217,26 @@ enum CCPoolCore {
 
     /// One account serves everything until it is exhausted, then the next: every switch rewrites the
     /// prompt cache (per organisation). The next is the eligible account whose five-hour window rolls
-    /// over soonest; never-measured accounts last; ties by `order`.
+    /// over soonest; never-measured accounts last; ties by label (#1838).
     static func pick(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double) -> String? {
         let names = state.order
         if let current = state.current, names.contains(current), !exclude.contains(current),
            eligible(state.accounts[current], model: model, now: now) {
             return current
         }
-        let ready = names.enumerated().filter { !exclude.contains($0.element)
-            && eligible(state.accounts[$0.element], model: model, now: now) }
+        let ready = names.filter { !exclude.contains($0) && eligible(state.accounts[$0], model: model, now: now) }
         return ready.min { a, b in
-            let ra = resetAt(state.accounts[a.element], fiveHour, now: now)
-            let rb = resetAt(state.accounts[b.element], fiveHour, now: now)
-            return ra != rb ? ra < rb : a.offset < b.offset
-        }?.element
+            let ra = resetAt(state.accounts[a], fiveHour, now: now)
+            let rb = resetAt(state.accounts[b], fiveHour, now: now)
+            return ra != rb ? ra < rb : labelFirst(a, b)
+        }
+    }
+
+    /// #1838: the one label order (the pane's list and every routing tie): Finder-like, case-insensitive; labels it
+    /// calls the same ("a", "A") fall back to code points, so the order is total.
+    static func labelFirst(_ a: String, _ b: String) -> Bool {
+        let c = a.localizedStandardCompare(b)
+        return c == .orderedSame ? a < b : c == .orderedAscending
     }
 
     /// #1259: the account for a request and the state after (Python choose(), ccpool_proxy.py 114-147). No usable
@@ -271,7 +277,7 @@ enum CCPoolCore {
     /// window's reset is after `now`, else 0. Live sessions = distinct session ids pinned to it in an expired copy
     /// (a lookup changes nothing). Learned numbers are outside data: a non-finite or negative score is 0. An account
     /// at or above 100%, or whose row fails the row check, ranks after every other; all there: still one is
-    /// returned, as in the reference. Ties: the soonest five-hour reset, then `order`.
+    /// returned, as in the reference. Ties: the soonest five-hour reset, then the label (#1838).
     /// #1677: below 1.0, `share` (the pane's "Move off an account at") is a soft preference: an account whose utilization
     /// now is at or above it ranks after every account under it, before the full ones; all over: the order above. It
     /// never excludes, so it never turns an answer into none. At 1.0 (or NaN) no account is over without being full.
@@ -290,14 +296,13 @@ enum CCPoolCore {
             let score = (1 - util) * CCPoolCapacity.capacity(of: row, among: rows) / Double((sessions[n]?.count ?? 0) + 1)
             return (util >= 1 ? 2 : util >= share ? 1 : 0, score.isFinite && score > 0 ? score : 0)
         }
-        let ready = state.order.enumerated().filter { state.accounts[$0.element] != nil && !exclude.contains($0.element)
-            && eligible(state.accounts[$0.element], model: model, now: now) }
-            .map { (name: $0.element, index: $0.offset, rank: rank($0.element),
-                    reset: resetAt(state.accounts[$0.element], fiveHour, now: now)) }
+        let ready = state.order.filter { state.accounts[$0] != nil && !exclude.contains($0)
+            && eligible(state.accounts[$0], model: model, now: now) }
+            .map { (name: $0, rank: rank($0), reset: resetAt(state.accounts[$0], fiveHour, now: now)) }
         return ready.min { a, b in
             if a.rank.tier != b.rank.tier { return a.rank.tier < b.rank.tier }
             if a.rank.score != b.rank.score { return a.rank.score > b.rank.score }
-            return a.reset != b.reset ? a.reset < b.reset : a.index < b.index
+            return a.reset != b.reset ? a.reset < b.reset : labelFirst(a.name, b.name)
         }?.name
     }
 
@@ -524,6 +529,18 @@ extension CCPoolState {
         return Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value.label) })
     }
     static let sessionLabelsCap = 64
+
+    /// #1838: live sessions per account for the pane, counted as `place` counts them (distinct session ids pinned to it
+    /// after `expirePins`' rule): account -> session ids, read-only. Accounts with none are absent. Bounded by the pin cap.
+    func liveSessions(now: Double) -> [String: Set<String>] {
+        var live = self
+        live.expirePins(now: now)
+        var sessions: [String: Set<String>] = [:]
+        for (key, pin) in live.pins where accounts[pin.account] != nil {
+            sessions[pin.account, default: []].insert(String(key.prefix { $0 != "/" }))
+        }
+        return sessions
+    }
 
     /// Re-stamp a live pin (Python re-pins on every request that follows it).
     mutating func touchPin(_ key: String, now: Double) {

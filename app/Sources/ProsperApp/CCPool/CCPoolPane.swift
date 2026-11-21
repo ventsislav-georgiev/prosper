@@ -22,10 +22,15 @@ struct CCPoolPane: View {
     static func routeScope(dch: [Int]?) -> String {
         dch.map { DchCommand.isAtLeast($0, AgentIsland.reviveEnvMinimum) } == true ? routeScope : routeScope + shellLimit
     }
-    /// QA #739 INFO-1: CCPoolCore.pick keeps the current account while it has room, then takes the
-    /// soonest five-hour reset; the list order only breaks ties.
-    static let accountsFooter = "The current account is used while it has room, then the one whose five-hour window resets soonest; "
-        + "the order of this list breaks ties. Remove deletes the Keychain item too."
+    /// #1838: CCPoolCore.route: a new session goes to CCPoolCore.place's pick and stays there; keyless requests use pick.
+    static let accountsFooter = "Each new session gets the account with the most room for one more session and keeps it, "
+        + "so its prompt cache stays warm; other clients share one account until it runs out. Remove deletes the Keychain item too."
+
+    /// The account row's second line; the live session count only when there is one.
+    static func rowSubtitle(_ row: CCPoolPaneModel.Row) -> String {
+        ([row.stateText] + (row.sessions > 0 ? [CCPoolPaneModel.count(row.sessions, "session")] : []) + [row.usageText])
+            .joined(separator: " · ")
+    }
 
     var body: some View {
         // QA #739 INFO-9: a state change in the store (a limit, a hold, `current`) republishes the
@@ -82,19 +87,19 @@ struct CCPoolPane: View {
                 if rows.isEmpty { caption("No accounts yet.") }
                 ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
                     if i > 0 { NeonDivider() }
-                    NeonRow(row.label, subtitle: "\(row.stateText) · \(row.usageText)") {
+                    NeonRow(row.label, subtitle: Self.rowSubtitle(row)) {
                         Button(model.selected == row.label ? "Done" : "Edit") { model.select(row.label) }
                             .buttonStyle(.neon).fixedSize()
                             .accessibilityLabel(model.selected == row.label ? "Close the actions for \(row.label)" : "Edit \(row.label)")
                     }
-                    if model.selected == row.label { actions(row.label, index: i, count: rows.count) }
+                    if model.selected == row.label { actions(row.label) }
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func actions(_ label: String, index: Int, count: Int) -> some View {
+    private func actions(_ label: String) -> some View {
         VStack(alignment: .leading, spacing: sz(8)) {
             if model.confirmingRemove == label {
                 fitting {
@@ -111,10 +116,6 @@ struct CCPoolPane: View {
                     .accessibilityLabel("Rename \(label)")
             }
             fitting {
-                Button("Move up") { model.move(label, by: -1) }.buttonStyle(.neon).fixedSize().disabled(index == 0)
-                    .accessibilityLabel("Move \(label) up")
-                Button("Move down") { model.move(label, by: 1) }.buttonStyle(.neon).fixedSize().disabled(index == count - 1)
-                    .accessibilityLabel("Move \(label) down")
                 Button("Remove…") { model.requestRemove(label) }.buttonStyle(.neonDestructive).fixedSize()
                     .disabled(model.busy || model.confirmingRemove == label)
                     .accessibilityLabel("Remove \(label)")

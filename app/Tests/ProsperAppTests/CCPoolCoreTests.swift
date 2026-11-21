@@ -364,4 +364,19 @@ final class CCPoolCoreTests: XCTestCase {
         XCTAssertTrue(log.lines.contains { $0.contains("state write failed") }, log.lines.joined(separator: "\n"))
         XCTAssertFalse(log.lines.joined().contains(blocker.path))
     }
+
+    /// #1838: no hand order: ties in pick() and place() go by label (Finder order: case-insensitive, numbers by value),
+    /// whatever `order` holds.
+    func testTiesGoByLabelNotByOrder() {
+        let st = pool(["b", "A10", "a2"])
+        XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: [], now: now), "a2", "all unseen: the first label")
+        XCTAssertEqual(CCPoolCore.pick(st, model: nil, exclude: ["a2"], now: now), "A10")
+        XCTAssertEqual(CCPoolCore.place(st, model: nil, exclude: [], now: now), "a2", "place ties the same way")
+        XCTAssertEqual(CCPoolCore.place(st, model: nil, exclude: ["a2"], now: now), "A10")
+        var reset = st
+        reset.accounts["b"]?.reset = ["five_hour": Int(now) + 60]
+        XCTAssertEqual(CCPoolCore.pick(reset, model: nil, exclude: [], now: now), "b", "the sooner reset still comes first")
+        XCTAssertEqual(CCPoolCore.place(reset, model: nil, exclude: [], now: now), "b")
+        XCTAssertTrue(CCPoolCore.labelFirst("A", "a") != CCPoolCore.labelFirst("a", "A"), "labels Finder calls the same still order")
+    }
 }

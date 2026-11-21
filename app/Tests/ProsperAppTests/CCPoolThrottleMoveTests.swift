@@ -65,7 +65,7 @@ final class CCPoolThrottleMoveTests: XCTestCase {
         return Rig(up: up, store: store, secrets: secrets, log: log, rec: rec, seams: seams, port: p)
     }
 
-    /// The session pinned to Example Org A by a first request (place ties by order), before anything is scripted.
+    /// The session pinned to Example Org A by a first request (place ties by label, #1838), before anything is scripted.
     private func pinnedOnA(_ r: Rig) {
         XCTAssertEqual(r.post(sid)?.status, 200)
         XCTAssertEqual(r.pins, [key: orgA])

@@ -193,12 +193,24 @@ final class CCPoolStore: @unchecked Sendable {
     /// Record what a response or a probe said about an account's claims. Ignored without numbers.
     /// #1219 (R1205-1): the sample of the account with Keychain id `id`, its label resolved under the lock the write
     /// takes: a renamed account keeps it, the new holder of its old label gets none, a gone account nothing.
+    /// #1838: a pin-following reply changes no state, so nothing republished its sample: an account whose sessions only
+    /// followed pins showed "no usage seen yet" until the pane's 30 s tick. Now the change hook runs when the shown
+    /// text would change (a first sample, or a percent the pane rounds differently), not on every reply.
     func recordUsage(id: String, limits: [String: CCPoolLimit]) {
         let util = CCPoolCore.utils(limits)
         guard !util.isEmpty else { return }
         let at = now
-        lock.withLock { if let label = state.label(ofID: id) { usage[label] = CCPoolUsageSample(util: util, at: at) } }
+        let hook = lock.withLock { () -> (@Sendable () -> Void)? in
+            guard let label = state.label(ofID: id) else { return nil }
+            let shown = usage[label].map(\.util).map(Self.shownPercents)
+            usage[label] = CCPoolUsageSample(util: util, at: at)
+            return shown == Self.shownPercents(util) ? nil : _onChange
+        }
+        hook?()
     }
+
+    /// The whole percents the pane shows (CCPoolPaneModel.usageText); utils already bounds each value to 0...100.
+    static func shownPercents(_ util: [String: Double]) -> [String: Int] { util.mapValues { Int(($0 * 100).rounded()) } }
 
     func usageSample(_ label: String) -> CCPoolUsageSample? { lock.withLock { usage[label] } }
 
@@ -280,7 +292,7 @@ final class CCPoolStore: @unchecked Sendable {
         return (id, true)
     }
 
-    /// Rename in place: same Keychain id (the secret is never rewritten), same pick-order slot,
+    /// Rename in place: same Keychain id (the secret is never rewritten), same slot in `order`,
     /// `current` and the usage sample follow. #1326 (a): with `secrets`, the Keychain item's label follows too; a failed
     /// relabel leaves the rename standing and logs the stale label (never the token).
     func renameAccount(_ label: String, to newLabel: String, secrets: CCPoolSecrets? = nil) throws {
@@ -305,20 +317,6 @@ final class CCPoolStore: @unchecked Sendable {
         do { try secrets.relabel(id: id, label: to) } catch {
             logger.note(to, "renamed; its Keychain item could not be relabelled and keeps its old name",
                         private: " \(CCPoolKeychainSecrets.itemLabel(label))")
-        }
-    }
-
-    /// Move `label` by `offset` places in the pick order (negative = up), clamped. False when it
-    /// did not move.
-    @discardableResult
-    func moveAccount(_ label: String, by offset: Int) -> Bool {
-        mutate { st in
-            guard let i = st.order.firstIndex(of: label) else { return false }
-            let j = max(0, min(st.order.count - 1, i + offset))
-            guard j != i else { return false }
-            st.order.remove(at: i)
-            st.order.insert(label, at: j)
-            return true
         }
     }
 

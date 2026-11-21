@@ -51,7 +51,7 @@ final class CCPoolCarryTests: XCTestCase {
         try Data(json.utf8).write(to: dir.appendingPathComponent("state.json"))
         let store = CCPoolStore(directory: dir, clock: { Double(t0) })
         XCTAssertEqual(store.snapshot.order, ["Example Org A", "Example Org B"], "it loads")
-        XCTAssertTrue(store.moveAccount("Example Org B", by: -1), "a write")
+        store.mutate { $0.order = ["Example Org B", "Example Org A"] }   // a write (#1838: was moveAccount, removed)
         let data = try Data(contentsOf: dir.appendingPathComponent("state.json"))
         let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let accounts = try XCTUnwrap(obj["accounts"] as? [String: [String: Any]])

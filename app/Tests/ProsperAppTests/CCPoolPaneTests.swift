@@ -141,7 +141,8 @@ final class CCPoolPaneTests: XCTestCase {
         let two = try ccpoolPaneRig()
         try two.add(["work-account-with-a-long-label@example.com", "personal"])
         two.store.mutate { $0.bench("personal", claim: "seven_day", until: t0 + 86400, now: Double(t0)) }
-        guard case .limited? = two.model.rows.last?.state else { return XCTFail("\(two.model.rows)") }
+        // #1838: rows are alphabetical, so "personal" is first.
+        guard case .limited? = two.model.rows.first?.state else { return XCTFail("\(two.model.rows)") }
         states.append(("two accounts, one limited", two.model))
 
         // The Python ccpool holds the port: the probe is a fake, nothing is dialled or bound.
@@ -291,11 +292,13 @@ final class CCPoolPaneTests: XCTestCase {
         // #1190 INFO-6: caption() is Text(String), which shows Markdown marks as typed.
         XCTAssertFalse(CCPoolPane.mintHint.contains("`"))
         XCTAssertTrue(CCPoolPane.labelHint.contains("Labels are not secret"), "errata C6")
-        XCTAssertTrue(CCPoolPane.accountsFooter.contains("the order of this list breaks ties"))
+        // #1838: the footer states the spread model; the list order breaks no tie any more.
+        XCTAssertTrue(CCPoolPane.accountsFooter.contains("Each new session gets the account with the most room"))
+        XCTAssertTrue(CCPoolPane.accountsFooter.contains("other clients share one account"))
+        XCTAssertFalse(CCPoolPane.accountsFooter.contains("order"))
         XCTAssertTrue(CCPoolPane.refreshHint.contains("one tiny request per account"))
         // QA #739 INFO-1 (B8): the order only breaks ties.
         XCTAssertFalse(CCPoolPane.accountsFooter.contains("Tried in this order"))
-        XCTAssertTrue(CCPoolPane.accountsFooter.contains("five-hour window resets soonest"))
         var s = viewStrings(r.model)
         // P2b-2: the spawn path applies the routing, so the row is shown, with what it reaches as built:
         // Prosper's own new sessions of claude, never a terminal's (no global routing in v1).

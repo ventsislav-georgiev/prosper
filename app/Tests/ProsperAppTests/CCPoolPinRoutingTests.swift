@@ -310,7 +310,8 @@ final class CCPoolPinRoutingTests: XCTestCase {
         XCTAssertEqual(r.via("sess-example-1", body: throttleQuotaCheck), "tok-a")
         XCTAssertEqual(r.store.snapshot, before, "state compared before and after")
         XCTAssertTrue(r.store.snapshot.pins.isEmpty)
-        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
+        // #1261: a new key is placed (no longer `current`); #1838: equal scores go by the sooner five-hour reset, then the label
+        r.store.mutate { $0.accounts[orgB]?.reset = [CCPoolCore.fiveHour: Int(r.seams.now) + 60] }
         XCTAssertEqual(r.via("sess-example-2"), "tok-b")
         r.setCurrent(orgA)
         XCTAssertEqual(r.via("sess-example-2", body: throttleQuotaCheck), "tok-b", "follows the pin")
@@ -319,7 +320,8 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testBadHeaderValueIsTreatedAsNoSessionIdAndNoValueIsLogged() throws {
         let r = try rig()
-        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
+        // #1261: a new key is placed (no longer `current`); #1838: equal scores go by the sooner five-hour reset, then the label
+        r.store.mutate { $0.accounts[orgB]?.reset = [CCPoolCore.fiveHour: Int(r.seams.now) + 60] }
         XCTAssertEqual(r.via("sess-example-1", "agent-example-1"), "tok-b")
         r.setCurrent(orgA)
         let bad: [(String, String?)] = [("sess example-2", nil), (String(repeating: "s", count: 129), nil),
@@ -340,7 +342,8 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testThrottleRetryOfAPinnedRequestStaysOnItsAccount() throws {
         let r = try rig()
-        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
+        // #1261: a new key is placed (no longer `current`); #1838: equal scores go by the sooner five-hour reset, then the label
+        r.store.mutate { $0.accounts[orgB]?.reset = [CCPoolCore.fiveHour: Int(r.seams.now) + 60] }
         XCTAssertEqual(r.via("sess-example-1"), "tok-b")
         r.setCurrent(orgA)
         r.up.set("tok-b", [.throttle(nil), .throttle("3")])
@@ -357,7 +360,8 @@ final class CCPoolPinRoutingTests: XCTestCase {
 
     func testMissingTokenMovesTheSession() throws {
         let r = try rig()
-        r.store.mutate { $0.order = [orgB, orgA] }   // #1261: a new key is placed, ties by order (no longer `current`)
+        // #1261: a new key is placed (no longer `current`); #1838: equal scores go by the sooner five-hour reset, then the label
+        r.store.mutate { $0.accounts[orgB]?.reset = [CCPoolCore.fiveHour: Int(r.seams.now) + 60] }
         XCTAssertEqual(r.via("sess-example-1"), "tok-b")
         r.setCurrent(orgB)
         let id = try XCTUnwrap(r.store.snapshot.accounts[orgB]?.id)

@@ -156,4 +156,20 @@ final class CCPoolCapacityTests: XCTestCase {
         let fresh = try JSONDecoder().decode(CCPoolCapacityState.self, from: JSONEncoder().encode(CCPoolCapacityState()))
         XCTAssertEqual(fresh, CCPoolCapacityState())
     }
+
+    /// #1838 (session-tokens item 3): a never-measured account (no row, or under minPoints) is placed at once, at the
+    /// median $/pt of the measured ones: the middle one for an odd count, the upper middle for an even one (Python's
+    /// sorted(...)[len // 2]); none measured: 1.0. Measured: 1, 4, 2 (odd: 2), then 8 joins (even: 4).
+    func testUnmeasuredAccountTakesTheMedianOfTheMeasured() {
+        func measured(_ perPoint: Double) -> CCPoolCapacityState {
+            CCPoolCapacityState(reset: 0, maxUtilization: 0, pendingDollars: 0, dollars: perPoint, points: 1)
+        }
+        let under = CCPoolCapacityState(reset: 0, maxUtilization: 0, pendingDollars: 0, dollars: 50, points: C.minPoints / 2)
+        let odd = [measured(1), measured(4), measured(2), under]
+        XCTAssertEqual(C.capacity(of: nil, among: odd), 2, accuracy: 1e-12, "never measured: the median")
+        XCTAssertEqual(C.capacity(of: under, among: odd), 2, accuracy: 1e-12, "under minPoints: the median, not its own 1000")
+        let even = odd + [measured(8)]
+        XCTAssertEqual(C.capacity(of: nil, among: even), 4, accuracy: 1e-12, "an even count: the upper median")
+        XCTAssertEqual(C.capacity(of: nil, among: [under]), 1.0, "none measured")
+    }
 }

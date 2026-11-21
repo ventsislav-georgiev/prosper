@@ -146,7 +146,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(row(r.model, "b")?.usageText, "5h 25% · week 10% · fable 34% · just now")
     }
 
-    func testCCPoolPaneRenameAndReorderSurviveAReload() throws {
+    func testCCPoolPaneRenameSurvivesAReload() throws {
         let r = try ccpoolPaneRig()
         try r.add(["a", "b", "c"])
         r.store.mutate { $0.current = "b" }
@@ -156,9 +156,7 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(r.model.renameDraft, "b")
         r.model.rename("b", to: "  bee ")
         XCTAssertEqual(r.model.selected, "bee")
-        r.model.move("c", by: -5)
-        r.model.move("bee", by: 1)   // already last: clamped, no change
-        XCTAssertEqual(r.model.rows.map(\.label), ["c", "a", "bee"])
+        XCTAssertEqual(r.model.rows.map(\.label), ["a", "bee", "c"], "#1838: alphabetical, never a hand order")
         XCTAssertEqual(row(r.model, "bee")?.state, .active, "current follows the rename")
         XCTAssertTrue(row(r.model, "bee")?.usageText.hasPrefix("5h 20%") ?? false, "the usage sample follows")
 
@@ -166,10 +164,10 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(r.model.notice, CCPoolStoreError.duplicateLabel.description)
         r.model.rename("a", to: "  ")
         XCTAssertEqual(r.model.notice, CCPoolStoreError.emptyLabel.description)
-        XCTAssertEqual(r.model.rows.map(\.label), ["c", "a", "bee"])
+        XCTAssertEqual(r.model.rows.map(\.label), ["a", "bee", "c"])
 
         let reloaded = CCPoolStore(directory: r.store.directory)
-        XCTAssertEqual(reloaded.snapshot.order, ["c", "a", "bee"])
+        XCTAssertEqual(reloaded.snapshot.order, ["a", "bee", "c"], "the rename keeps its slot in the file")
         XCTAssertEqual(reloaded.snapshot.current, "bee")
         XCTAssertEqual(reloaded.snapshot.accounts["bee"]?.id, idB, "rename keeps the opaque Keychain id")
         XCTAssertEqual(try r.secrets.token(id: idB), "tok-b", "and the secret is never rewritten")
@@ -989,5 +987,59 @@ extension CCPoolPaneModelTests {
                                vaultURL: dir.appendingPathComponent("old"), defaults: defaults,
                                probeBase: cfg.upstream, logger: CCPoolCapturingLogger())
         XCTAssertEqual(rt.service.config.exhaustedThreshold, 0.9)
+    }
+
+    // MARK: #1838 the spread model
+
+    /// Rows are alphabetical (Finder order), never a hand order; the proxy row counts sessions over accounts and names
+    /// the account other clients share; an account row shows its live sessions only when it has one.
+    func testRowsAreAlphabeticalAndTheProxyRowCountsSessions() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(r.model.proxySubtitle, "Starts when the first account is added.")
+        try r.add(["beta", "Alpha", "gamma 10", "gamma 9"])
+        XCTAssertEqual(r.model.rows.map(\.label), ["Alpha", "beta", "gamma 9", "gamma 10"])
+        XCTAssertEqual(r.store.snapshot.order, ["beta", "Alpha", "gamma 10", "gamma 9"], "the file keeps the add order")
+        XCTAssertEqual(r.model.proxySubtitle,
+                       "No sessions yet: each new session gets the account with the most room.\nOther clients: none yet")
+        let now = r.clock.now
+        r.store.mutate {
+            $0.current = "beta"
+            $0.pin("sess-a/", to: "Alpha", now: now)
+            $0.pin("sess-a/agent-1", to: "gamma 9", now: now)   // a subagent elsewhere: one session, two accounts
+            $0.pin("sess-b/", to: "Alpha", now: now)
+            $0.pin("sess-c/", to: "gamma 9", now: now - 3601)   // idle past the hour: not live
+        }
+        XCTAssertEqual(r.model.proxySubtitle, "2 sessions over 2 accounts\nOther clients: beta")
+        XCTAssertEqual(r.model.rows.map(\.sessions), [2, 0, 1, 0])
+        let alpha = try XCTUnwrap(r.model.rows.first)
+        XCTAssertEqual(CCPoolPane.rowSubtitle(alpha), "ready · 2 sessions · no usage seen yet")
+        let beta = try XCTUnwrap(r.model.rows.first { $0.label == "beta" })
+        XCTAssertEqual(CCPoolPane.rowSubtitle(beta), "active · no usage seen yet", "no session: no count")
+        XCTAssertEqual(CCPoolPaneModel.spreadText(["x": ["s"]]), "1 session over 1 account")
+    }
+
+    /// The Payhawk-SP-style gap: a reply that only follows a pin changes no state, so before #1838 its usage sample
+    /// reached the pane only at the next 30 s tick. The store's change hook now runs when the shown text changes:
+    /// a first sample or a different whole percent; the same percents again run nothing (counted, not timed).
+    func testUsageSampleRepublishesOnlyWhenItsShownTextChanges() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        let hits = CCPoolDecoyHits()
+        r.store.onChange = { hits.bump() }
+        let id = try XCTUnwrap(r.store.snapshot.accounts["a"]?.id)
+        func limits(_ u: String) -> [String: CCPoolLimit] {
+            CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": u]).limits
+        }
+        r.store.recordUsage(id: id, limits: limits("0.42"))
+        XCTAssertEqual(hits.count, 1, "the first sample")
+        XCTAssertTrue(r.model.rows.first?.usageText.hasPrefix("5h 42%") ?? false)
+        r.store.recordUsage(id: id, limits: limits("0.4204"))
+        XCTAssertEqual(hits.count, 1, "the same shown percent: no republish")
+        r.store.recordUsage(id: id, limits: limits("0.43"))
+        XCTAssertEqual(hits.count, 2, "a new percent")
+        r.store.recordUsage(id: "no-such-id", limits: limits("0.9"))
+        r.store.recordUsage(id: id, limits: [:])
+        XCTAssertEqual(hits.count, 2, "an unknown id or no numbers: nothing")
+        XCTAssertTrue(r.store.usageSample("b") == nil)
     }
 }

@@ -2310,6 +2310,10 @@ tag from the now-released section and put it on the new top draft.
 - Agents can search a session's X-ray history and look up what a session and its project said about
   a file or ref through the prosper command (xray.search, xray.ref), read-only, naming the session
   or its project folder; no X-ray drawer needs to be open. (#1834)
+- ccpool Settings: accounts are now listed alphabetically and the Move up / Move down buttons are
+  gone; the proxy line shows how many sessions are spread over how many accounts and which account
+  other clients use, each account shows its live session count, and an account's usage appears as
+  soon as its first reply arrives. (#1838)
 
 ## v2.174.0
 

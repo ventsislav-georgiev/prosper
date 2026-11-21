@@ -53,8 +53,9 @@ final class CCPoolStatusTests: XCTestCase {
         XCTAssertEqual(stopped["running"] as? Bool, false)
         XCTAssertEqual(stopped["port"] as? Int, 0, "stopped: the configured port")
         XCTAssertTrue(stopped["current"] == nil, "no current account: the key is absent (Lua nil)")
+        // #1838: alphabetical, never the stored order.
         XCTAssertEqual(rows(stopped), ["alpha:ready:-", "beta:limited:\(Int(now) + 3600)",
-                                       "gamma:held:\(Int(now) + 7200)", "delta:refused:-"])
+                                       "delta:refused:-", "gamma:held:\(Int(now) + 7200)"])
 
         guard case .running(let port) = r.service.start() else { return XCTFail("\(r.service.status)") }
         r.store.mutate { $0.current = "alpha" }

@@ -245,7 +245,8 @@ extension CCPoolService {
     static func statusJSON(running: Bool, port: UInt16, state: CCPoolState?, now: Double) -> String {
         var obj: [String: Any] = ["running": running, "port": Int(port)]
         if let current = state?.current { obj["current"] = current }
-        obj["accounts"] = (state?.order ?? []).compactMap { statusRow(label: $0, state: state, now: now) }
+        // #1838: alphabetical, as the pane lists them; `order` is only the membership list.
+        obj["accounts"] = (state?.order ?? []).sorted(by: CCPoolCore.labelFirst).compactMap { statusRow(label: $0, state: state, now: now) }
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return ExtensionPoolStatus.off }
         return String(decoding: data, as: UTF8.self)
     }

@@ -75,7 +75,7 @@ final class CCPoolPlacementTests: XCTestCase {
     func testReferenceSpentAccountMovesItsSessionOnly() {
         let st = pool(bench: [orgA], pins: ["sess-example-1/": orgA, "sess-example-2/": orgB, "sess-example-3/": orgC])
         let moved = route(st, "sess-example-1/")
-        XCTAssertEqual(moved.account, orgB, "B and C both hold one session: a tie, B first in order")
+        XCTAssertEqual(moved.account, orgB, "B and C both hold one session: a tie, B first by label")
         XCTAssertFalse(moved.followed)
         XCTAssertEqual(route(moved.state, "sess-example-1/agent-example-1").account, orgB, "its subagent follows it")
         XCTAssertEqual(route(moved.state, "sess-example-2/").account, orgB)
@@ -92,7 +92,7 @@ final class CCPoolPlacementTests: XCTestCase {
     func testReferenceNearlyFullAccountIsSkippedUnlessAllAre() {
         XCTAssertEqual(place(pool(rows: [orgA: row(util: 0.95)])), orgB)
         let all = pool(rows: [orgA: row(util: 0.95), orgB: row(util: 0.95), orgC: row(util: 0.95)])
-        XCTAssertEqual(place(all), orgA, "all equal: still placed, by order")
+        XCTAssertEqual(place(all), orgA, "all equal: still placed, by label")
     }
 
     /// Ports :365-372 "a new session goes to the bigger plan, even part used" and "the small plan is last while a bigger
@@ -113,21 +113,22 @@ final class CCPoolPlacementTests: XCTestCase {
     // MARK: The score
 
     /// Two plans 12x apart (12 $/pt and 1 $/pt, both empty): the large one scores 12 / (n + 1) with n live sessions,
-    /// the small one 1. n = 0: 12 > 1; n = 10: 12/11 > 1; n = 11: 12/12 = 1, a tie: the order decides; n = 12: 12/13 < 1.
+    /// the small one 1. n = 0: 12 > 1; n = 10: 12/11 > 1; n = 11: 12/12 = 1, a tie: the label decides (#1838); n = 12: 12/13 < 1.
     func testTwelveFoldPlanTakesElevenSessionsBeforeTheSmallOneGetsOne() {
         let rows = [orgA: row(cap: 3), orgB: row(cap: 0.25)]
         for (n, want) in [(0, orgA), (10, orgA), (11, orgA), (12, orgB)] {
             XCTAssertEqual(place(pool([orgA, orgB], rows: rows, pins: sessions(n, on: orgA))), want, "n = \(n)")
         }
-        XCTAssertEqual(place(pool([orgB, orgA], rows: rows, pins: sessions(11, on: orgA))), orgB, "the tie, order flipped")
+        XCTAssertEqual(place(pool([orgB, orgA], rows: rows, pins: sessions(11, on: orgA))), orgA,
+                       "#1838: the tie goes by label, whatever `order` holds")
     }
 
     /// A at 4 $/pt: no session 4, one session 4/2 = 2, two sessions 4/3. B at 2 ties with one, B at 1.5 sits between.
     func testOneMoreLiveSessionDividesTheScoreByItsCount() {
         let at2 = [orgA: row(cap: 1), orgB: row(cap: 0.5)]
         XCTAssertEqual(place(pool([orgA, orgB], rows: at2)), orgA, "4 > 2")
-        XCTAssertEqual(place(pool([orgA, orgB], rows: at2, pins: sessions(1, on: orgA))), orgA, "2 = 2: order")
-        XCTAssertEqual(place(pool([orgB, orgA], rows: at2, pins: sessions(1, on: orgA))), orgB, "2 = 2: order flipped")
+        XCTAssertEqual(place(pool([orgA, orgB], rows: at2, pins: sessions(1, on: orgA))), orgA, "2 = 2: the label (#1838)")
+        XCTAssertEqual(place(pool([orgB, orgA], rows: at2, pins: sessions(1, on: orgA))), orgA, "2 = 2: the label, whatever `order` holds")
         let at15 = [orgA: row(cap: 1), orgB: row(cap: 0.375)]
         XCTAssertEqual(place(pool([orgA, orgB], rows: at15, pins: sessions(1, on: orgA))), orgA, "2 > 1.5")
         XCTAssertEqual(place(pool([orgA, orgB], rows: at15, pins: sessions(2, on: orgA))), orgB, "4/3 < 1.5")
