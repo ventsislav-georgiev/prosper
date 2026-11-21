@@ -98,7 +98,7 @@ final class ControlCCPoolTests: XCTestCase {
         XCTAssertEqual(o["sessions"], .number(3), "s1, s2, s3; the idle pin is not live")
         let rows = list(o["accounts"])
         XCTAssertEqual(rows.map { $0["label"] }, ["alpha", "bravo", "Charlie", "delta", "echo"].map { .string($0) })
-        XCTAssertEqual(rows.first?.keys.sorted(), ["benched", "five_hour", "held", "label", "seven_day", "sessions", "state"])
+        XCTAssertEqual(rows.first?.keys.sorted(), ["benched", "five_hour", "held", "label", "sessions", "seven_day", "state"])
         let by = Dictionary(rows.map { row -> (String, [String: ControlJSON]) in
             guard case .string(let l)? = row["label"] else { return ("", row) }
             return (l, row)
@@ -201,7 +201,7 @@ final class ControlCCPoolTests: XCTestCase {
         let accts = list(o["accounts"])
         XCTAssertEqual(accts.map { $0["label"] }, ["alpha", "bravo", "Charlie", "removed account"].map { .string($0) })
         XCTAssertEqual(accts.first?.keys.sorted(), ["cache_read", "cache_write_1h", "cache_write_5m", "input", "label", "output", "requests", "total"])
-        XCTAssertEqual(accts.first.map(totals), [1, 100, 50, 900, 0, 0, 1050], "the row before since is not counted")
+        XCTAssertEqual(accts.first.map(totals), [1, 100, 50, 0, 900, 0, 1050], "the row before since is not counted")
         XCTAssertEqual(accts.last.map(totals), [1, 1, 1, 1, 1, 1, 5])
         let sessions = list(o["sessions"])
         XCTAssertEqual(sessions.map { $0["session"] }, [.string("01234567\u{2026}"), .string("fedcba98\u{2026}")])
@@ -211,7 +211,7 @@ final class ControlCCPoolTests: XCTestCase {
         // Default: the last 24 h (the row 5 h ago counts, yesterday's file row too; nothing older than a day).
         let day = obj(await call("ccpool.usage"))
         XCTAssertEqual(day["since"], .number(t0 - 86_400))
-        XCTAssertEqual(list(day["accounts"]).first.map(totals), [2, 1100, 50, 900, 0, 0, 2050])
+        XCTAssertEqual(list(day["accounts"]).first.map(totals), [2, 1100, 50, 0, 900, 0, 2050])
         XCTAssertEqual(list(day["accounts"]).map { $0["label"] }, ["alpha", "bravo", "Charlie", "delta", "removed account"].map { .string($0) })
     }
 

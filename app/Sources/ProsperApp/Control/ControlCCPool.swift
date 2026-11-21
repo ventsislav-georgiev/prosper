@@ -1,8 +1,8 @@
 import Foundation
 
 extension ControlRegistry {
-    /// #1843: ccpool.status, ccpool.usage and ccpool.pin, reads only and labels only (CCPool/CCPoolControl.swift builds
-    /// the replies). The supervisor adds `ControlRegistry.registerCCPool(&r)` to `standard()` on landing.
+    /// #1843: ccpool.status, ccpool.usage and ccpool.pin, reads only and labels only (CCPoolControl builds
+    /// the replies); wired in ControlRegistry.standard().
     static func registerCCPool(_ r: inout ControlRegistry) {
         r.register(ControlCommand(name: "ccpool.status",
                                   summary: "The ccpool proxy (running, stopped, busy, port held, failed; port), the current account for requests without a session, live sessions, and every account alphabetically: state, sessions, held, benched, 5h/7d utilization percent and reset epoch. Labels only.",
