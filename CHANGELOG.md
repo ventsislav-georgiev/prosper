@@ -2301,6 +2301,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now list your extensions and themes, turn extensions on or off, and switch the theme
   through the prosper command, with an Undo on every change; extensions you have not trusted still
   need you to trust them in Settings. (#1811)
+- Agents can now list, start, stop, restart and focus your Agent Sessions, and put two sessions side
+  by side, through the prosper command; each change shows a notice, and focus, new session and
+  layout changes can be undone. (#1809)
 
 ## v2.174.0
 

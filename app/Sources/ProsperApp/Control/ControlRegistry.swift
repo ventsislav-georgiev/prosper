@@ -143,6 +143,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerActions(&r)
         ControlRegistry.registerSettings(&r)
         ControlRegistry.registerExtensions(&r)
+        ControlRegistry.registerSessions(&r)
         return r
     }
 

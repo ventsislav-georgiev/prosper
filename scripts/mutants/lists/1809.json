@@ -1,0 +1,111 @@
+{
+ "entry": "1809",
+ "filter": "ControlSessionsTests",
+ "mutants": [
+  {
+   "name": "gate_skip",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if let why = AgentWindowControls.notRun(AgentWindowControls.menu(s, store: st), verb) { throw ControlError(why) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "busy_ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard started else {",
+   "new": "guard started || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "verb_swap",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let restart = verb == .restart",
+   "new": "let restart = verb == .stop",
+   "expect": "killed"
+  },
+  {
+   "name": "ambiguous_allowed",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard hits.count < 2 else",
+   "new": "guard hits.count < 3 else",
+   "expect": "killed"
+  },
+  {
+   "name": "no_title_fallback",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if hits.isEmpty { hits = st.sessions.filter { $0.title.lowercased() == name.lowercased() } }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "layout_no_rollback",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "            m.deleteLayout(made)\n            throw",
+   "new": "            throw",
+   "expect": "killed"
+  },
+  {
+   "name": "layout_rows",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "m.perform(.split(.columns))",
+   "new": "m.perform(.split(.rows))",
+   "expect": "killed"
+  },
+  {
+   "name": "prompt_any_agent",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard agent == \"claude\" || prompt == nil else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "refusal_keeps_form",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "            m.cancelNewSession()\n            return ControlError",
+   "new": "            return ControlError",
+   "expect": "killed"
+  },
+  {
+   "name": "pane_zero_based",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": ".number(Double($0 + 1))",
+   "new": ".number(Double($0))",
+   "expect": "killed"
+  },
+  {
+   "name": "focus_undo_noop",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard let before, let m else { return }",
+   "new": "guard let before, let m, false else { _ = (before, m); return }",
+   "expect": "killed"
+  },
+  {
+   "name": "open_form_taken",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard m.newSession == nil else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "draft_overwritten",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "m.setNewSessionPrompt(prompt ?? \"\", draft: false)",
+   "new": "m.setNewSessionPrompt(prompt ?? \"\")",
+   "expect": "killed"
+  },
+  {
+   "name": "draft_taken_by_other",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if !prompt.isEmpty, prompt == lastPrompt { lastPrompt = \"\" }",
+   "new": "if !prompt.isEmpty { lastPrompt = \"\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_show_open",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard let m = model() ?? showWindow(), let st = m.store",
+   "new": "guard let m = model(), let st = m.store",
+   "expect": "killed"
+  }
+ ]
+}

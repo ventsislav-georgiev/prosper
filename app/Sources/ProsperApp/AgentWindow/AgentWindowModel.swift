@@ -2553,10 +2553,11 @@ final class AgentWindowModel: ObservableObject {
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
 
 
-    func setNewSessionPrompt(_ s: String) {
+    /// #1809: `draft: false` (an agent's sessions.new) fills the form only: the person's kept draft stays.
+    func setNewSessionPrompt(_ s: String, draft: Bool = true) {
         guard newSession != nil, newSession?.starting == nil else { return }
         newSession?.prompt = s
-        lastPrompt = s
+        if draft { lastPrompt = s }
     }
 
     /// #1822: where a pasted prompt image is written; nil (the XCTest default): an image paste is not taken.
@@ -2861,7 +2862,7 @@ final class AgentWindowModel: ObservableObject {
         if request != nil {
             guard mine else { return }   // closed or replaced meanwhile: the human moved on (no message)
             newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands
-            if !prompt.isEmpty { lastPrompt = "" }   // #847 D2.4: this start took it
+            if !prompt.isEmpty, prompt == lastPrompt { lastPrompt = "" }   // #847 D2.4: this start took it (#1809: not another text)
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
         }
