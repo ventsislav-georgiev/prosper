@@ -514,9 +514,12 @@ final class AgentTerminalController: ObservableObject {
     }
 
     /// #1799: `--active` exited 0: the still-shown client re-sends its size (a client kept or switched away meanwhile: nothing).
+    /// #1803: and its focus-in: dch >= 1.135.0 drops the focus reports of a passive client, so the view's focus-in at the
+    /// restore never reached the program; libghostty sends it again now the client is active (only with libghostty focus).
     private func activated(_ c: AgentTerminalChild) {
         guard child === c else { return }
         c.redraw()
+        view?.refocusSurface()
     }
 
     nonisolated private static let passiveQueue = DispatchQueue(label: "eu.illegible.prosper.dch-passive", qos: .utility)
@@ -1160,6 +1163,14 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// and changes nothing): the responder chain, the grid and the pty stay as they are.
     /// Hosted through the wrapper's TerminalViewRepresentable instead, this would also flip its FocusState (QA R1656 n3).
     private func unfocusSurface() { _ = super.resignFirstResponder() }
+
+    /// #1803: a focus false then true through the wrapper's own calls (core.setFocus), so libghostty writes the program
+    /// its focus-out then focus-in itself; only while the surface holds libghostty focus (#1656). The responder chain stays.
+    func refocusSurface() {
+        guard libghosttyFocus(responder: window?.firstResponder === self) else { return }
+        unfocusSurface()
+        _ = super.becomeFirstResponder()
+    }
 
     func terminalDidChangeFocus(_ focused: Bool) { owner?.focusSent?(focused) }
 

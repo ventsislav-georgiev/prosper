@@ -1,0 +1,34 @@
+{
+ "entry": "1803",
+ "filter": "AgentTerminalKeepTests/testActiveToggleExitZero",
+ "mutants": [
+  {
+   "name": "focus-resend-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        c.redraw()\n        view?.refocusSurface()\n",
+   "new": "        c.redraw()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-ignores-libghostty-rule",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard libghosttyFocus(responder: window?.firstResponder === self) else { return }\n        unfocusSurface()\n",
+   "new": "        unfocusSurface()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-for-kept-client",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        guard child === c else { return }\n        c.redraw()\n        view?.refocusSurface()\n",
+   "new": "        c.redraw()\n        view?.refocusSurface()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-on-failed-exit",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "            guard !on, status == 0 else { return }\n",
+   "new": "            guard !on else { return }\n",
+   "expect": "killed"
+  }
+ ]
+}

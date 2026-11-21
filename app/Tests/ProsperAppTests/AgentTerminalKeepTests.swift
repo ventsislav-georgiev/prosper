@@ -411,4 +411,84 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertEqual(childA.redraws, redrawsA + 1, "nor for the client shown now")
         c.attach(nil)
     }
+
+    /// #1803: dch >= 1.135.0 drops a passive client's focus reports, so the restored view's focus-in never reached the
+    /// program. A recorded `--active` that exits 0 hands libghostty one focus false then true (focusSent: what core.setFocus
+    /// tells the view) for the still-shown client, only while its surface holds libghostty focus (#1656: key window,
+    /// focused pane, first responder); none when the window is not key or another pane is focused, none for a client kept
+    /// or switched away before the hop, none on exit 1 or a timeout. The size re-send stays. The window is a never-shown
+    /// CaretWindow whose key state is a stored flag; the clients are fakes (no surface: the hooks still record).
+    @MainActor
+    func testActiveToggleExitZeroResendsFocusInOnlyWhileTheShownSurfaceHoldsFocus() {
+        _ = NSApplication.shared
+        let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
+        var runs: [(args: [String], done: @Sendable (Int32?) -> Void)] = []
+        var sent: [Bool] = []
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.passiveToggle = { r, done in runs.append((r.args, done)) }
+        c.focusSent = { sent.append($0) }
+        var paneFocused = true
+        c.paneFocused = { paneFocused }
+        let slot = AgentTerminalHostSlot(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        let win = AgentWindowD1Tests.CaretWindow(contentRect: slot.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.key = true
+        win.contentView = slot
+        defer { c.attach(nil); win.contentView = nil; win.close() }
+        @MainActor func mount() -> AgentTerminalHostView {   // what AgentTerminalRepresentable.updateNSView does
+            let v = c.hostView()
+            slot.hold(v)
+            v.owner = c
+            c.view = v
+            return v
+        }
+        c.attach(a)
+        let va = mount()
+        XCTAssertTrue(win.makeFirstResponder(va))
+        rig.grid(100, 30)
+        c.attach(b)
+        _ = mount()
+        c.attach(a)   // --passive api-qa, --active api
+        XCTAssertTrue(mount() === va && win.firstResponder === va, "a's view is back with the keys")
+        XCTAssertEqual(runs.last?.args, ["--active", "api", "--pid", "4001"])
+        guard let childA = rig.children.first, let active = runs.last?.done else { return XCTFail("a's --active") }
+        let redrawsA = childA.redraws
+        sent = []
+        active(1)
+        active(nil)
+        spin()
+        XCTAssertEqual(sent, [], "exit 1 or timed out: no focus")
+        win.key = false
+        active(0)
+        spin()
+        XCTAssertEqual(sent, [], "a window that is not key: no focus")
+        XCTAssertEqual(childA.redraws, redrawsA + 1, "the size is still re-sent")
+        win.key = true
+        paneFocused = false
+        active(0)
+        spin()
+        XCTAssertEqual(sent, [], "another pane focused: no focus")
+        paneFocused = true
+        active(0)
+        spin()
+        XCTAssertEqual(sent, [false, true], "shown and focused: one focus-out then focus-in, the focus-in last")
+        XCTAssertEqual(childA.redraws, redrawsA + 3, "and the size, once per exit 0")
+        XCTAssertTrue(win.firstResponder === va, "the keys stay where they were")
+        c.attach(b)   // --passive api, --active api-qa
+        _ = mount()
+        let activeB = runs.last?.done
+        XCTAssertEqual(runs.last?.args, ["--active", "api-qa", "--pid", "4002"])
+        c.attach(a)   // b switched away before its --active completed
+        XCTAssertTrue(mount() === va && win.firstResponder === va)
+        sent = []
+        activeB?(0)
+        spin()
+        XCTAssertEqual(sent, [], "switched away before the hop: no focus")
+        c.attach(b)   // a kept
+        _ = mount()
+        sent = []
+        active(0)
+        spin()
+        XCTAssertEqual(sent, [], "a kept client: no focus")
+    }
 }

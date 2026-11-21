@@ -2248,6 +2248,8 @@ tag from the now-released section and put it on the new top draft.
   and Command-number shortcuts on every switch. (#1785)
 - Settings: a session group can no longer be named Sessions or History, the names dch uses for its
   own tabs; a saved group with either name is dropped. (#1801)
+- Agent Sessions: a session you switch back to tells Claude Code its terminal is focused again (dch
+  1.135.0 drops the focus reports of a hidden view). (#1803)
 
 ## v2.174.0
 
