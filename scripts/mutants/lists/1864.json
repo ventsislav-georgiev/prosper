@@ -1,0 +1,30 @@
+{
+ "entry": "1864",
+ "filter": "ControlSessionsTests",
+ "mutants": [
+  {
+   "name": "refusal",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "        guard !retargetsKeys(m, .live(s.key)) else { throw ControlError(keysInPane) }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "ControlSessionsTests/testSessionsFocusRefusedWhenItWouldRetargetThePaneWithTheKeys"
+  },
+  {
+   "name": "undoskip",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard let before, let m, !retargetsKeys(m, before) else { return }",
+   "new": "guard let before, let m else { return }",
+   "expect": "killed",
+   "filter": "ControlSessionsTests/testSessionsFocusUndoNeverRetargetsThePaneWithTheKeys"
+  },
+  {
+   "name": "keyscond",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "        return m.terminal.focusPending || m.terminal.view.map { $0.window?.firstResponder === $0 } == true\n",
+   "new": "        return true\n",
+   "expect": "killed",
+   "filter": "ControlSessionsTests"
+  }
+ ]
+}

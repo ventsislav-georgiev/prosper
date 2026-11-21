@@ -97,21 +97,35 @@ enum ControlSessions {
 
     // MARK: - sessions.focus
 
+    /// #1864 n181: the person's keys are in (or headed for) the focused pane's terminal, so a retarget of that pane would
+    /// swap in another session's view, which takes them (AgentTerminalHostSlot.hold).
+    static let keysInPane = "no pane shows that session and the keys are in the focused pane: pick it yourself"
+
     /// The window shown and the session selected in its sidebar, as a click picks it but the keys stay where they are
-    /// (#1846 n133: the person may be typing in another app). An open New session form is refused (n135: a pick closes
-    /// it). Undo selects the row selected before.
+    /// (#1846 n133: the person may be typing in another app; #1864: inside keepingKeys, as window.nextNeedsYou). An open
+    /// New session form is refused (n135: a pick closes it), and so is a pick that would retarget the focused pane while
+    /// the keys are in its terminal (n181: nothing changed). Undo selects the row selected before, skipped when that
+    /// would retarget the focused pane while the keys are in it.
     static func focus(_ args: [String: ControlJSON]) throws -> ControlChange {
         let name = try required(args, "name")
         guard let m = showWindow(), let st = m.store else { throw ControlError(islandOff) }
         guard m.newSession == nil else { throw ControlError(formOpen) }
         let s = try session(name, in: st), before = m.selection
-        m.select(.live(s.key))
+        guard !retargetsKeys(m, .live(s.key)) else { throw ControlError(keysInPane) }
+        m.keepingKeys { m.select(.live(s.key)) }
         return ControlChange(summary: "focus \(s.title)", result: .string(s.name), verb: "focused", undo: { [weak m] in
             // A live row comes back only while its session is listed (the sidebar's rows may not be built yet).
-            guard let before, let m else { return }
+            guard let before, let m, !retargetsKeys(m, before) else { return }
             if case .live(let k) = before, m.store?.sessions.contains(where: { $0.key == k }) != true { return }
-            m.select(before)
+            m.keepingKeys { m.select(before) }
         })
+    }
+
+    /// #1864: `select(id)` would put another target into the focused pane while its terminal has the keys or a focus
+    /// pending (only a terminal view hands them on a swap; with no keys there a retarget moves none, so it stays allowed).
+    static func retargetsKeys(_ m: AgentWindowModel, _ id: AgentSidebar.RowID) -> Bool {
+        guard m.wouldRetargetFocusedPane(id) else { return false }
+        return m.terminal.focusPending || m.terminal.view.map { $0.window?.firstResponder === $0 } == true
     }
 
     // MARK: - sessions.new
@@ -370,7 +384,7 @@ extension ControlRegistry {
                            args: ["name": name]) { _, a in try ControlSessions.run(.stop, a) })
         r.register(.change(name: "sessions.restart", summary: "Restart a session's agent on the same conversation (no undo).",
                            args: ["name": name]) { _, a in try ControlSessions.run(.restart, a) })
-        r.register(.change(name: "sessions.focus", summary: "Show Agent Sessions with this session selected (the keys stay where they are).",
+        r.register(.change(name: "sessions.focus", summary: "Show Agent Sessions with this session selected (the keys stay where they are). Refused when no pane shows it and the keys are in the focused pane (it never swaps that pane's terminal under the person's keys).",
                            args: ["name": name]) { _, a in try ControlSessions.focus(a) })
         r.register(.change(name: "layout.set", summary: "Arrange Agent Sessions: side-by-side puts two sessions in two panes.", args: [
             "layout": ControlArg(type: "string", required: true, allowed: ControlSessions.layouts),

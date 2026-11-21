@@ -2385,6 +2385,9 @@ tag from the now-released section and put it on the new top draft.
   the window appears in the background and Prosper is not brought forward. It is off while agent
   control is off and shows a notice; key, credential, token, browser-profile and settings files,
   hard links and anything that is not a plain-text file are refused. (#1857)
+- An agent's sessions.focus no longer moves your typing: when no pane shows the session and your
+  keys are in the focused pane's terminal, it is refused (pick the session yourself), and its Undo
+  never swaps that pane's session out from under your keys.
 
 ## v2.174.0
 

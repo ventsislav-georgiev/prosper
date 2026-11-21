@@ -26,8 +26,8 @@
   {
    "name": "focus_click",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "        m.select(.live(s.key))\n        return ControlChange(summary: \"focus",
-   "new": "        m.click(.live(s.key))\n        return ControlChange(summary: \"focus",
+   "old": "        m.keepingKeys { m.select(.live(s.key)) }\n        return ControlChange(summary: \"focus",
+   "new": "        m.keepingKeys { m.click(.live(s.key)) }\n        return ControlChange(summary: \"focus",
    "expect": "killed"
   },
   {

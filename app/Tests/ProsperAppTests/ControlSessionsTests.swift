@@ -147,6 +147,89 @@ final class ControlSessionsTests: XCTestCase {
         try withSeams { refused(try ControlSessions.focus(args(["name": "web"])), ControlSessions.islandOff) }
     }
 
+    /// #1864 n181: ControlNavTests.withOnePaneKeys for sessions.focus: one stored layout of one pane (api), web shown by
+    /// no pane, the keys in api's terminal (a fake-client terminal in a never-shown window). `body` gets the model, api's
+    /// view, the window and its host.
+    @MainActor
+    func withOnePaneKeys(_ body: (AgentWindowModel, AgentTerminalHostView, AgentsNSWindow, NSView) throws -> Void) throws {
+        try base.withPaneMenu(true) {
+            let a = base.paneLayout([base.paneTarget("api")]), d = base.layoutSuite()
+            d.set(try PaneLayoutStore(layouts: [a], active: a.id, mru: [a.id]).encode(), forKey: "agentWindowLayouts")   // the one stored layout, before the model reads it
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle)]), layouts: d)
+            let log = base.splitTerminals(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let (win, host) = base.focusWindow(m)
+            defer { win.close() }
+            base.endRests(log)
+            base.paneFocusSettle(host) { m.terminal.phase == .live && m.terminal.view?.window === win }
+            let apiView = try XCTUnwrap(m.terminal.view)
+            XCTAssertEqual(m.layout.panes.count, 1)
+            XCTAssertTrue(m.focusSelection())
+            base.paneFocusSettle(host) { win.firstResponder === apiView }
+            XCTAssertTrue(win.firstResponder === apiView, "the keys in api's terminal")
+            try withSeams(model: m, show: m) { try body(m, apiView, win, host) }
+            XCTAssertFalse(win.isVisible, "never shown")
+            XCTAssertFalse(win.isKeyWindow, "never key")
+        }
+    }
+
+    @MainActor
+    func focusedName(_ m: AgentWindowModel) -> String? {
+        guard case let .session(_, n)? = m.layout.panes.first(where: { $0.id == m.layout.focused })?.target else { return nil }
+        return n
+    }
+
+    /// #1864 n181: no pane shows web and the keys are in the one pane's terminal, so the focus is refused (its select would
+    /// put web into that pane, whose swapped-in view AgentTerminalHostSlot.hold hands the keys): target, layout, row, writes
+    /// and keys unchanged. The session the pane already shows is still focused, the keys left in its terminal.
+    @MainActor
+    func testSessionsFocusRefusedWhenItWouldRetargetThePaneWithTheKeys() throws {
+        try withOnePaneKeys { m, apiView, win, host in
+            let layout = m.layout, selection = m.selection, keys = m.keyFocus, writes = m.layoutWrites
+            refused(try ControlSessions.focus(args(["name": "web"])), ControlSessions.keysInPane)
+            base.paneFocusSettle(host) { false }
+            XCTAssertEqual(focusedName(m), "api", "the focused pane is not retargeted")
+            XCTAssertEqual(m.layout, layout)
+            XCTAssertTrue(m.selection == selection, "the row is unchanged")
+            XCTAssertEqual(m.keyFocus, keys)
+            XCTAssertEqual(m.layoutWrites, writes)
+            XCTAssertTrue(win.firstResponder === apiView, "the keys stay in api's terminal")
+            let ch = try ControlSessions.focus(args(["name": "api"]))
+            XCTAssertEqual(ch.verb, "focused", "a session the pane shows: allowed")
+            base.paneFocusSettle(host) { false }
+            XCTAssertEqual(focusedName(m), "api")
+            XCTAssertFalse(m.keysStay)
+            XCTAssertTrue(win.firstResponder === apiView, "the keys still in api's terminal")
+        }
+    }
+
+    /// #1864 n181: with no keys in the pane the focus retargets it (web) and moves no keys; the person then clicks into
+    /// web's terminal. The undo's restore (api) would now retarget the pane under the keys: skipped, web and its keys kept.
+    @MainActor
+    func testSessionsFocusUndoNeverRetargetsThePaneWithTheKeys() throws {
+        try withOnePaneKeys { m, apiView, win, host in
+            XCTAssertTrue(win.makeFirstResponder(nil))
+            base.paneFocusSettle(host) { win.firstResponder !== apiView }
+            let pane = m.layout.focused
+            let before = try XCTUnwrap(m.selection)
+            let ch = try ControlSessions.focus(args(["name": "web"]))
+            base.paneFocusSettle(host) { m.terminal.phase == .live && m.terminal.view?.window === win && m.terminal.view !== apiView }
+            XCTAssertEqual(m.layout.focused, pane)
+            XCTAssertEqual(focusedName(m), "web", "no keys in the pane: the focus retargets it")
+            let webView = try XCTUnwrap(m.terminal.view)
+            XCTAssertFalse(win.firstResponder === webView, "#1846 n133: the keys not moved into web's terminal")
+            XCTAssertTrue(m.focusSelection(), "the person's click")
+            base.paneFocusSettle(host) { win.firstResponder === webView }
+            XCTAssertTrue(win.firstResponder === webView, "the keys in web's terminal")
+            XCTAssertTrue(m.wouldRetargetFocusedPane(before), "the restore would retarget the focused pane")
+            ch.undo?()
+            base.paneFocusSettle(host) { false }
+            XCTAssertEqual(focusedName(m), "web", "the undo leaves the pane under the keys")
+            XCTAssertTrue(win.firstResponder === webView, "the keys stay in web's terminal")
+        }
+    }
+
     // MARK: - layout.set
 
     /// side-by-side: a new layout, two columns, left then right, saved and locked; undo deletes it and the layout before is

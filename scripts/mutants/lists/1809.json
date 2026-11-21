@@ -75,8 +75,8 @@
   {
    "name": "focus_undo_noop",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard let before, let m else { return }",
-   "new": "guard let before, let m, false else { _ = (before, m); return }",
+   "old": "guard let before, let m, !retargetsKeys(m, before) else { return }",
+   "new": "guard let before, let m, !retargetsKeys(m, before), false else { _ = (before, m); return }",
    "expect": "killed"
   },
   {
