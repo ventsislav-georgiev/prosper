@@ -2334,6 +2334,11 @@ tag from the now-released section and put it on the new top draft.
   in Settings. (#1843)
 - A window an extension opens while an agent runs one of its actions now appears without pulling the
   keyboard away from the app you are typing in. (#1850)
+- A message an agent sends to a session can no longer start a slash command or shell mode (a leading
+  / or !), and hidden characters in it or in a failure notice are refused or dropped. (#1839)
+- A rename from an agent is refused when the title has a control or hidden character, and the first
+  message an agent gives a new or resumed session follows the same rules as a message to a running
+  one. (#1839)
 
 ## v2.174.0
 

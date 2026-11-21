@@ -88,8 +88,18 @@ final class ControlSessionsTalkTests: XCTestCase {
     func testSayTextRefusesControlCharactersAndLongText() throws {
         for bad in ["go\r", "go\u{1B}[201~rm", "go\u{7F}", "go\u{85}", "go\u{00}"] {
             refused(try ControlSessionsTalk.text(["text": .string(bad)]),
-                    "text has a control character: only line breaks (LF) and tabs are allowed")
+                    "text has a control or hidden character: only line breaks (LF) and tabs are allowed")
         }
+        for bad in ["a\u{202E}b", "a\u{200B}b", "a\u{2028}b", "\u{2003}/x"] {
+            refused(try ControlSessionsTalk.text(["text": .string(bad)]),
+                    "text has a control or hidden character: only line breaks (LF) and tabs are allowed")
+        }
+        for bad in ["/x", "  /x", "\n/x", "\t!x", "!x"] {
+            refused(try ControlSessionsTalk.text(["text": .string(bad)]),
+                    "a message cannot start with / or !: slash commands and shell mode stay with the person")
+        }
+        XCTAssertEqual(try ControlSessionsTalk.text(["text": .string("see /tmp/x")]), "see /tmp/x")
+        XCTAssertEqual(try ControlSessionsTalk.text(["text": .string("hi!")]), "hi!")
         refused(try ControlSessionsTalk.text(["text": .string(String(repeating: "a", count: ControlSessionsTalk.maxBytes + 1))]),
                 "text is longer than \(ControlSessionsTalk.maxBytes) bytes")
         XCTAssertEqual(try ControlSessionsTalk.text(["text": .string(String(repeating: "a", count: ControlSessionsTalk.maxBytes))]).count,
@@ -130,6 +140,17 @@ final class ControlSessionsTalkTests: XCTestCase {
             XCTAssertEqual(dch.said, [], "nothing typed over a prompt")
             XCTAssertEqual(notices.count, 1)
             XCTAssertEqual(notices.last?.hasPrefix("Agent's message to API failed: "), true, "\(notices)")
+        }
+    }
+
+    /// The late-failure reason is outside text too: a hidden character in it is dropped from the notice.
+    @MainActor
+    func testSayFailureReasonIsCleaned() throws {
+        let st = base.store([base.session("api", .done, alias: "API")])
+        try withSeams(st) { changes in
+            ControlSessionsTalk.act = { s, _, done in done(.failed("no\u{202E}pe")); return true }
+            _ = try ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            XCTAssertEqual(notices, ["Agent's message to API failed: nope"])
         }
     }
 

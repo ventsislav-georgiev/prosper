@@ -121,6 +121,8 @@ enum ControlSessions {
         let (m, _) = try window()
         guard m.newSession == nil else { throw ControlError(formOpen) }
         let agent = try required(args, "agent"), prompt = string(args, "prompt")
+        // An agent's first message is outside text: the same cap and refusals as sessions.say, before anything opens.
+        if prompt != nil { _ = try ControlSessionsTalk.text(args, key: "prompt") }
         guard agent == "claude" || prompt == nil else { throw ControlError("a prompt needs agent claude") }
         m.openNewSession()
         guard let f = m.newSession else {
@@ -246,6 +248,7 @@ enum ControlSessions {
         guard hits.count < 2 else { throw ControlError("\(hits.count) History records are \(id): resume it from Agent Sessions") }
         guard let r = hits.first else { throw ControlError("no History record \(id) (sessions.history lists them)") }
         let message = string(args, "message"), remote = AgentWindowModel.isRemote(r)
+        if message != nil { _ = try ControlSessionsTalk.text(args, key: "message") }   // outside text, before anything resumes
         if message != nil {
             // The New session form's rule (newSessionClaude): a first message only to an interactive Claude on this Mac.
             guard !remote else { throw ControlError("a message goes only to a session on this Mac") }

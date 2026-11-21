@@ -1,19 +1,61 @@
 {
  "entry": "1839",
- "filter": "ControlSessionsTalkTests",
+ "filter": "ControlSessionsTalkTests|ControlSessionsTests|ControlSessionsHistoryTests|ControlSessionsEditTests",
  "mutants": [
+  {
+   "name": "no-slash-guard",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "first == \"/\" || first == \"!\"",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "first-char-only",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "raw.unicodeScalars.first(where: { !$0.properties.isWhitespace })",
+   "new": "raw.unicodeScalars.first",
+   "expect": "killed"
+  },
+  {
+   "name": "no-unseen",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "!allowing.contains($0) && OutsideText.isUnseen($0)",
+   "new": "!allowing.contains($0) && $0.properties.generalCategory == .control",
+   "expect": "killed"
+  },
+  {
+   "name": "no-new-prompt-check",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if prompt != nil { _ = try ControlSessionsTalk.text(args, key: \"prompt\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-resume-message-check",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if message != nil { _ = try ControlSessionsTalk.text(args, key: \"message\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-rename-guard",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "if ControlSessionsTalk.hasUnseen(raw) {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-notice-clean",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "OutsideText.shown(why, max: 200)",
+   "new": "why",
+   "expect": "killed"
+  },
   {
    "name": "cap",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
    "old": "guard raw.utf8.count <= maxBytes else",
    "new": "guard raw.utf8.count <= maxBytes + 1 else",
-   "expect": "killed"
-  },
-  {
-   "name": "control",
-   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "$0 != \"\\n\" && $0 != \"\\t\" && $0.properties.generalCategory == .control",
-   "new": "$0 == \"\\u{0}\"",
    "expect": "killed"
   },
   {

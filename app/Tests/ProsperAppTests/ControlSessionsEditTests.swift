@@ -50,7 +50,7 @@ final class ControlSessionsEditTests: XCTestCase {
         let st = base.store([base.session("api", .idle, alias: "API"), base.session("web", .working)])
         var calls: [String] = []
         try withSeams(nil, store: st, rename: { calls.append("\($0.name)=\($1)"); return true }) {
-            let c = try ControlSessionsEdit.renameSession(args(["name": "api", "to": "  Billing\n"]))
+            let c = try ControlSessionsEdit.renameSession(args(["name": "api", "to": "  Billing  "]))
             XCTAssertEqual(calls, ["api=Billing"], "trimmed, one line")
             XCTAssertEqual(c.verb, "renamed")
             XCTAssertEqual(c.result, .string("api"))
@@ -61,6 +61,23 @@ final class ControlSessionsEditTests: XCTestCase {
             XCTAssertEqual(calls.last, "web=site")
             byTitle.undo?()
             XCTAssertEqual(calls.last, "web=", "no alias before: cleared")
+        }
+    }
+
+    /// A title is one line of outside text: a control character (ESC, tab, LF) or an unseen scalar is refused whole and
+    /// the rename seam is never called; a title may start with / or !.
+    @MainActor
+    func testRenameRefusesControlAndHiddenCharacters() throws {
+        let st = base.store([base.session("api", .idle)])
+        var calls: [String] = []
+        try withSeams(nil, store: st, rename: { calls.append("\($0.name)=\($1)"); return true }) {
+            for bad in ["\u{1B}[2J", "a\u{202E}b", "a\tb", "a\nb", "a\u{200B}b"] {
+                refused(try ControlSessionsEdit.renameSession(args(["name": "api", "to": bad])), "to has a control or hidden character")
+            }
+            XCTAssertEqual(calls, [], "refused whole: nothing renamed")
+            _ = try ControlSessionsEdit.renameSession(args(["name": "api", "to": "api 2"]))
+            _ = try ControlSessionsEdit.renameSession(args(["name": "api", "to": "/api"]))
+            XCTAssertEqual(calls, ["api=api 2", "api=/api"])
         }
     }
 

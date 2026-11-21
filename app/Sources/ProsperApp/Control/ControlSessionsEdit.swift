@@ -26,7 +26,10 @@ enum ControlSessionsEdit {
     /// Undo puts the alias before back (empty: dch's own name again).
     static func renameSession(_ args: [String: ControlJSON]) throws -> ControlChange {
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
-        let to = AgentIsland.renameText(try ControlSessions.required(args, "to")), old = s.alias, key = s.key
+        let raw = try ControlSessions.required(args, "to")
+        // A title is one line of outside text: a control character (tab and LF too) or an unseen scalar refuses it whole.
+        if ControlSessionsTalk.hasUnseen(raw) { throw ControlError("to has a control or hidden character") }
+        let to = AgentIsland.renameText(raw), old = s.alias, key = s.key
         guard AgentIsland.renameArgs(s.name, to, current: old) != nil else { throw ControlError("\(s.title) is already named \(to)") }
         guard rename(s, to) else { throw ControlError(st.actions[key] ?? "\(s.title) can't be renamed now: dch is unavailable or the session is busy") }
         return ControlChange(summary: "\(s.title) to \(to)", result: .string(s.name), verb: "renamed", undo: {

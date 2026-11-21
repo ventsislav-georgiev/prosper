@@ -32,15 +32,25 @@ enum ControlSessionsTalk {
 
     // MARK: - sessions.say
 
-    /// Text from an agent is outside text: over the cap, or with a control character other than LF and tab (CR,
-    /// ESC, DEL, C1), it is refused whole, never cleaned and sent; then the driver's own `message` trims it.
-    static func text(_ args: [String: ControlJSON]) throws -> String {
-        guard case .string(let raw)? = args["text"] else { throw ControlError("argument 'text' is empty") }
-        guard raw.utf8.count <= maxBytes else { throw ControlError("text is longer than \(maxBytes) bytes") }
-        if raw.unicodeScalars.contains(where: { $0 != "\n" && $0 != "\t" && $0.properties.generalCategory == .control }) {
-            throw ControlError("text has a control character: only line breaks (LF) and tabs are allowed")
+    /// An agent string with a control or unseen scalar (OutsideText.isUnseen) other than `allowing`.
+    static func hasUnseen(_ raw: String, allowing: Set<Unicode.Scalar> = []) -> Bool {
+        raw.unicodeScalars.contains { !allowing.contains($0) && OutsideText.isUnseen($0) }
+    }
+
+    /// Text from an agent is outside text: over the cap, or with a control character other than LF and tab (CR, ESC,
+    /// DEL, C1) or another unseen scalar, or starting with / or !, it is refused whole, never cleaned and sent; then
+    /// the driver's own `message` trims it. `key` names the argument (say's text; sessions.new's prompt; sessions.resume's message).
+    static func text(_ args: [String: ControlJSON], key: String = "text") throws -> String {
+        guard case .string(let raw)? = args[key] else { throw ControlError("argument '\(key)' is empty") }
+        guard raw.utf8.count <= maxBytes else { throw ControlError("\(key) is longer than \(maxBytes) bytes") }
+        if hasUnseen(raw, allowing: ["\n", "\t"]) {
+            throw ControlError("\(key) has a control or hidden character: only line breaks (LF) and tabs are allowed")
         }
-        guard let t = AgentWindowDriver.message(raw) else { throw ControlError("argument 'text' is empty") }
+        // A leading / or ! would run a slash command or shell mode in the target: those stay with the person.
+        if let first = raw.unicodeScalars.first(where: { !$0.properties.isWhitespace }), first == "/" || first == "!" {
+            throw ControlError("a message cannot start with / or !: slash commands and shell mode stay with the person")
+        }
+        guard let t = AgentWindowDriver.message(raw) else { throw ControlError("argument '\(key)' is empty") }
         return t
     }
 
@@ -79,7 +89,7 @@ enum ControlSessionsTalk {
         if let why = refusal(s, in: st) { throw ControlError(why) }
         let title = s.title
         let ok = act(s, run) { r in
-            if case .failed(let why) = r { changes.present("Agent's \(what) to \(OutsideText.shown(title, max: 60)) failed: \(why)", nil) }
+            if case .failed(let why) = r { changes.present("Agent's \(what) to \(OutsideText.shown(title, max: 60)) failed: \(OutsideText.shown(why, max: 200))", nil) }
         }
         guard ok else { throw ControlError(AgentWindowText.busy) }
     }

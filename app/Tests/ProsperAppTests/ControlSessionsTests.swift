@@ -211,6 +211,12 @@ final class ControlSessionsTests: XCTestCase {
             try withSeams(model: m) {
                 refused(try ControlSessions.new(args(["agent": "shell", "prompt": "hi"])), "a prompt needs agent claude")
                 XCTAssertTrue(m.newSession == nil, "refused before the form opens")
+                // QA n145: the agent's first message is outside text: refused whole, the form never opens, nothing spawns.
+                for bad in ["/x", "!x", "a\u{202E}b"] {
+                    XCTAssertThrowsError(try ControlSessions.new(args(["agent": "claude", "cwd": "/Users/example/api", "prompt": bad])), bad)
+                    XCTAssertTrue(m.newSession == nil, bad)
+                }
+                XCTAssertEqual(spawns.calls.count, 0)
                 XCTAssertThrowsError(try ControlSessions.new(args(["agent": "claude", "name": "api", "cwd": "/Users/example/missing"])))
                 XCTAssertTrue(m.newSession == nil, "a refusal closes the form")
                 XCTAssertEqual(spawns.calls.count, 0)

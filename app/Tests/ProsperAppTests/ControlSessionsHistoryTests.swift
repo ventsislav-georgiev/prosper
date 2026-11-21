@@ -122,6 +122,12 @@ final class ControlSessionsHistoryTests: XCTestCase {
             XCTAssertEqual(ch.verb, "resumed")
             XCTAssertTrue(ch.undo == nil, "a resume is not reversible")
             XCTAssertTrue(ch.summary.contains("no undo"), ch.summary)
+            // QA n145: the agent's message is outside text: refused whole before anything resumes or is said.
+            for bad in ["/x", "!x", "a\u{202E}b"] {
+                XCTAssertThrowsError(try ControlSessions.resume(args(["id": "api", "message": bad])), bad)
+            }
+            XCTAssertEqual(calls, ["web false", "api true"], "a refused message resumes nothing")
+            XCTAssertEqual(said.count, 1, "and says nothing")
             refused(try ControlSessions.resume(args(["id": "api", "message": "hello"], noMessage: false)),
                     "message already resumes without dch's carry-on message")
             _ = try ControlSessions.resume(args(["id": "web"], noMessage: true))
