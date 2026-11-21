@@ -54,7 +54,9 @@ enum ControlTextViewer {
     }
 
     /// Why `path` (absolute, standardized) is off limits by name, or nil.
-    nonisolated static func nameRefusal(_ path: String, home: String) -> String? {
+    nonisolated static func nameRefusal(_ rawPath: String, home: String) -> String? {
+        // The APFS firmlink spells the same file with this prefix and would skip the home-anchored rules (n182); only the judged name is stripped, never the path that opens.
+        let path = rawPath.hasPrefix("/System/Volumes/Data/") ? String(rawPath.dropFirst("/System/Volumes/Data".count)) : rawPath
         let parts = path.split(separator: "/").map { String($0).lowercased() }
         let homeParts = home.split(separator: "/").map { String($0).lowercased() }
         let under = parts.starts(with: homeParts) ? Array(parts.dropFirst(homeParts.count)) : []

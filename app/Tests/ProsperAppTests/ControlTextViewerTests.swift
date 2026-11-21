@@ -75,6 +75,17 @@ final class ControlTextViewerTests: XCTestCase {
         }
     }
 
+    /// n182: the firmlink spelling must not skip the home-anchored rules; refused by name, before any stat.
+    @MainActor
+    func testFirmlinkSpellingOfAHomeAnchoredPathIsRefused() async throws {
+        try await withRecorder { dir, rec in
+            let f = try put(dir, ".config/my-token/a.txt")
+            await denied("/System/Volumes/Data" + f.path)
+            await denied("/System/Volumes/Data" + dir.path + "/.config/my-token/missing.txt")
+            XCTAssertTrue(rec.urls.isEmpty)
+        }
+    }
+
     @MainActor
     func testSymlinkIntoARefusedPlaceIsRefused() async throws {
         try await withRecorder { dir, rec in

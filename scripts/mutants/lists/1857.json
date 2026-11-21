@@ -183,6 +183,13 @@
    "old": "mutates: true, run:",
    "new": "mutates: false, run:",
    "expect": "killed"
+  },
+  {
+   "name": "no_firmlink_strip",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "let path = rawPath.hasPrefix(\"/System/Volumes/Data/\") ?",
+   "new": "let path = false ?",
+   "expect": "killed"
   }
  ]
 }
