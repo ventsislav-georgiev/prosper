@@ -97,7 +97,8 @@ final class ControlXrayReadsTests: XCTestCase {
 
     // MARK: refusals
 
-    /// Red without ControlXray.reader (M-noReader): no dch, or one under 1.78.0, says the gate's words; nothing runs.
+    /// Red without ControlXray.reader (M-noReader: the session read without the gate): no dch, or one under 1.78.0, says the
+    /// gate's words; nothing runs.
     func testNoOrOldDchSaysTheGatesRefusal() async {
         XrayPanels.probed = nil
         let none = await call("xray.tasks")
@@ -121,7 +122,8 @@ final class ControlXrayReadsTests: XCTestCase {
         XCTAssertTrue(fake.calls.isEmpty)
     }
 
-    /// Red if the timeout's range is not held (M-timeoutRange) or recap's since is not checked (M-sinceRange).
+    /// Red if the timeout is not read through ControlXray.timeout, so its range is not held (M-timeoutRange), or recap's since
+    /// is not checked (M-sinceRange).
     func testTimeoutAndSinceAreRangeChecked() async {
         let slow = await call("xray.tasks", ["session": .string("api"), "timeout": .number(61)])
         let negative = await call("xray.recap", ["session": .string("api"), "since": .number(-1)])
@@ -160,7 +162,7 @@ final class ControlXrayReadsTests: XCTestCase {
                                     ["--xray", "api", "--since", "1794313600", "--json"]])
     }
 
-    /// Red if chapters are not the parse's rows (M-chapterRows), or the newest 20 are not kept (M-chapterCap).
+    /// Red if chapters are not the parse's rows in its order (M-chapterRows), or the newest 20 are not kept (M-chapterCap).
     func testChaptersAreCappedToTheNewestRows() async {
         fake.answer = Self.chapters(3)
         let few = await call("xray.chapters")
@@ -212,7 +214,7 @@ final class ControlXrayReadsTests: XCTestCase {
         XCTAssertEqual(object(many)["more"], .bool(true))
     }
 
-    /// Red if recap's rows are not the parse's (M-recapRows: refs most mentioned first) or are not capped.
+    /// Red if recap's rows are not the parse's (M-recapRows: refs most mentioned first).
     func testRecapRowsAreTheParsesAndCapped() async {
         fake.answer = Self.recap(chapters: 2, refs: 3)
         let r = await call("xray.recap")
@@ -221,6 +223,17 @@ final class ControlXrayReadsTests: XCTestCase {
         XCTAssertEqual(object(r)["since"], .number(1794300000))
         XCTAssertEqual(ControlXrayReads.recapJSON(XrayRecap(since: nil, chapters: [], refs: [], more: false, partial: true)),
                        .object(["since": .null, "chapters": .array([]), "refs": .array([]), "more": .bool(false), "partial": .bool(true)]))
+    }
+
+    /// Red if recap's refs are not capped to 20 (M-recapRefCap) or the cut is not told (M-recapRefMore). The parser keeps up
+    /// to 30 (XrayRecap.maxRefs) and sends more:false for 25, so only the reply's own cap answers 20 and more:true.
+    func testRecapRefsAreCappedTo20() async {
+        fake.answer = Self.recap(chapters: 1, refs: 25)
+        let r = await call("xray.recap")
+        XCTAssertEqual(list(r, "refs").count, ControlXray.maxRows)
+        XCTAssertEqual(list(r, "refs").first?["text"], .string("T-25"))
+        XCTAssertEqual(list(r, "refs").last?["text"], .string("T-6"))
+        XCTAssertEqual(object(r)["more"], .bool(true))
     }
 
     /// Red if an outside control character or bidi scalar reaches the reply (M-clean).
@@ -251,7 +264,8 @@ final class ControlXrayReadsTests: XCTestCase {
         XCTAssertEqual(p.error, ControlXrayReads.noRecap)
     }
 
-    /// Red without the deadline (M-noDeadline): a read past its timeout is cancelled and the reply names the timeout.
+    /// Red without the deadline (M-noDeadline: the work awaited without ControlXray.within): a read past its timeout is
+    /// cancelled and the reply names the timeout.
     func testTimeoutCancelsTheReadAndSaysSo() async {
         fake.hold = true
         ControlXray.sleep = { _ in try? await Task.sleep(nanoseconds: 50_000_000) }

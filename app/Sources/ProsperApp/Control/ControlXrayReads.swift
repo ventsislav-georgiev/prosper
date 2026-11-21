@@ -25,8 +25,9 @@ enum ControlXrayReads {
     static func read(_ cmd: String, _ args: [String: ControlJSON], failed: String, argv: (XrayTarget) -> [String],
                      parse: @escaping @Sendable (Data) -> ControlJSON?) async throws -> ControlJSON {
         let (t, dch, run) = try ControlXray.reader(args)
-        let wait = try ControlXray.timeout(args), a = argv(t), env = t.env, remote = t.dir == nil
-        return try await ControlXray.within(wait, cmd) {
+        let wait = try ControlXray.timeout(args)
+        let a = argv(t), env = t.env, remote = t.dir == nil
+        let work: @MainActor @Sendable () async -> Result<ControlJSON, ControlError> = {
             let r = await run(dch, a, env)
             if ControlXray.unreached(r.status, remote: remote) { return .failure(ControlError("host unreachable")) }
             switch r.status {
@@ -39,6 +40,8 @@ enum ControlXrayReads {
             default: return .failure(ControlError(cannotRead))
             }
         }
+        // the deadline: one line, so a mutant can drop it (M-noDeadline)
+        return try await ControlXray.within(wait, cmd, work)
     }
 
     nonisolated static func at(_ d: Date?) -> ControlJSON { d.map { .number($0.timeIntervalSince1970) } ?? .null }

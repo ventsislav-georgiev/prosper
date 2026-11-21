@@ -71,6 +71,55 @@
    "old": "t.groups.flatMap(\\.tasks)",
    "new": "t.tasks",
    "expect": "killed"
+  },
+  {
+   "name": "M-noReader",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "let (t, dch, run) = try ControlXray.reader(args)",
+   "new": "let (t, dch, run) = try (XrayRefLink.target(ControlSessions.session(ControlSessions.string(args, \"session\") ?? \"\", in: ControlSessions.store()).key)!, \"dch\", XrayPanels.run)",
+   "expect": "killed"
+  },
+  {
+   "name": "M-timeoutRange",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "let wait = try ControlXray.timeout(args)",
+   "new": "let wait = ControlXray.defaultTimeout",
+   "expect": "killed"
+  },
+  {
+   "name": "M-noDeadline",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "return try await ControlXray.within(wait, cmd, work)",
+   "new": "return try await work().get()",
+   "expect": "killed"
+  },
+  {
+   "name": "M-chapterRows",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "XrayChapters.parse(data).map(chaptersJSON)",
+   "new": "XrayChapters.parse(data).map { chaptersJSON(Array($0.reversed())) }",
+   "expect": "killed"
+  },
+  {
+   "name": "M-recapRows",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "let refs = r.refs.prefix(ControlXray.maxRows).map",
+   "new": "let refs = r.refs.reversed().prefix(ControlXray.maxRows).map",
+   "expect": "killed"
+  },
+  {
+   "name": "M-recapRefCap",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": "let refs = r.refs.prefix(ControlXray.maxRows).map",
+   "new": "let refs = r.refs.map",
+   "expect": "killed"
+  },
+  {
+   "name": "M-recapRefMore",
+   "file": "app/Sources/ProsperApp/Control/ControlXrayReads.swift",
+   "old": " || r.refs.count > ControlXray.maxRows",
+   "new": "",
+   "expect": "killed"
   }
  ]
 }
