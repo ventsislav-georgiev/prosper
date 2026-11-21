@@ -2364,7 +2364,9 @@ tag from the now-released section and put it on the new top draft.
   stays yours only. It is refused, your clipboard left as it was, when Prosper is not allowed to
   paste from other apps or your current clip is too big (over 32 MiB) to put back. (#1861)
 - Agents can list and set session groups, show a group tab on the island, and pin or unpin History
-  records, each with Undo; Forget and Clear unpinned stay yours only. (#1856)
+  records, each with Undo; Forget and Clear unpinned stay yours only. An agent cannot unpin a record
+  idle for 29 days or more (dch deletes unpinned records idle over 30 days), nor switch the island's
+  tab while History asks "Clear unpinned?", and its Undo leaves groups you changed since alone. (#1856)
 - Agents can read a session's X-ray chapters, tasks, memory notes and recap (read only, capped at 20
   rows, memory bodies cut to a short snippet). (#1860)
 - Agents can list remote sessions and History, resume another Mac's session by host and name, and

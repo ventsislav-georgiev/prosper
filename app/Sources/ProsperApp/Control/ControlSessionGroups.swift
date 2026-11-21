@@ -22,6 +22,12 @@ enum ControlSessionGroups {
     }
 
     static let sessionsTab = "sessions"
+    /// The clock for a record's idle days (sessions.history's own "now"). Tests replace it.
+    static var now: @MainActor () -> TimeInterval = { ControlSessions.model()?.now() ?? Date().timeIntervalSince1970 }
+    /// #1856 n167: dch v1.143.0 rec_prune (master.c:843-877, run on every non-resumed start) deletes an unpinned record idle over 30 days.
+    static let dchPruneDays = 30
+    /// An agent may not unpin a record within a day of that prune: the next start could delete it and the undo with it.
+    static let unpinRefusedFromDays = dchPruneDays - 1
 
     // MARK: - sessions.groups.list
 
@@ -76,7 +82,11 @@ enum ControlSessionGroups {
         guard list != old else { throw ControlError("these are already the groups") }
         store(list)
         return ControlChange(summary: list.isEmpty ? "no session groups" : "groups " + list.map(\.name).joined(separator: ", "),
-                             result: .number(Double(list.count)), verb: "set session groups", undo: { store(old) })
+                             result: .number(Double(list.count)), verb: "set session groups", undo: {
+            // n168: only while the groups are still what this call stored (Settings or a phone may have changed them).
+            guard Preferences.agentIslandSessionGroups == list else { return }
+            store(old)
+        })
     }
 
     // MARK: - island.showGroup
@@ -94,6 +104,8 @@ enum ControlSessionGroups {
         } else {
             throw ControlError("no group tab \(OutsideText.shown(want, max: 64)): a group has a tab only while it has a session")
         }
+        // n169: the controller's showGroup drops History's pending question; the person answers it first.
+        guard !st.confirmingClear else { throw ControlError("History is asking \"Clear unpinned?\": answer it first") }
         let (wasHistory, was) = (st.historyTab, st.groupTab)
         guard wasHistory || was != target else { throw ControlError("that tab is already shown") }
         showGroup(target)
@@ -116,6 +128,10 @@ enum ControlSessionGroups {
         guard !AgentWindowModel.isRemote(r) else { throw ControlError("pins are for this Mac's records only") }
         guard r.pinned != pinned else { throw ControlError("\(r.title) is already \(pinned ? "pinned" : "unpinned")") }
         if let why = ControlSessions.historyRefusal(r, .pin, in: st) { throw ControlError(why) }
+        // n167: idle as the History row shows it (lastSeen; none known reads as idle for ever).
+        if !pinned, now() - r.lastSeen >= Double(unpinRefusedFromDays) * 86400 {
+            throw ControlError("\(r.title) has been idle \(unpinRefusedFromDays) days or more: dch may delete it once unpinned, so unpin it yourself in History")
+        }
         pinRecord(r)
         return ControlChange(summary: r.title, result: .string(ControlSessions.recordID(r)), verb: pinned ? "pinned" : "unpinned", undo: {
             // Re-read at the click: the record may have moved or been edited meanwhile.

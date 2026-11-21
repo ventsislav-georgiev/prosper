@@ -19,13 +19,13 @@ final class ControlSessionGroupsTests: XCTestCase {
                     "agentIslandSidekickPatternUpdated", "agentIslandSidekickTabs"]
         let savedKeys = keys.map { Preferences.defaults.object(forKey: $0) }
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessionGroups.store, ControlSessionGroups.showGroup,
-                     ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord)
+                     ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord, ControlSessionGroups.now)
         defer {
             for (k, v) in zip(keys, savedKeys) {
                 if let v { Preferences.defaults.set(v, forKey: k) } else { Preferences.defaults.removeObject(forKey: k) }
             }
             (ControlSessions.model, ControlSessions.islandStore, ControlSessionGroups.store, ControlSessionGroups.showGroup,
-             ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord) = saved
+             ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord, ControlSessionGroups.now) = saved
         }
         shown = []; historyShown = 0; stored = []; pinned = []; notices = []
         ControlSessions.model = { nil }
@@ -35,6 +35,7 @@ final class ControlSessionGroupsTests: XCTestCase {
         ControlSessionGroups.showGroup = { self.shown.append($0); st?.groupTab = $0; st?.historyTab = false }
         ControlSessionGroups.showHistory = { self.historyShown += 1; st?.historyTab = true }
         ControlSessionGroups.pinRecord = { self.pinned.append($0.name) }
+        ControlSessionGroups.now = { AgentWindowD1Tests.now }
         let changes = ControlChanges()
         changes.present = { text, _ in self.notices.append(text) }
         try body(changes)
@@ -97,6 +98,19 @@ final class ControlSessionGroupsTests: XCTestCase {
             XCTAssertTrue(changes.undo(entry.id))
             XCTAssertEqual(Preferences.agentIslandSessionGroups, [SessionGroup(id: "keep", name: "Qa", pattern: "qa")])
             XCTAssertEqual(stored.count, 2)
+        }
+    }
+
+    /// n168: once the groups moved on after the call (Settings, a phone), its undo stores nothing.
+    func testSetUndoDoesNothingOnceTheGroupsChanged() throws {
+        try withSeams { _ in
+            Preferences.agentIslandSessionGroups = [SessionGroup(id: "a", name: "Qa", pattern: "qa")]
+            let c = try ControlSessionGroups.set(groups(group("Docs", "doc")))
+            let later = [SessionGroup(id: "b", name: "Web", pattern: "web")]
+            Preferences.agentIslandSessionGroups = later
+            c.undo?()
+            XCTAssertEqual(Preferences.agentIslandSessionGroups, later)
+            XCTAssertEqual(stored.count, 1, "the call's own store only")
         }
     }
 
@@ -173,6 +187,19 @@ final class ControlSessionGroupsTests: XCTestCase {
         }
     }
 
+    /// n169: while History asks "Clear unpinned?", a tab change is refused and the question stays.
+    func testShowGroupIsRefusedWhileClearUnpinnedIsAsked() throws {
+        let st = showStore()
+        st.historyTab = true
+        st.confirmingClear = true
+        try withSeams(store: st) { _ in
+            refused(try ControlSessionGroups.show(["group": .string("sidekicks")]), "History is asking \"Clear unpinned?\": answer it first")
+            XCTAssertTrue(shown.isEmpty)
+            XCTAssertTrue(st.confirmingClear)
+            XCTAssertTrue(st.historyTab)
+        }
+    }
+
     /// No group with a session, no tabs: refused; no island: refused.
     func testShowGroupRefusesWithoutTabsOrIsland() throws {
         try withSeams(store: base.store([base.session("api", .idle)])) { _ in
@@ -217,6 +244,28 @@ final class ControlSessionGroupsTests: XCTestCase {
             XCTAssertEqual(u.verb, "unpinned")
             XCTAssertEqual(u.summary, "web")
             _ = changes
+        }
+    }
+
+    /// n167: dch's prune deletes an unpinned record idle over 30 days, so unpin refuses from 29 idle days (the History
+    /// row's lastSeen) and runs nothing; 28 days is unpinned. Pinning an old record stays allowed.
+    func testUnpinIsRefusedFrom29IdleDays() throws {
+        var young = base.record("young", ago: 28 * 86400), old = base.record("old", ago: 29 * 86400)
+        young.pinned = true
+        old.pinned = true
+        let st = base.store([], history: [young, old, base.record("older", ago: 40 * 86400)])
+        st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 30, 0])
+        try withSeams(store: st) { _ in
+            XCTAssertEqual(ControlSessionGroups.unpinRefusedFromDays, 29)
+            refused(try ControlSessionGroups.pin(["id": .string("old")], pinned: false),
+                    "old has been idle 29 days or more: dch may delete it once unpinned, so unpin it yourself in History")
+            XCTAssertTrue(pinned.isEmpty)
+            XCTAssertTrue(st.history.first { $0.name == "old" }?.pinned == true)
+            let c = try ControlSessionGroups.pin(["id": .string("young")], pinned: false)
+            XCTAssertEqual(c.verb, "unpinned")
+            XCTAssertEqual(pinned, ["young"])
+            _ = try ControlSessionGroups.pin(["id": .string("older")], pinned: true)
+            XCTAssertEqual(pinned, ["young", "older"])
         }
     }
 

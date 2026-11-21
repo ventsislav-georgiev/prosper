@@ -61,8 +61,8 @@
   {
    "name": "set-undo-noop",
    "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
-   "old": "undo: { store(old) })",
-   "new": "undo: {})",
+   "old": "            store(old)\n        })",
+   "new": "        })",
    "expect": "killed"
   },
   {
@@ -77,6 +77,34 @@
    "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
    "old": "if wasHistory { showHistory() } else { showGroup(was) }",
    "new": "showGroup(was)",
+   "expect": "killed"
+  },
+  {
+   "name": "m167_boundary",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "now() - r.lastSeen >= Double(unpinRefusedFromDays) * 86400",
+   "new": "now() - r.lastSeen >= Double(dchPruneDays) * 86400",
+   "expect": "killed"
+  },
+  {
+   "name": "m167_off",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "if !pinned, now() - r.lastSeen",
+   "new": "if false, now() - r.lastSeen",
+   "expect": "killed"
+  },
+  {
+   "name": "m168_unguarded",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard Preferences.agentIslandSessionGroups == list else { return }",
+   "new": "guard true else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "m169_unguarded",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard !st.confirmingClear else {",
+   "new": "guard true else {",
    "expect": "killed"
   }
  ]
