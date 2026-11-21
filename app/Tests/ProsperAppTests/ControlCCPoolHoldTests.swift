@@ -71,6 +71,36 @@ final class ControlCCPoolHoldTests: XCTestCase {
         XCTAssertEqual(r.store.snapshot.accounts["bravo"]?.cooldown, ["seven_day": until])
     }
 
+    /// n171: an undo puts the account back only while it is still what the change left: a later hold or Release wins.
+    func testUndoAfterALaterChangeDoesNothing() throws {
+        let r = try rig()
+        let held = try CCPoolControl.hold(label: "alpha", hours: 2)
+        r.model.hold("alpha", hours: 5)
+        held.undo?()
+        XCTAssertEqual(r.model.rows.first { $0.label == "alpha" }?.state, .held(until: Int(t0) + 5 * 3600), "the later hold is kept")
+
+        _ = try CCPoolControl.hold(label: "bravo", hours: 1)
+        let freed = try CCPoolControl.release(label: "bravo")
+        r.model.hold("bravo", hours: 3)
+        freed.undo?()
+        XCTAssertEqual(r.model.rows.first { $0.label == "bravo" }?.state, .held(until: Int(t0) + 3 * 3600),
+                       "the hold made after the release is kept, not the one before it")
+
+        let again = try CCPoolControl.release(label: "bravo")
+        r.model.release("bravo")   // nothing to change: the account is still what the release left
+        again.undo?()
+        XCTAssertEqual(r.model.rows.first { $0.label == "bravo" }?.state, .held(until: Int(t0) + 3 * 3600), "an unchanged account is undone")
+    }
+
+    /// n171: the summary says the hold the store applied: a longer limit already on the account wins over the hours asked.
+    func testHoldSummaryIsWhatWasApplied() throws {
+        let r = try rig()
+        XCTAssertEqual(try CCPoolControl.hold(label: "alpha", hours: 2).summary, "hold alpha for 2.0 h")
+        r.store.mutate { $0.accounts["bravo"]?.cooldown[CCPoolCore.fiveHour] = Int(t0) + 10 * 3600 }
+        XCTAssertEqual(try CCPoolControl.hold(label: "bravo", hours: 2).summary, "hold bravo for 10.0 h")
+        XCTAssertEqual(r.store.snapshot.accounts["bravo"]?.held, Int(t0) + 10 * 3600)
+    }
+
     func testRefusals() throws {
         let r = try rig()
         refused(try CCPoolControl.hold(label: "alpha", hours: 0), CCPoolControl.badHours)
@@ -97,15 +127,33 @@ final class ControlCCPoolHoldTests: XCTestCase {
         XCTAssertTrue(r.store.snapshot.accounts["alpha"] == nil, "no account is made by an undo")
     }
 
-    func testOffAndMissingArgsAreErrorsOverTheRegistry() async {
+    /// Over the registry: ccpool off; a missing argument is the registry's own refusal (ControlCommand.validate, before
+    /// the handler runs); hours out of range and a blank label reach the handler's refusals and change nothing. NaN and
+    /// infinity have no JSON form (testRefusals holds them).
+    func testOffAndMissingArgsAreErrorsOverTheRegistry() async throws {
         CCPoolControl.model = { nil }
         addTeardownBlock { @MainActor in CCPoolControl.model = { CCPoolRuntime.shared?.model } }
         let reg = registry()
-        let off = await reg.reply(to: try! JSONEncoder().encode(ControlRequest(cmd: "ccpool.hold", args: args("alpha", 1))))
-        XCTAssertEqual(off.error, "ccpool is off")
-        let noHours = await reg.reply(to: try! JSONEncoder().encode(ControlRequest(cmd: "ccpool.hold", args: args("alpha"))))
-        XCTAssertEqual(noHours.error, CCPoolControl.badHours)
-        let noLabel = await reg.reply(to: try! JSONEncoder().encode(ControlRequest(cmd: "ccpool.release", args: [:])))
-        XCTAssertEqual(noLabel.error, "argument 'label' is empty")
+        func refusal(_ cmd: String, _ a: [String: ControlJSON]) async throws -> String? {
+            await reg.reply(to: try JSONEncoder().encode(ControlRequest(cmd: cmd, args: a))).error
+        }
+        let off = try await refusal("ccpool.hold", args("alpha", 1))
+        XCTAssertEqual(off, "ccpool is off")
+        let noHours = try await refusal("ccpool.hold", args("alpha"))
+        XCTAssertEqual(noHours, "missing argument 'hours' for ccpool.hold")
+        let noLabel = try await refusal("ccpool.release", [:])
+        XCTAssertEqual(noLabel, "missing argument 'label' for ccpool.release")
+
+        let r = try rig()
+        for h in [0, -1, CCPoolControl.maxHours + 1] {
+            let bad = try await refusal("ccpool.hold", args("alpha", h))
+            XCTAssertEqual(bad, CCPoolControl.badHours, "hours \(h)")
+        }
+        let blankHold = try await refusal("ccpool.hold", args("  ", 1))
+        XCTAssertEqual(blankHold, "argument 'label' is empty")
+        let blankRelease = try await refusal("ccpool.release", args("  "))
+        XCTAssertEqual(blankRelease, "argument 'label' is empty")
+        XCTAssertTrue(r.store.snapshot.accounts["alpha"]?.cooldown == [:] && r.store.snapshot.accounts["alpha"]?.held == nil,
+                      "a refusal changes nothing")
     }
 }

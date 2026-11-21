@@ -13,7 +13,7 @@
   {
    "name": "hold-no-undo",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
-   "old": "verb: \"held a ccpool account\",\n                             undo: undo(m, label, before))",
+   "old": "verb: \"held a ccpool account\", undo: undo(m, label, before, after: Bench(a)))",
    "new": "verb: \"held a ccpool account\")",
    "expect": "killed",
    "filter": "ControlCCPoolHoldTests"
@@ -61,10 +61,52 @@
   {
    "name": "release-no-undo",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
-   "old": "verb: \"released a ccpool account\", undo: undo(m, label, before))",
+   "old": "verb: \"released a ccpool account\", undo: undo(m, label, before, after: after))",
    "new": "verb: \"released a ccpool account\")",
    "expect": "killed",
    "filter": "ControlCCPoolHoldTests"
+  },
+  {
+   "name": "nav-jump-moves-keys",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "guard m.keepingKeys({ m.nextNeedsYou() }) else",
+   "new": "guard m.nextNeedsYou() else",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-selection-ignores-keysstay",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard !keysStay, renaming == nil,",
+   "new": "guard renaming == nil,",
+   "expect": "killed"
+  },
+  {
+   "name": "nav-undo-moves-keys",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "            m.keepingKeys {\n                if m.layout.id != layout {",
+   "new": "            do {\n                if m.layout.id != layout {",
+   "expect": "killed"
+  },
+  {
+   "name": "nav-undo-closes-form",
+   "file": "app/Sources/ProsperApp/Control/ControlNav.swift",
+   "old": "guard let m, !m.closed, m.newSession == nil else { return }",
+   "new": "guard let m, !m.closed else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "ccpool-undo-unchecked",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "guard let a = st.accounts[label], Bench(a) == after else { return }",
+   "new": "guard st.accounts[label] != nil else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "hold-summary-asked",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "old": "for \\(applied) h\"",
+   "new": "for \\(String(format: \"%.1f\", hours)) h\"",
+   "expect": "killed"
   }
  ]
 }

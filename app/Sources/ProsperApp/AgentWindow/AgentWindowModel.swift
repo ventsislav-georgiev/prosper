@@ -2168,10 +2168,24 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func focusSelection() -> Bool {
         // #887 (QA #747 INFO-4): the New session form covers the pane, so its session takes no input meanwhile.
-        guard renaming == nil, newSession == nil, !focusedEnded,
+        // #1862 n170: inside keepingKeys (an agent's pane change) no terminal takes the keys.
+        guard !keysStay, renaming == nil, newSession == nil, !focusedEnded,
               selectedRow?.session != nil || selectedRow?.remote != nil else { return false }
         terminal.focus()   // #1471: Terminal is the only mode
         return true
+    }
+
+    /// #1862 n170: true only inside `keepingKeys`.
+    private(set) var keysStay = false
+
+    /// #1862 n170: `body` (the control channel's pane changes: window.nextNeedsYou and its undo) shows and focuses panes
+    /// as the human's keys do, but the keys stay where they are, as sessions.focus leaves them: focusSelection refuses
+    /// meanwhile (every pane focus path asks it) and keyFocus is put back after. The human's ⌘J never runs inside it.
+    func keepingKeys<T>(_ body: () throws -> T) rethrows -> T {
+        let held = (keyFocus, keysStay)
+        keysStay = true
+        defer { (keyFocus, keysStay) = held }
+        return try body()
     }
 
     /// #1538: a pick while locked. A session the layout shows: the browse rule on the layout (its pane focused; from the
