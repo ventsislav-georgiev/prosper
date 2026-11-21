@@ -1,0 +1,62 @@
+{
+ "entry": "1818",
+ "filter": "ControlActionsTests",
+ "mutants": [
+  {
+   "name": "no_fire_extension",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            source.fireExtension(commandID, takes ? input ?? \"\" : item)\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "unknown_kind_runs",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        default:\n            throw unknown\n",
+   "new": "        default:\n            return id\n",
+   "expect": "killed"
+  },
+  {
+   "name": "input_guard_off",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "guard input == nil || takes else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "input_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "source.fireExtension(commandID, takes ? input ?? \"\" : item)",
+   "new": "source.fireExtension(commandID, item)",
+   "expect": "killed"
+  },
+  {
+   "name": "builtin_input_guard_off",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            guard input == nil else { throw ControlError(\"\\(action.title) takes no input\") }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "list_mutates",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            mutates: false) { _, args in",
+   "new": "            mutates: true) { _, args in",
+   "expect": "killed"
+  },
+  {
+   "name": "refresh_not_coalesced",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "        guard refresh == nil else { return }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_items",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "if input, let listed",
+   "new": "if !input, let listed",
+   "expect": "killed"
+  }
+ ]
+}

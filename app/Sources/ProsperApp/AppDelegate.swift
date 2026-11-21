@@ -69,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// model-backed command (e.g. Translate) runs on-device generation that can
     /// take tens of seconds, and a short timeout would silently drop the result.
     private let extensions = ExtensionRegistry(callTimeout: 60)
+    /// #1818: read by actions.list / actions.run (Control/ControlActions.swift).
+    var extensionRegistry: ExtensionRegistry { extensions }
+    /// #1818: each built-in's hotkey payload, kept by registerHotKeys so actions.run fires the same closure.
+    private(set) var builtInPayloads: [ShortcutAction: () -> Void] = [:]
     /// Native watchers (battery / network / wake / lid) → extension events.
     private let systemEventWatchers = SystemEventWatchers()
 
@@ -907,6 +911,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let op = entry.op
             add(entry.action) { DispatchQueue.main.async { WindowManager.perform(op) } }
         }
+        builtInPayloads = Dictionary(builtIns.map { ($0.action, $0.payload) }, uniquingKeysWith: { first, _ in first })
         for reg in ShortcutStore.builtInRegistrations(builtIns, isAvailable: { $0.isAvailable(registry: extensions) },
                                                       held: held) {
             bound.append(
@@ -985,18 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bound.append(
                 (GlobalHotKey(keyCode: reg.combo.keyCode, modifiers: reg.combo.carbonModifiers,
                               id: GlobalHotKey.extensionIdBase + UInt32(i)) { [weak self] in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        // #1113/#1123: a window command whose window holds this press's view toggles it instead.
-                        Self.extensionHotkeyPressed(commandID: commandID, item: item, registry: self.extensions,
-                                                    panel: self.extensionViewPanel) { pressed in
-                            Task { @MainActor in
-                                await ExtensionShortcuts.fire(commandID: commandID, item: item,
-                                                              registry: self.extensions)
-                                self.extensionViewPanel.pressEnded(pressed)
-                            }
-                        }
-                    }
+                    Task { @MainActor in self?.pressExtensionAction(commandID: commandID, item: item) }
                 },
                  reg.label, false)
             )
@@ -1087,6 +1081,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             invoke(id, pressed)
         }
         return true
+    }
+
+    /// One extension-action press: the hotkey's path, and actions.run's (#1818). #1113/#1123: a window command
+    /// whose window holds this press's view toggles it instead.
+    func pressExtensionAction(commandID: String, item: String) {
+        Self.extensionHotkeyPressed(commandID: commandID, item: item, registry: extensions,
+                                    panel: extensionViewPanel) { pressed in
+            Task { @MainActor in
+                await ExtensionShortcuts.fire(commandID: commandID, item: item, registry: self.extensions)
+                self.extensionViewPanel.pressEnded(pressed)
+            }
+        }
     }
 
     /// #1123: an extension hotkey press, apart from registration so a row runs it on a fake panel. Its text is

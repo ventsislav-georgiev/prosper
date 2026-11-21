@@ -140,6 +140,7 @@ struct ControlRegistry: Sendable {
         })
         r.register(ControlCommand(name: "log", summary: "The last changes agents made to Prosper, oldest first, with whether each was undone.",
                                   args: [:], mutates: false) { reg, _ in reg.changes.logJSON })
+        ControlRegistry.registerActions(&r)
         return r
     }
 

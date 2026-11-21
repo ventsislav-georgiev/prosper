@@ -2271,6 +2271,9 @@ tag from the now-released section and put it on the new top draft.
 - X-ray drawer: a prompt or memory opened from the drawer now shows its Markdown formatted (bold,
   italics, lists, inline code, code blocks, links and headings) instead of raw ** and - marks, and
   the word typed in the drawer's Filter is highlighted in the opened card. (#1814)
+- Agents can now list and run every action Prosper offers in the command runner and Settings >
+  Shortcuts, including every extension command, with `ProsperApp ctl actions.list` and `ProsperApp
+  ctl actions.run`. (#1818)
 
 ## v2.174.0
 
