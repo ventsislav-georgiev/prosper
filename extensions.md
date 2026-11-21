@@ -664,7 +664,7 @@ Every piece has an `id` (`[a-z0-9-]+`, unique in the kit), a `kind`, the keys of
 | --- | --- | --- | --- |
 | `claude-md` | `source` (a `.md` file), `position` (`top` or `bottom`, default `bottom`) | a managed block in `~/.claude/CLAUDE.md` that imports the file | the block |
 | `tools` | `dir` | one shim per executable file, in Prosper's own folder `~/.config/prosper/kits/<ext-id>/bin/` | the shims |
-| `hook` | `event`, `matcher`, `run`, `timeout` (1 to 3600 s), `interpreter` | one hook group appended under `hooks.<event>` in `~/.claude/settings.json` | that group |
+| `hook` | `event`, `matcher`, `run`, `timeout` (1 to 3600 s), `interpreter`, `on_error` (`"deny"` only) | one hook group appended under `hooks.<event>` in `~/.claude/settings.json` | that group |
 | `statusline` | `run`, `interpreter` (at most one per kit) | the `statusLine` slot in `settings.json` | the slot, restored to what it was |
 | `permissions` | `allow`, `deny`, `ask` (at most 64 rules in each), `disable_bypass` (`true` or `false`; at least one rule unless it is `true`) | the rules, added to `permissions.*` in `settings.json`; with `disable_bypass = true`, `permissions.disableBypassPermissionsMode` set to `"disable"` | the rules this kit added; the bypass slot, restored to what it was |
 | `seed` | `from` | files copied into `~/.config/<slug>/` when missing | nothing: seeded files are the person's after the copy |
@@ -685,6 +685,7 @@ Rules the validator enforces on every kit, local or Marketplace, with the reason
 - Every `run`, `source`, `dir` and `from` path stays inside the kit folder, goes through no symlink, and names a file or folder of the right kind. Files carrying a setuid or setgid bit are refused.
 - `hook.event` must be one of the hook events Claude Code documents. An unknown name is a refusal in Prosper.
 - `interpreter`, when given, must be listed in `requires`.
+- `on_error = "deny"` marks a deny guard hook: when Prosper's kit runner cannot run it (a bad argument, a missing or unsafe kit.env, input over 1 MiB, a failing `.pre` hook, a missing script) it exits 2 and Claude Code blocks the call. A hook without it lets the call through on such an error. A Prosper that predates the key refuses a kit that uses it.
 - An agent file is `<name>.md` with a `---` frontmatter whose single `name:` equals the file name; it may not hold a placeholder, because it is installed byte for byte.
 - A `settings.json` hook runs in parallel with the person's own hooks and with other kits' hooks: nothing promises an order between them.
 

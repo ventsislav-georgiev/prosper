@@ -98,6 +98,22 @@ final class KitRenderTests: XCTestCase {
         XCTAssertEqual(KitRender.shellQuote("it's"), #"'it'\''s'"#)
     }
 
+    /// #1868: a hook with on_error = "deny" (validated through the kit dir) renders the deny flag first; the others do not.
+    func testADenyGuardHookPutsTheDenyFlagFirst() throws {
+        let v = try validatedFixture(KitFixture.kit(replacing: "timeout = 10\n", with: "timeout = 10\non_error = \"deny\"\n"))
+        let plan = KitRender.plan(v, ctx)
+        let guardLine = KitRender.runnerLine(ctx, pieceID: "guard", name: "guard", target: ctx.kitDir + "/hooks/guard.sh", denyOnError: true)
+        XCTAssertEqual(try shArgs(guardLine), [ctx.runner, KitRunner.denyFlag, "dev.example.kit.calm-agent", "guard", "guard", ctx.kitDir + "/hooks/guard.sh"])
+        XCTAssertEqual(plan.pieces.first { $0.id == "guard" }?.value,
+                       #"{"matcher": "Bash", "hooks": [{"type": "command", "command": "# + OrderedJSON.quote(guardLine) + #", "timeout": 10}]}"#)
+        let hud = try XCTUnwrap(plan.pieces.first { $0.id == "hud" }?.value)
+        XCTAssertFalse(hud.contains(KitRunner.denyFlag), "a statusline keeps fail-open")
+        XCTAssertFalse(KitRender.plan(try validatedFixture(), ctx).pieces.contains { $0.value?.contains(KitRunner.denyFlag) ?? false },
+                       "a hook without the key keeps fail-open")
+        XCTAssertTrue(KitRender.summary(v, ctx).contains(
+            "guard: Claude Code runs hooks/guard.sh on PreToolUse (Bash) in every session, timeout 10 s; when it cannot run, the call is blocked"))
+    }
+
     func testShimExecsTheRunnerWithItsArguments() throws {
         let v = try validatedFixture()
         let shims = KitRender.plan(v, ctx).shims

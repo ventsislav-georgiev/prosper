@@ -123,8 +123,11 @@ enum KitRender {
     /// `prosper-kit-run <ext-id> <piece-id> <name> [<interpreter>] <kit-dir>/<path>` (spec 4.5,
     /// errata A7: the kit id and the piece id are always there). With an interpreter the runner
     /// runs the interpreter (a PATH name from `requires`) with the script as its first argument.
-    static func runnerLine(_ c: KitRenderContext, pieceID: String, name: String, target: String, interpreter: String? = nil) -> String {
-        ([c.runner, c.extensionID, pieceID, name] + (interpreter.map { [$0] } ?? []) + [target]).map(shellQuote).joined(separator: " ")
+    /// #1868: `denyOnError` (a hook's on_error = "deny") puts `--on-error=deny` first: the runner then exits 2 on its own error.
+    static func runnerLine(_ c: KitRenderContext, pieceID: String, name: String, target: String, interpreter: String? = nil,
+                           denyOnError: Bool = false) -> String {
+        ([c.runner] + (denyOnError ? [KitRunner.denyFlag] : []) + [c.extensionID, pieceID, name] + (interpreter.map { [$0] } ?? []) + [target])
+            .map(shellQuote).joined(separator: " ")
     }
 
     /// errata C12: plain `exec`, never `exec --` (dash runs "--" as the command).
@@ -182,7 +185,8 @@ enum KitRender {
                 }
             case .hook:
                 guard let event = p.event, let run = p.run else { missing(p); continue }
-                let command = runnerLine(c, pieceID: p.id, name: p.id, target: c.kitDir + "/" + run, interpreter: p.interpreter)
+                let command = runnerLine(c, pieceID: p.id, name: p.id, target: c.kitDir + "/" + run, interpreter: p.interpreter,
+                                         denyOnError: p.denyOnError)
                 let handler = #"{"type": "command", "command": "# + OrderedJSON.quote(command) + (p.timeout.map { #", "timeout": \#($0)"# } ?? "") + "}"
                 let value = "{" + (p.matcher.map { #""matcher": "# + OrderedJSON.quote($0) + ", " } ?? "") + #""hooks": ["# + handler + "]}"
                 wiring.append(ManagedConfigPiece(id: p.id, kind: .json, target: "claude:settings.json", path: ["hooks", event], op: .append, value: value))
@@ -257,7 +261,8 @@ enum KitRender {
                 lines.append("\(p.id): commands \(names.isEmpty ? "(none)" : names) in \(c.kitBin)")
             case .hook:
                 let timeout = p.timeout.map { "timeout \($0) s" } ?? "Claude Code's default timeout"
-                lines.append("\(p.id): Claude Code runs \(p.run ?? "")\(via) on \(p.event ?? "") (\(p.matcher ?? "any")) in every session, \(timeout)")
+                lines.append("\(p.id): Claude Code runs \(p.run ?? "")\(via) on \(p.event ?? "") (\(p.matcher ?? "any")) in every session, \(timeout)"
+                             + (p.denyOnError ? "; when it cannot run, the call is blocked" : ""))
             case .statusline:
                 lines.append("\(p.id): Claude Code runs \(p.run ?? "")\(via) as the status line; Remove puts your own status line back")
             case .permissions:

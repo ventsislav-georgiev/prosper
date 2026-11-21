@@ -33,6 +33,9 @@ enum ControlKits {
 
     static let maxValue = 1000
 
+    /// The id kits.install's GitHub task installed, read after its deadline (n190).
+    @MainActor private final class Landed { var id: String? }
+
     private static func shown(_ s: String) -> String { OutsideText.shown(s, max: 80) }
 
     static func runtimes() throws -> KitRuntimes {
@@ -277,10 +280,23 @@ enum ControlKits {
         do {
             switch src {
             case .github(let url):
-                let got = try await ControlXray.within(installDeadline, "kits.install") { @MainActor in
-                    do { return .success(.string(try await installGitHub(reg, url, admit(reg)).id)) }
-                    catch let e as ControlError { return .failure(e) }
-                    catch { return .failure(ControlError("not installed: \(error)")) }
+                let landed = Landed()
+                let got: ControlJSON
+                do {
+                    got = try await ControlXray.within(installDeadline, "kits.install") { @MainActor in
+                        do {
+                            let id = try await installGitHub(reg, url, admit(reg)).id
+                            landed.id = id
+                            return .success(.string(id))
+                        }
+                        catch let e as ControlError { return .failure(e) }
+                        catch { return .failure(ControlError("not installed: \(error)")) }
+                    }
+                } catch {
+                    // n190: within waits for the install task, so a copy that finished after the deadline has landed by now:
+                    // take back an id this call installed (never one that was there before)
+                    if let id = landed.id, !before.contains(id) { try? await reg.uninstall(id: id) }
+                    throw error
                 }
                 guard case .string(let id) = got, let r = reg.record(id: id) else { throw ControlError("not installed") }
                 rec = r

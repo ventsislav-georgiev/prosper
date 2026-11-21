@@ -16,18 +16,30 @@ import Foundation
 // any hook or the target runs.
 // Exit codes: 64 bad arguments or ids, 65 stdin over 1 MiB, 78 kit.env missing or unsafe, 70 no
 // temp file or stdin unreadable, a .pre's non-zero status, else the target's status.
+// #1868: with `--on-error=deny` as the first argument (a hook piece's on_error = "deny") every one of those runner
+// errors, a .pre's non-zero status, and a target that is missing or not executable exit 2 instead, with a stderr
+// line naming the cause: Claude Code blocks a PreToolUse call only on exit 2, so a deny guard fails closed. The
+// target's own status is passed through as it is. Without the flag nothing changes (every other hook fails open).
 
 enum KitRunner {
+    /// #1868: the runner's first argument for a deny guard hook (`=` keeps it apart from any id: idok refuses `=`)
+    static let denyFlag = "--on-error=deny"
+
     static let script = #"""
     #!/bin/sh
     # prosper-kit-run: written by Prosper, rewritten on every Prosper update. Do not edit.
-    # usage: prosper-kit-run <ext-id> <piece-id> <name> [<interpreter>] </abs/target> [args...]
+    # usage: prosper-kit-run [--on-error=deny] <ext-id> <piece-id> <name> [<interpreter>] </abs/target> [args...]
     set -u
     unset KIT_DIR KIT_BIN KIT_CONFIG KIT_STATE_DIR KIT_STATUS
     # Every other KIT_* the caller exported. A value holding "\nKIT_X=" only adds one more unset;
     # LC_ALL=C so a value that is not UTF-8 cannot stop sed early.
     for k in $(env | LC_ALL=C sed -n 's/^\(KIT_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$k"; done
-    die() { printf 'prosper-kit-run: %s\n' "$1" >&2; exit "$2"; }
+    deny=
+    case ${1-} in \#(denyFlag)) deny=1; shift ;; esac
+    die() {
+      if [ -n "$deny" ]; then printf 'prosper-kit-run: %s; blocked: this deny guard fails closed\n' "$1" >&2; exit 2; fi
+      printf 'prosper-kit-run: %s\n' "$1" >&2; exit "$2"
+    }
     idok() { case $1 in ''|.|..|*[!A-Za-z0-9._-]*) return 1 ;; esac; }
     [ "$#" -ge 4 ] || die 'usage: <ext-id> <piece-id> <name> [<interpreter>] <target> [args]' 64
     idok "$1" && idok "$2" && idok "$3" || die 'refused: an id or the name is empty, "." or "..", or holds a character outside [A-Za-z0-9._-]' 64
@@ -91,6 +103,9 @@ enum KitRunner {
       printf 'prosper-kit-run: skipped %s: not a regular executable file of yours, or group- or world-writable\n' "${1##*/}" >&2
       return 1
     }
+    if [ -n "$deny" ]; then
+      [ -f "$target" ] && { [ -n "$interp" ] || [ -x "$target" ]; } || die "the script $target is missing or not executable" 2
+    fi
     pre= post=
     hook "$KIT_CONFIG/hooks/$name.pre" && pre=$KIT_CONFIG/hooks/$name.pre
     hook "$KIT_CONFIG/hooks/$name.post" && post=$KIT_CONFIG/hooks/$name.post
@@ -112,7 +127,7 @@ enum KitRunner {
     if [ -n "$pre" ]; then
       run "$pre" ${1+"$@"} >&2
       rc=$?
-      [ "$rc" -eq 0 ] || exit "$rc"
+      [ "$rc" -eq 0 ] || { [ -z "$deny" ] || [ "$rc" -eq 2 ] || die "$name.pre exited $rc" 2; exit "$rc"; }
     fi
     if [ -n "$interp" ]; then run "$interp" "$target" ${1+"$@"}; else run "$target" ${1+"$@"}; fi
     st=$?

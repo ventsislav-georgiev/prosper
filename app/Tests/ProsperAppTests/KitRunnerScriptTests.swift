@@ -488,6 +488,79 @@ final class KitRunnerScriptTests: XCTestCase {
 
     // MARK: text builders
 
+    // MARK: #1868 deny guards fail closed
+
+    private static let blocked = "; blocked: this deny guard fails closed"
+
+    /// A runner error (64 usage and ids, 78 kit.env, 65 stdin over 1 MiB) exits 2 with one stderr line naming it under
+    /// --on-error=deny; without the flag each keeps its old code.
+    func testADenyGuardExits2OnARunnerError() throws {
+        let kit = try makeKit(tempDir(), targetBody: "printf 'TARGET RAN\\n'\n")
+        try hook(kit, "t.post", "printf 'POST RAN\\n' >&2\n")
+        let over = try bytes(kit, Self.stdinCap + 1)
+        let cases: [(String, [String], URL?, Int32, String)] = [
+            ("usage", [Self.ext, "tools"], nil, 64, "usage: <ext-id> <piece-id> <name> [<interpreter>] <target> [args]"),
+            ("bad id", ["a/b", "tools", "t", kit.target], nil, 64,
+             #"refused: an id or the name is empty, "." or "..", or holds a character outside [A-Za-z0-9._-]"#),
+            ("no kit.env", ["com.example.none", "tools", "t", kit.target], nil, 78,
+             "refused: kit.env is missing, not a regular file, not yours, or group- or world-writable"),
+            ("stdin over 1 MiB", [Self.ext, "tools", "t", kit.target], over, 65, "refused: stdin is over 1 MiB (1048576 bytes)"),
+        ]
+        try eachShell { shell in
+            for (label, args, input, old, cause) in cases {
+                let d = try run(shell, kit, [KitRunner.denyFlag] + args, stdinFile: input)
+                XCTAssertEqual(d.status, 2, "\(shell) \(label): blocked")
+                XCTAssertEqual(d.out, "", "\(shell) \(label)")
+                XCTAssertEqual(lines(d.err), ["prosper-kit-run: " + cause + Self.blocked], "\(shell) \(label)")
+                let p = try run(shell, kit, args, stdinFile: input)
+                XCTAssertEqual(p.status, old, "\(shell) \(label): no flag, the old code")
+                XCTAssertEqual(lines(p.err), ["prosper-kit-run: " + cause], "\(shell) \(label)")
+            }
+        }
+    }
+
+    /// A .pre that fails with anything but 2 blocks a deny guard; a non-deny piece keeps the .pre's status.
+    func testADenyGuardExits2WhenItsPreFails() throws {
+        let kit = try makeKit(tempDir(), targetBody: "printf 'TARGET RAN\\n'\n")
+        try hook(kit, "t.pre", "printf 'PRE\\n' >&2\nexit 5\n")
+        try eachShell { shell in
+            let d = try run(shell, kit, [KitRunner.denyFlag, Self.ext, "tools", "t", kit.target], stdin: "{}")
+            XCTAssertEqual(d.status, 2, shell)
+            XCTAssertEqual(d.out, "", "\(shell): the target did not run")
+            XCTAssertEqual(lines(d.err), ["PRE", "prosper-kit-run: t.pre exited 5" + Self.blocked], shell)
+            let p = try run(shell, kit, [Self.ext, "tools", "t", kit.target], stdin: "{}")
+            XCTAssertEqual(p.status, 5, "\(shell): no flag, the .pre's status")
+            XCTAssertEqual(lines(p.err), ["PRE"], shell)
+        }
+    }
+
+    /// A missing guard script blocks a deny guard (on both paths); the target's own status (0, 2, 3) passes as it is.
+    func testADenyGuardExits2OnAMissingScriptAndPassesTheTargetsStatus() throws {
+        let kit = try makeKit(tempDir(), targetBody: "printf 'T\\n'\nexit \"${1-0}\"\n")
+        let gone = kit.kd.appendingPathComponent("live/hooks/gone.sh").path
+        try eachShell { shell in
+            for stdin in [nil, "{}"] as [String?] {
+                let d = try run(shell, kit, [KitRunner.denyFlag, Self.ext, "g", "g", gone], stdin: stdin)
+                XCTAssertEqual(d.status, 2, "\(shell) \(stdin ?? "no stdin")")
+                XCTAssertEqual(lines(d.err), ["prosper-kit-run: the script \(gone) is missing or not executable" + Self.blocked], shell)
+                let p = try run(shell, kit, [Self.ext, "g", "g", gone], stdin: stdin)
+                XCTAssertNotEqual(p.status, 2, "\(shell): no flag, the call is not blocked (the old fail-open)")
+                for code in ["0", "2", "3"] {
+                    let t = try run(shell, kit, [KitRunner.denyFlag, Self.ext, "g", "g", kit.target, code], stdin: stdin)
+                    XCTAssertEqual(t.status, Int32(code), "\(shell) \(code)")
+                    XCTAssertEqual(t.out, "T\n", shell)
+                    XCTAssertEqual(t.err, "", shell)
+                }
+            }
+        }
+        try hook(kit, "g.pre", "printf 'DENIED\\n' >&2\nexit 2\n")
+        try eachShell { shell in
+            let d = try run(shell, kit, [KitRunner.denyFlag, Self.ext, "g", "g", kit.target], stdin: "{}")
+            XCTAssertEqual(d.status, 2, shell)
+            XCTAssertEqual(d.err, "DENIED\n", "\(shell): a .pre's own deny keeps its stderr alone")
+        }
+    }
+
     func testKitEnvTextIsSingleQuoted() {
         let ctx = KitRenderContext(extensionID: Self.ext, kitDir: "/Users/example/k", kitBin: "/Users/example/b",
                                    kitConfig: "/Users/example/.config/example-kit", home: "/Users/example", runner: "/r")

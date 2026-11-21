@@ -358,6 +358,20 @@ final class KitManifestTests: XCTestCase {
         }
     }
 
+    /// #1868: on_error = "deny" marks a deny guard hook; any other value or type is refused; only a hook takes the key.
+    func testOnErrorDenyIsTheOnlyValue() throws {
+        let ok = try parse(KitFixture.kit(replacing: "timeout = 10\n", with: "timeout = 10\non_error = \"deny\"\n"))
+        XCTAssertEqual(ok.refusals, [])
+        XCTAssertEqual(ok.kit.pieces.first { $0.id == "guard" }?.denyOnError, true)
+        XCTAssertEqual(try parse(KitFixture.kit).kit.pieces.first { $0.id == "guard" }?.denyOnError, false, "no key: fail open as before")
+        for bad in ["\"allow\"", "\"Deny\"", "\"deny \"", "\"\"", "true", "1", "[\"deny\"]"] {
+            try assertRefused(KitFixture.kit(replacing: "timeout = 10\n", with: "timeout = 10\non_error = \(bad)\n"), "pieces[2].on_error", .badOnError)
+        }
+        try assertRefused(KitFixture.kit(replacing: "interpreter = \"node\"\n", with: "interpreter = \"node\"\non_error = \"deny\"\n"),
+                          "pieces[3].on_error", .unknownKey)
+        XCTAssertEqual(KitReason.badOnError.rawValue, "on_error must be \"deny\" (a deny guard hook blocks the call when its runner fails)")
+    }
+
     func testReasonTextsAreFixed() {
         XCTAssertEqual(KitReason.unknownEvent.rawValue, "hook event is not one of the hook events Claude Code documents")
         XCTAssertEqual(KitReason.interpreterNotRequired.rawValue, "interpreter must be listed in requires")

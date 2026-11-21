@@ -479,6 +479,46 @@ final class ControlKitsTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty)
     }
 
+    /// #1868 (n190): the deadline fires while the install still runs; the copy lands after it. Nothing is left behind.
+    func testAnInstallThatOutlastsTheDeadlineLeavesNoExtensionBehind() async throws {
+        let e = try kitPaneEnv()
+        let (reg, _) = installEnv(e)
+        let dir = URL(fileURLWithPath: try source(e), isDirectory: true), r = registry()
+        let sleep = ControlXray.sleep
+        defer { ControlXray.sleep = sleep }
+        ControlXray.sleep = { _ in } // the deadline fires at once
+        var installs = 0
+        ControlKits.installGitHub = { reg, _, _ in
+            try? await Task.sleep(nanoseconds: 30_000_000_000) // ends early: the deadline cancels it
+            installs += 1
+            return try reg.installLocal(from: dir, review: ControlKits.quiet) // the copy that outlasts the deadline
+        }
+        let late = await call(r, "kits.install", ["source": .string("https://github.com/example/kit")])
+        XCTAssertEqual(late.error, ControlXray.timedOut("kits.install", ControlKits.installDeadline))
+        XCTAssertEqual(installs, 1, "the copy did land")
+        XCTAssertTrue(reg.record(id: Self.ext) == nil, "uninstalled after the deadline")
+        XCTAssertTrue(notices.isEmpty)
+    }
+
+    /// #1868 (n190): an id that was installed before the call is never removed by the deadline path.
+    func testADeadlineKeepsAnIDInstalledBeforeTheCall() async throws {
+        let e = try kitPaneEnv()
+        let (reg, _) = installEnv(e)
+        let dir = URL(fileURLWithPath: try source(e), isDirectory: true), r = registry()
+        _ = try reg.installLocal(from: dir)
+        let sleep = ControlXray.sleep
+        defer { ControlXray.sleep = sleep }
+        ControlXray.sleep = { _ in }
+        ControlKits.installGitHub = { reg, _, _ in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard let rec = reg.record(id: Self.ext) else { throw ControlError("fake: gone") }
+            return rec // the task names the id that was there before
+        }
+        let late = await call(r, "kits.install", ["source": .string("https://github.com/example/kit")])
+        XCTAssertEqual(late.error, ControlXray.timedOut("kits.install", ControlKits.installDeadline))
+        XCTAssertTrue(reg.record(id: Self.ext) != nil, "kept")
+    }
+
     /// Counts every byte pulled (the per-byte read of a capped download).
     private struct CountedBytes: AsyncSequence, AsyncIteratorProtocol {
         typealias Element = UInt8

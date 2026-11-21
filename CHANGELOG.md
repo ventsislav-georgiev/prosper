@@ -2395,6 +2395,13 @@ tag from the now-released section and put it on the new top draft.
   Claude Code permissions, environment settings and shell startup blocks it wrote. (#1866)
 - Agents reading your snippets now get key-, token- and home-path-shaped text blanked; the snippets
   an agent made itself are unchanged. (#1867)
+- When `kits.install` from GitHub runs past its 60-second limit, Prosper now uninstalls the kit if
+  the install still finishes after the limit. Before, the extension stayed installed but was never
+  trusted or applied. An extension that was already installed before the call is kept. (#1868)
+- A kit hook marked `on_error = "deny"` (for a guard such as killguard, removeguard or prodguard)
+  now blocks the tool call when Prosper's kit runner cannot run it: a bad argument, a missing or
+  unsafe kit.env, input over 1 MiB, a failing .pre hook or a missing script. Before, the call was
+  let through. Every other hook still lets the call through when it fails. (#1868)
 
 ## v2.174.0
 

@@ -110,6 +110,8 @@ enum KitReason: String, Sendable, CaseIterable {
     case needsCycle = "needs form a cycle: a piece needs itself, directly or through other pieces"
     case duplicateNeed = "needs lists the same piece id twice"
     case tooManyNeeds = "a piece lists at most 64 needs"
+    // #1868
+    case badOnError = "on_error must be \"deny\" (a deny guard hook blocks the call when its runner fails)"
     // OQ-193
     case envKeyNotAllowed = "an env piece sets only the env keys Prosper allows (extensions.md section 12)"
     case emptyEnv = "an env piece sets at least one key in vars"
@@ -186,6 +188,8 @@ struct KitManifest: Sendable, Equatable {
         var run: String? = nil // hook, statusline
         var timeout: Int? = nil // hook, seconds
         var interpreter: String? = nil // hook, statusline
+        /// #1868: on_error = "deny": a runner error blocks the call (exit 2) instead of letting it through
+        var denyOnError = false // hook
         var allow: [String] = [] // permissions
         var deny: [String] = []
         var ask: [String] = []
@@ -251,7 +255,7 @@ struct KitManifest: Sendable, Equatable {
     static let pieceKeys: [Piece.Kind: Set<String>] = [
         .claudeMD: ["source", "position"],
         .tools: ["dir"],
-        .hook: ["event", "matcher", "run", "timeout", "interpreter"],
+        .hook: ["event", "matcher", "run", "timeout", "interpreter", "on_error"],
         .statusline: ["run", "interpreter"],
         .permissions: ["allow", "deny", "ask", "disable_bypass"],
         .seed: ["from"],
@@ -458,6 +462,11 @@ struct KitManifest: Sendable, Equatable {
                     // outside value: bounded as Int64 first, so Int(n) cannot trap
                     case .integer(let n)? where KitManifest.timeoutRange.contains(n): p.timeout = Int(n)
                     default: refuse("\(at)timeout", .badTimeout)
+                    }
+                    switch t["on_error"] {
+                    case nil: break
+                    case .string("deny")?: p.denyOnError = true
+                    default: refuse("\(at)on_error", .badOnError)
                     }
                 }
                 p.interpreter = string(t, "interpreter", at)

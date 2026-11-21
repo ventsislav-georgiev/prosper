@@ -1,0 +1,118 @@
+{
+ "entry": "1868",
+ "filter": "KitRunnerScriptTests|KitRenderTests|KitManifestTests|ControlKitsTests",
+ "mutants": [
+  {
+   "name": "runner-die-deny",
+   "file": "app/Sources/ProsperApp/Kit/KitRunner.swift",
+   "old": "fails closed\\n' \"$1\" >&2; exit 2; fi",
+   "new": "fails closed\\n' \"$1\" >&2; fi",
+   "expect": "killed",
+   "filter": "KitRunnerScriptTests/testADenyGuardExits2OnARunnerError"
+  },
+  {
+   "name": "runner-flag-unset",
+   "file": "app/Sources/ProsperApp/Kit/KitRunner.swift",
+   "old": "deny=1; shift ;; esac",
+   "new": "shift ;; esac",
+   "expect": "killed",
+   "filter": "KitRunnerScriptTests/testADenyGuard"
+  },
+  {
+   "name": "runner-pre-deny",
+   "file": "app/Sources/ProsperApp/Kit/KitRunner.swift",
+   "old": "|| { [ -z \"$deny\" ] || [ \"$rc\" -eq 2 ] || die \"$name.pre exited $rc\" 2; exit \"$rc\"; }",
+   "new": "|| { exit \"$rc\"; }",
+   "expect": "killed",
+   "filter": "KitRunnerScriptTests/testADenyGuardExits2WhenItsPreFails"
+  },
+  {
+   "name": "runner-pre-own-2",
+   "file": "app/Sources/ProsperApp/Kit/KitRunner.swift",
+   "old": "[ -z \"$deny\" ] || [ \"$rc\" -eq 2 ] || die",
+   "new": "[ -z \"$deny\" ] || die",
+   "expect": "killed",
+   "filter": "KitRunnerScriptTests/testADenyGuardExits2OnAMissingScriptAndPassesTheTargetsStatus"
+  },
+  {
+   "name": "runner-missing-target",
+   "file": "app/Sources/ProsperApp/Kit/KitRunner.swift",
+   "old": "if [ -n \"$deny\" ]; then\n      [ -f \"$target\" ]",
+   "new": "if false; then\n      [ -f \"$target\" ]",
+   "expect": "killed",
+   "filter": "KitRunnerScriptTests/testADenyGuardExits2OnAMissingScriptAndPassesTheTargetsStatus"
+  },
+  {
+   "name": "render-flag",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "(denyOnError ? [KitRunner.denyFlag] : [])",
+   "new": "([] as [String])",
+   "expect": "killed",
+   "filter": "KitRenderTests/testADenyGuardHookPutsTheDenyFlagFirst"
+  },
+  {
+   "name": "render-plan-pass",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "denyOnError: p.denyOnError)",
+   "new": "denyOnError: false)",
+   "expect": "killed",
+   "filter": "KitRenderTests/testADenyGuardHookPutsTheDenyFlagFirst"
+  },
+  {
+   "name": "render-summary",
+   "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+   "old": "(p.denyOnError ? \"; when it cannot run, the call is blocked\" : \"\")",
+   "new": "\"\"",
+   "expect": "killed",
+   "filter": "KitRenderTests/testADenyGuardHookPutsTheDenyFlagFirst"
+  },
+  {
+   "name": "manifest-accept",
+   "file": "app/Sources/ProsperApp/Kit/KitManifest.swift",
+   "old": "case .string(\"deny\")?: p.denyOnError = true",
+   "new": "case .string(\"deny\")?: break",
+   "expect": "killed",
+   "filter": "KitManifestTests/testOnErrorDenyIsTheOnlyValue"
+  },
+  {
+   "name": "manifest-refuse",
+   "file": "app/Sources/ProsperApp/Kit/KitManifest.swift",
+   "old": "default: refuse(\"\\(at)on_error\", .badOnError)",
+   "new": "default: break",
+   "expect": "killed",
+   "filter": "KitManifestTests/testOnErrorDenyIsTheOnlyValue"
+  },
+  {
+   "name": "manifest-key",
+   "file": "app/Sources/ProsperApp/Kit/KitManifest.swift",
+   "old": "\"timeout\", \"interpreter\", \"on_error\"]",
+   "new": "\"timeout\", \"interpreter\"]",
+   "expect": "killed",
+   "filter": "KitManifestTests/testOnErrorDenyIsTheOnlyValue"
+  },
+  {
+   "name": "install-no-cleanup",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if let id = landed.id, !before.contains(id) {",
+   "new": "if false, let id = landed.id, !before.contains(id) {",
+   "expect": "killed",
+   "filter": "ControlKitsTests/testAnInstallThatOutlastsTheDeadlineLeavesNoExtensionBehind"
+  },
+  {
+   "name": "install-before-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "if let id = landed.id, !before.contains(id) {",
+   "new": "if let id = landed.id, true {",
+   "expect": "killed",
+   "filter": "ControlKitsTests/testADeadlineKeepsAnIDInstalledBeforeTheCall"
+  },
+  {
+   "name": "install-landed-unset",
+   "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+   "old": "                            landed.id = id\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "ControlKitsTests/testAnInstallThatOutlastsTheDeadlineLeavesNoExtensionBehind"
+  }
+ ]
+}
