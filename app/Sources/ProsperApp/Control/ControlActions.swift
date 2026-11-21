@@ -30,6 +30,10 @@ enum ControlActions {
 
     static var source = Source.app
 
+    /// #1845: built-ins that read another app's screen through a selection the person makes; an agent cannot drive
+    /// them, so they are neither listed nor run here.
+    static let humanOnly: [ShortcutAction] = [.copyScreenText, .pickColor]
+
     /// The last ExtensionShortcuts.bindableActions result; nil until the first list's refresh ends.
     private(set) static var extensionActions: [BindableExtensionAction]?
     /// The refresh in flight. A control command runs synchronously, and the listing asks each `bindable_items`
@@ -55,7 +59,7 @@ enum ControlActions {
         if let registry { refreshExtensionActions(registry) }
         let cached = extensionActions ?? []
         var rows = ShortcutCatalog.build(
-            prosperActions: ShortcutAction.allCases.filter { $0.isAvailable(registry: registry) },
+            prosperActions: ShortcutAction.allCases.filter { !humanOnly.contains($0) && $0.isAvailable(registry: registry) },
             combos: [:], extensionActions: cached)
         var inputIDs = Set<String>()
         for record in registry?.records ?? [] where record.isLive {
@@ -94,6 +98,9 @@ enum ControlActions {
         switch BindableActionKind(rawValue: kind) {
         case .prosper?:
             guard let action = ShortcutAction(rawValue: key), action.isAvailable(registry: source.registry()) else { throw unknown }
+            guard !humanOnly.contains(action) else {
+                throw ControlError("\(action.title) is human-only: it reads the screen through a selection the person makes")
+            }
             guard input == nil else { throw ControlError("\(action.title) takes no input") }
             guard source.fireBuiltIn(action) else { throw ControlError("\(action.title) is not available right now") }
             return action.title

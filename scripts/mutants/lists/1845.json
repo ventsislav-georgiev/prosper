@@ -1,0 +1,27 @@
+{
+ "entry": "1845",
+ "filter": "ControlActionsTests/testScreenReadersAreHumanOnly",
+ "mutants": [
+  {
+   "name": "listsHumanOnly",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "!humanOnly.contains($0) && $0.isAvailable",
+   "new": "$0.isAvailable",
+   "expect": "killed"
+  },
+  {
+   "name": "runsHumanOnly",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "guard !humanOnly.contains(action) else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "setShrinks",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "[.copyScreenText, .pickColor]",
+   "new": "[.copyScreenText]",
+   "expect": "killed"
+  }
+ ]
+}

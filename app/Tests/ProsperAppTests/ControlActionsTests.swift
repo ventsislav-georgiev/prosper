@@ -176,6 +176,23 @@ final class ControlActionsTests: XCTestCase {
         XCTAssertTrue(fired.isEmpty, "\(fired)")
     }
 
+    /// #1845: the interactive screen readers stay human-only: pinned set, not listed, refused with the reason.
+    func testScreenReadersAreHumanOnly() async throws {
+        useRecorder(try fakeRegistry())
+        XCTAssertEqual(ControlActions.humanOnly.map(\.rawValue), ["copyScreenText", "pickColor"])
+        let reg = registry()
+        let list = actions(await listed(reg))
+        XCTAssertFalse(list.isEmpty)
+        for action in ControlActions.humanOnly {
+            let id = BindableAction(kind: .prosper, key: action.rawValue, title: "", category: "", icon: "", combo: unsetKeyCombo).id
+            XCTAssertTrue(list[id] == nil, id)
+            let r = await call(reg, "actions.run", ["id": .string(id)])
+            XCTAssertFalse(r.ok, id)
+            XCTAssertTrue(r.error?.contains("human-only") == true, "\(r)")
+        }
+        XCTAssertTrue(fired.isEmpty, "\(fired)")
+    }
+
     /// The Settings switch refuses every `mutates` command in ControlRegistry.reply (#1808); run is one, list is not.
     func testRunIsRefusedByTheAgentControlSwitchAndListIsNot() {
         let reg = registry()
