@@ -2324,6 +2324,8 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now list your Agent Sessions History over the prosper command (sessions.history) and
   resume a record with or without dch's carry-on message, optionally sending their own first message
   to the resumed Claude session (sessions.resume). (#1833)
+- Agents can now rename a session and switch a Claude session's model or effort (while it is idle or
+  done) over the prosper command, each with Undo. (#1842)
 
 ## v2.174.0
 

@@ -1,0 +1,48 @@
+{
+ "entry": "1842",
+ "filter": "ControlSessionsEditTests",
+ "mutants": [
+  {
+   "name": "idle-gate",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "guard s.state == .idle || s.state == .done else {",
+   "new": "guard true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "foreground-gate",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "guard s.claudeForeground == true else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "unchanged-rename",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "guard AgentIsland.renameArgs(s.name, to, current: old) != nil else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "rename-undo-old",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "_ = rename(live, old)",
+   "new": "_ = rename(live, to)",
+   "expect": "killed"
+  },
+  {
+   "name": "window-refusal-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "if let why = switchTo(m, c, s) { throw ControlError(why) }",
+   "new": "_ = switchTo(m, c, s)",
+   "expect": "killed"
+  },
+  {
+   "name": "rename-refusal-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsEdit.swift",
+   "old": "guard rename(s, to) else {",
+   "new": "guard rename(s, to) || true else {",
+   "expect": "killed"
+  }
+ ]
+}
