@@ -82,6 +82,7 @@ final class AppUpdater: NSObject {
             delegate: channelDelegate
         )
         super.init()
+        channelDelegate.onProbe = { [weak self] in self?.probeEvent($0) }
         guard let updater else { return }
 
         // Mirror the driver's download/extract state so the menu can show it.
@@ -124,6 +125,29 @@ final class AppUpdater: NSObject {
         isCheckingForUpdates = true
         updater?.checkForUpdates()
         if automaticChecks { restartPolling() }
+    }
+
+    /// #1859: what a check-only probe found.
+    enum Probe: Equatable, Sendable { case upToDate, found(String), failed(String) }
+    private var probing: CheckedContinuation<Probe, Never>?
+    private var probed: Probe = .upToDate
+
+    /// #1859 updates.check: Sparkle's information-only check. It never downloads or installs (the silent driver is not
+    /// asked), unlike checkForUpdates(). nil: no updater (XCTest) or a check is already running.
+    /// shortcut: no deadline of our own, Sparkle's network timeout ends the cycle; add one if a hang is ever seen.
+    func probeForUpdate() async -> Probe? {
+        guard let updater, probing == nil, updater.canCheckForUpdates else { return nil }
+        probed = .upToDate
+        return await withCheckedContinuation { c in
+            probing = c
+            updater.checkForUpdateInformation()
+        }
+    }
+
+    private func probeEvent(_ p: Probe?) {
+        if let p { probed = p; return }
+        probing?.resume(returning: probed)
+        probing = nil
     }
 
     var automaticChecks: Bool {
@@ -197,6 +221,14 @@ final class UpdaterChannelDelegate: NSObject, SPUUpdaterDelegate {
 
     /// Pure, so AppUpdaterDriverTests pins it without a Sparkle updater (none is built under XCTest).
     static func channels(allowBeta: Bool) -> Set<String> { allowBeta ? ["beta"] : [] }
+
+    /// #1859: Sparkle's callbacks (main thread) for AppUpdater.probeForUpdate: a result, or nil when the cycle ended.
+    var onProbe: (@MainActor (AppUpdater.Probe?) -> Void)?
+    private func tell(_ p: AppUpdater.Probe?) { MainActor.assumeIsolated { onProbe?(p) } }
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) { tell(.found(item.displayVersionString)) }
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) { tell(.upToDate) }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) { tell(.failed(error.localizedDescription)) }
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) { tell(nil) }
 }
 
 // MARK: - Silent user driver

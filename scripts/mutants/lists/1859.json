@@ -1,0 +1,62 @@
+{
+ "entry": "1859",
+ "filter": "ControlInfoTests",
+ "mutants": [
+  {
+   "name": "gap_off",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "at.timeIntervalSince(last) < notifyGap, at >= last",
+   "new": "at.timeIntervalSince(last) < 0, at >= last",
+   "expect": "killed"
+  },
+  {
+   "name": "clean_title",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "let title = OutsideText.shown(t, max: titleMax)",
+   "new": "let title = String(t.prefix(titleMax))",
+   "expect": "killed"
+  },
+  {
+   "name": "clean_body",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "let body = OutsideText.shown(b, max: bodyMax)",
+   "new": "let body = String(b.prefix(bodyMax))",
+   "expect": "killed"
+  },
+  {
+   "name": "empty_title",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "guard !title.isEmpty else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "finite",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "d.isFinite ? .number(d) : .null",
+   "new": ".number(d)",
+   "expect": "killed"
+  },
+  {
+   "name": "leak_ssid",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "\"downloadBytesPerSec\": num(n.downloadBytesPerSec)]",
+   "new": "\"downloadBytesPerSec\": num(n.downloadBytesPerSec), \"ssid\": .string(n.ssid ?? \"\")]",
+   "expect": "killed"
+  },
+  {
+   "name": "scrub_off",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "diagnostics() -> ControlJSON { .object([\"text\": .string(scrub(diagnosticsText()))]) }",
+   "new": "diagnostics() -> ControlJSON { .object([\"text\": .string(diagnosticsText())]) }",
+   "expect": "killed"
+  },
+  {
+   "name": "scrub_home",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "|/Users/[^/\\s]+",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

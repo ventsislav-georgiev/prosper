@@ -17,7 +17,7 @@ extension Notification.Name {
 final class StatsController {
     static let shared = StatsController()
 
-    private var store = StatsStore(style: SystemStatsStore.load())
+    private(set) var store = StatsStore(style: SystemStatsStore.load())
     private var poller: StatsPoller?
     private var items: [StatsModule: (item: NSStatusItem, host: NSHostingView<StatsMenuWidget>)] = [:]
     private var buttonModule: [ObjectIdentifier: StatsModule] = [:]

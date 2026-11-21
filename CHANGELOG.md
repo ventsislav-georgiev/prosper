@@ -2368,6 +2368,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can list remote sessions and History, resume another Mac's session by host and name, and
   start a new session on a remote host or with images attached; an image that is not a regular file
   (a link is read as its target) is skipped, for pasted images too. (#1863)
+- Agents can show you a short notice (at most one every 10 seconds), read the System Stats headline
+  numbers, fetch the Agent Sessions Diagnostics text with key- and path-shaped text removed, and ask
+  whether a newer Prosper exists (check only: nothing downloads or installs). (#1859)
 
 ## v2.174.0
 
