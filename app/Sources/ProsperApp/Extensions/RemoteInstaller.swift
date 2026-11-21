@@ -88,7 +88,9 @@ enum RemoteInstaller {
     /// Download + extract the repo, returning the local directory that contains
     /// `extension.toml`. The caller removes the work folder holding it with
     /// `removeWorkFolder(holding:)` after copying the extension out.
-    static func fetch(_ raw: String) async throws -> URL {
+    /// #1866 n188: `maxBytes` (ctl kits.install: the market's cap) reads the download as a stream and refuses it at one
+    /// byte past the cap, and refuses an unpacked tree past `checkTree`'s caps; nil: as before (Settings, update check).
+    static func fetch(_ raw: String, maxBytes: Int? = nil) async throws -> URL {
         guard let source = parse(raw) else { throw InstallError.unsupportedURL(raw) }
 
         // codeload serves a gzipped tarball for any ref. HEAD resolves to the
@@ -98,7 +100,14 @@ enum RemoteInstaller {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(from: tarURL)
+            if let maxBytes {
+                let (stream, r) = try await URLSession.shared.bytes(from: tarURL)
+                (data, response) = (try await capped(stream, max: maxBytes), r)
+            } else {
+                (data, response) = try await URLSession.shared.data(from: tarURL)
+            }
+        } catch let e as InstallError {
+            throw e
         } catch {
             throw InstallError.downloadFailed(error.localizedDescription)
         }
@@ -111,8 +120,69 @@ enum RemoteInstaller {
         // Same zip-slip/symlink guards as the market path — a GitHub repo is just as
         // untrusted. assertSafeArchive checks RAW entries for `..` (conservative: also
         // covers `repo-ref/../../x`, which --strip-components 1 would turn into `../x`).
-        return try extract(data, workName: githubWorkName(repo: source.repo, address: raw),
-                           stripTopLevel: true, subdir: source.subdir)
+        let dir = try extract(data, workName: githubWorkName(repo: source.repo, address: raw),
+                              stripTopLevel: true, subdir: source.subdir)
+        guard maxBytes != nil else { return dir }
+        do { try checkTree(dir) } catch { removeWorkFolder(holding: dir); throw error }
+        return dir
+    }
+
+    /// The market's artifact cap (fetchFromMarket); #1866 n188: ctl kits.install's GitHub download is capped with it too.
+    static let maxArtifactBytes = 4 * 1_048_576
+
+    /// #1866 n188: the bytes of `bytes`, refused at the first byte past `max` (nothing after it is read).
+    static func capped<S: AsyncSequence>(_ bytes: S, max: Int) async throws -> Data where S.Element == UInt8 {
+        var out = Data()
+        for try await b in bytes {
+            guard out.count < max else { throw InstallError.unsafeArchive("download over \(max) bytes") }
+            out.append(b)
+        }
+        return out
+    }
+
+    /// #1866 n188: a folder an agent names, or an unpacked capped download, is refused past the kit store's caps
+    /// (KitValidator.maxEntries entries, KitStore.localByteCap bytes) before it is copied. Sizes from stat only; it stops
+    /// at the first entry over a cap. Links are counted, never followed (the enumerator does not descend them).
+    static func checkTree(_ dir: URL, maxBytes: Int = KitStore.localByteCap, maxEntries: Int = KitValidator.maxEntries) throws {
+        guard let walk = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey]) else {
+            throw InstallError.unsafeArchive("cannot list \(shownName(dir.lastPathComponent))")
+        }
+        var entries = 0, bytes = 0
+        for case let u as URL in walk {
+            entries += 1
+            guard entries <= maxEntries else { throw InstallError.unsafeArchive("over \(maxEntries) files") }
+            let size = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size <= maxBytes - bytes else { throw InstallError.unsafeArchive("over \(maxBytes) bytes") }
+            bytes += size
+        }
+    }
+
+    /// #1866 n188: an agent-named folder (links resolved) copied into a download work folder, run off main, so the
+    /// registry's install copies a checked, capped copy: `checkTree` before the copy and on the copy (a source that grew
+    /// meanwhile). The caller removes it with `removeWorkFolder(holding:)`; on a throw it is removed here. `copy`: rows count it.
+    static func stage(_ dir: URL, tempRoot: URL = FileManager.default.temporaryDirectory,
+                      copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws -> URL {
+        let source = dir.resolvingSymlinksInPath()
+        try checkTree(source)
+        let work = tempRoot.appendingPathComponent(githubWorkName(repo: "local", address: source.path), isDirectory: true)
+        guard inUse.withLock({ $0.insert(work.path).inserted }) else {
+            throw InstallError.extractFailed("this extension is already being installed")
+        }
+        guard removeWorkFolder(work, tempRoot: tempRoot) else {
+            release(work)
+            throw InstallError.extractFailed("unexpected download folder name")
+        }
+        let staged = work.appendingPathComponent("src", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+            try copy(source, staged)
+            try checkTree(staged)
+            return staged
+        } catch {
+            removeWorkFolder(work, tempRoot: tempRoot)
+            release(work)
+            throw error
+        }
     }
 
     /// The GitHub download's work folder: the same name for the same address in every launch, so a
@@ -161,7 +231,7 @@ enum RemoteInstaller {
         }
         // Bound size before doing any work with the bytes (defense-in-depth; the
         // server already caps publishes far below this).
-        guard bytes.count <= 4 * 1_048_576 else {
+        guard bytes.count <= maxArtifactBytes else {
             throw InstallError.unsafeArchive("artifact too large (\(bytes.count) bytes)")
         }
 

@@ -5,8 +5,8 @@
   {
    "name": "m1737a-always",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "if !off, let line",
-   "new": "if true, let line",
+   "old": "return off ? nil : envWarnings[key]",
+   "new": "return false ? nil : envWarnings[key]",
    "expect": "killed"
   },
   {

@@ -33,8 +33,8 @@
   {
    "name": "m5-warning-always",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "ManagedConfigPlanner.envWarnings[key]",
-   "new": "ManagedConfigPlanner.envWarnings.values.first",
+   "old": "return off ? nil : envWarnings[key]",
+   "new": "return off ? nil : envWarnings.values.first",
    "expect": "killed"
   }
  ]

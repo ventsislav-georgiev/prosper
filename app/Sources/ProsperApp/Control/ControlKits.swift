@@ -5,8 +5,10 @@ import Foundation
 /// KitRuntimes (one single-flight with the pane), KitPaneModel's facts read, its install apply (applyRun), its confirmed
 /// toggle (toggleRun) and its settings form, and the registry's install and Trust calls. Nothing here selects, closes,
 /// renders or writes kit files itself. Each call passes its own KitAgentConsent to the runtime: the config change sheet is
-/// not shown for it (the person's consent is the "Let agents control Prosper" switch); the files it approved come back
-/// in the reply ("approved") and their count in the log line. The pane's own calls pass none and still ask the sheet.
+/// not shown for it (the person's consent is the "Let agents control Prosper" switch); the config file changes it was
+/// asked to approve come back in the reply ("approved", not a list of files written) with their count in the log line,
+/// and the Claude Code permission, env and bypass slots and shell rc blocks it covered ("slots") in the reply and the
+/// log line. The pane's own calls pass none and still ask the sheet.
 ///
 /// Arguments are outside data: the source is https://github.com/<owner>/<repo> (optionally /tree/<tag>) or an existing
 /// absolute folder; setting keys are the kit's declared ones with plain text values; piece ids exist. A refusal throws
@@ -15,7 +17,17 @@ import Foundation
 enum ControlKits {
     /// Seams: the app's kit runtimes and the GitHub install (rows: a fake owner over temp roots; never the network).
     static var owner: () -> KitRuntimes? = { KitRuntimes.shared }
-    static var installGitHub: (ExtensionRegistry, String) async throws -> ExtensionRecord = { try await $0.installRemote(url: $1) }
+    /// n186/n188: the registry's GitHub install with the market's download cap, the quiet decline and kits.install's admit.
+    static let githubInstall: (ExtensionRegistry, String, @escaping ExtensionRegistry.Admit) async throws -> ExtensionRecord = {
+        try await $0.installRemote(url: $1, maxBytes: RemoteInstaller.maxArtifactBytes, review: quiet, admit: $2)
+    }
+    static var installGitHub = githubInstall
+    /// n188: where a folder source is staged (RemoteInstaller.stage) before the registry copies it; rows pass a tempDir.
+    static var stageRoot: URL = FileManager.default.temporaryDirectory
+    /// n188: the GitHub install's deadline (ControlCLI gives up at 70 s).
+    static let installDeadline: Double = 60
+    /// n186: an update that adds a permission is declined quietly, as the daily update check does: no alert for an agent.
+    static let quiet: ExtensionRegistry.PermissionReview = { _, _ in false }
     /// The last undo's work (undo is synchronous, the remove and uninstall are not): rows await it.
     static var lastUndo: Task<Void, Never>?
 
@@ -124,7 +136,8 @@ enum ControlKits {
          "configRefusals": .array(r.configRefusals.map { .string($0.description) })]
     }
 
-    /// What the call's agent consent approved: [{path, action, change}].
+    /// The change sets the call's agent consent was asked about: [{path, action, change}] (F7: asked and approved, not
+    /// necessarily written: a later failure or replan may leave one unwritten; the kit's own files are not listed).
     private static func approved(_ a: KitAgentConsent) -> ControlJSON {
         .array(a.files.map { .object(["path": .string(OutsideText.shown($0.path, max: 400)), "action": .string($0.action), "change": .string($0.change)]) })
     }
@@ -135,6 +148,12 @@ enum ControlKits {
     }
 
     private static func strings(_ list: [String]) -> ControlJSON { .array(list.map { .string(OutsideText.shown($0, max: 400)) }) }
+
+    /// n189: the slots in the log line (ControlChanges cuts the summary at 200; the warned ones come first).
+    private static func slotsLine(_ a: KitAgentConsent) -> String {
+        let s = a.slots
+        return s.isEmpty ? "" : "; " + s.joined(separator: "; ")
+    }
 
     /// kits.install / kits.apply: (never applied) the install selection closed and written, then apply; (applied) the
     /// settings, the confirmed toggle when `off` changes it, then apply (an update when the version is newer). `off`
@@ -174,6 +193,9 @@ enum ControlKits {
         let first = live == nil, sel = off ?? (first ? optIn : current)
         let r = await Task.detached { await KitPaneModel.applyRun(rt, ext, first: first, off: sel, source: src, others: others, agent: agent) }.value
         guard let ran = r.ran else { throw ControlError(r.line) }
+        // n187: a refused run (busy, untrusted, no managed config) applied nothing: thrown, so the caller puts trust back,
+        // logs nothing and offers no Undo
+        if ran.refused != nil { throw ControlError(r.line) }
         notes += ran.notes
         // A first apply records the kit's slug, which the settings file is named by: saved after it.
         if first, let given { out["settings"] = .string(await Task.detached { save(rt, kit, given) }.value) }
@@ -183,6 +205,7 @@ enum ControlKits {
         out["notes"] = strings(notes)
         out["live"] = rt.current.map { .string($0.live.version) } ?? .null
         out["approved"] = approved(agent)
+        out["slots"] = strings(agent.slots)
         return (.object(out), first)
     }
 
@@ -223,9 +246,28 @@ enum ControlKits {
         return .object(["kits": .array(rows)])
     }
 
+    /// n185: the candidate's manifest, read before anything on disk changes (installLocal calls this right after its load,
+    /// on main, with no await before its copy): the deadline passed, the switch off, a non-kit, or an id already installed
+    /// (a kit or not; a case variant is the registry's own refusal) are refused. kits.install never replaces an installed
+    /// extension, so a refusal never has an old folder to put back: kits.apply applies an installed kit, and its update
+    /// comes through Settings > Extensions.
+    private static func admit(_ reg: ExtensionRegistry) -> ExtensionRegistry.Admit {
+        { loaded in
+            try Task.checkCancellation()
+            try gate()
+            let id = loaded.id
+            guard loaded.manifest.contributes?.kit != nil else { throw ControlError("\(shown(id)) is not an agent kit (no [contributes.kit])") }
+            guard reg.record(id: id) == nil else {
+                throw ControlError("\(shown(id)) is already installed: kits.install does not replace an installed extension (kits.apply applies an installed kit)")
+            }
+        }
+    }
+
     /// Install from GitHub or a folder (the registry's own install), Trust it (the Trust button's call), then applyKit.
-    /// Undo, when the kit had no live version before: Remove of what it applied, then the uninstall when this call installed
-    /// it (else trust as it was). A kit already applied before has no undo: Remove would take what the person applied.
+    /// GitHub: under a 60 s deadline, the download capped at the market's 4 MiB and its tree at the kit store's caps.
+    /// A folder: checked against those caps and staged off main first (RemoteInstaller.stage); the registry copies the stage.
+    /// Undo, when the kit had no live version before: Remove of what it applied, then the uninstall. A kit already applied
+    /// before (its kit store kept a live version) has no undo: Remove would take what the person applied.
     /// A refusal after the install puts the extension back the same way.
     static func install(_ args: [String: ControlJSON]) async throws -> ControlChange {
         let src = try source(try ControlSessions.required(args, "source"))
@@ -234,14 +276,28 @@ enum ControlKits {
         let rec: ExtensionRecord
         do {
             switch src {
-            case .github(let url): rec = try await installGitHub(reg, url)
-            // an update that adds a permission is declined quietly, as the daily update check does
-            case .folder(let dir): rec = try reg.installLocal(from: dir, review: { _, _ in false })
+            case .github(let url):
+                let got = try await ControlXray.within(installDeadline, "kits.install") { @MainActor in
+                    do { return .success(.string(try await installGitHub(reg, url, admit(reg)).id)) }
+                    catch let e as ControlError { return .failure(e) }
+                    catch { return .failure(ControlError("not installed: \(error)")) }
+                }
+                guard case .string(let id) = got, let r = reg.record(id: id) else { throw ControlError("not installed") }
+                rec = r
+            case .folder(let dir):
+                let root = stageRoot
+                let staged = try await Task.detached { try RemoteInstaller.stage(dir, tempRoot: root) }.value
+                let done = Result { try reg.installLocal(from: staged, review: quiet, admit: admit(reg)) }
+                await Task.detached { RemoteInstaller.removeWorkFolder(holding: staged, tempRoot: root) }.value
+                rec = try done.get()
             }
         } catch let e as ControlError { throw e } catch { throw ControlError("not installed: \(error)") }
         let id = rec.id, fresh = !before.contains(id), wasTrusted = rec.trusted
         let putBack: @MainActor @Sendable () async -> Void = {
-            if fresh { try? await reg.uninstall(id: id) } else if !wasTrusted { try? reg.untrust(id: id) }
+            // trust first: the registry's trust list outlives an uninstall (a reinstall of the id would come back trusted),
+            // and an uninstall that stops (config it kept) leaves the record as it was trusted
+            if !wasTrusted, reg.record(id: id)?.trusted == true { try? reg.untrust(id: id) }
+            if fresh { try? await reg.uninstall(id: id) }
         }
         do {
             guard rec.manifest.contributes?.kit != nil else { throw ControlError("\(shown(id)) is not an agent kit (no [contributes.kit])") }
@@ -250,12 +306,16 @@ enum ControlKits {
             let agent = KitAgentConsent()
             let done = try await applyKit(o, id, args, agent: agent)
             let summary = "\(title(rec)) \(rec.manifest.extension.version), \(approvedLine(agent))" + (done.first ? "" : " (no Undo: it was applied before)")
+                + slotsLine(agent)
             var undo: (@MainActor () -> Void)?
             if done.first {
                 undo = { @MainActor in
                     lastUndo = Task { @MainActor in
                         // the person's Undo click: the pane's path, the sheet asks
-                        if let rt = o.runtime(for: id), let ext = o.record(id)?.loaded { _ = await Task.detached { await rt.remove(ext) }.value }
+                        if let rt = o.runtime(for: id), let ext = o.record(id)?.loaded {
+                            // a declined sheet (or a failed Remove) keeps the kit applied: installed and trusted as it is (F8)
+                            guard KitPaneModel.line(await Task.detached { await rt.remove(ext) }.value) == "done" else { return }
+                        }
                         await putBack()
                     }
                 }
@@ -279,7 +339,7 @@ enum ControlKits {
         let agent = KitAgentConsent()
         do {
             let done = try await applyKit(o, id, args, agent: agent)
-            return ControlChange(summary: "\(title(t.rec)), \(approvedLine(agent)) (no Undo: kits.rollback goes back a version)", result: done.json,
+            return ControlChange(summary: "\(title(t.rec)), \(approvedLine(agent)) (no Undo: kits.rollback goes back a version)" + slotsLine(agent), result: done.json,
                                  verb: "applied an agent kit")
         } catch {
             // nothing applied: the trust this call granted goes back
@@ -336,7 +396,7 @@ extension ControlRegistry {
         r.register(ControlCommand(name: "kits.list", summary: "Every installed agent kit: id, title, version, trusted, applied, live, updateAvailable, pieces (id, kind, on), settings (key, value), notes, refused.",
                                   args: [:], mutates: false, run: { _, _ in throw ControlError("kits.list reads off main: send it through the control channel") },
                                   runAsync: { _, _ in try await ControlKits.list() }))
-        r.register(ControlKits.change("kits.install", "Install an agent kit from https://github.com/<owner>/<repo> (or .../tree/<tag>) or an absolute folder, trust it, write its selection and settings, and apply it; the config file changes it makes are approved for this call (listed in the reply). Undo (a kit not applied before) removes what it applied and uninstalls it.",
+        r.register(ControlKits.change("kits.install", "Install an agent kit from https://github.com/<owner>/<repo> (or .../tree/<tag>) or an absolute folder, trust it, write its selection and settings, and apply it; the config file changes it is asked about are approved for this call (listed in the reply with the Claude Code slots they write). Refuses an id already installed. Undo (a kit not applied before) removes what it applied and uninstalls it.",
                                       ["source": ControlArg(type: "string", required: true, summary: "https://github.com/<owner>/<repo> or an absolute folder"),
                                        "settings": settings, "off": off]) { try await ControlKits.install($0) })
         r.register(ControlKits.change("kits.apply", "Apply or update an installed kit, with a changed selection or settings (trusts it first if needed). No undo.",

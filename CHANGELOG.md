@@ -2390,7 +2390,9 @@ tag from the now-released section and put it on the new top draft.
   never swaps that pane's session out from under your keys.
 - Agents can install, update, repair, roll back and remove an agent kit through the prosper command
   (kits.list, kits.install, kits.apply, kits.repair, kits.rollback, kits.remove), behind Let agents
-  control Prosper.
+  control Prosper. An agent's install takes only an agent kit that is not installed yet, from GitHub
+  (at most 4 MiB, 60 seconds) or a folder (at most 16 MiB and 4096 files), and its notice names the
+  Claude Code permissions, environment settings and shell startup blocks it wrote. (#1866)
 
 ## v2.174.0
 

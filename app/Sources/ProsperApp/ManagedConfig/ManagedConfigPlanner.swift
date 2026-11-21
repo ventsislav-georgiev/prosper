@@ -63,6 +63,11 @@ struct ManagedConfigPlanner {
         "CLAUDE_CODE_ENABLE_AUTO_MODE": "Claude Code sessions act without asking you.",
         "ENABLE_CLAUDEAI_MCP_SERVERS": "Your claude.ai connectors load in every session.",
     ]
+    /// #1737, #1742: an env key's warning line unless the value is clearly off (fail safe). The sheet and ctl kits (#1866) read it.
+    static func envWarning(_ key: String, _ value: String) -> String? {
+        let off = ["", "0", "false", "no", "off"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        return off ? nil : envWarnings[key]
+    }
     /// OQ-193: a permissions piece's disable_bypass sets this slot to "disable"; Remove restores what was there.
     static let bypassPath = ["permissions", "disableBypassPermissionsMode"]
 
@@ -616,9 +621,8 @@ struct ManagedConfigPlanner {
         guard case .string(let s) = value, let key = path.last else { return }
         if path.first == "env" {
             w.notes.append("Claude Code sessions get the environment variable \(key) = \(OrderedJSON.quote(s)).")
-            // n52: the two keys that change behaviour; #1737: #1742: the line unless the value is clearly off (fail safe)
-            let off = ["", "0", "false", "no", "off"].contains(s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-            if !off, let line = ManagedConfigPlanner.envWarnings[key] { w.notes.append(line) }
+            // n52: the two keys that change behaviour
+            if let line = ManagedConfigPlanner.envWarning(key, s) { w.notes.append(line) }
         }
         if path == ManagedConfigPlanner.bypassPath { w.notes.append("Claude Code's bypass permissions mode is switched off.") }
     }

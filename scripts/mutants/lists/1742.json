@@ -5,8 +5,8 @@
   {
    "name": "invert-back",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "if !off, let line",
-   "new": "if off, let line",
+   "old": "return off ? nil : envWarnings[key]",
+   "new": "return !off ? nil : envWarnings[key]",
    "expect": "killed"
   },
   {
@@ -19,15 +19,15 @@
   {
    "name": "drop-trim",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())\n            if !off",
-   "new": "s.lowercased())\n            if !off",
+   "old": "contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())",
+   "new": "contains(value.lowercased())",
    "expect": "killed"
   },
   {
    "name": "drop-lowercase",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": ".whitespacesAndNewlines).lowercased())\n            if !off",
-   "new": ".whitespacesAndNewlines))\n            if !off",
+   "old": "contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())",
+   "new": "contains(value.trimmingCharacters(in: .whitespacesAndNewlines))",
    "expect": "killed"
   },
   {

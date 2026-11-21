@@ -41,10 +41,39 @@ struct KitApprovedFile: Equatable, Sendable {
 final class KitAgentConsent: ManagedConfigConsent, @unchecked Sendable {
     private let lock = NSLock()
     private var sets: [ManagedConfigChangeSet] = []
+    private var slotLines: [String] = []
 
     func confirm(_ changes: ManagedConfigChangeSet) async -> Bool {
         lock.withLock { sets.append(changes) }
         return true
+    }
+
+    /// n189: the slots the asked-about plan writes (askConsent passes its pieces just before it asks), the lines with a
+    /// sheet warning first: so the reply and the notice say what kind of slot an agent's yes covered.
+    func planned(_ pieces: [ManagedConfigPiece]) {
+        let lines = pieces.compactMap(Self.slot)
+        lock.withLock { for l in lines where !slotLines.contains(l) { slotLines.append(l) } }
+    }
+
+    var slots: [String] {
+        let all = lock.withLock { slotLines }
+        let warns = { (l: String) in ManagedConfigPlanner.envWarnings.values.contains { l.hasSuffix($0) } }
+        return all.filter(warns) + all.filter { !warns($0) }
+    }
+
+    /// One line per piece that writes a Claude Code permission, env or bypass slot, or a shell rc block; nil for the rest.
+    /// The kit's values are outside text: shown cleaned and cut. An env key's sheet warning (envWarning) follows its line.
+    static func slot(_ p: ManagedConfigPiece) -> String? {
+        if p.target.hasPrefix("shellrc:") { return "shell startup block in ~/\(OutsideText.shown(String(p.target.dropFirst("shellrc:".count)), max: 40))" }
+        guard p.kind == .json, let path = p.path else { return nil }
+        if path == ManagedConfigPlanner.bypassPath { return "Claude Code bypass permissions mode switched off" }
+        if path.count == 2, path[0] == "permissions" {
+            return "Claude Code permissions.\(path[1]) adds \(OutsideText.shown(p.value ?? "", max: 120))"
+        }
+        guard ManagedConfigPlanner.isEnvSlot(path), let key = path.last else { return nil }
+        let value = p.value.flatMap { try? JSONDecoder().decode(String.self, from: Data($0.utf8)) } ?? ""
+        let line = "Claude Code env \(key)=\(OutsideText.shown(value, max: 40))"
+        return ManagedConfigPlanner.envWarning(key, value).map { line + ": " + $0 } ?? line
     }
 
     var files: [KitApprovedFile] {
@@ -337,7 +366,8 @@ final class KitRuntime: @unchecked Sendable {
     /// Apply or update from the extension's own dir. Nothing happens for the version already live.
     func apply(_ ext: LoadedExtension, source: KitInstallSource = .local, otherKitSlugs: Set<String> = [], agent: KitAgentConsent? = nil) async -> KitRuntimeResult {
         guard begin() else { return KitRuntimeResult(refused: Self.busyText) }
-        defer { end() } // apply
+        // F6: an agent's yes never outlives its apply (a drive that stops between askConsent and the wiring)
+        defer { lock.withLock { consentAnswer = false; approved = nil }; end() } // apply
         guard isTrusted(ext.id) else { return KitRuntimeResult(refused: "untrusted kit: trust it first") } // spec 4.9
         let config: ManagedConfig
         switch self.config(for: ext) {
@@ -493,7 +523,10 @@ final class KitRuntime: @unchecked Sendable {
             let mc = config.plan(p.pieces, owner: owner(ext, v, dir: store.stagedPath(st.version, st.treeHash)))
             guard mc.refusals.isEmpty else { out.configRefusals += mc.refusals; return }
             var yes = true
-            if mc.writesUserFiles { yes = await config.consent.confirm(mc.changes) }
+            if mc.writesUserFiles {
+                (config.consent as? KitAgentConsent)?.planned(p.pieces)
+                yes = await config.consent.confirm(mc.changes)
+            }
             lock.withLock { consentAnswer = yes; approved = yes ? mc.changes : nil }
         case .applyWiring(let version):
             lock.withLock { wiring = "no validated kit for \(version)" }

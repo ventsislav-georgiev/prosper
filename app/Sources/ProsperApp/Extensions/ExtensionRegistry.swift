@@ -1371,11 +1371,13 @@ final class ExtensionRegistry: ObservableObject {
     /// `extension.toml`; it is validated against the host before any copy.
     /// #1704: `review` answers the new-permissions question (nil: `reviewNewPermissions`, the person's alert); the daily
     /// update check passes a quiet decline.
+    /// #1866 n185: `admit` sees the candidate right after its load, before anything on disk changes; a throw refuses it.
     @discardableResult
-    func installLocal(from sourceDir: URL, review: PermissionReview? = nil) throws -> ExtensionRecord {
+    func installLocal(from sourceDir: URL, review: PermissionReview? = nil, admit: Admit? = nil) throws -> ExtensionRecord {
         // Validate first so a bad download never lands in the extensions dir.
         let loaded = try ExtensionLoader.load(
             directory: sourceDir, isSystem: false, hostVersion: hostVersion)
+        try admit?(loaded)
         // A remote extension cannot masquerade as a bundled system one.
         guard !loaded.manifest.extension.isSystem else {
             throw ExtensionError.cannotUninstallSystem(loaded.id)
@@ -1431,6 +1433,8 @@ final class ExtensionRegistry: ObservableObject {
     /// #1704 (OQ-191): the review an update over a trusted extension gets when it declares new permissions (the title and
     /// the added names, both outside data); true installs. Rows pass a recorder.
     typealias PermissionReview = @MainActor (_ title: String, _ added: [String]) -> Bool
+    /// #1866 n185: a caller's own check of the loaded candidate (ctl kits.install: a kit, not installed yet, the switch on).
+    typealias Admit = @MainActor (LoadedExtension) throws -> Void
     var reviewNewPermissions: PermissionReview = { ExtensionRegistry.newPermissionsAlert(title: $0, added: $1) }
 
     /// The app's review: a modal alert naming the added permissions, only ever after a person's click (Prosper is in front
@@ -1537,15 +1541,20 @@ final class ExtensionRegistry: ObservableObject {
     }
 
     /// Fetch + install an extension from a GitHub URL (repo or repo subdir).
+    /// #1866 n186/n188: `maxBytes` caps the download (RemoteInstaller.fetch), `review` and `admit` go to installLocal;
+    /// the defaults are the Settings path's (no cap, the person's alert).
     @discardableResult
-    func installRemote(url: String) async throws -> ExtensionRecord {
-        let extDir = try await RemoteInstaller.fetch(url)
+    func installRemote(url: String, maxBytes: Int? = nil, review: PermissionReview? = nil, admit: Admit? = nil) async throws -> ExtensionRecord {
+        let extDir = try await remoteFetch(url, maxBytes)
         defer { RemoteInstaller.removeWorkFolder(holding: extDir) }
         // Stamp the origin so future launches can poll it for updates (no-op if
         // the author already declared an update_url).
         injectUpdateURL(url, intoManifestAt: extDir)
-        return try installLocal(from: extDir)
+        return try installLocal(from: extDir, review: review, admit: admit)
     }
+
+    /// #1866: installRemote's download (rows pass a fake folder; the default reaches GitHub).
+    var remoteFetch: @Sendable (_ url: String, _ maxBytes: Int?) async throws -> URL = { try await RemoteInstaller.fetch($0, maxBytes: $1) }
 
     /// Fetch + install (or upgrade) an extension from the marketplace. The download
     /// is integrity- and signature-verified in `RemoteInstaller.fetchFromMarket`
