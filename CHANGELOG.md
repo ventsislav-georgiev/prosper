@@ -2339,6 +2339,9 @@ tag from the now-released section and put it on the new top draft.
 - A rename from an agent is refused when the title has a control or hidden character, and the first
   message an agent gives a new or resumed session follows the same rules as a message to a running
   one. (#1839)
+- Agents can now look at a session through Prosper's control channel: its full details, its current
+  screen and its Claude Code transcript (the last two only while agent control is on), and they can
+  wait until a session is idle, needs you, or has ended. (#1840)
 
 ## v2.174.0
 

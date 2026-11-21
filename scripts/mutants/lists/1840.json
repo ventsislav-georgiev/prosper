@@ -1,0 +1,118 @@
+{
+ "entry": "1840",
+ "filter": "ControlSessionsReadTests",
+ "mutants": [
+  {
+   "name": "gate-off",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }",
+   "new": "guard Preferences.agentControlEnabled || true else { throw ControlError(ControlChanges.offError) }",
+   "expect": "killed"
+  },
+  {
+   "name": "idle-not-done",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "default: s.state == .idle || s.state == .done",
+   "new": "default: s.state == .idle",
+   "expect": "killed"
+  },
+  {
+   "name": "ended-reached",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "return state == \"ended\" ? .object([\"reached\": .bool(true), \"state\": .string(\"ended\")]) : .object([\"ended\": .bool(true)])",
+   "new": "return .object([\"ended\": .bool(true)])",
+   "expect": "killed"
+  },
+  {
+   "name": "wait-first-only",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if let v = verdict(list.first(where: { $0.key == key }), state) { cont.yield(v); cont.finish() }",
+   "new": "if waitChecks == 1, let v = verdict(list.first(where: { $0.key == key }), state) { cont.yield(v); cont.finish() }",
+   "expect": "killed"
+  },
+  {
+   "name": "wait-sub-leaks",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "defer { sub.cancel() }",
+   "new": "_ = sub; WaitLeak.keep.append(sub)",
+   "expect": "killed"
+  },
+  {
+   "name": "wait-timeout-text",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "throw ControlError(late)",
+   "new": "throw e",
+   "expect": "killed"
+  },
+  {
+   "name": "timeout-range",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "guard t.isFinite, t >= 1, t <= ControlXray.maxTimeout else",
+   "new": "guard t.isFinite, t > 0 else",
+   "expect": "killed"
+  },
+  {
+   "name": "whole-fraction",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "guard n.isFinite, n.rounded() == n, n >=",
+   "new": "guard n.isFinite, n >=",
+   "expect": "killed"
+  },
+  {
+   "name": "screen-trailing",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "while let last = rows.last, last.allSatisfy({ $0 == \" \" || $0 == \"\\r\" }) { rows.removeLast() }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "screen-cap",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if text.count > screenMaxChars { text = String(text.suffix(screenMaxChars)) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "offmain-no-cancel",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "return await withTaskCancellationHandler { await t.value } onCancel: { t.cancel() }",
+   "new": "return await t.value",
+   "expect": "killed"
+  },
+  {
+   "name": "sidechain-in",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "guard d.sidechain == nil else { return [] }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "since-next",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if since != nil { end = l.range.upperBound + 1 }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "tail-limit",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if since == nil, flat.count > limit { flat = Array(flat.suffix(limit)) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "tail-reads-all",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "guard count < limit, chars < transcriptMaxChars else { break }",
+   "new": "guard chars < transcriptMaxChars else { break }",
+   "expect": "killed"
+  },
+  {
+   "name": "pr-url",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "\"url\": p.pullURL.map { .string($0.absoluteString) } ?? .null",
+   "new": "\"url\": .string(p.url)",
+   "expect": "killed"
+  }
+ ]
+}
