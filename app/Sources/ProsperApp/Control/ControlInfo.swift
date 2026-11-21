@@ -43,6 +43,7 @@ enum ControlInfo {
     }
 
     static func resetNotify() { lastNotify = nil }
+    static func resetProbe() { lastProbe = nil }
 
     // MARK: - stats.get
 
@@ -87,9 +88,25 @@ enum ControlInfo {
 
     // MARK: - updates.check
 
+    static let probeGap: TimeInterval = 600
+    private static var lastProbe: (at: Date, probe: AppUpdater.Probe)?
+
+    /// A read, so it does not fetch the appcast on every call: within `probeGap` (10 minutes) of the last answered
+    /// probe the same answer comes back with "cached": true. A failure is not kept, so a retry after going online fetches.
+    /// Each real probe also makes Sparkle write its own last-check date (SULastCheckTime); left as is.
     static func updatesCheck() async throws -> ControlJSON {
-        guard let p = await probe() else { throw ControlError("the updater is not available or a check is already running") }
-        var o: [String: ControlJSON] = ["version": .string(AppInfo.shortVersion)]
+        let at = now()
+        var cached = false
+        let p: AppUpdater.Probe
+        if let last = lastProbe, at.timeIntervalSince(last.at) < probeGap, at >= last.at {
+            p = last.probe
+            cached = true
+        } else {
+            guard let fresh = await probe() else { throw ControlError("the updater is not available or a check is already running") }
+            p = fresh
+            if case .failed = fresh {} else { lastProbe = (now(), fresh) }
+        }
+        var o: [String: ControlJSON] = ["version": .string(AppInfo.shortVersion), "cached": .bool(cached)]
         switch p {
         case .upToDate: o["updateAvailable"] = .bool(false)
         case .found(let v): o["updateAvailable"] = .bool(true); o["latest"] = .string(OutsideText.shown(v, max: 32))

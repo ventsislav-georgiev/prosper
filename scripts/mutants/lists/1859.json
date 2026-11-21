@@ -57,6 +57,34 @@
    "old": "|/Users/[^/\\s]+",
    "new": "",
    "expect": "killed"
+  },
+  {
+   "name": "noupdate_ignore",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "if isNoUpdate(error) { continue }",
+   "new": "if false { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "first_terminal",
+   "file": "app/Sources/ProsperApp/AppUpdater.swift",
+   "old": "for e in events {",
+   "new": "for e in events.reversed() {",
+   "expect": "killed"
+  },
+  {
+   "name": "cache_gap",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "at.timeIntervalSince(last.at) < probeGap, at >= last.at",
+   "new": "at.timeIntervalSince(last.at) < 0, at >= last.at",
+   "expect": "killed"
+  },
+  {
+   "name": "cache_failure",
+   "file": "app/Sources/ProsperApp/Control/ControlInfo.swift",
+   "old": "if case .failed = fresh {} else { lastProbe = (now(), fresh) }",
+   "new": "lastProbe = (now(), fresh)",
+   "expect": "killed"
   }
  ]
 }

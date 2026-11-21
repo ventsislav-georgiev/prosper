@@ -1,4 +1,5 @@
 import Foundation
+import Sparkle
 import StatsCore
 import XCTest
 @testable import ProsperApp
@@ -15,6 +16,7 @@ final class ControlInfoTests: XCTestCase {
     override func setUp() async throws {
         saved = (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe)
         ControlInfo.resetNotify()
+        ControlInfo.resetProbe()
         ControlInfo.now = { [unowned self] in clock }
         Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
     }
@@ -22,6 +24,7 @@ final class ControlInfoTests: XCTestCase {
     override func tearDown() async throws {
         if let s = saved { (ControlInfo.now, ControlInfo.snapshot, ControlInfo.diagnosticsText, ControlInfo.probe) = (s.now, s.snap, s.text, s.probe) }
         ControlInfo.resetNotify()
+        ControlInfo.resetProbe()
         Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
     }
 
@@ -70,6 +73,13 @@ final class ControlInfoTests: XCTestCase {
         let later = await call("notify", ["title": .string("c"), "body": .string("")])
         XCTAssertTrue(later.ok)
         XCTAssertEqual(shown, ["Agent notified: a", "Agent notified: c"])
+    }
+
+    /// n179: a body that cleans to nothing leaves the title alone (an uncleaned body would add ": ").
+    func testNotifyBodyOfOnlyAnUnseenCharacterIsDropped() async {
+        let r = await call("notify", ["title": .string("t"), "body": .string("\u{200B}")])
+        XCTAssertTrue(r.ok, "\(r)")
+        XCTAssertEqual(shown, ["Agent notified: t"])
     }
 
     func testNotifyBoundsTitleAndBody() async {
@@ -127,16 +137,66 @@ final class ControlInfoTests: XCTestCase {
         var o = obj(await call("updates.check"))
         XCTAssertEqual(o["updateAvailable"], .bool(true))
         XCTAssertEqual(o["latest"], .string("9.9.9"))
+        ControlInfo.resetProbe()
         ControlInfo.probe = { .upToDate }
         o = obj(await call("updates.check"))
         XCTAssertEqual(o["updateAvailable"], .bool(false))
         XCTAssertTrue(o["latest"] == nil)
+        ControlInfo.resetProbe()
         ControlInfo.probe = { .failed("offline") }
         var r = await call("updates.check")
         XCTAssertEqual(r.error, "update check failed: offline")
         ControlInfo.probe = { nil }
         r = await call("updates.check")
         XCTAssertEqual(r.error, "the updater is not available or a check is already running")
+    }
+
+    /// The gap: a second check within 10 minutes answers the kept result without a fetch; a failure is not kept.
+    func testUpdatesCheckReusesTheLastAnswerWithinTheGap() async {
+        var fetches = 0
+        ControlInfo.probe = { fetches += 1; return .found("9.9.9") }
+        var o = obj(await call("updates.check"))
+        XCTAssertEqual(o["cached"], .bool(false))
+        clock = clock.addingTimeInterval(ControlInfo.probeGap - 1)
+        o = obj(await call("updates.check"))
+        XCTAssertEqual(fetches, 1)
+        XCTAssertEqual(o["cached"], .bool(true))
+        XCTAssertEqual(o["latest"], .string("9.9.9"))
+        clock = clock.addingTimeInterval(1)
+        o = obj(await call("updates.check"))
+        XCTAssertEqual(fetches, 2)
+        XCTAssertEqual(o["cached"], .bool(false))
+        ControlInfo.resetProbe()
+        ControlInfo.probe = { fetches += 1; return .failed("offline") }
+        _ = await call("updates.check")
+        let again = await call("updates.check")
+        XCTAssertEqual(fetches, 4)
+        XCTAssertEqual(again.error, "update check failed: offline")
+    }
+
+    // MARK: - Sparkle cycle -> probe answer (n178)
+
+    private let noUpdate = NSError(domain: SUSparkleErrorDomain, code: 1001, userInfo: [NSLocalizedDescriptionKey: "You're up to date!"])
+    private let offline = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet,
+                                  userInfo: [NSLocalizedDescriptionKey: "offline"])
+
+    /// Sparkle 2.10's up-to-date cycle: didNotFindUpdate, then didAbortWithError(SUNoUpdateError).
+    func testNotFoundThenTheNoUpdateAbortIsUpToDate() {
+        XCTAssertEqual(AppUpdater.probe(from: [.notFound, .aborted(noUpdate)]), .upToDate)
+    }
+
+    func testTheNoUpdateAbortAloneIsUpToDate() {
+        XCTAssertEqual(AppUpdater.probe(from: [.aborted(noUpdate)]), .upToDate)
+    }
+
+    func testFoundThenAnyAbortKeepsFound() {
+        XCTAssertEqual(AppUpdater.probe(from: [.found("2.0"), .aborted(noUpdate)]), .found("2.0"))
+        XCTAssertEqual(AppUpdater.probe(from: [.found("2.0"), .aborted(offline)]), .found("2.0"))
+    }
+
+    func testARealAbortAloneIsFailed() {
+        XCTAssertEqual(AppUpdater.probe(from: [.aborted(offline)]), .failed("offline"))
+        XCTAssertTrue(AppUpdater.isNoUpdate(noUpdate) && !AppUpdater.isNoUpdate(offline))
     }
 
     /// Under XCTest no Sparkle updater exists: the real seam answers nil and starts nothing.

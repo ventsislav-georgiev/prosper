@@ -129,25 +129,53 @@ final class AppUpdater: NSObject {
 
     /// #1859: what a check-only probe found.
     enum Probe: Equatable, Sendable { case upToDate, found(String), failed(String) }
+    /// #1859: one Sparkle callback of a probe cycle, in arrival order.
+    enum ProbeEvent: Sendable { case found(String), notFound, aborted(any Error) }
     private var probing: CheckedContinuation<Probe, Never>?
-    private var probed: Probe = .upToDate
+    private var probeEvents: [ProbeEvent] = []
+
+    /// #1859 n178: a cycle's events in, its answer out. Sparkle 2.10 calls updaterDidNotFindUpdate and THEN
+    /// didAbortWithError(SUNoUpdateError) (SPUUpdater.m notifyDelegateOfDriverCompletion), so that abort is not a
+    /// failure, and the FIRST terminal event of a cycle is its answer. No event at all: up to date.
+    static func probe(from events: [ProbeEvent]) -> Probe {
+        for e in events {
+            switch e {
+            case .found(let v): return .found(v)
+            case .notFound: return .upToDate
+            case .aborted(let error):
+                if isNoUpdate(error) { continue }
+                return .failed(error.localizedDescription)
+            }
+        }
+        return .upToDate
+    }
+
+    /// Sparkle's own "you're up to date" error (SUErrors.h: SUSparkleErrorDomain, SUNoUpdateError = 1001).
+    static func isNoUpdate(_ error: any Error) -> Bool {
+        let e = error as NSError
+        return e.domain == SUSparkleErrorDomain && e.code == Int(SUError.noUpdateError.rawValue)
+    }
 
     /// #1859 updates.check: Sparkle's information-only check. It never downloads or installs (the silent driver is not
     /// asked), unlike checkForUpdates(). nil: no updater (XCTest) or a check is already running.
     /// shortcut: no deadline of our own, Sparkle's network timeout ends the cycle; add one if a hang is ever seen.
     func probeForUpdate() async -> Probe? {
         guard let updater, probing == nil, updater.canCheckForUpdates else { return nil }
-        probed = .upToDate
+        probeEvents = []
         return await withCheckedContinuation { c in
             probing = c
             updater.checkForUpdateInformation()
         }
     }
 
-    private func probeEvent(_ p: Probe?) {
-        if let p { probed = p; return }
-        probing?.resume(returning: probed)
+    /// Events of a cycle nobody probes (a background check) are dropped, so nothing grows between probes.
+    private func probeEvent(_ e: ProbeEvent?) {
+        guard let c = probing else { return }
+        if let e { probeEvents.append(e); return }
+        let p = Self.probe(from: probeEvents)
+        probeEvents = []
         probing = nil
+        c.resume(returning: p)
     }
 
     var automaticChecks: Bool {
@@ -223,11 +251,11 @@ final class UpdaterChannelDelegate: NSObject, SPUUpdaterDelegate {
     static func channels(allowBeta: Bool) -> Set<String> { allowBeta ? ["beta"] : [] }
 
     /// #1859: Sparkle's callbacks (main thread) for AppUpdater.probeForUpdate: a result, or nil when the cycle ended.
-    var onProbe: (@MainActor (AppUpdater.Probe?) -> Void)?
-    private func tell(_ p: AppUpdater.Probe?) { MainActor.assumeIsolated { onProbe?(p) } }
+    var onProbe: (@MainActor (AppUpdater.ProbeEvent?) -> Void)?
+    private func tell(_ e: AppUpdater.ProbeEvent?) { MainActor.assumeIsolated { onProbe?(e) } }
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) { tell(.found(item.displayVersionString)) }
-    func updaterDidNotFindUpdate(_ updater: SPUUpdater) { tell(.upToDate) }
-    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) { tell(.failed(error.localizedDescription)) }
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater) { tell(.notFound) }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) { tell(.aborted(error)) }
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) { tell(nil) }
 }
 
