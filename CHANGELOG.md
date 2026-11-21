@@ -2274,6 +2274,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now list and run every action Prosper offers in the command runner and Settings >
   Shortcuts, including every extension command, with `ProsperApp ctl actions.list` and `ProsperApp
   ctl actions.run`. (#1818)
+- Fixed typing sometimes going to another app after quickly closing and reopening the Agent Sessions
+  window: when macOS declines to bring Prosper forward, Prosper now brings itself to the front so
+  the keyboard reaches the window you see. (#1821)
 
 ## v2.174.0
 

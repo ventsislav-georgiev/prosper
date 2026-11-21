@@ -1,0 +1,48 @@
+{
+ "entry": "1821",
+ "filter": "DockPolicyTests|AgentWindowD1Tests/testWindowEveryShowPath",
+ "mutants": [
+  {
+   "name": "no_reassert",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "            reactivate()\n        }\n    }\n",
+   "new": "        }\n    }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_active_guard",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "            guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "new": "            guard visible.contains(id), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_same_front_guard",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "            guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "new": "            guard visible.contains(id), !isActive(), let front, front != getpid() else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_shown_guard",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "            guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "new": "            guard !isActive(), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no_self_front_guard",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "            guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }\n",
+   "new": "            guard visible.contains(id), !isActive(), let front, frontmostPid() == front else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "order_before_register",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "        windowDidShow(win)\n        let front = frontmostPid()\n        order(win)\n",
+   "new": "        order(win)\n        windowDidShow(win)\n        let front = frontmostPid()\n",
+   "expect": "killed"
+  }
+ ]
+}

@@ -36,11 +36,8 @@ final class AgentsWindow {
     // Seams (QA #626 INFO-7: show and teardown run in tests with a window never put on screen).
     var island: () -> AgentIslandController = { .shared }
     var build: (AgentWindowModel) -> NSWindow = { AgentsWindow.makeWindow($0) }
-    var present: (NSWindow) -> Void = { win in
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
-    }
+    /// #1821: registers before ordering front, and re-asserts a refused activation (DockPolicy.present).
+    var present: (NSWindow) -> Void = { DockPolicy.present($0) }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
 
     func show() {

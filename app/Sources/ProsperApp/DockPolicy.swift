@@ -36,6 +36,47 @@ enum DockPolicy {
     }
     private static var setPolicy: @MainActor (NSApplication.ActivationPolicy) -> Void = liveSetPolicy
 
+    /// #1821: how long a show waits for its activation before re-asserting it (one check per show, no timer at idle).
+    static let activationSettle: TimeInterval = 0.25
+    // #1821 seams: the order front, the activation probes, the re-assertion and its scheduler (a row fakes them all).
+    private static var order: @MainActor (NSWindow) -> Void = liveOrder
+    private static var isActive: @MainActor () -> Bool = { NSApp.isActive }
+    private static var frontmostPid: @MainActor () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    private static var reactivate: @MainActor () -> Void = liveReactivate
+    private static var after: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void = { delay, f in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { f() } }
+    }
+    private static func liveOrder(_ win: NSWindow) {
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+    }
+    /// macOS 14+ cooperative activation can refuse NSApp.activate after the accessory flip (the demotion handed front to
+    /// another app, TransformProcessType pickNew=1); a Launch Services open of the running app is not refused (the same
+    /// bypass as AgentIslandController.activate). Never under XCTest, and never for a bare executable (no .app to open).
+    private static func liveReactivate() {
+        let url = Bundle.main.bundleURL
+        guard NSClassFromString("XCTestCase") == nil, url.pathExtension == "app" else { return }
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: cfg) { _, _ in }
+    }
+
+    /// #1821: the one way a tracked window comes up: registered (the `.regular` flip) BEFORE it is activated and ordered
+    /// front, then, if the activation was refused (the app still inactive with the same other app in front after
+    /// `activationSettle`, the window still shown), re-asserted once. Without it the window is front and key inside the
+    /// app while the keys go to the other app, and a click does not bring them back (operator 2026-11-21, beta.43 log:
+    /// "ordered front from a non-active application" after each reopen that followed a demotion).
+    static func present(_ win: NSWindow) {
+        windowDidShow(win)
+        let front = frontmostPid()
+        order(win)
+        let id = ObjectIdentifier(win)
+        after(activationSettle) {
+            guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }
+            reactivate()
+        }
+    }
+
     /// Marks `window` as visible and reconciles the activation policy. Call this
     /// BEFORE activating the window so the `.regular` flip lands before activation.
     static func windowDidShow(_ window: NSWindow) {
@@ -93,13 +134,26 @@ enum DockPolicy {
         pendingDemotion = nil
     }
 
+    /// #1821: whether `window` is counted as shown (rows check the registration came before the order front).
+    static func isShown(_ window: NSWindow) -> Bool { visible.contains(ObjectIdentifier(window)) }
+
     static func resetForTesting(
         demotionDelay: TimeInterval = defaultDemotionDelay,
-        setPolicy: (@MainActor (NSApplication.ActivationPolicy) -> Void)? = nil
+        setPolicy: (@MainActor (NSApplication.ActivationPolicy) -> Void)? = nil,
+        order: (@MainActor (NSWindow) -> Void)? = nil,
+        isActive: (@MainActor () -> Bool)? = nil,
+        frontmostPid: (@MainActor () -> pid_t?)? = nil,
+        reactivate: (@MainActor () -> Void)? = nil,
+        after: (@MainActor (TimeInterval, @escaping @MainActor () -> Void) -> Void)? = nil
     ) {
         cancelPendingDemotion()
         self.demotionDelay = demotionDelay
         visible.removeAll()
         self.setPolicy = setPolicy ?? liveSetPolicy
+        self.order = order ?? liveOrder
+        self.isActive = isActive ?? { NSApp.isActive }
+        self.frontmostPid = frontmostPid ?? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        self.reactivate = reactivate ?? liveReactivate
+        self.after = after ?? { delay, f in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { f() } } }
     }
 }
