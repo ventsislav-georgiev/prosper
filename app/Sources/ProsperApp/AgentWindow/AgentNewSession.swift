@@ -71,6 +71,9 @@ enum AgentPromptImages {
     /// #1836: one paste's cap: images, and bytes read.
     static let maxImages = 20
     static let maxBytes = 50_000_000
+    /// #1863 n173 (b): an image's width times height, read from its header before anything decodes it (a small file can
+    /// claim a huge canvas). 64 megapixels: an 8K photo is 33.
+    static let maxPixels = 64_000_000
 
     /// Caches/Prosper/prompt-images; nil under XCTest, so a row writes only under the temp dir it sets.
     static let defaultDir: URL? = {
@@ -116,8 +119,10 @@ enum AgentPromptImages {
     }
 
     /// #1836: past `maxImages` sources, or when the next one would take the bytes read past `maxBytes`, the rest is
-    /// refused unread (a file's size is asked for before it is read).
-    static func write(_ sources: [Source], dir: URL, now: Date, maxImages: Int = maxImages, maxBytes: Int = maxBytes) -> Outcome {
+    /// refused unread (a file's size is asked for before it is read). #1863: a file whose target is not named as an image
+    /// type, is not a regular file, or an image over `maxPixels` counts as failed.
+    static func write(_ sources: [Source], dir: URL, now: Date, maxImages: Int = maxImages, maxBytes: Int = maxBytes,
+                      maxPixels: Int = maxPixels) -> Outcome {
         let fm = FileManager.default
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         prune(dir: dir, now: now)
@@ -126,18 +131,21 @@ enum AgentPromptImages {
             let data: Data?
             switch s {
             case .file(let named):
-                // #1863: a link is read as its target; a FIFO or device (an agent's path) is never opened: a read would block.
+                // #1863: a link is read as its target, and the target's name is the one that must be an image type's.
                 let url = named.resolvingSymlinksInPath()
-                let v = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                let v = try? url.resourceValues(forKeys: [.fileSizeKey])
                 if i >= maxImages || (v?.fileSize ?? 0) > maxBytes - read { out.refused = sources.count - i; return out }
-                guard v?.isRegularFile == true else { out.failed += 1; continue }
-                data = try? Data(contentsOf: url)
+                guard UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true else { out.failed += 1; continue }
+                // n172: one read on the open descriptor: a FIFO or device (swapped in since the size check, too) is refused
+                // without blocking, and a file grown since then is refused at the bytes left, never read whole.
+                data = try? BoundedFileRead.data(url, maxBytes: maxBytes - read)
             case .data(let d):
                 if i >= maxImages || d.count > maxBytes - read { out.refused = sources.count - i; return out }
                 data = d
             }
-            read += data?.count ?? 0   // at most the size checked above (a file grown since then is read in full: no overflow)
-            guard let data, let src = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(src) > 0 else {
+            read += data?.count ?? 0   // at most maxBytes - read: both reads are capped above
+            guard let data, let src = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(src) > 0,
+                  pixels(src).map({ $0 <= maxPixels }) == true else {
                 out.failed += 1
                 continue
             }
@@ -165,6 +173,14 @@ enum AgentPromptImages {
             removed += 1
         }
         return removed
+    }
+
+    /// The first image's width times height from its header (no decode); nil when the header does not say.
+    static func pixels(_ src: CGImageSource) -> Int? {
+        guard let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int, w >= 0, h >= 0 else { return nil }
+        let (n, over) = w.multipliedReportingOverflow(by: h)
+        return over ? nil : n
     }
 
     private static func png(_ image: CGImage, to url: CFURL) -> Bool {

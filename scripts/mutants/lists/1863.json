@@ -99,6 +99,41 @@
    "old": "AgentWindowModel.isRemote($0) && $0.key.dir.dropFirst() == host",
    "new": "AgentWindowModel.isRemote($0)",
    "expect": "killed"
+  },
+  {
+   "name": "images_fifo_read",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "data = try? BoundedFileRead.data(url, maxBytes: maxBytes - read)",
+   "new": "data = try? Data(contentsOf: url)",
+   "expect": "killed"
+  },
+  {
+   "name": "images_target_name_unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "guard UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true else { out.failed += 1; continue }",
+   "new": "_ = url.pathExtension",
+   "expect": "killed"
+  },
+  {
+   "name": "images_pixel_cap_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "pixels(src).map({ $0 <= maxPixels }) == true else {",
+   "new": "true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "images_stale_sends_outcome",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "m.endNewSessionPromptPaste()   // n173 (c)",
+   "new": "m.addNewSessionPromptImages(AgentPromptImages.Outcome())   // n173 (c)",
+   "expect": "killed"
+  },
+  {
+   "name": "remote_cwd_unseen_ok",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if host != nil, let cwd = string(args, \"cwd\"), ControlSessionsTalk.hasUnseen(cwd) {",
+   "new": "if host != nil, let cwd = string(args, \"cwd\"), false && ControlSessionsTalk.hasUnseen(cwd) {",
+   "expect": "killed"
   }
  ]
 }

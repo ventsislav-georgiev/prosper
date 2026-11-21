@@ -2572,10 +2572,13 @@ final class AgentWindowModel: ObservableObject {
     /// shortcut: a form closed and reopened mid-paste takes the old paste's end as its own; upgrade if that shows.
     func addNewSessionPromptImages(_ out: AgentPromptImages.Outcome) {
         guard newSession != nil else { return }
-        newSession?.pasting = max(0, (newSession?.pasting ?? 0) - 1)
+        endNewSessionPromptPaste()
         newSession?.images += out.made.map { AgentPromptImages.Pasted(path: $0.path, thumb: $0.thumb.flatMap(NSImage.init(data:))) }
         newSession?.imageNote = out.note
     }
+
+    /// #1863 n173 (c): a paste's end with nothing for the form (its images, its note): Start stops waiting for it.
+    func endNewSessionPromptPaste() { newSession?.pasting = max(0, (newSession?.pasting ?? 0) - 1) }
 
     /// #1822: a chip's x: its path leaves the prompt and the chip goes (the file stays for the age prune).
     func removeNewSessionPromptImage(_ path: String) {

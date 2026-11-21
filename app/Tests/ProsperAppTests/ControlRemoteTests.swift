@@ -140,6 +140,10 @@ final class ControlRemoteTests: XCTestCase {
                         "A first prompt starts on this Mac only")
                 refused(try ControlSessions.new(args(["agent": "claude", "host": "host-a", "prompt": "hi"], images: ["/Users/example/a.png"]),
                                                 changes: changes), "A first prompt starts on this Mac only")
+                // n173 (d): the form's remote folder check passes a bidi override (only C0 and DEL); the agent's cwd is refused.
+                XCTAssertNil(AgentNewSession.remoteFolderError("/Users/example/\u{202E}site"))
+                refused(try ControlSessions.new(args(["agent": "shell", "host": "host-a", "cwd": "/Users/example/\u{202E}site"]), changes: changes),
+                        "cwd has a control or hidden character")
                 XCTAssertTrue(m.newSession == nil, "refused before the form opens")
                 XCTAssertEqual(calls.verbs.count, 0)
                 let ch = try ControlSessions.new(args(["agent": "shell", "host": "host-a", "name": "site", "cwd": "/Users/example/site"]),
@@ -242,13 +246,78 @@ final class ControlRemoteTests: XCTestCase {
                 m.cancelNewSession()
                 m.openNewSession()
                 m.setNewSessionName("mine")
+                // n173 (c): the person's own paste left its note; the agent's write ending later never clears it.
+                m.beginNewSessionPromptPaste()
+                m.addNewSessionPromptImages(AgentPromptImages.Outcome(failed: 1))
+                XCTAssertEqual(m.newSession?.imageNote, "Could not add 1 image")
                 held?(AgentPromptImages.Outcome(made: [.init(path: "/Users/example/x.png", thumb: nil)]))
                 XCTAssertEqual(spawns.calls.count, 0, "the person's form is never started")
+                XCTAssertEqual(m.newSession?.imageNote, "Could not add 1 image", "nothing of the agent's write reaches the person's form")
+                XCTAssertEqual(m.newSession?.images.count, 0)
                 XCTAssertEqual(m.newSession?.pasting, 0)
                 XCTAssertEqual(m.newSession?.prompt.contains("x.png"), false)
                 XCTAssertEqual(notices.last, "Agent's new session api did not start: the New session form changed")
                 m.cancelNewSession()
             }
+        }
+    }
+
+    // MARK: - AgentPromptImages.write (n172, n173)
+
+    /// n172: a FIFO named as an image is failed through the one bounded read, never opened blocking. A writer waits on the
+    /// FIFO with a real PNG: a read that opened it would get an image and make one. The row opens the read end itself
+    /// (non-blocking) only to release that writer, and waits at most 5 s for it.
+    func testPromptImagesWriteFailsAFIFOWithoutOpeningIt() throws {
+        let dir = tempDir(), fifo = dir.appendingPathComponent("pipe.png"), image = dir.appendingPathComponent("a.png")
+        try png(image)
+        let bytes = try Data(contentsOf: image)
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        let wrote = DispatchSemaphore(value: 0), path = fifo.path
+        Thread.detachNewThread {
+            let fd = open(path, O_WRONLY)   // blocks until a reader opens the FIFO
+            if fd >= 0 {
+                _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+                _ = bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+                close(fd)
+            }
+            wrote.signal()
+        }
+        let out = AgentPromptImages.write([.file(fifo)], dir: dir.appendingPathComponent("out", isDirectory: true), now: Date())
+        let release = open(fifo.path, O_RDONLY | O_NONBLOCK)
+        XCTAssertEqual(wrote.wait(timeout: .now() + 5), .success, "the writer was released")
+        if release >= 0 { close(release) }
+        XCTAssertEqual(out.made.count, 0, "the FIFO was never read")
+        XCTAssertEqual(out.failed, 1)
+        XCTAssertEqual(out.refused, 0)
+    }
+
+    /// n173 (a): a link named like an image whose target is not is failed, though the target's bytes are a PNG; the
+    /// same bytes under an image name behind a link are made.
+    func testPromptImagesWriteChecksTheLinkTargetsName() throws {
+        let dir = tempDir(), out = dir.appendingPathComponent("out", isDirectory: true)
+        let target = dir.appendingPathComponent("shot.dat"), link = dir.appendingPathComponent("shot.png")
+        try png(target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let bad = AgentPromptImages.write([.file(link)], dir: out, now: Date())
+        XCTAssertEqual(bad.made.count, 0)
+        XCTAssertEqual(bad.failed, 1)
+        let named = dir.appendingPathComponent("named.png"), named2 = dir.appendingPathComponent("link2.png")
+        try FileManager.default.copyItem(at: target, to: named)
+        try FileManager.default.createSymbolicLink(at: named2, withDestinationURL: named)
+        XCTAssertEqual(AgentPromptImages.write([.file(named2)], dir: out, now: Date()).made.count, 1)
+    }
+
+    /// n173 (b): an image over the pixel cap (read from its header) is failed before it is decoded; at the cap it is made.
+    func testPromptImagesWriteFailsAnImageOverThePixelCap() throws {
+        let dir = tempDir(), out = dir.appendingPathComponent("out", isDirectory: true), a = dir.appendingPathComponent("a.png")
+        try png(a)
+        let bytes = try Data(contentsOf: a)
+        XCTAssertEqual(AgentPromptImages.maxPixels, 64_000_000)
+        for src in [AgentPromptImages.Source.file(a), .data(bytes)] {
+            let over = AgentPromptImages.write([src], dir: out, now: Date(), maxPixels: 3)
+            XCTAssertEqual(over.made.count, 0, "2x2 is 4 pixels")
+            XCTAssertEqual(over.failed, 1)
+            XCTAssertEqual(AgentPromptImages.write([src], dir: out, now: Date(), maxPixels: 4).made.count, 1)
         }
     }
 

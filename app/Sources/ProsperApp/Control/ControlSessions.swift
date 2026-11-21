@@ -123,7 +123,8 @@ enum ControlSessions {
 
     /// #1863: sessions.new's images: absolute paths whose extension is an image type, at most AgentPromptImages.maxImages,
     /// no control or hidden character. Checked here without touching the disk; the writer then refuses what is not a
-    /// regular file, is past the paste's byte cap or does not decode as an image (AgentPromptImages.write).
+    /// regular file, is past the paste's byte cap, is a link whose target is not named as an image (n173 a: resolved off
+    /// main), is over its pixel cap or does not decode as an image (AgentPromptImages.write).
     static func imagePaths(_ args: [String: ControlJSON]) throws -> [URL] {
         guard let v = args["images"] else { return [] }
         guard case .array(let a) = v, !a.isEmpty else { throw ControlError("images is an empty list") }
@@ -159,6 +160,10 @@ enum ControlSessions {
         guard images.isEmpty || prompt != nil else { throw ControlError("images need a prompt") }
         if let host, !m.newSessionHosts.contains(host) {
             throw ControlError("no host \(OutsideText.shown(host, max: 80)) to start on (remote.list lists them)")
+        }
+        // n173 (d): another Mac's folder is argv there; the form checks only C0 and DEL (remoteFolderError), an agent's gets every unseen scalar refused.
+        if host != nil, let cwd = string(args, "cwd"), ControlSessionsTalk.hasUnseen(cwd) {
+            throw ControlError("cwd has a control or hidden character")
         }
         guard images.isEmpty || m.promptImagesDir != nil else { throw ControlError("images are not available here") }
         m.openNewSession()
@@ -196,7 +201,7 @@ enum ControlSessions {
                 guard let m, m.newSession != nil else { return }
                 // Only into the form this call filled (its name): another one gets the paste's end and nothing else.
                 guard m.newSession?.starting == nil, m.newSessionName == name, let text = m.newSession?.prompt else {
-                    m.addNewSessionPromptImages(AgentPromptImages.Outcome())
+                    m.endNewSessionPromptPaste()   // n173 (c): nothing of this write reaches the form, its note included
                     return changes.present("Agent's new session \(OutsideText.shown(name, max: 60)) did not start: the New session form changed", nil)
                 }
                 m.setNewSessionPrompt(text + AgentPromptImages.insertion(out.made.map(\.path), after: text.last), draft: false)
