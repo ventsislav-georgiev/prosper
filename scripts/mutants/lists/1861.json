@@ -1,0 +1,69 @@
+{
+ "entry": "1861",
+ "filter": "ControlClipboardTests",
+ "mutants": [
+  {
+   "name": "access-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "let previous = Pasteboard.save(pb, access: access())",
+   "new": "let previous = Pasteboard.save(pb, access: .allowed)",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-counts-characters",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard text.utf8.count <= maxBytes",
+   "new": "guard text.count <= maxBytes",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-plus-one",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "text.utf8.count <= maxBytes",
+   "new": "text.utf8.count <= maxBytes + 1",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-allowed",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": ", !text.isEmpty else",
+   "new": " else",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden-check-off",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "if ControlSessionsTalk.hasUnseen(text, allowing: [\"\\n\", \"\\t\"]) {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-clear",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "        pb.clearContents()\n        guard pb.setString",
+   "new": "        guard pb.setString",
+   "expect": "killed"
+  },
+  {
+   "name": "no-save",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "let previous = Pasteboard.save(pb, access: access())",
+   "new": "let previous = Pasteboard.SavedClip()",
+   "expect": "killed"
+  },
+  {
+   "name": "summary-uncapped",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "OutsideText.shown(text, max: summaryMax)",
+   "new": "OutsideText.shown(text, max: 10_000)",
+   "expect": "killed"
+  },
+  {
+   "name": "undo-ignores-later-copy",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "undo: { Pasteboard.restore(previous, to: pb, ifChangeCount: written) }",
+   "new": "undo: { Pasteboard.restore(previous, to: pb, ifChangeCount: pb.changeCount) }",
+   "expect": "killed"
+  }
+ ]
+}

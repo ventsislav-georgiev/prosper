@@ -2359,6 +2359,8 @@ tag from the now-released section and put it on the new top draft.
   be undone. (#1858)
 - Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
   release an account in the account pool, each with Undo. (#1862)
+- Agents can put plain text on the clipboard; Undo puts back what was there unless you copied
+  something since, and reading the clipboard stays yours only. (#1861)
 
 ## v2.174.0
 
