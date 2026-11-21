@@ -1,0 +1,55 @@
+{
+ "entry": "1857",
+ "filter": "ControlTextViewerTests",
+ "mutants": [
+  {
+   "name": "no_resolve",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "let resolved = url.resolvingSymlinksInPath()",
+   "new": "let resolved = url",
+   "expect": "killed"
+  },
+  {
+   "name": "no_regular",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "guard st.st_mode & S_IFMT == S_IFREG else",
+   "new": "guard true else",
+   "expect": "killed"
+  },
+  {
+   "name": "no_size",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "st.st_size <= Int64(TextViewerDocument.maxBytes) else {\n            throw",
+   "new": "st.st_size <= Int64.max else {\n            throw",
+   "expect": "killed"
+  },
+  {
+   "name": "no_env",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "if p.hasPrefix(\".env\") { return \"an .env file\" }",
+   "new": "if false { return \"an .env file\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_sshdir",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "if parts.contains(where: secretDirs.contains)",
+   "new": "if false",
+   "expect": "killed"
+  },
+  {
+   "name": "no_token",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "?.contains(\"token\") == true",
+   "new": "?.contains(\"zzz\") == true",
+   "expect": "killed"
+  },
+  {
+   "name": "no_hidden",
+   "file": "app/Sources/ProsperApp/Control/ControlTextViewer.swift",
+   "old": "guard raw.unicodeScalars.allSatisfy({ !OutsideText.isUnseen($0) }) else",
+   "new": "guard true else",
+   "expect": "killed"
+  }
+ ]
+}

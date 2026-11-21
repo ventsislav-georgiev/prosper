@@ -160,6 +160,7 @@ struct ControlRegistry: Sendable {
         ControlRegistry.registerClipboard(&r)
         ControlRegistry.registerSessionGroups(&r)
         ControlRegistry.registerRemote(&r)
+        r.register(ControlTextViewer.command)
         return r
     }
 
