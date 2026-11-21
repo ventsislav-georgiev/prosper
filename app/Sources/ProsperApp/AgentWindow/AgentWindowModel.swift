@@ -510,6 +510,7 @@ final class AgentWindowModel: ObservableObject {
     /// #1538: the layout is locked: the split gate on, a store loaded, Edit layout off and a layout the person made (the
     /// Layouts section's show rule: two panes or more, or two layouts or more; the lone one-pane layout behaves as before).
     /// Locked: nothing autosaves, a pick outside the layout opens the single-pane view, structural changes are refused.
+    /// #1817: but Close Pane and a drop act and are saved; Edit layout gates the sidebar pick into the focused pane.
     var layoutLocked: Bool {
         guard AgentPaneLayout.splitsEnabled, !layoutEditing, let s = layouts else { return false }
         return parked != nil || layout.panes.count >= 2 || s.layouts.count >= 2
@@ -815,10 +816,13 @@ final class AgentWindowModel: ObservableObject {
 
     /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane. 7.2: a close moves the
     /// keys to the panes.
+    /// #1817 (operator 2026-11-21): an explicit close acts without Edit layout and is saved; the single-pane view's one
+    /// pane never closes (close refuses the last pane).
     func closePane(_ pane: UUID) {
-        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }   // #1538; #1700: the view's one pane never closes
         let shown = layout.focused
-        if case let .success(l) = layout.close(pane) { keyFocus = .pane; adopt(l); cancelFormOfClosed(pane, shown: shown) }
+        if case let .success(l) = layout.close(pane) {
+            keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed(pane, shown: shown)
+        }
     }
 
     /// #1659: the one rule for every close (⌘W, Close Pane, the pills, a VoiceOver press): the form is drawn in the focused
@@ -848,8 +852,8 @@ final class AgentWindowModel: ObservableObject {
             // #1700: the single-pane view's split makes a new layout of it, Edit layout on (as "+" then a split)
             if parked != nil, case let .success(l) = next { keyFocus = .pane; unpark(l); return true }
         case .closePane:
-            // #1538: refused, the chord swallowed. #1700: the single-pane view swallows it with no notice (never the window close)
-            if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }
+            // #1817: acts locked too (saved below). #1700: the single-pane view swallows it with no notice (never the window close)
+            if parked != nil { return true }
             closing = base.focused
             next = base.close(base.focused)
         case let .focus(d):
@@ -877,6 +881,7 @@ final class AgentWindowModel: ObservableObject {
             // the new empty pane; set before adopt, so its autosave saves the split (locked, it would not).
             if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }
             adopt(l)
+            if closing != nil { autosave(explicit: true) }   // #1817: a close is saved while locked too
             closing.map { cancelFormOfClosed($0, shown: shown) }
             return true
         case let .failure(r):
@@ -1719,9 +1724,10 @@ final class AgentWindowModel: ObservableObject {
     /// (`storing` nil); and no change.
     /// shortcut: one write per committed change, not coalesced per run-loop turn (8.1); B2's divider (save at drag end)
     /// and B3's chained verbs are where coalescing pays.
-    private func autosave(_ next: PaneLayoutStore? = nil) {
+    /// #1817: `explicit` (a Close Pane, a drop) saves while locked; browsing still never does.
+    private func autosave(_ next: PaneLayoutStore? = nil, explicit: Bool = false) {
         guard let d = layoutDefaults, !closed, let s = layouts else { return }
-        if next == nil, layoutLocked { return }   // #1538: locked, browsing never rewrites the saved layout
+        if next == nil, layoutLocked, !explicit { return }   // #1538: locked, browsing never rewrites the saved layout
         guard let n = next ?? (store == nil ? islandOffLayout().flatMap(s.storing) : s.storing(layout)), n != s else { return }
         layouts = n
         layoutWrites += 1
@@ -2239,13 +2245,15 @@ final class AgentWindowModel: ObservableObject {
     /// #1491: a pick in pane `pane`'s title switcher: row `id` goes into THAT pane (focused or not), swapping with a pane
     /// that already shows it (PaneLayout.put), then the pane takes the focus and the keys as a sidebar click does (a remote
     /// row arms its attach). The pane's own session, or a pane no longer in the layout: nothing changes.
-    func choose(_ id: AgentSidebar.RowID, into pane: UUID) {
-        if layoutLocked { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }   // #1538: a pane retarget; #1700: the view's one pane takes the pick
+    /// #1817: `drop` (a drag onto the pane) acts while locked and is saved; the title switcher's pick keeps the #1538 gate.
+    func choose(_ id: AgentSidebar.RowID, into pane: UUID, drop: Bool = false) {
+        if layoutLocked, !drop || parked != nil { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }   // #1538: a pane retarget; #1700: the view's one pane takes the pick
         guard case let .success(put) = layout.put(target(id), in: pane), put != layout,
               case let .success(l) = put.focus(pane) else { return }
         removing = nil; pendingSpawn = nil; newSession = nil
         if paneRefusal != nil { paneRefusal = nil }
         layout = l
+        if drop { autosave(explicit: true) }
         if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
         follow()
         focusSelection()
@@ -2293,15 +2301,15 @@ final class AgentWindowModel: ObservableObject {
     func drop(_ id: AgentSidebar.RowID, into pane: UUID, zone: PaneDropZone) -> Bool {
         dropHover = nil
         guard !closed, Self.dragToken(id) != nil, row(id) != nil, layout.order.contains(pane) else { return false }
-        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }   // #1538: a drop retargets or splits
-        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }
+        // #1817 (operator 2026-11-21): a drop is explicit: it retargets or splits without Edit layout, and is saved
+        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }
         switch layout.split(pane, side: side, target: target(id), minimum: paneMinimum,
                             in: CGRect(origin: .zero, size: paneArea.size)) {
         case let .failure(r):
             paneRefusal = r
         case let .success(l):
             // #1722: a refused unpark (9 layouts) keeps the pending state and arms, follows and focuses nothing
-            if parked != nil { guard unpark(l) else { return true } } else { layout = l }   // #1700: an edge drop on the single-pane view
+            if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave(explicit: true) }   // #1700: an edge drop on the single-pane view
             removing = nil; pendingSpawn = nil; newSession = nil
             if paneRefusal != nil { paneRefusal = nil }
             if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }

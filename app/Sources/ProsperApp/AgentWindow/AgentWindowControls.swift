@@ -292,7 +292,7 @@ enum AgentWindowControls {
         return rowMenu(s, store: store, splits: AgentPaneLayout.splitsEnabled, side: refusal(), groups: groups)
     }
 
-    static let closePaneLabel = "Close Pane (the session keeps running)"
+    static let closePaneLabel = "Close Pane"   // #1817 (operator 2026-11-21): the short label
     /// #1351: the "..." item of the X-ray panel.
     static let xrayLabel = "X-Ray\u{2026} \u{21E7}\u{2318}X"
 

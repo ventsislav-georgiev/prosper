@@ -1,0 +1,90 @@
+{
+ "entry": "1817",
+ "filter": "AgentWindowLayoutEditTests",
+ "mutants": [
+  {
+   "name": "close-locked-refused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        let shown = layout.focused\n        if case let .success(l) = layout.close(pane) {",
+   "new": "        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }\n        let shown = layout.focused\n        if case let .success(l) = layout.close(pane) {",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-locked-refused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if parked != nil { return true }",
+   "new": "            if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-not-saved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if closing != nil { autosave(explicit: true) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "close-not-saved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed",
+   "new": "keyFocus = .pane; adopt(l); cancelFormOfClosed",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-locked-refused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
+   "new": "        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-centre-not-flagged",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "choose(id, into: pane, drop: true); return true }",
+   "new": "choose(id, into: pane); return true }",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-centre-not-saved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if drop { autosave(explicit: true) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-edge-not-saved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "} else { layout = l; autosave(explicit: true) }",
+   "new": "} else { layout = l }",
+   "expect": "killed"
+  },
+  {
+   "name": "explicit-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if next == nil, layoutLocked, !explicit { return }",
+   "new": "if next == nil, layoutLocked { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "sidebar-guard-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) }",
+   "new": "if let id, manual, placement == .focused, false { lockedShowing(id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-close-in-session",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+   "old": "        case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close): .session",
+   "new": "        case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close), .pane(.closePane): .session",
+   "expect": "killed"
+  },
+  {
+   "name": "label-long",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "static let closePaneLabel = \"Close Pane\"",
+   "new": "static let closePaneLabel = \"Close Pane (the session keeps running)\"",
+   "expect": "killed"
+  }
+ ]
+}

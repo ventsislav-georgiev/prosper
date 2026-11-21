@@ -107,7 +107,7 @@ extension AgentWindowD1Tests {
     @MainActor
     func testPaneMenuGateOnTwoPanesFiveItems() throws {
         try withPaneMenu(true) {
-            let five = ["Split Right", "Split Down", "Zoom", "Equalize", "Close Pane (the session keeps running)"]
+            let five = ["Split Right", "Split Down", "Zoom", "Equalize", "Close Pane"]
             let m = paneMenuModel(paneLayout([paneTarget("api"), paneTarget("web")]))
             defer { m.close() }
             let e = AgentWindowControls.paneMenu(m, pane: m.layout.focused)
@@ -116,7 +116,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(paneMenuItems(e), five)
             XCTAssertEqual(try paneMenuVerb(e, "Zoom"), .action(.zoom))
             XCTAssertEqual(try paneMenuVerb(e, "Equalize"), .equalize)
-            XCTAssertEqual(try paneMenuVerb(e, "Close Pane (the session keeps running)"), .action(.closePane))
+            XCTAssertEqual(try paneMenuVerb(e, "Close Pane"), .action(.closePane))
             m.adopt(m.layout.toggleZoom())
             XCTAssertTrue(m.layout.zoomed != nil)
             XCTAssertEqual(paneMenuItems(AgentWindowControls.paneMenu(m, pane: m.layout.focused)), five, "zoomed")
@@ -183,7 +183,7 @@ extension AgentWindowD1Tests {
             let names = [t.api: "api", t.web: "web", t.db: "db"]
             let keys: [(String, PaneAction?)] = [("Split Right", .split(.columns)), ("Split Down", .split(.rows)),
                                                  ("Zoom", .zoom), ("Equalize", nil),
-                                                 ("Close Pane (the session keeps running)", .closePane)]
+                                                 ("Close Pane", .closePane)]
             for (title, action) in keys {
                 let menu = paneMenuModel(t.l), twin = paneMenuModel(t.l)
                 defer { menu.close(); twin.close() }
@@ -224,7 +224,7 @@ extension AgentWindowD1Tests {
             defer { close.close() }
             XCTAssertEqual(close.layout.focused, t.api)
             let e = AgentWindowControls.paneMenu(close, pane: t.db)
-            AgentWindowControls.runPane(try paneMenuVerb(e, "Close Pane (the session keeps running)"), pane: t.db, in: close)
+            AgentWindowControls.runPane(try paneMenuVerb(e, "Close Pane"), pane: t.db, in: close)
             XCTAssertEqual(paneMenuShape(close.layout, names), "columns(0.7, api, web) focused web zoomed none", "db closed, not api")
 
             let split = paneMenuModel(t.l)

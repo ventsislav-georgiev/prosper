@@ -33,8 +33,8 @@
   {
    "name": "form-not-dismissed-closePane",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "adopt(l); cancelFormOfClosed(pane, shown: shown) }",
-   "new": "adopt(l) }",
+   "old": "adopt(l); autosave(explicit: true); cancelFormOfClosed(pane, shown: shown)",
+   "new": "adopt(l); autosave(explicit: true)",
    "expect": "killed"
   },
   {

@@ -2264,6 +2264,10 @@ tag from the now-released section and put it on the new top draft.
 - X-ray: the Tasks tab no longer leaves an empty gap under "Pending"; the Responses tab is gone
   (click a prompt to see its response); "Hide agent messages" in Prompts is now on by default and
   remembered between opens. (#1815)
+- Agents window layouts: Close Pane (the pane's ⋯ item, now just "Close Pane", the Layout menu and
+  ⌘W) and dragging a session onto a pane now act right away and are saved, without turning on Edit
+  layout first; Edit layout is still what lets a sidebar click change the focused pane's session.
+  (#1817)
 
 ## v2.174.0
 

@@ -26,8 +26,9 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     /// #1726: which menu an entry is in.
     static func kind(of a: Action) -> Kind {
         switch a {
-        case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close), .pane(.closePane): .session
-        case .pane(.split), .pane(.cycle), .pane(.layout), .editLayout: .layout
+        case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close): .session
+        // #1817 (operator 2026-11-21): Close Pane (Command-W, more than one pane) is in the Layout menu
+        case .pane(.closePane), .pane(.split), .pane(.cycle), .pane(.layout), .editLayout: .layout
         case .pane(.toggleSidebar), .pane(.zoom), .sidebarMode, .key(.font): .view
         default: .go
         }

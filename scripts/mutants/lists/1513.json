@@ -12,8 +12,8 @@
   {
    "name": "remote-pick-no-attach",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        layout = l\n        if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }\n        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
-   "new": "        layout = l\n        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
+   "old": "        if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }\n        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
+   "new": "        follow()\n        focusSelection()\n    }\n\n    /// #1492: the drop indicator",
    "expect": "killed"
   }
  ]

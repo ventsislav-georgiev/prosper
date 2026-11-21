@@ -132,7 +132,8 @@ enum PaneRefusal: Error, Equatable {
     case layoutExists
     /// #901 B3 step 1: New, Rename or Duplicate with the split gate off (15.0): nothing made, renamed or written.
     case layoutsOff
-    /// #1538: a structural change (split, close, a pane retarget, a drop) while the layout is locked (not in Edit layout).
+    /// #1538: a structural change (split, a title-switcher retarget, Open to the Side) while the layout is locked (not in
+    /// Edit layout). #1817: Close Pane and a drop never answer it.
     case layoutLocked
 
     var notice: String? {

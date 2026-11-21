@@ -33,15 +33,15 @@
   {
    "name": "drop-locked-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }   // #1538: a drop",
-   "new": "if layoutLocked { paneRefusal = .layoutLocked; return true }   // #1538: a drop",
+   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
+   "new": "        if layoutLocked { paneRefusal = .layoutLocked; return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
    "expect": "killed"
   },
   {
    "name": "drop-no-unpark",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l }   // #1700",
-   "new": "layout = l   // #1700",
+   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave(explicit: true) }   // #1700",
+   "new": "layout = l; autosave(explicit: true)   // #1700",
    "expect": "killed"
   },
   {
@@ -54,22 +54,22 @@
   {
    "name": "closepane-locked-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return }   // #1538; #1700",
-   "new": "if layoutLocked { paneRefusal = .layoutLocked; return }   // #1538; #1700",
+   "old": "        let shown = layout.focused\n        if case let .success(l) = layout.close(pane) {",
+   "new": "        if parked != nil { paneRefusal = .layoutLocked; return }\n        let shown = layout.focused\n        if case let .success(l) = layout.close(pane) {",
    "expect": "killed"
   },
   {
    "name": "perform-close-notice-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
-   "new": "if layoutLocked { paneRefusal = .layoutLocked; return true }",
+   "old": "if parked != nil { return true }",
+   "new": "if parked != nil { paneRefusal = .layoutLocked; return true }",
    "expect": "killed"
   },
   {
    "name": "perform-close-falls-through-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked { if parked == nil { paneRefusal = .layoutLocked }; return true }",
-   "new": "if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }",
+   "old": "if parked != nil { return true }",
+   "new": "if parked != nil, false { return true }",
    "expect": "killed"
   },
   {

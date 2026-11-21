@@ -161,8 +161,9 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
-    /// Locked: Split, Close Pane, a pane retarget (title switcher), a drop, Open to the Side and the dividers are refused
-    /// with "Edit layout to change it"; the layout and the blob stay. A focus move still works. Editing, Close Pane acts.
+    /// Locked: Split, a pane retarget (title switcher), Open to the Side and the dividers are refused with "Edit layout to
+    /// change it"; the layout and the blob stay. A focus move still works. #1817: Close Pane and a drop are not refused
+    /// (testAgentWindowLayoutEditLockedClosePaneActsWithNoNotice and its neighbours).
     @MainActor
     func testAgentWindowLayoutEditLockedStructuralChangesAreRefused() throws {
         try withGate(true) {
@@ -174,14 +175,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.perform(.split(.columns)), "the chord is swallowed")
             XCTAssertEqual(m.paneRefusal, .layoutLocked)
             XCTAssertEqual(m.layout.order, two.order, "no split")
-            XCTAssertTrue(m.perform(.closePane))
-            XCTAssertEqual(m.layout.order, two.order, "no close")
-            m.closePane(second)
-            XCTAssertEqual(m.layout.order, two.order, "no close from the header")
             m.choose(row("docs"), into: second)
             XCTAssertTrue(m.layout.panes.last?.target == t("web"), "no retarget")
-            XCTAssertTrue(m.drop(row("docs"), into: second, zone: .centre))
-            XCTAssertTrue(m.layout.panes.last?.target == t("web"), "no drop")
             m.openToTheSide(row("docs"))
             XCTAssertEqual(m.layout.order, two.order, "no side split")
             XCTAssertTrue(m.dividers(in: CGSize(width: 3000, height: 1000)).isEmpty, "no divider to drag")
@@ -191,6 +186,93 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             m.setLayoutEditing(true)
             m.closePane(second)
             XCTAssertEqual(m.layout.panes.count, 1, "editing: Close Pane acts")
+        }
+    }
+
+    /// #1817 (operator 2026-11-21): locked, the pane's Close Pane closes it at once: no notice, Edit layout stays off, the
+    /// close is saved (the blob's active layout is the one pane left).
+    @MainActor
+    func testAgentWindowLayoutEditLockedClosePaneActsWithNoNotice() throws {
+        try withGate(true) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            XCTAssertTrue(m.layoutLocked)
+            let second = try XCTUnwrap(two.order.last)
+            m.closePane(second)
+            XCTAssertEqual(m.layout.panes.count, 1, "closed")
+            XCTAssertTrue(m.paneRefusal == nil, "no Edit layout notice")
+            XCTAssertFalse(m.layoutEditing, "Edit layout not turned on")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the close is saved")
+        }
+    }
+
+    /// #1817: Command-W is the close-pane shortcut with two panes or more (PaneKeys); locked, perform closes the focused
+    /// pane, no notice, saved. Four panes: a header Close Pane then Command-W, so the layout stays locked after each close
+    /// and only the explicit save writes.
+    @MainActor
+    func testAgentWindowLayoutEditLockedCommandWClosesTheFocusedPane() throws {
+        try withGate(true) {
+            let four = base.paneLayout([t("api"), t("web"), t("docs"), t("ops")])
+            let d = base.layoutSuite()
+            d.set(try PaneLayoutStore(layouts: [four], active: four.id, mru: [four.id]).encode(), forKey: Self.blobKey)
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle),
+                                                 base.session("docs", .idle), base.session("ops", .idle)]), layouts: d)
+            defer { m.close() }
+            m.setVisible(true)
+            m.setLayoutEditing(false)
+            let last = try XCTUnwrap(four.order.last)
+            m.closePane(last)
+            XCTAssertEqual(m.layout.panes.count, 3, "the header's Close Pane closed it")
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the header close is saved while locked")
+            let c = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 3, splitsEnabled: true)
+            let e = try XCTUnwrap(AgentsNSWindow.keyEvent("w", .command, 13))
+            XCTAssertEqual(PaneKeys.action(for: e, context: c), .closePane, "Command-W is the shortcut")
+            let focused = m.layout.focused
+            XCTAssertTrue(m.perform(.closePane))
+            XCTAssertEqual(m.layout.panes.count, 2)
+            XCTAssertFalse(m.layout.order.contains(focused), "the focused pane closed")
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved while locked")
+        }
+    }
+
+    /// #1817: Close Pane is in the Layout menu (Command-W, two panes or more), not the Session menu, and the pane "⋯"
+    /// item has the short label.
+    @MainActor
+    func testAgentWindowLayoutEditClosePaneMenuItems() {
+        let all = AgentGoMenu.entries(splits: true, panes: 2) + AgentGoMenu.layoutEntries(splits: true)
+        let layout = AgentGoMenu.entries(all, in: .layout).compactMap { $0 }
+        XCTAssertTrue(layout.contains { $0.title == "Close Pane" && $0.key == "w" && $0.action == .pane(.closePane) })
+        XCTAssertFalse(AgentGoMenu.entries(all, in: .session).contains { $0?.title == "Close Pane" })
+        XCTAssertEqual(AgentWindowControls.closePaneLabel, "Close Pane")
+        let pane = AgentWindowControls.paneMenu(splits: true, panes: 2, right: nil, down: nil)
+        XCTAssertTrue(pane.contains(.pane("Close Pane", enabled: true, verb: .action(.closePane))))
+    }
+
+    /// #1817: locked, a drop places the session (the centre retargets, an edge splits), no notice, Edit layout stays off,
+    /// saved. The old guard stays: a sidebar click outside Edit layout never replaces the focused pane's session (it opens
+    /// the single-pane view; the saved layout keeps its panes).
+    @MainActor
+    func testAgentWindowLayoutEditLockedDropPlacesAndASidebarClickStillDoesNot() throws {
+        try withGate(true) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            let second = try XCTUnwrap(two.order.last)
+            XCTAssertTrue(m.drop(row("docs"), into: second, zone: .centre))
+            XCTAssertTrue(m.layout.panes.last?.target == t("docs"), "the centre drop retargets")
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing, "no notice, Edit layout off")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
+            XCTAssertTrue(m.drop(row("ops"), into: second, zone: .edge(.right)))
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("api"), t("docs"), t("ops")], "the edge drop splits")
+            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked)
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
+            let saved = m.layout
+            m.click(row("web"))
+            XCTAssertTrue(m.parked == saved, "a sidebar click parks the layout")
+            XCTAssertTrue(m.layouts?.activeLayout == saved, "the saved layout keeps its panes")
+            XCTAssertTrue(m.layout.panes.count == 1 && m.layout.panes.first?.target == t("web"), "the single-pane view")
         }
     }
 

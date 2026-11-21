@@ -5,8 +5,8 @@
   {
    "name": "kind-close-to-go",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
-   "old": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close), .pane(.closePane): .session",
-   "new": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .pane(.closePane): .session",
+   "old": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close): .session",
+   "new": "case .key(.newSession), .key(.newShell), .key(.stopOrRemove): .session",
    "expect": "killed",
    "filter": "AgentGoMenuTests/testEachItemRunsTheWindowsPerformAndMatchesNoKey"
   },
