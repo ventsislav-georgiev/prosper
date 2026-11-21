@@ -14,7 +14,8 @@ enum ControlActions {
         /// Runs a built-in's hotkey payload; false when the app holds none for it.
         var fireBuiltIn: (ShortcutAction) -> Bool
         /// An extension action's hotkey press (AppDelegate.pressExtensionAction): `item` is the bound row or the input.
-        var fireExtension: (_ commandID: String, _ item: String) -> Void
+        /// #1850: `done` runs once the handler's invoke has ended (at once when there is no app to fire in).
+        var fireExtension: (_ commandID: String, _ item: String, _ done: @escaping @MainActor () -> Void) -> Void
 
         static var app: Source {
             Source(
@@ -24,11 +25,18 @@ enum ControlActions {
                     payload()
                     return true
                 },
-                fireExtension: { (NSApp?.delegate as? AppDelegate)?.pressExtensionAction(commandID: $0, item: $1) })
+                fireExtension: { commandID, item, done in
+                    guard let app = NSApp?.delegate as? AppDelegate else { return done() }
+                    app.pressExtensionAction(commandID: commandID, item: item, done: done)
+                })
         }
     }
 
     static var source = Source.app
+
+    /// #1850: extension actions an agent ran whose handler has not ended. While above 0, ExtensionViewPanel orders a
+    /// window the handler opens (host.window.open) in quietly: no activation, never key. Settable so a row resets it.
+    static var agentRunsInFlight = 0
 
     /// Built-ins an agent must not fire, so they are neither listed nor run here. #1845: the screen readers read
     /// another app's screen through a selection the person makes. #1848: the rest open a Prosper panel or window that
@@ -136,7 +144,8 @@ enum ControlActions {
                                                 commandTitle: hit.command.title, icon: "").label
             guard !opensPanel(hit.command) else { throw ControlError("\(label) is human-only: it opens a panel that takes the keyboard") }
             guard input == nil || takes else { throw ControlError("\(label) takes no input") }
-            source.fireExtension(commandID, takes ? input ?? "" : item)
+            agentRunsInFlight += 1
+            source.fireExtension(commandID, takes ? input ?? "" : item) { agentRunsInFlight -= 1 }
             return label
         default:
             throw unknown

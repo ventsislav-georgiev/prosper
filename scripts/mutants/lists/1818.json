@@ -5,8 +5,8 @@
   {
    "name": "no_fire_extension",
    "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
-   "old": "            source.fireExtension(commandID, takes ? input ?? \"\" : item)\n",
-   "new": "\n",
+   "old": "            source.fireExtension(commandID, takes ? input ?? \"\" : item) { agentRunsInFlight -= 1 }\n",
+   "new": "            agentRunsInFlight -= 1\n",
    "expect": "killed"
   },
   {

@@ -1085,12 +1085,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One extension-action press: the hotkey's path, and actions.run's (#1818). #1113/#1123: a window command
     /// whose window holds this press's view toggles it instead.
-    func pressExtensionAction(commandID: String, item: String) {
+    func pressExtensionAction(commandID: String, item: String, done: @escaping @MainActor () -> Void = {}) {
         Self.extensionHotkeyPressed(commandID: commandID, item: item, registry: extensions,
                                     panel: extensionViewPanel) { pressed in
             Task { @MainActor in
                 await ExtensionShortcuts.fire(commandID: commandID, item: item, registry: self.extensions)
                 self.extensionViewPanel.pressEnded(pressed)
+                done()
             }
         }
     }

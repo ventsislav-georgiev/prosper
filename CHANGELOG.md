@@ -2332,6 +2332,8 @@ tag from the now-released section and put it on the new top draft.
   status and usage (ccpool.status), token totals per account and session (ccpool.usage), and which
   account a session is pinned to (ccpool.pin). Labels only; tokens and account changes stay with you
   in Settings. (#1843)
+- A window an extension opens while an agent runs one of its actions now appears without pulling the
+  keyboard away from the app you are typing in. (#1850)
 
 ## v2.174.0
 

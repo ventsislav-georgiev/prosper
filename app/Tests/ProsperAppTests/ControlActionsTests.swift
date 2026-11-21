@@ -88,7 +88,7 @@ final class ControlActionsTests: XCTestCase {
         ControlActions.source = ControlActions.Source(
             registry: { registry },
             fireBuiltIn: { [weak self] in self?.fired.append("builtin:\($0.rawValue)"); return true },
-            fireExtension: { [weak self] in self?.fired.append("ext:\($0)|\($1)") })
+            fireExtension: { [weak self] commandID, item, done in self?.fired.append("ext:\(commandID)|\(item)"); done() })
     }
 
     private func registry() -> ControlRegistry {
@@ -285,6 +285,59 @@ final class ControlActionsTests: XCTestCase {
             XCTAssertTrue(refused.error?.hasSuffix("takes no input") == true, "\(id): \(refused)")
         }
         XCTAssertEqual(fired.count, 1, "\(fired)")
+    }
+
+    /// #1850: a handler run by an agent that opens its own window (host.window.open -> the presenter) gets it ordered
+    /// in quietly while its invoke is in flight; once the invoke ends, a show (a hotkey press) presents as before.
+    func testAgentRunOrdersAnExtensionWindowQuietly() async throws {
+        addTeardownBlock { @MainActor in ControlActions.agentRunsInFlight = 0 }
+        let exts = try fakeRegistry()
+        let panel = ExtensionViewPanel()
+        var shows: [String] = []
+        panel.onScreen = { _ in shows.append("present") }
+        panel.onScreenQuietly = { _ in shows.append("quiet") }
+        addTeardownBlock { @MainActor in
+            panel.window?.close()
+            panel.window?.contentViewController = nil
+        }
+        var ended: (@MainActor () -> Void)?
+        addTeardownBlock { @MainActor in ControlActions.source = .app }
+        ControlActions.source = ControlActions.Source(
+            registry: { exts },
+            fireBuiltIn: { _ in true },
+            fireExtension: { _, _, done in
+                // The handler's host.window.open, during its invoke; the invoke ends later.
+                AppDelegate.presentExtensionView(extID: "com.example.fake", node: .spinner("Fake"),
+                                                 registry: exts, panel: panel)
+                ended = done
+            })
+        let r = await call(registry(), "actions.run", ["id": .string("extensionItem\u{1}fake.ping\u{1}")])
+        XCTAssertTrue(r.ok, "\(r)")
+        XCTAssertEqual(shows, ["quiet"], "an agent's run never activates Prosper or takes the keys")
+        XCTAssertEqual(ControlActions.agentRunsInFlight, 1)
+        AppDelegate.presentExtensionView(extID: "com.example.fake", node: .spinner("Again"), registry: exts, panel: panel)
+        XCTAssertEqual(shows, ["quiet", "quiet"], "still in flight: a second open is quiet too")
+        ended?()
+        XCTAssertEqual(ControlActions.agentRunsInFlight, 0, "the run's end clears it")
+        AppDelegate.presentExtensionView(extID: "com.example.fake", node: .spinner("Hotkey"), registry: exts, panel: panel)
+        XCTAssertEqual(shows, ["quiet", "quiet", "present"], "no run in flight (a hotkey press): presented as before")
+        XCTAssertFalse(panel.window?.isVisible ?? false, "never on screen")
+    }
+
+    /// #1850: a refused run takes no flag (nothing fires, so nothing would clear it).
+    func testRefusedRunLeavesNoRunInFlight() async throws {
+        addTeardownBlock { @MainActor in ControlActions.agentRunsInFlight = 0 }
+        useRecorder(try fakeRegistry())
+        let r = await call(registry(), "actions.run", ["id": .string("extensionItem\u{1}fake.win\u{1}")])
+        XCTAssertFalse(r.ok)
+        XCTAssertEqual(ControlActions.agentRunsInFlight, 0)
+    }
+
+    /// #1850: the app's own source with no app to fire in ends the run at once, so the flag cannot stay up.
+    func testAppSourceWithoutTheAppEndsTheRunAtOnce() {
+        var ended = 0
+        ControlActions.Source.app.fireExtension("fake.ping", "") { ended += 1 }
+        XCTAssertEqual(ended, 1)
     }
 
     /// No app delegate under XCTest: the real source finds no registry, so a run is an unknown id, never a fire.

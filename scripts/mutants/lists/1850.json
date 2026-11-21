@@ -1,0 +1,34 @@
+{
+ "entry": "1850",
+ "filter": "ControlActionsTests",
+ "mutants": [
+  {
+   "name": "no_flag_set",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "            agentRunsInFlight += 1\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "presenter_ignores_flag",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift",
+   "old": "if ControlActions.agentRunsInFlight > 0 { onScreenQuietly(win) }",
+   "new": "if false { onScreenQuietly(win) }",
+   "expect": "killed"
+  },
+  {
+   "name": "flag_never_cleared",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "{ agentRunsInFlight -= 1 }",
+   "new": "{ }",
+   "expect": "killed"
+  },
+  {
+   "name": "app_source_no_done",
+   "file": "app/Sources/ProsperApp/Control/ControlActions.swift",
+   "old": "guard let app = NSApp?.delegate as? AppDelegate else { return done() }",
+   "new": "guard let app = NSApp?.delegate as? AppDelegate else { return }",
+   "expect": "killed"
+  }
+ ]
+}

@@ -608,6 +608,8 @@ final class ExtensionViewPanel {
     var onScreen: (NSWindow) -> Void = { win in
         DockPolicy.present(win)
     }
+    /// #1850: the show while an agent's actions.run is in flight: ordered in without taking the keys (#1846).
+    var onScreenQuietly: (NSWindow) -> Void = { DockPolicy.presentQuietly($0) }
 
     func present(
         owner: String? = nil,
@@ -666,7 +668,7 @@ final class ExtensionViewPanel {
         identity = pending?.extensionID == owner ? pending : (owner == self.owner ? identity : nil)
         pending = nil
         self.owner = owner
-        onScreen(win)
+        if ControlActions.agentRunsInFlight > 0 { onScreenQuietly(win) } else { onScreen(win) }
     }
 
     /// #1113: WindowToggle's focus: the window back in front with the view the user left, no re-render.
