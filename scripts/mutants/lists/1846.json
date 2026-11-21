@@ -1,0 +1,83 @@
+{
+ "entry": "1846",
+ "filter": "ControlSessionsTests",
+ "mutants": [
+  {
+   "name": "persist_control",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard m.startNewSession(persist: false) else",
+   "new": "guard m.startNewSession() else",
+   "expect": "killed"
+  },
+  {
+   "name": "persist_folder",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if persist { Preferences.agentWindowNewSessionFolder = folder }",
+   "new": "Preferences.agentWindowNewSessionFolder = folder",
+   "expect": "killed"
+  },
+  {
+   "name": "persist_command",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if persist, let command, !command",
+   "new": "if let command, !command",
+   "expect": "killed"
+  },
+  {
+   "name": "focus_click",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "        m.select(.live(s.key))\n        return ControlChange(summary: \"focus",
+   "new": "        m.click(.live(s.key))\n        return ControlChange(summary: \"focus",
+   "expect": "killed"
+  },
+  {
+   "name": "quiet_present",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "        orderQuietly(win)\n    }",
+   "new": "        present(win)\n    }",
+   "expect": "killed"
+  },
+  {
+   "name": "quiet_always",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "guard !isActive() else { return present(win) }",
+   "new": "guard isActive() else { return present(win) }",
+   "expect": "killed"
+  },
+  {
+   "name": "show_quiet_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "let present = quietly ? presentQuietly : self.present",
+   "new": "let present = self.present",
+   "expect": "killed"
+  },
+  {
+   "name": "layout_no_restore",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "            m.setLayoutEditing(editing)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "layout_restore_off",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "            m.setLayoutEditing(editing)\n",
+   "new": "            m.setLayoutEditing(false)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "focus_form_guard",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "        guard m.newSession == nil else { throw ControlError(formOpen) }\n        let s = try session(name, in: st)",
+   "new": "        let s = try session(name, in: st)",
+   "expect": "killed"
+  },
+  {
+   "name": "layout_form_guard",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "        let (m, st) = try window()\n        guard m.newSession == nil else { throw ControlError(formOpen) }\n",
+   "new": "        let (m, st) = try window()\n",
+   "expect": "killed"
+  }
+ ]
+}

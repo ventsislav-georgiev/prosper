@@ -2731,16 +2731,17 @@ final class AgentWindowModel: ObservableObject {
         return !newSessionName.isEmpty && e.folder == nil && e.name == nil
     }
 
-    /// Start or Return: nothing runs unless every check passes now.
+    /// Start or Return: nothing runs unless every check passes now. #1846 n132: `persist` false (an agent's start over the
+    /// control channel) leaves the person's saved folder and command as they are.
     @discardableResult
-    func startNewSession() -> Bool {
+    func startNewSession(persist: Bool = true) -> Bool {
         guard let f = newSession, canStartNewSession else { return false }
         if let host = f.host {
             return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
         }
         // #847 D6.1: the prompt only for a Claude; it never joins the spawn's argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
-                     name: newSessionName, command: f.command, prompt: newSessionClaude ? f.prompt : "")
+                     name: newSessionName, command: f.command, prompt: newSessionClaude ? f.prompt : "", persist: persist)
     }
 
     /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
@@ -2762,13 +2763,14 @@ final class AgentWindowModel: ObservableObject {
                      command: nil)
     }
 
-    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, prompt: String = "") -> Bool {
+    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, prompt: String = "",
+                       persist: Bool = true) -> Bool {
         requests += 1
         unlisted = nil
         let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
             self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked,
-                          prompt: prompt)
+                          prompt: prompt, persist: persist)
         }) else {
             let why = spawnRefusal(name)
             // never dropped silently; #948 F2: a gate refusal goes when the gate opens, a name or busy one with the form
@@ -2851,7 +2853,7 @@ final class AgentWindowModel: ObservableObject {
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
-                         request: Int?, asked: TimeInterval, prompt: String) {
+                         request: Int?, asked: TimeInterval, prompt: String, persist: Bool) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
@@ -2861,8 +2863,8 @@ final class AgentWindowModel: ObservableObject {
             return
         }
         claimed[name] = now()
-        Preferences.agentWindowNewSessionFolder = folder
-        if let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if persist { Preferences.agentWindowNewSessionFolder = folder }
+        if persist, let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             // #847 D7.2: a typed -n/--name would name every later session; else the text as typed.
             let words = AgentIsland.shellWords(command), kept = AgentIsland.strippingName(words)
             Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import XCTest
 @testable import ProsperApp
 
@@ -132,12 +133,14 @@ final class ControlSessionsTests: XCTestCase {
     func testSessionsFocusSelectsTheSessionAndUndoSelectsTheOneBefore() throws {
         let st = base.store([base.session("api", .idle), base.session("web", .idle)])
         let m = base.windowModel(st)
+        m.setVisible(true)   // #1846: the sidebar's rows built, so a click would move the keys (focusSelection)
         defer { m.close() }
         _ = base.fakeTerminal(m)
         m.select(.live(base.paneKey("api")))
         try withSeams(show: m) {
             let ch = try ControlSessions.focus(args(["name": "web"]))
             XCTAssertEqual(m.selection, .live(base.paneKey("web")))
+            XCTAssertFalse(m.terminal.focusPending, "#1846 n133: selected, the keys not moved into its terminal")
             ch.undo?()
             XCTAssertEqual(m.selection, .live(base.paneKey("api")))
         }
@@ -158,9 +161,14 @@ final class ControlSessionsTests: XCTestCase {
             try withGate(true) {
                 let before = m.layout.id, count = m.layouts?.layouts.count ?? 0
                 m.paneArea = CGRect(x: 0, y: 0, width: 400, height: 300)
+                m.setLayoutEditing(false)   // #1846 n134: the fixture starts in Edit layout; off first, on below
                 refused(try ControlSessions.setLayout(a), PaneRefusal.noRoom.notice ?? "")
                 XCTAssertEqual(m.layout.id, before, "a refusal brings the layout before back")
                 XCTAssertEqual(m.layouts?.layouts.count, count, "and leaves no layout behind")
+                XCTAssertFalse(m.layoutEditing, "#1846 n134: and Edit layout as it was (off)")
+                m.setLayoutEditing(true)
+                refused(try ControlSessions.setLayout(a), PaneRefusal.noRoom.notice ?? "")
+                XCTAssertTrue(m.layoutEditing, "#1846 n134: and Edit layout as it was (on)")
                 m.paneArea = AgentWindowD1Tests.wideArea
                 let ch = try ControlSessions.setLayout(a)
                 XCTAssertEqual(m.layout.panes.compactMap(\.target), [base.paneTarget("api"), base.paneTarget("web")])
@@ -241,6 +249,15 @@ final class ControlSessionsTests: XCTestCase {
                 m.openNewSession()
                 XCTAssertEqual(m.newSession?.prompt, "my draft", "the next form opens with the draft")
                 m.cancelNewSession()
+                // #1846 n132: an agent's start and its answer leave the person's saved command and folder as they are.
+                Preferences.agentIslandNewSessionCommand = "claude --model example"
+                Preferences.agentWindowNewSessionFolder = "/Users/example/saved"
+                _ = try ControlSessions.new(args(["agent": "codex", "name": "web2", "cwd": "/Users/example/web"]))
+                XCTAssertEqual(spawns.calls.last?.name, "web2")
+                spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web2"), nil)
+                XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --model example")
+                XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/saved")
+                m.cancelNewSession()
                 XCTAssertEqual(shows, 0, "a model already: the window is not shown")
             }
             // #1809 (b): never opened: opened through the show path (seam: recorded), then the form started.
@@ -252,6 +269,64 @@ final class ControlSessionsTests: XCTestCase {
             }
             try withSeams { refused(try ControlSessions.new(args(["agent": "claude"])), ControlSessions.islandOff) }
         }
+    }
+
+    /// #1846 n135: sessions.focus and layout.set refuse over an open New session form, as sessions.new does (a pick
+    /// would close it); the form stays open and nothing is selected or laid out.
+    @MainActor
+    func testSessionsFocusAndLayoutSetRefuseOverAnOpenForm() throws {
+        try base.withNewSessionPrefs {
+            let st = base.store([base.session("api", .idle), base.session("web", .idle)])
+            let m = base.newSessionModel(st, AgentWindowD1Tests.SpawnCalls())
+            defer { m.close() }
+            m.select(.live(base.paneKey("api")))
+            m.openNewSession()
+            XCTAssertTrue(m.newSession != nil)
+            try withSeams(model: m, show: m) {
+                try withGate(true) {
+                    refused(try ControlSessions.focus(args(["name": "web"])), ControlSessions.formOpen)
+                    refused(try ControlSessions.setLayout(args(["layout": "side-by-side", "left": "api", "right": "web"])),
+                            ControlSessions.formOpen)
+                }
+            }
+            XCTAssertTrue(m.newSession != nil, "the form stays open")
+            m.cancelNewSession()
+        }
+    }
+
+    /// #1846 n133: an agent's show (AgentsWindow.show(quietly:), DockPolicy.presentQuietly) never activates an inactive
+    /// Prosper: ordered front only, no activation, no re-assert, no `.regular` flip. Active: the normal present. Every
+    /// DockPolicy seam faked; the window is never put on screen.
+    @MainActor
+    func testAgentShowNeverActivatesAnInactiveProsper() throws {
+        var log: [String] = [], active = false
+        DockPolicy.resetForTesting(setPolicy: { log.append("policy \($0.rawValue)") }, order: { _ in log.append("order") },
+                                   orderQuietly: { _ in log.append("quiet") }, isActive: { active },
+                                   frontmostPid: { 1 }, reactivate: { log.append("reactivate") },
+                                   after: { _, f in log.append("after"); f() })
+        defer { DockPolicy.resetForTesting() }
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        DockPolicy.presentQuietly(win)
+        XCTAssertEqual(log, ["quiet"], "inactive: ordered front only")
+        XCTAssertFalse(DockPolicy.isShown(win), "not registered: the .regular flip would activate")
+        log = []
+        active = true
+        DockPolicy.presentQuietly(win)
+        XCTAssertTrue(log.contains("order"), "active: the normal present")
+        XCTAssertFalse(log.contains("quiet"))
+        // The window's own path: show(quietly: true) takes presentQuietly, show() the person's present.
+        let r = AgentWindowD1Tests.HideRig(base.store([base.session("api", .idle)]))
+        let w = r.w
+        addTeardownBlock { @MainActor in w.window?.close(); w.grace?.fire() }
+        var quiet = 0
+        w.presentQuietly = { _ in quiet += 1 }
+        w.show(quietly: true)
+        XCTAssertEqual(quiet, 1)
+        XCTAssertEqual(r.presented, 0)
+        w.show()
+        XCTAssertEqual(quiet, 1)
+        XCTAssertEqual(r.presented, 1)
     }
 
     // MARK: - Registration and the wire

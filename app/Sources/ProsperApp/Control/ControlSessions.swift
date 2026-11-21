@@ -3,7 +3,7 @@ import Foundation
 /// #1809: Agent Sessions over the control channel: sessions.list/new/stop/restart/focus and layout.set. Every command
 /// takes the window's own path (the agent window is the superset): Stop and Restart the confirm strip's gate check and
 /// the model's `stopSession`/`restartSession` (the island controller's methods); New the New session form; Focus a
-/// sidebar click; layout.set the Layouts "+" (newLayout), a pick, Split Right and a pick. Work runs on demand only: no
+/// sidebar pick (#1846: the keys stay put); layout.set the Layouts "+" (newLayout), a pick, Split Right and a pick. Work runs on demand only: no
 /// observer, no poll. Only structured commands with arguments live here: parameterless actions are #1818's.
 @MainActor
 enum ControlSessions {
@@ -13,15 +13,17 @@ enum ControlSessions {
     static var islandStore: @MainActor () -> AgentIslandStore? = { AgentIslandController.shared.store }
     /// The window shown (the menu item's `show`, AgentsWindow.swift:102) and its model; nil (nothing shown) while the
     /// island is off. sessions.focus always; sessions.new and layout.set only while the window has no model yet.
+    /// #1846 n133: quietly: an inactive Prosper is not activated (DockPolicy.presentQuietly).
     static var showWindow: @MainActor () -> AgentWindowModel? = {
         guard AgentIslandController.shared.store != nil else { return nil }
-        AgentsWindow.shared.show()
+        AgentsWindow.shared.show(quietly: true)
         return AgentsWindow.shared.model
     }
 
     nonisolated static let agents = ["claude", "codex", "shell"]
     nonisolated static let layouts = ["side-by-side"]
     static let islandOff = "Agent Island is off: turn it on in Settings > Extensions"
+    static let formOpen = "the New session form is open in Agent Sessions: finish or cancel it first"
 
     // MARK: - Lookup
 
@@ -94,13 +96,15 @@ enum ControlSessions {
 
     // MARK: - sessions.focus
 
-    /// The window shown and the session clicked in its sidebar (select, then the keys into its terminal). Undo selects
-    /// the row selected before.
+    /// The window shown and the session selected in its sidebar, as a click picks it but the keys stay where they are
+    /// (#1846 n133: the person may be typing in another app). An open New session form is refused (n135: a pick closes
+    /// it). Undo selects the row selected before.
     static func focus(_ args: [String: ControlJSON]) throws -> ControlChange {
         let name = try required(args, "name")
         guard let m = showWindow(), let st = m.store else { throw ControlError(islandOff) }
+        guard m.newSession == nil else { throw ControlError(formOpen) }
         let s = try session(name, in: st), before = m.selection
-        m.click(.live(s.key))
+        m.select(.live(s.key))
         return ControlChange(summary: "focus \(s.title)", result: .string(s.name), verb: "focused", undo: { [weak m] in
             // A live row comes back only while its session is listed (the sidebar's rows may not be built yet).
             guard let before, let m else { return }
@@ -115,7 +119,7 @@ enum ControlSessions {
     /// is the reply's error. Undo stops the new session once it is listed.
     static func new(_ args: [String: ControlJSON]) throws -> ControlChange {
         let (m, _) = try window()
-        guard m.newSession == nil else { throw ControlError("the New session form is open in Agent Sessions: finish or cancel it first") }
+        guard m.newSession == nil else { throw ControlError(formOpen) }
         let agent = try required(args, "agent"), prompt = string(args, "prompt")
         guard agent == "claude" || prompt == nil else { throw ControlError("a prompt needs agent claude") }
         m.openNewSession()
@@ -143,7 +147,7 @@ enum ControlSessions {
             throw refuse(e.name ?? e.folder ?? m.newSessionStatus)
         }
         let name = m.newSessionName
-        guard m.startNewSession() else { throw refuse(m.newSession?.status) }
+        guard m.startNewSession(persist: false) else { throw refuse(m.newSession?.status) }
         return ControlChange(summary: name, result: .string(name), verb: "started a session", undo: { [weak m] in
             // shortcut: by name in the store as listed at undo time; a session not listed yet is not stopped.
             guard let m, let s = m.store?.sessions.first(where: { $0.name == name }) else { return }
@@ -155,12 +159,15 @@ enum ControlSessions {
 
     /// "side-by-side": a new layout (Layouts "+", Edit layout on), `left` picked into its pane, Split Right, `right`
     /// picked into the new pane, then Done (saved, locked). A refusal (the split gate off, 9 layouts, no room) deletes
-    /// the layout it made and is the error. Undo deletes it: the layout before comes back (the MRU's next).
+    /// the layout it made, puts Edit layout back as it was (#1846 n134) and is the error. An open New session form is
+    /// refused (n135: a pick closes it). Undo deletes it: the layout before comes back (the MRU's next).
     static func setLayout(_ args: [String: ControlJSON]) throws -> ControlChange {
         let (m, st) = try window()
+        guard m.newSession == nil else { throw ControlError(formOpen) }
         let left = try session(try required(args, "left"), in: st), right = try session(try required(args, "right"), in: st)
         guard left.key != right.key else { throw ControlError("left and right are the same session") }
         guard AgentPaneLayout.splitsEnabled else { throw ControlError("split panes are off in this build") }
+        let editing = m.layoutEditing
         if let r = m.newLayout() { throw ControlError(r.notice ?? "no new layout: \(r)") }
         let made = m.layout.id
         m.select(.live(left.key))
@@ -170,6 +177,7 @@ enum ControlSessions {
         guard shown == [.session(dir: left.key.dir, name: left.name), .session(dir: right.key.dir, name: right.name)] else {
             let why = m.paneRefusal?.notice
             m.deleteLayout(made)
+            m.setLayoutEditing(editing)
             throw ControlError(why ?? "the two sessions could not be put side by side")
         }
         m.setLayoutEditing(false)
@@ -196,7 +204,7 @@ extension ControlRegistry {
                            args: ["name": name]) { _, a in try ControlSessions.run(.stop, a) })
         r.register(.change(name: "sessions.restart", summary: "Restart a session's agent on the same conversation (no undo).",
                            args: ["name": name]) { _, a in try ControlSessions.run(.restart, a) })
-        r.register(.change(name: "sessions.focus", summary: "Show Agent Sessions with this session selected and typing into it.",
+        r.register(.change(name: "sessions.focus", summary: "Show Agent Sessions with this session selected (the keys stay where they are).",
                            args: ["name": name]) { _, a in try ControlSessions.focus(a) })
         r.register(.change(name: "layout.set", summary: "Arrange Agent Sessions: side-by-side puts two sessions in two panes.", args: [
             "layout": ControlArg(type: "string", required: true, allowed: ControlSessions.layouts),

@@ -40,8 +40,8 @@
   {
    "name": "layout_no_rollback",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "            m.deleteLayout(made)\n            throw",
-   "new": "            throw",
+   "old": "            m.deleteLayout(made)\n            m.setLayoutEditing(editing)\n            throw",
+   "new": "            m.setLayoutEditing(editing)\n            throw",
    "expect": "killed"
   },
   {
@@ -82,8 +82,8 @@
   {
    "name": "open_form_taken",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard m.newSession == nil else",
-   "new": "guard true else",
+   "old": "guard m.newSession == nil else { throw ControlError(formOpen) }\n        let agent",
+   "new": "guard true else { throw ControlError(formOpen) }\n        let agent",
    "expect": "killed"
   },
   {

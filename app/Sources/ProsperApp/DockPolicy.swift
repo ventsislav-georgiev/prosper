@@ -40,6 +40,7 @@ enum DockPolicy {
     static let activationSettle: TimeInterval = 0.25
     // #1821 seams: the order front, the activation probes, the re-assertion and its scheduler (a row fakes them all).
     private static var order: @MainActor (NSWindow) -> Void = liveOrder
+    private static var orderQuietly: @MainActor (NSWindow) -> Void = { $0.orderFront(nil) }
     private static var isActive: @MainActor () -> Bool = { NSApp.isActive }
     private static var frontmostPid: @MainActor () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     private static var reactivate: @MainActor () -> Void = liveReactivate
@@ -89,6 +90,14 @@ enum DockPolicy {
             guard visible.contains(id), !isActive(), let front, front != getpid(), frontmostPid() == front else { return }
             reactivate()
         }
+    }
+
+    /// #1846 n133: a show the person did not ask for (an agent's, over the control channel). Prosper inactive: the window is
+    /// ordered front only: no activation, no re-assert, and not registered (the `.regular` flip activates), so the keys stay
+    /// in the app the person is typing in. Prosper active: `present`.
+    static func presentQuietly(_ win: NSWindow) {
+        guard !isActive() else { return present(win) }
+        orderQuietly(win)
     }
 
     /// Marks `window` as visible and reconciles the activation policy. Call this
@@ -155,6 +164,7 @@ enum DockPolicy {
         demotionDelay: TimeInterval = defaultDemotionDelay,
         setPolicy: (@MainActor (NSApplication.ActivationPolicy) -> Void)? = nil,
         order: (@MainActor (NSWindow) -> Void)? = nil,
+        orderQuietly: (@MainActor (NSWindow) -> Void)? = nil,
         isActive: (@MainActor () -> Bool)? = nil,
         frontmostPid: (@MainActor () -> pid_t?)? = nil,
         reactivate: (@MainActor () -> Void)? = nil,
@@ -165,6 +175,7 @@ enum DockPolicy {
         visible.removeAll()
         self.setPolicy = setPolicy ?? liveSetPolicy
         self.order = order ?? liveOrder
+        self.orderQuietly = orderQuietly ?? { $0.orderFront(nil) }
         self.isActive = isActive ?? { NSApp.isActive }
         self.frontmostPid = frontmostPid ?? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         self.reactivate = reactivate ?? liveReactivate

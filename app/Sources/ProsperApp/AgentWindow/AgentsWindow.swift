@@ -38,9 +38,13 @@ final class AgentsWindow {
     var build: (AgentWindowModel) -> NSWindow = { AgentsWindow.makeWindow($0) }
     /// #1821: registers before ordering front, and re-asserts a refused activation (DockPolicy.present).
     var present: (NSWindow) -> Void = { DockPolicy.present($0) }
+    /// #1846 n133: an agent's show (ControlSessions.showWindow): never activates an inactive Prosper.
+    var presentQuietly: (NSWindow) -> Void = { DockPolicy.presentQuietly($0) }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
 
-    func show() {
+    /// `quietly`: an agent's show (#1846 n133), through `presentQuietly`; else the person's, through `present`.
+    func show(quietly: Bool = false) {
+        let present = quietly ? presentQuietly : self.present
         if let window {
             grace?.invalidate()   // #1784: the kept window comes back as it was, no rebuild
             grace = nil
