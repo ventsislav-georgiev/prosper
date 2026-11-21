@@ -2393,6 +2393,8 @@ tag from the now-released section and put it on the new top draft.
   control Prosper. An agent's install takes only an agent kit that is not installed yet, from GitHub
   (at most 4 MiB, 60 seconds) or a folder (at most 16 MiB and 4096 files), and its notice names the
   Claude Code permissions, environment settings and shell startup blocks it wrote. (#1866)
+- Agents reading your snippets now get key-, token- and home-path-shaped text blanked; the snippets
+  an agent made itself are unchanged. (#1867)
 
 ## v2.174.0
 

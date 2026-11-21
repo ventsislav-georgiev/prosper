@@ -41,6 +41,25 @@ final class ControlSnippetsTests: XCTestCase {
     /// What an agent's set leaves: plain, auto-expand off, the stored agentMade marker on.
     let mine = SnippetHit(name: "note", keyword: ";;note", text: "Old", collection: "Mail", description: "d", autoExpand: false, agentMade: true)
 
+    /// #1867: the person's snippet comes back with key- and path-shaped text blanked; an agent's own and plain text are untouched.
+    @MainActor
+    func testGetBlanksSecretShapedTextOfThePersonsSnippetsOnly() throws {
+        let fake = "token ghp_FAKEFAKEFAKEFAKE in /Users/example/notes"
+        let theirs = SnippetHit(name: "keys", keyword: "", text: fake, collection: "", description: "", autoExpand: false)
+        let agents = SnippetHit(name: "agentkeys", keyword: "", text: fake, collection: "", description: "", autoExpand: false, agentMade: true)
+        try withStore([theirs, agents, sig]) { _ in
+            guard case .object(let t) = try ControlSnippets.get(args(["name": "keys"])) else { return XCTFail("get shape") }
+            XCTAssertEqual(t["text"], .string("token [removed] in [removed]/notes"))
+            XCTAssertEqual(t["scrubbed"], .bool(true))
+            guard case .object(let p) = try ControlSnippets.get(args(["name": "sig"])) else { return XCTFail("get shape") }
+            XCTAssertEqual(p["text"], .string("Best,\nExample"))
+            XCTAssertTrue(p["scrubbed"] == nil)
+            guard case .object(let a) = try ControlSnippets.get(args(["name": "agentkeys"])) else { return XCTFail("get shape") }
+            XCTAssertEqual(a["text"], .string(fake))
+            XCTAssertTrue(a["scrubbed"] == nil)
+        }
+    }
+
     /// A new snippet never auto-expands and its undo removes it; list has no bodies, get has.
     @MainActor
     func testSetNewIsNotAutoExpandingAndUndoRemoves() throws {

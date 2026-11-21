@@ -81,12 +81,16 @@ enum ControlSnippets {
         })])
     }
 
-    /// The list's fields plus `text` (RTF source when richText).
+    /// The list's fields plus `text` (RTF source when richText). The person's snippets come back with secret-shaped text
+    /// blanked (ControlInfo.scrub, "scrubbed": true when it changed anything); an agent's own come back untouched.
     static func get(_ args: [String: ControlJSON]) throws -> ControlJSON {
         let h = try find(try ControlSessions.required(args, "name"))
-        return .object(["name": .string(h.name), "keyword": .string(h.keyword), "collection": .string(h.collection),
-                        "description": .string(h.description), "autoExpand": .bool(h.autoExpand), "richText": .bool(h.richText),
-                        "text": .string(h.text)])
+        let text = h.agentMade ? h.text : ControlInfo.scrub(h.text)
+        var o: [String: ControlJSON] = ["name": .string(h.name), "keyword": .string(h.keyword), "collection": .string(h.collection),
+                                        "description": .string(h.description), "autoExpand": .bool(h.autoExpand), "richText": .bool(h.richText),
+                                        "text": .string(text)]
+        if text != h.text { o["scrubbed"] = .bool(true) }
+        return .object(o)
     }
 
     // MARK: - snippets.set
@@ -149,7 +153,7 @@ extension ControlRegistry {
         let name = ControlArg(type: "string", required: true, summary: "the snippet's name (snippets.list)")
         r.register(ControlCommand(name: "snippets.list", summary: "List saved snippets: name, keyword, collection, description, autoExpand, richText, bytes (no text).",
                                   args: [:], mutates: false) { _, _ in ControlSnippets.list() })
-        r.register(ControlCommand(name: "snippets.get", summary: "One snippet with its text.", args: ["name": name], mutates: false) { _, a in
+        r.register(ControlCommand(name: "snippets.get", summary: "One snippet with its text. Key-, token- and home-path-shaped text in the person's snippets is blanked (\"scrubbed\": true); snippets the agent made come back as saved.", args: ["name": name], mutates: false) { _, a in
             try ControlSnippets.get(a)
         })
         r.register(.change(name: "snippets.set", summary: "Save or replace a plain text snippet the agent made. It never auto-expands; only {cursor} {date} {time} {datetime} {uuid} {argument} placeholders; a name or keyword the person's, a phone's or a Text Replacement's snippet uses, or that their embeds or hotkeys name, is refused.", args: [

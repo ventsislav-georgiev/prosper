@@ -1,0 +1,22 @@
+{
+ "entry": "1867",
+ "filter": "ControlSnippetsTests",
+ "mutants": [
+  {
+   "name": "drop-scrub",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "h.agentMade ? h.text : ControlInfo.scrub(h.text)",
+   "new": "h.text",
+   "expect": "killed",
+   "filter": "ControlSnippetsTests/testGetBlanksSecretShapedTextOfThePersonsSnippetsOnly"
+  },
+  {
+   "name": "scrub-agent-made",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "h.agentMade ? h.text : ControlInfo.scrub(h.text)",
+   "new": "ControlInfo.scrub(h.text)",
+   "expect": "killed",
+   "filter": "ControlSnippetsTests/testGetBlanksSecretShapedTextOfThePersonsSnippetsOnly"
+  }
+ ]
+}
