@@ -194,11 +194,12 @@ final class ControlNavTests: XCTestCase {
         try base.withPaneMenu(true) {
             let saved = ControlSessions.model
             defer { ControlSessions.model = saved }
-            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .blocked)]), layouts: base.layoutSuite())
+            let a = base.paneLayout([base.paneTarget("api")]), d = base.layoutSuite()
+            d.set(try PaneLayoutStore(layouts: [a], active: a.id, mru: [a.id]).encode(), forKey: "agentWindowLayouts")   // the one stored layout, before the model reads it
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .blocked)]), layouts: d)
             let log = base.splitTerminals(m)
             m.setVisible(true)
             defer { m.close() }
-            m.adopt(base.paneLayout([base.paneTarget("api")]))
             ControlSessions.model = { m }
             let (win, host) = base.focusWindow(m)
             defer { win.close() }
