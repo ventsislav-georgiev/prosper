@@ -4151,6 +4151,8 @@ struct AgentComposerField: NSViewRepresentable {
     var returnSubmits = true
     /// #1392: VoiceOver's name for the field; nil keeps `label(editable:)`.
     var label: String?
+    /// #1822: the New session prompt's image paste; nil (every other composer): paste as before.
+    var imagePaste: AgentComposerTextView.ImagePaste?
 
     var accessibilityName: String { label ?? Self.label(editable: editable) }
 
@@ -4193,6 +4195,7 @@ struct AgentComposerField: NSViewRepresentable {
         tv.insertionPointColor = NSColor(Neon.textPrimary)
         tv.onSubmit = { context.coordinator.parent.onSubmit() }
         tv.returnSubmits = returnSubmits
+        tv.imagePaste = imagePaste
         // Selectable first: a false isSelectable clears isEditable, a true isEditable sets isSelectable.
         tv.isSelectable = editable
         tv.isEditable = editable
@@ -4216,6 +4219,36 @@ final class AgentComposerTextView: NSTextView {
     /// #847 D5.2: false: Return or Enter alone adds a line, Command-Return submits.
     var returnSubmits = true
     weak var owner: AgentWindowInteraction?
+
+    /// #1822: where pasted images go and who hears of them (on main, after the path is inserted).
+    struct ImagePaste: Sendable {
+        var dir: URL
+        var added: @MainActor @Sendable ([AgentPromptImages.Made]) -> Void
+    }
+    var imagePaste: ImagePaste?
+
+    /// #1822: with `imagePaste` set, a paste of images writes them and inserts their paths; any other paste is the
+    /// text view's own.
+    override func paste(_ sender: Any?) {
+        guard imagePaste != nil else { return super.paste(sender) }
+        paste(from: Pasteboard.general)
+    }
+
+    /// The paste from `pb` (the seam rows use, with a named pasteboard): images to `imagePaste`, else the text as
+    /// NSTextView's paste reads it.
+    func paste(from pb: NSPasteboard) {
+        guard isEditable, let sink = imagePaste, let sources = AgentPromptImages.sources(pb) else {
+            _ = readSelection(from: pb)
+            return
+        }
+        AgentPromptImages.store(sources, dir: sink.dir) { [weak self] made in
+            guard let self, !made.isEmpty else { return }
+            let r = self.selectedRange(), ns = self.string as NSString
+            let previous = r.location > 0 && r.location <= ns.length ? Character(ns.substring(with: NSRange(location: r.location - 1, length: 1))) : nil
+            self.insertText(AgentPromptImages.insertion(made.map(\.path), after: previous), replacementRange: r)
+            sink.added(made)
+        }
+    }
 
     /// #845: a focus asked for before the box was in the window (a row click from Terminal mode builds it next pass).
     override func viewDidMoveToWindow() {

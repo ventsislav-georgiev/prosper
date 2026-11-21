@@ -2508,7 +2508,7 @@ final class AgentWindowModel: ObservableObject {
         newSessionTookKeys = sessionHasKeys
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
                                          command: typed.isEmpty ? "claude" : typed,
-                                         prompt: lastPrompt, promptShown: !lastPrompt.isEmpty)   // #847 D2.4, D5.1
+                                         prompt: lastPrompt)   // #847 D2.4
         follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
@@ -2559,7 +2559,21 @@ final class AgentWindowModel: ObservableObject {
         lastPrompt = s
     }
 
-    func toggleNewSessionPrompt() { newSession?.promptShown.toggle() }
+    /// #1822: where a pasted prompt image is written; nil (the XCTest default): an image paste is not taken.
+    var promptImagesDir: URL? = AgentPromptImages.defaultDir
+
+    /// #1822: images written by a paste in the prompt (their paths already inserted there); thumbnails built here, on main.
+    func addNewSessionPromptImages(_ made: [AgentPromptImages.Made]) {
+        guard newSession != nil else { return }
+        newSession?.images += made.map { AgentPromptImages.Pasted(path: $0.path, thumb: $0.thumb.flatMap(NSImage.init(data:))) }
+    }
+
+    /// #1822: a chip's x: its path leaves the prompt and the chip goes (the file stays for the age prune).
+    func removeNewSessionPromptImage(_ path: String) {
+        guard let f = newSession, f.starting == nil else { return }
+        newSession?.images.removeAll { $0.path == path }
+        setNewSessionPrompt(AgentPromptImages.removing(path, from: f.prompt))
+    }
 
     /// #847 D6.1: an interactive Claude (AgentIsland.isInteractiveClaude, the rule naming() uses) on this Mac.
     /// shortcut: another Mac (#1323) gets no first prompt (the say seam is this Mac's); upgrade when the remote spawn

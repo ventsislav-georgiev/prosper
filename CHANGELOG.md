@@ -2295,6 +2295,9 @@ tag from the now-released section and put it on the new top draft.
 - Clipboard History, Settings, Chat, Extension Marketplace, text viewer, extension windows and the
   model download window now come to the front and take the keyboard reliably after Prosper's Dock
   icon has handed focus to another app. (#1829)
+- The New session form's first prompt is now always shown (no more expand/collapse), and you can
+  paste one or more images into it with Command-V: each is saved as a PNG and its path is added to
+  the prompt, with a small thumbnail you can remove. (#1822)
 
 ## v2.174.0
 

@@ -84,12 +84,13 @@ extension AgentWindowD1Tests {
         }
     }
 
-    // MARK: T30: the one reflow
+    // MARK: T30, #1822: the prompt is always there
 
-    /// T30: expanding the prompt grows the form by one delta, sz(96) + the column's sz(6); the form is centred (#1479), so
-    /// Start, Cancel and New shell move down by half of it and the fields up by half (was: down by all of it, nothing above moved); 12 typed lines keep the editor's frame; collapsing puts every row back.
+    /// #1822 (was T30: a disclosure opened the editor, one reflow): at UI scale 1.0, 0.85 and 0.7 the editor is there as
+    /// the form opens, a fixed sz(96), with no disclosure button; 12 typed lines keep the editor's frame and every row.
+    /// Red at base: no editor while the prompt was collapsed.
     @MainActor
-    func testAgentWindowNewSessionFormPromptOpensByOneFixedDeltaAndTypingKeepsTheEditor() throws {
+    func testAgentWindowNewSessionFormPromptIsAlwaysShownAndTypingKeepsTheEditor() throws {
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
         let restore = AXTreeSupport.axOn()
@@ -103,45 +104,27 @@ extension AgentWindowD1Tests {
                 let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
                 defer { win.close() }
                 m.openNewSession()
-                XCTAssertEqual(m.newSession?.promptShown, false, "collapsed by default at \(scale)")
-                let base = try XCTUnwrap(formRows(host).rows, "rows at \(scale)")
-                let fields = formFields(host).map { host.convert($0.bounds, from: $0) }
-                XCTAssertEqual(fields.count, 3, "\(scale)")
-                XCTAssertTrue(focusViews(host, AgentComposerTextView.self).isEmpty, "no editor while collapsed at \(scale)")
-
-                m.toggleNewSessionPrompt()
-                let open = try XCTUnwrap(formRows(host).rows, "rows open at \(scale)")
-                let editor = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first?.enclosingScrollView, "the editor at \(scale)")
+                let base = formRows(host)
+                let rows = try XCTUnwrap(base.rows, "rows at \(scale)")
+                XCTAssertFalse(base.tree.contains { $0.role == "AXButton" && ($0.named("Prompt, optional") || $0.named(prefix: "Prompt")) },
+                               "no disclosure at \(scale): \(base.tree.map(\.name))")
+                let editor = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first?.enclosingScrollView, "the editor as it opens at \(scale)")
                 let frame = host.convert(editor.bounds, from: editor)
                 XCTAssertEqual(frame.height, sz(96), accuracy: pixel, "a fixed sz(96) editor at \(scale)")
-                let delta = base.start.minY - open.start.minY   // AX frames are y-up: down is a smaller minY
-                XCTAssertEqual(delta, (sz(96) + sz(6)) / 2, accuracy: 1, "half the growth, centred, at \(scale)")
-                for (a, b, n) in [(base.cancel, open.cancel, "Cancel"), (base.shell, open.shell, "New shell")] {
-                    XCTAssertEqual(a.minY - b.minY, delta, accuracy: pixel, "\(n) by the same delta at \(scale)")
-                    XCTAssertEqual(a.minX, b.minX, accuracy: pixel, "\(n) not sideways at \(scale)")
-                    XCTAssertEqual(a.width, b.width, accuracy: pixel, "\(n) same size at \(scale)")
-                    XCTAssertEqual(a.height, b.height, accuracy: pixel, "\(n) same size at \(scale)")
-                }
-                let moved = formFields(host).map { host.convert($0.bounds, from: $0) }
-                XCTAssertEqual(moved.count, fields.count, "\(scale)")
-                for (a, b) in zip(moved, fields) { XCTAssertEqual(abs(a.minY - b.minY), delta, accuracy: pixel, "each field moves by the half at \(scale)") }
 
                 m.setNewSessionPrompt((1...12).map { "Example task line \($0)" }.joined(separator: "\n"))
                 settle(host)
                 assertRect(host.convert(editor.bounds, from: editor), frame, accuracy: pixel, "12 lines keep the editor at \(scale)")
-                assertRows(formRows(host).rows, open, "typing moves nothing at \(scale)")
-
-                m.toggleNewSessionPrompt()
-                assertRows(formRows(host).rows, base, "collapsed again at \(scale)")
+                assertRows(formRows(host).rows, rows, "typing moves nothing at \(scale)")
             }
         }
     }
 
-    /// #1399 (R1392-s1): what VoiceOver gets, read from the drawn form's AX tree (never the statics): the editor is an
-    /// AXTextArea labelled "First prompt for the new session"; the disclosure's label is "Prompt, optional" with the value
-    /// "expanded" / "collapsed"; no label in the tree carries the triangle glyphs (U+25B8, U+25BE).
+    /// #1399 (R1392-s1), #1822: what VoiceOver gets, read from the drawn form's AX tree (never the statics): the editor is
+    /// an AXTextArea labelled "First prompt for the new session" as the form opens; there is no disclosure ("Prompt,
+    /// optional"), the line under the editor says the prompt is optional, and no label carries the triangle glyphs.
     @MainActor
-    func testAgentWindowNewSessionFormPromptEditorAndDisclosureSpeakTheirNamesOnTheAXTree() throws {
+    func testAgentWindowNewSessionFormPromptEditorSpeaksItsNameOnTheAXTree() throws {
         let restore = AXTreeSupport.axOn()
         defer { restore() }
         try withNewSessionPrefs {
@@ -150,22 +133,17 @@ extension AgentWindowD1Tests {
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
             m.openNewSession()
-            func disclosure(_ t: [AXTreeNode]) -> AXTreeNode? { t.last { $0.label == "Prompt, optional" && !$0.ignored } }
             func glyphs(_ t: [AXTreeNode]) -> [String] {
                 t.map(\.label).filter { $0.contains("\u{25B8}") || $0.contains("\u{25BE}") }
             }
-            let closed = AXTreeSupport.poll(host) { disclosure($0)?.value == "collapsed" }
-            XCTAssertEqual(disclosure(closed)?.value, "collapsed", "the disclosure's value while the prompt is hidden")
-            XCTAssertTrue(glyphs(closed).isEmpty, "no glyph in a label while hidden: \(glyphs(closed))")
-
-            m.toggleNewSessionPrompt()
-            let open = AXTreeSupport.poll(host) { t in
-                disclosure(t)?.value == "expanded" && t.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" }
+            let tree = AXTreeSupport.poll(host) { t in
+                t.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" }
             }
-            XCTAssertEqual(disclosure(open)?.value, "expanded", "the disclosure's value while the prompt is shown")
-            XCTAssertTrue(open.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" },
-                          "the editor's AX label: \(open.filter { $0.role == "AXTextArea" }.map(\.label))")
-            XCTAssertTrue(glyphs(open).isEmpty, "no glyph in a label while shown: \(glyphs(open))")
+            XCTAssertTrue(tree.contains { $0.role == "AXTextArea" && $0.label == "First prompt for the new session" },
+                          "the editor's AX label: \(tree.filter { $0.role == "AXTextArea" }.map(\.label))")
+            XCTAssertFalse(tree.contains { $0.named("Prompt, optional") }, "no disclosure")
+            XCTAssertTrue(tree.contains { $0.reads(AgentNewSessionView.promptHint) }, "the optional line: \(tree.map(\.name))")
+            XCTAssertTrue(glyphs(tree).isEmpty, "no glyph in a label: \(glyphs(tree))")
         }
     }
 
@@ -181,7 +159,6 @@ extension AgentWindowD1Tests {
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
             m.openNewSessionNamed()
-            m.toggleNewSessionPrompt()
             m.setNewSessionPrompt("Example task")
             settle(host)
             let tv = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first, "the editor")
@@ -243,16 +220,19 @@ extension AgentWindowD1Tests {
                 m.setNewSessionCommand(command)
                 XCTAssertFalse(m.newSessionClaude, command)
                 XCTAssertEqual(AgentNewSessionView.notClaude(command: command, host: nil), why)
+                settle(host)
                 let tree = formRows(host).tree
-                let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named("Prompt, optional") }, command)
-                XCTAssertFalse(disclosure.enabled, "the disclosure dimmed: \(command)")
-                XCTAssertEqual(disclosure.help, why, "#1820: the reason is the disclosure's help (the Sidekick line that showed it is gone): \(command)")
+                XCTAssertTrue(tree.contains { $0.reads(why) }, "#1822: the reason is a line under the dimmed prompt: \(command): \(tree.map(\.name))")
+                XCTAssertFalse(tree.contains { $0.reads(AgentNewSessionView.promptHint) }, "not the optional line: \(command)")
+                let tv = try XCTUnwrap(focusViews(host, AgentComposerTextView.self).first, "the editor is still there: \(command)")
+                XCTAssertFalse(tv.isEditable, "dimmed: \(command)")
             }
             m.setNewSessionCommand("claude")
             let tree = formRows(host).tree
             XCTAssertFalse(tree.contains { $0.named(prefix: "Sidekick") || $0.named(prefix: "Also start") }, "#1820: no Sidekick row: \(tree.map(\.name))")
-            let disclosure = try XCTUnwrap(tree.first { $0.role == "AXButton" && $0.named("Prompt, optional") })
-            XCTAssertTrue(disclosure.enabled, "a Claude: the disclosure is live")
+            XCTAssertTrue(tree.contains { $0.reads(AgentNewSessionView.promptHint) }, "a Claude: the optional line")
+            XCTAssertFalse(tree.contains { $0.reads("Needs a claude command (claude, or a wrapper that runs claude)") }, "no reason left")
+            XCTAssertTrue(focusViews(host, AgentComposerTextView.self).first?.isEditable ?? false, "a Claude: the editor is live")
         }
     }
 
@@ -305,8 +285,8 @@ extension AgentWindowD1Tests {
     }
 
     /// #1479: in a tall pane the form sits in the middle: growing the pane by 200 pt moves every field down by 100 (half;
-    /// pinned to the top it would not move), the first field is well below the top, and opening the Prompt keeps the
-    /// middle (the form grows by one delta, the first field moves up by half of it). In a short pane that scrolls the form
+    /// pinned to the top it would not move) and the first field is well below the top (#1822: the Prompt is always there,
+    /// nothing opens). In a short pane that scrolls the form
     /// starts at the top (the same field position at two short heights), its content is taller than the pane, and Start
     /// is on the tree to scroll to. Host coordinates are y-down.
     @MainActor
@@ -315,11 +295,10 @@ extension AgentWindowD1Tests {
         defer { restore() }
         let pixel = AXTreeSupport.devicePixel   // CI backs at 1x (a pixel is 1 pt there, 0.5 pt at 2x): never a literal 0.5
         try withNewSessionPrefs {
-            @MainActor func firstField(_ height: CGFloat, scrolls: Bool, promptOpen: Bool = false) throws -> (top: CGFloat, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
+            @MainActor func firstField(_ height: CGFloat, scrolls: Bool) throws -> (top: CGFloat, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
                 let m = wiringModel(store([mapped("a")]), SpawnCalls())
                 let (win, host) = centredFormWindow(m, CGSize(width: 1600, height: height), scrolls: scrolls)
                 m.openNewSession()
-                if promptOpen { m.toggleNewSessionPrompt() }
                 settle(host)
                 _ = formRows(host)
                 let fields = formFields(host).map { host.convert($0.bounds, from: $0) }
@@ -330,9 +309,6 @@ extension AgentWindowD1Tests {
             defer { tall.m.close(); taller.m.close(); tall.win.close(); taller.win.close() }
             XCTAssertEqual(taller.top - tall.top, 100, accuracy: pixel, "200 pt more pane: the form moves down by half")
             XCTAssertGreaterThan(tall.top, 200, "not pinned to the top of a 1200 pt pane")
-            let open = try firstField(1200, scrolls: false, promptOpen: true)
-            defer { open.m.close(); open.win.close() }
-            XCTAssertEqual(tall.top - open.top, (sz(96) + sz(6)) / 2, accuracy: 1, "the Prompt opens and the form stays centred")
 
             let a = try firstField(260, scrolls: true), b = try firstField(300, scrolls: true)
             defer { a.m.close(); b.m.close(); a.win.close(); b.win.close() }
@@ -349,7 +325,7 @@ extension AgentWindowD1Tests {
     /// #1731: through the real host (AgentDetailView, scrolls = true: the pane's ScrollView), not the bare form. The form's
     /// natural height F is the document's in a pane too short for it (it starts at the top there); in a tall pane its
     /// top gap is (H - F) / 2, so the bottom gap is the same, within one device pixel; 200 pt more pane moves it down by
-    /// 100; opening the Prompt keeps the middle (the first field moves up by half of the added height); a short pane
+    /// 100 (#1822: the Prompt is always there, nothing opens); a short pane
     /// starts at the top and Start is on the tree to scroll to.
     @MainActor
     func testAgentWindowNewSessionFormIsCentredInTheRealScrollingHost() throws {
@@ -357,11 +333,10 @@ extension AgentWindowD1Tests {
         defer { restore() }
         let pixel = AXTreeSupport.devicePixel
         try withNewSessionPrefs {
-            @MainActor func measure(_ height: CGFloat, promptOpen: Bool = false) throws -> (top: CGFloat, doc: CGFloat, scroller: NSScrollView, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
+            @MainActor func measure(_ height: CGFloat) throws -> (top: CGFloat, doc: CGFloat, scroller: NSScrollView, host: NSView, win: AgentsNSWindow, m: AgentWindowModel) {
                 let m = wiringModel(store([mapped("a")]), SpawnCalls())
                 let (win, host) = centredFormWindow(m, CGSize(width: 1600, height: height), scrolls: true)
                 m.openNewSession()
-                if promptOpen { m.toggleNewSessionPrompt() }
                 settle(host)
                 _ = formRows(host)
                 let fields = formFields(host).map { host.convert($0.bounds, from: $0) }
@@ -369,8 +344,8 @@ extension AgentWindowD1Tests {
                 let scroller = try XCTUnwrap(focusViews(host, NSScrollView.self).first, "the pane's ScrollView at \(height)")
                 return (try XCTUnwrap(fields.map(\.minY).min(), "fields at \(height)"), scroller.documentView?.frame.height ?? 0, scroller, host, win, m)
             }
-            let short = try measure(260), tall = try measure(1200), taller = try measure(1400), open = try measure(1200, promptOpen: true)
-            defer { for r in [short, tall, taller, open] { r.m.close(); r.win.close() } }
+            let short = try measure(260), tall = try measure(1200), taller = try measure(1400)
+            defer { for r in [short, tall, taller] { r.m.close(); r.win.close() } }
             let form = short.doc   // too short a pane: the document is the form's own height
             XCTAssertGreaterThan(form, 260, "the form does not fit 260 pt: it scrolls")
             XCTAssertLessThan(form, 1200 - 100, "and fits 1200 pt with room to centre")
@@ -380,7 +355,6 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(tall.top - short.top, (1200 - form) / 2, accuracy: pixel, "top gap = bottom gap = (pane - form) / 2")
             XCTAssertEqual(taller.top - tall.top, 100, accuracy: pixel, "200 pt more pane: down by half")
             XCTAssertEqual(tall.doc, 1200, accuracy: pixel, "the content fills the viewport: nothing to scroll")
-            XCTAssertEqual(tall.top - open.top, (sz(96) + sz(6)) / 2, accuracy: 1, "the Prompt opens and the form stays centred")
         }
     }
 

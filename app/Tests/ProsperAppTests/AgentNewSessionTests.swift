@@ -255,9 +255,9 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// R1370-s2: the editor's name, the composer's default, and the disclosure's label and value.
+    /// R1370-s2: the editor's name and the composer's default. #1822: the disclosure is gone; the prompt's own label.
     @MainActor
-    func testAgentWindowNewSessionPromptEditorAndDisclosureSpeakTheirOwnNames() {
+    func testAgentWindowNewSessionPromptEditorSpeaksItsOwnName() {
         let field = AgentNewSessionView.promptEditor(text: .constant(""), onSubmit: {}, editable: true)
         XCTAssertEqual(field.accessibilityName, "First prompt for the new session")
         XCTAssertFalse(field.returnSubmits, "the editor is still the New session one")
@@ -265,8 +265,7 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(plain.accessibilityName, "Message Claude")
         XCTAssertEqual(AgentComposerField(text: .constant(""), onSubmit: {}, editable: false).accessibilityName,
                        "Message Claude, session ended")
-        XCTAssertEqual(AgentNewSessionView.promptDisclosureLabel, "Prompt, optional")
-        XCTAssertEqual(AgentNewSessionView.promptDisclosureValue(shown: true), "expanded")
-        XCTAssertEqual(AgentNewSessionView.promptDisclosureValue(shown: false), "collapsed")
+        XCTAssertEqual(AgentNewSessionView.promptLabel, "Prompt")
+        XCTAssertTrue(field.imagePaste == nil, "no image paste unless the form gives one")
     }
 }

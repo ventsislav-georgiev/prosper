@@ -1,0 +1,90 @@
+{
+ "entry": "1822",
+ "filter": "AgentNewSessionPromptImagesTests|AgentWindowD1Tests/testAgentWindowNewSessionPromptImage|AgentWindowD1Tests/testAgentWindowNewSessionFormNonClaude",
+ "mutants": [
+  {
+   "name": "text-loses-to-image-bytes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "guard pb.string(forType: .string) == nil,\n",
+   "new": "guard true,\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-file-urls",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "if !urls.isEmpty { return urls.map(Source.file) }",
+   "new": "if false { return urls.map(Source.file) }",
+   "expect": "killed"
+  },
+  {
+   "name": "first-image-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "return datas.isEmpty ? nil : datas.map(Source.data)",
+   "new": "return datas.isEmpty ? nil : [datas[0]].map(Source.data)",
+   "expect": "killed"
+  },
+  {
+   "name": "prune-ignores-age",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "now.timeIntervalSince(at) > maxAge, (try? fm.removeItem",
+   "new": "true, (try? fm.removeItem",
+   "expect": "killed"
+  },
+  {
+   "name": "prune-any-extension",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "for f in files where f.pathExtension == \"png\" {",
+   "new": "for f in files {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-prune-on-write",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "        prune(dir: dir, now: now)\n        return sources.compactMap",
+   "new": "        return sources.compactMap",
+   "expect": "killed"
+  },
+  {
+   "name": "fixed-name",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "dir.appendingPathComponent(UUID().uuidString + \".png\")",
+   "new": "dir.appendingPathComponent(\"image.png\")",
+   "expect": "killed"
+  },
+  {
+   "name": "no-lead-space",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "previous.map { $0.isWhitespace ? \"\" : \" \" } ?? \"\"",
+   "new": "\"\"",
+   "expect": "killed"
+  },
+  {
+   "name": "remove-keeps-path",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "prompt.replacingOccurrences(of: path + \" \", with: \"\").replacingOccurrences(of: path, with: \"\")",
+   "new": "prompt",
+   "expect": "killed"
+  },
+  {
+   "name": "reason-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "slot(claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))",
+   "new": "slot(Self.promptHint)",
+   "expect": "killed"
+  },
+  {
+   "name": "paste-ignores-images",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard isEditable, let sink = imagePaste, let sources = AgentPromptImages.sources(pb) else {",
+   "new": "guard false, let sink = imagePaste, let sources = AgentPromptImages.sources(pb) else {",
+   "expect": "killed"
+  },
+  {
+   "name": "default-dir-real-under-xctest",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "        guard NSClassFromString(\"XCTestCase\") == nil else { return nil }\n        return FileManager.default.urls(for: .cachesDirectory",
+   "new": "        return FileManager.default.urls(for: .cachesDirectory",
+   "expect": "killed"
+  }
+ ]
+}

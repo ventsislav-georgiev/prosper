@@ -93,29 +93,25 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// T26: Cancel keeps the prompt for the next open (shown); a Start that takes it drops it.
+    /// T26: Cancel keeps the prompt for the next open; a Start that takes it drops it. #1822: no collapse state to check.
     @MainActor
     func testAgentWindowNewSessionLastPromptSurvivesCancelNotAStart() throws {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), m = sidekickModel(st, spawns, SayCalls())
             defer { m.close() }
             m.openNewSessionNamed(folder: "/Users/example/api")
-            XCTAssertEqual(m.newSession?.promptShown, false, "collapsed with nothing kept")
-            m.toggleNewSessionPrompt()
-            XCTAssertEqual(m.newSession?.promptShown, true)
+            XCTAssertEqual(m.newSession?.prompt, "", "nothing kept")
             m.setNewSessionPrompt("two\nlines")
             m.cancelNewSession()
             XCTAssertEqual(m.lastPrompt, "two\nlines")
             m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.prompt, "two\nlines")
-            XCTAssertEqual(m.newSession?.promptShown, true, "open with a kept prompt")
             XCTAssertTrue(m.startNewSession())
             spawns.done.first?(spawnKey("api"), nil)
             XCTAssertEqual(m.lastPrompt, "", "taken by the start")
             st.sessions = [mapped("api")]
             m.openNewSessionNamed(folder: "/Users/example/api")
             XCTAssertEqual(m.newSession?.prompt, "")
-            XCTAssertEqual(m.newSession?.promptShown, false)
         }
     }
 

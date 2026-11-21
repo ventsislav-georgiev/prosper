@@ -1,6 +1,8 @@
 import AppKit
 import Combine
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 // #847: New session from the Agent Sessions window: the form in the detail pane (folder, name, command)
 // and the quick shell. One spawn path with the island's New session (AgentIslandController.spawn).
@@ -23,9 +25,120 @@ struct AgentNewSessionForm: Equatable {
     var status: String?
     /// #1323: the Mac it starts on: nil this one, else a host from the remote list (raw, as argv takes it).
     var host: String?
-    /// #847 P1d: the first message, and whether its editor is open.
+    /// #847 P1d: the first message. #1822: its editor is always shown (no disclosure).
     var prompt = ""
-    var promptShown = false
+    /// #1822: the images pasted into the prompt, in paste order (their paths are in `prompt`).
+    var images: [AgentPromptImages.Pasted] = []
+}
+
+/// #1822: an image pasted into the New session prompt: written as a PNG to a Prosper-owned cache dir, its absolute
+/// path inserted at the caret (Claude Code reads an image file named by its path in a message). Nothing runs until a
+/// paste; the encode, the thumbnail and the age prune run off main, on that paste.
+enum AgentPromptImages {
+    /// What a paste holds: an image file, or an item's image bytes (PNG, TIFF, any image UTI).
+    enum Source: Sendable, Equatable { case file(URL), data(Data) }
+    /// One written PNG and its small thumbnail's PNG bytes (made off main; NSImage is built on main).
+    struct Made: Sendable, Equatable { var path: String; var thumb: Data? }
+    /// A pasted image as the form keeps it.
+    struct Pasted: Equatable { var path: String; var thumb: NSImage? }
+
+    /// Pruned on each paste: older files are gone by then (a first message reads its image at once).
+    static let maxAge: TimeInterval = 7 * 24 * 3600
+    static let thumbPixels = 64
+
+    /// Caches/Prosper/prompt-images; nil under XCTest, so a row writes only under the temp dir it sets.
+    static let defaultDir: URL? = {
+        guard NSClassFromString("XCTestCase") == nil else { return nil }
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Prosper/prompt-images", isDirectory: true)
+    }()
+
+    /// The paste's images; nil: not an image paste (the text path, unchanged). Image file URLs first (Finder's copy
+    /// also holds the names as text); then text wins over image bytes, as in the terminal's paste.
+    static func sources(_ pb: NSPasteboard) -> [Source]? {
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true,
+                                  .urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL] ?? []
+        if !urls.isEmpty { return urls.map(Source.file) }
+        guard pb.string(forType: .string) == nil,
+              pb.canReadItem(withDataConformingToTypes: [UTType.image.identifier]) else { return nil }   // AgentTerminal's test
+        let datas = (pb.pasteboardItems ?? []).compactMap { item in
+            item.types.first { UTType($0.rawValue)?.conforms(to: .image) == true }.flatMap { item.data(forType: $0) }
+        }
+        return datas.isEmpty ? nil : datas.map(Source.data)
+    }
+
+    /// Off main: prunes `dir`, then writes each source as `<uuid>.png` (a PNG as it is, anything else re-encoded),
+    /// and hands what was written to `done` on main. A source that is not a readable image is skipped.
+    static func store(_ sources: [Source], dir: URL, now: Date = Date(), done: @escaping @MainActor @Sendable ([Made]) -> Void) {
+        Task.detached(priority: .userInitiated) {
+            let made = write(sources, dir: dir, now: now)
+            await done(made)
+        }
+    }
+
+    static func write(_ sources: [Source], dir: URL, now: Date) -> [Made] {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        prune(dir: dir, now: now)
+        return sources.compactMap { s in
+            let data: Data?
+            switch s {
+            case .file(let url): data = try? Data(contentsOf: url)
+            case .data(let d): data = d
+            }
+            guard let data, let src = CGImageSourceCreateWithData(data as CFData, nil),
+                  CGImageSourceGetCount(src) > 0 else { return nil }
+            let url = dir.appendingPathComponent(UUID().uuidString + ".png")
+            if CGImageSourceGetType(src) as String? == UTType.png.identifier {
+                guard (try? data.write(to: url)) != nil else { return nil }
+            } else {
+                guard let image = CGImageSourceCreateImageAtIndex(src, 0, nil), png(image, to: url as CFURL) else { return nil }
+            }
+            return Made(path: url.path, thumb: thumb(src))
+        }
+    }
+
+    /// Removes the PNGs in `dir` last modified before `now - maxAge`; nothing else. Returns how many went.
+    @discardableResult
+    static func prune(dir: URL, now: Date, maxAge: TimeInterval = maxAge) -> Int {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var removed = 0
+        for f in files where f.pathExtension == "png" {
+            guard let at = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  now.timeIntervalSince(at) > maxAge, (try? fm.removeItem(at: f)) != nil else { continue }
+            removed += 1
+        }
+        return removed
+    }
+
+    private static func png(_ image: CGImage, to url: CFURL) -> Bool {
+        guard let dest = CGImageDestinationCreateWithURL(url, UTType.png.identifier as CFString, 1, nil) else { return false }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest)
+    }
+
+    private static func thumb(_ src: CGImageSource) -> Data? {
+        let opts = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: thumbPixels] as CFDictionary
+        guard let image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest) ? out as Data : nil
+    }
+
+    /// The text a paste inserts: the paths, space-separated, a space before them unless at a line start or after a
+    /// space, and one after.
+    static func insertion(_ paths: [String], after previous: Character?) -> String {
+        let lead = previous.map { $0.isWhitespace ? "" : " " } ?? ""
+        return lead + paths.joined(separator: " ") + " "
+    }
+
+    /// `prompt` without `path` (and the one space after it): the chip's remove.
+    static func removing(_ path: String, from prompt: String) -> String {
+        prompt.replacingOccurrences(of: path + " ", with: "").replacingOccurrences(of: path, with: "")
+    }
 }
 
 /// The form's rules. Pure.
@@ -346,7 +459,7 @@ struct AgentNewSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)   // #1479: centred when it fits; a ScrollView gives it its own height, so it stays top-aligned there
     }
 
-    /// #847 D6.1: why the prompt is dimmed (newSessionClaude false), its help.
+    /// #847 D6.1: why the prompt is dimmed (newSessionClaude false); #1822: shown under it.
     static func notClaude(command: String, host: String?) -> String {
         if host != nil { return "A first prompt starts on this Mac only" }
         return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -354,40 +467,63 @@ struct AgentNewSessionView: View {
             : "Needs a claude command (claude, or a wrapper that runs claude)"
     }
 
-    /// #847 D5.1-D5.3: the disclosure, and the editor at a fixed sz(96) under it (the one accepted reflow). Return adds
-    /// a line, Command-Return is Start. Not a Claude: dimmed, the text kept.
-    static let promptDisclosureLabel = "Prompt, optional"
+    /// #847 D5.1-D5.3: the editor at a fixed sz(96). #1822: always shown (no disclosure), the line under it says it is
+    /// optional, or why it is dimmed. Return adds a line, Command-Return is Start. Not a Claude: dimmed, the text kept.
+    static let promptLabel = "Prompt"
+    static let promptHint = "Optional. \u{2318}V pastes images too"
     static let promptEditorLabel = "First prompt for the new session"   // #1392: not the composer's "Message Claude"
-    static func promptDisclosureValue(shown: Bool) -> String { shown ? "expanded" : "collapsed" }
-    static func promptEditor(text: Binding<String>, onSubmit: @escaping () -> Void, editable: Bool) -> AgentComposerField {
-        AgentComposerField(text: text, onSubmit: onSubmit, editable: editable, returnSubmits: false, label: promptEditorLabel)
+    static func promptEditor(text: Binding<String>, onSubmit: @escaping () -> Void, editable: Bool,
+                             imagePaste: AgentComposerTextView.ImagePaste? = nil) -> AgentComposerField {
+        AgentComposerField(text: text, onSubmit: onSubmit, editable: editable, returnSubmits: false, label: promptEditorLabel,
+                           imagePaste: imagePaste)
     }
 
     private var promptRows: some View {
         let claude = model.newSessionClaude
+        let paste = model.promptImagesDir.map { dir in
+            AgentComposerTextView.ImagePaste(dir: dir) { [weak model] made in model?.addNewSessionPromptImages(made) }
+        }
+        // A chip only while its path is still in the text (typing it away drops the chip too).
+        let images = form.images.filter { form.prompt.contains($0.path) }
         return HStack(alignment: .top, spacing: sz(8)) {
-            Color.clear.frame(width: sz(64), height: 1)
-            VStack(alignment: .leading, spacing: sz(6)) {
-                Button { model.toggleNewSessionPrompt() } label: {
-                    Text(verbatim: form.promptShown ? "\u{25BE} Prompt" : "\u{25B8} Prompt (optional)")
-                        .font(Neon.font(11.5)).foregroundStyle(Neon.textSecondary).lineLimit(1)
-                        .frame(height: sz(18)).contentShape(Rectangle())
+            Text(Self.promptLabel).font(Neon.font(11.5)).foregroundStyle(Neon.textSecondary).frame(width: sz(64), alignment: .leading)
+            VStack(alignment: .leading, spacing: sz(2)) {
+                Self.promptEditor(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
+                                  onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil, imagePaste: paste)
+                    .frame(height: sz(96))
+                    .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
+                    .opacity(claude ? 1 : 0.45)
+                if !images.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: sz(6)) { ForEach(images, id: \.path) { promptChip($0, enabled: claude && form.starting == nil) } }
+                    }
+                    .padding(.top, sz(4))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Self.promptDisclosureLabel)
-                .accessibilityValue(Self.promptDisclosureValue(shown: form.promptShown))
-                .disabled(!claude)
-                .help(claude ? "A first message for the new session" : Self.notClaude(command: form.command, host: form.host))
-                if form.promptShown {
-                    Self.promptEditor(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
-                                      onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil)
-                        .frame(height: sz(96))
-                        .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
-                        .opacity(claude ? 1 : 0.45)
-                }
+                slot(claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// #1822: one pasted image: its thumbnail, and an x that takes its path out of the prompt.
+    private func promptChip(_ image: AgentPromptImages.Pasted, enabled: Bool) -> some View {
+        let name = (image.path as NSString).lastPathComponent
+        return HStack(spacing: sz(3)) {
+            Group {
+                if let thumb = image.thumb { Image(nsImage: thumb).resizable().scaledToFill() }
+                else { Image(systemName: "photo").foregroundStyle(Neon.textSecondary) }
+            }
+            .frame(width: sz(28), height: sz(28)).clipShape(RoundedRectangle(cornerRadius: sz(3)))
+            .help(image.path)
+            Button { model.removeNewSessionPromptImage(image.path) } label: {
+                Image(systemName: "xmark").font(Neon.font(9, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(14), height: sz(14)).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).disabled(!enabled)
+            .help("Remove this image").accessibilityLabel("Remove image \(name)")
+        }
+        .padding(sz(2))
+        .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
     }
 
     private func field<C: View>(_ label: String, error: String?, @ViewBuilder _ content: () -> C) -> some View {
