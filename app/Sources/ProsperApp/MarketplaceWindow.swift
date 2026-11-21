@@ -15,9 +15,7 @@ final class MarketplaceWindow {
 
     func show() {
         if let window {
-            DockPolicy.windowDidShow(window)
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            DockPolicy.present(window)
             return
         }
         // Pull the live registry AppDelegate owns — same instance the Extensions
@@ -56,9 +54,7 @@ final class MarketplaceWindow {
                 DispatchQueue.main.async { win.contentViewController = nil }
             }
         }
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        DockPolicy.present(win)
     }
 }
 

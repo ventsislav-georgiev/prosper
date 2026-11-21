@@ -529,9 +529,7 @@ final class TextViewerWindows {
     // Seams (as AgentsWindow's): tests build the window and never put it on screen.
     var build: (TextViewerModel) -> NSWindow = { TextViewerWindows.makeWindow($0) }
     var present: (NSWindow) -> Void = { win in
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        DockPolicy.present(win)
     }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
     var actions: () -> TextViewerActions = { .live }

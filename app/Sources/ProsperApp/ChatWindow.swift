@@ -26,9 +26,7 @@ final class ChatWindow {
     // the teardown, and load no model.
     var build: () -> NSWindow = { ChatWindow.makeWindow() }
     var present: (NSWindow) -> Void = { win in
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        DockPolicy.present(win)
         AgentController.shared.warmUp()
     }
     var dismissed: (NSWindow) -> Void = { win in

@@ -48,9 +48,7 @@ final class SettingsWindow {
     // Seams (#1102): the shortcut's tests build a plain offscreen window and record the present.
     var build: () -> NSWindow = { SettingsWindow.makeWindow() }
     var present: (NSWindow) -> Void = { win in
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        DockPolicy.present(win)
     }
     var dismissed: (NSWindow) -> Void = { DockPolicy.windowDidHide($0) }
 

@@ -174,9 +174,7 @@ final class ModelSetup: NSObject, NSWindowDelegate {
         window.contentView = content
         self.window = window
 
-        DockPolicy.windowDidShow(window)
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        DockPolicy.present(window)
     }
 
     /// #928: colours `label` with the theme's primary text now and again on every generation bump

@@ -56,9 +56,23 @@ enum DockPolicy {
     private static func liveReactivate() {
         let url = Bundle.main.bundleURL
         guard NSClassFromString("XCTestCase") == nil, url.pathExtension == "app" else { return }
-        let cfg = NSWorkspace.OpenConfiguration()
-        cfg.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: cfg) { _, _ in }
+        reactivateRoute(versions: liveVersions, openSelf: {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: cfg) { _, _ in }
+        }, activateCurrent: { NSRunningApplication.current.activate(options: [.activateAllWindows]) })
+    }
+    /// (running, on disk) CFBundleVersion; the disk one is read from Contents/Info.plist directly (Bundle caches its dictionary).
+    private static func liveVersions() -> (running: String?, disk: String?) {
+        let plist = Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")
+        let disk = (try? Data(contentsOf: plist)).flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        return (Bundle.main.infoDictionary?["CFBundleVersion"] as? String, disk?["CFBundleVersion"] as? String)
+    }
+    /// The route of the re-assertion (a row fakes all three): a Launch Services open of the bundle on disk starts the NEW copy
+    /// when an update is staged but not yet relaunched, so a different (or unreadable) on-disk version only re-activates this process.
+    static func reactivateRoute(versions: () -> (running: String?, disk: String?), openSelf: () -> Void, activateCurrent: () -> Void) {
+        let v = versions()
+        if let running = v.running, running == v.disk { openSelf() } else { activateCurrent() }
     }
 
     /// #1821: the one way a tracked window comes up: registered (the `.regular` flip) BEFORE it is activated and ordered

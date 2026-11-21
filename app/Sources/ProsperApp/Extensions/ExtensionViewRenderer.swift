@@ -606,9 +606,7 @@ final class ExtensionViewPanel {
 
     /// The on-screen calls, a seam (#1113): a test must not order the window front or make it key.
     var onScreen: (NSWindow) -> Void = { win in
-        DockPolicy.windowDidShow(win)
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        DockPolicy.present(win)
     }
 
     func present(

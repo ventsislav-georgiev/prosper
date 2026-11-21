@@ -2292,6 +2292,9 @@ tag from the now-released section and put it on the new top draft.
   project's mentions fill in when the full search ends. (#1824)
 - Agents window: Split (Command-D), Open to the Side and dragging a pane divider now work on a saved
   layout without clicking Edit layout first, and are saved. (#1826)
+- Clipboard History, Settings, Chat, Extension Marketplace, text viewer, extension windows and the
+  model download window now come to the front and take the keyboard reliably after Prosper's Dock
+  icon has handed focus to another app. (#1829)
 
 ## v2.174.0
 

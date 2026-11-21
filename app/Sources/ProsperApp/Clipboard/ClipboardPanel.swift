@@ -138,9 +138,7 @@ final class ClipboardPanel {
     }
 
     private func putOnScreen() {
-        DockPolicy.windowDidShow(panel)
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        DockPolicy.present(panel)
         model.focusRequested = false
         DispatchQueue.main.async { [weak self] in self?.model.focusRequested = true }
     }

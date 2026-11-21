@@ -1,0 +1,76 @@
+{
+ "entry": "1829",
+ "filter": "TrackedWindowPresentTests|DockPolicyReactivateRouteTests",
+ "mutants": [
+  {
+   "name": "inline-settings",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "DockPolicy.present(win)",
+   "new": "DockPolicy.windowDidShow(win)\n        NSApp.activate(ignoringOtherApps: true)\n        win.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-marketplace-a",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "DockPolicy.present(window)",
+   "new": "DockPolicy.windowDidShow(window)\n        NSApp.activate(ignoringOtherApps: true)\n        window.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-marketplace-b",
+   "file": "app/Sources/ProsperApp/MarketplaceWindow.swift",
+   "old": "DockPolicy.present(win)",
+   "new": "DockPolicy.windowDidShow(win)\n        NSApp.activate(ignoringOtherApps: true)\n        win.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-clipboard",
+   "file": "app/Sources/ProsperApp/Clipboard/ClipboardPanel.swift",
+   "old": "DockPolicy.present(panel)",
+   "new": "DockPolicy.windowDidShow(panel)\n        NSApp.activate(ignoringOtherApps: true)\n        panel.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-textviewer",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "DockPolicy.present(win)",
+   "new": "DockPolicy.windowDidShow(win)\n        NSApp.activate(ignoringOtherApps: true)\n        win.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-chat",
+   "file": "app/Sources/ProsperApp/ChatWindow.swift",
+   "old": "DockPolicy.present(win)",
+   "new": "DockPolicy.windowDidShow(win)\n        NSApp.activate(ignoringOtherApps: true)\n        win.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-extview",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift",
+   "old": "DockPolicy.present(win)",
+   "new": "DockPolicy.windowDidShow(win)\n        NSApp.activate(ignoringOtherApps: true)\n        win.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "inline-modelsetup",
+   "file": "app/Sources/ProsperApp/ModelSetup.swift",
+   "old": "DockPolicy.present(window)",
+   "new": "DockPolicy.windowDidShow(window)\n        NSApp.activate(ignoringOtherApps: true)\n        window.makeKeyAndOrderFront(nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "route-inverted",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "running == v.disk { openSelf()",
+   "new": "running != v.disk { openSelf()",
+   "expect": "killed"
+  },
+  {
+   "name": "route-open-when-differ",
+   "file": "app/Sources/ProsperApp/DockPolicy.swift",
+   "old": "if let running = v.running, running == v.disk { openSelf() }",
+   "new": "if v.running != nil { openSelf() }",
+   "expect": "killed"
+  }
+ ]
+}
