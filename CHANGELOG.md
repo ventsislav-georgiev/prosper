@@ -2281,8 +2281,9 @@ tag from the now-released section and put it on the new top draft.
   action cannot be undone), and every agent notice and `ctl log` entry drops hidden and direction-
   flipping characters and is cut to 200 characters. (#1825)
 - Agent Sessions: pairs are gone: no Pairs setting, no Stop both / Resume both, no sidekick box or
-  sidekick prompt in New session, and no Control-Tab "Next in Group" / "Previous in Group"; session
-  groups replace them. (#1820)
+  sidekick prompt in New session, no "Add to group", and no Control-Tab "Next in Group" / "Previous in
+  Group"; each former pair member is its own sidebar row with its own Command-number; session groups
+  replace pairs. (#1820)
 - Agents can now read and change Prosper's settings through the control channel (settings.schema,
   settings.get, settings.set): every change is checked first, shows the Undo notice and is logged,
   and secrets such as keys and tokens are never listed or readable. (#1810)
