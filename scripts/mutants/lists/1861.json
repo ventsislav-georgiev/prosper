@@ -3,13 +3,6 @@
  "filter": "ControlClipboardTests",
  "mutants": [
   {
-   "name": "access-ignored",
-   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
-   "old": "let previous = Pasteboard.save(pb, access: access())",
-   "new": "let previous = Pasteboard.save(pb, access: .allowed)",
-   "expect": "killed"
-  },
-  {
    "name": "cap-counts-characters",
    "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
    "old": "guard text.utf8.count <= maxBytes",
@@ -47,7 +40,7 @@
   {
    "name": "no-save",
    "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
-   "old": "let previous = Pasteboard.save(pb, access: access())",
+   "old": "let previous = Pasteboard.save(pb, access: state, cap: saveCap)",
    "new": "let previous = Pasteboard.SavedClip()",
    "expect": "killed"
   },
@@ -61,8 +54,71 @@
   {
    "name": "undo-ignores-later-copy",
    "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
-   "old": "undo: { Pasteboard.restore(previous, to: pb, ifChangeCount: written) }",
-   "new": "undo: { Pasteboard.restore(previous, to: pb, ifChangeCount: pb.changeCount) }",
+   "old": "undo: { restore(previous, to: pb, ifChangeCount: written) }",
+   "new": "undo: { restore(previous, to: pb, ifChangeCount: pb.changeCount) }",
+   "expect": "killed"
+  },
+  {
+   "name": "access_guard_off",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard state == .allowed || state == .unknown else",
+   "new": "guard state == state else",
+   "expect": "killed"
+  },
+  {
+   "name": "access_allows_asks",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard state == .allowed || state == .unknown else",
+   "new": "guard state == .allowed || state == .unknown || state == .asks else",
+   "expect": "killed"
+  },
+  {
+   "name": "access_refuses_unknown",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard state == .allowed || state == .unknown else",
+   "new": "guard state == .allowed else",
+   "expect": "killed"
+  },
+  {
+   "name": "cap_guard_off",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard previous.bytesRead <= saveCap else",
+   "new": "guard previous.bytesRead <= Int.max else",
+   "expect": "killed"
+  },
+  {
+   "name": "cap_refuses_at_cap",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "guard previous.bytesRead <= saveCap else",
+   "new": "guard previous.bytesRead < saveCap else",
+   "expect": "killed"
+  },
+  {
+   "name": "put_history_off",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "        ignoreHistory(written)\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "put_history_wrong_count",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "        ignoreHistory(written)\n",
+   "new": "        ignoreHistory(written - 1)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "undo_history_off",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "{ ignoreHistory(pb.changeCount) }",
+   "new": "{ }",
+   "expect": "killed"
+  },
+  {
+   "name": "history_on_unrestored",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "if Pasteboard.restore(saved, to: pb, ifChangeCount: written) {",
+   "new": "if Pasteboard.restore(saved, to: pb, ifChangeCount: written) || true {",
    "expect": "killed"
   }
  ]

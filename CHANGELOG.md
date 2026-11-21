@@ -2360,7 +2360,9 @@ tag from the now-released section and put it on the new top draft.
 - Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
   release an account in the account pool, each with Undo. (#1862)
 - Agents can put plain text on the clipboard; Undo puts back what was there unless you copied
-  something since, and reading the clipboard stays yours only. (#1861)
+  something since, the agent's text stays out of your clipboard history, and reading the clipboard
+  stays yours only. It is refused, your clipboard left as it was, when Prosper is not allowed to
+  paste from other apps or your current clip is too big (over 32 MiB) to put back. (#1861)
 - Agents can list and set session groups, show a group tab on the island, and pin or unpin History
   records, each with Undo; Forget and Clear unpinned stay yours only. (#1856)
 - Agents can read a session's X-ray chapters, tasks, memory notes and recap (read only, capped at 20

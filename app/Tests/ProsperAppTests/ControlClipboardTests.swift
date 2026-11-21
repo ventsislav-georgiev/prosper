@@ -4,21 +4,29 @@ import XCTest
 @testable import ProsperApp
 
 /// #1861: clipboard.put over the control channel. Every row writes a named scratch pasteboard of its own (released at the
-/// end), swapped in through ControlClipboard.pasteboard; the user's clipboard is never named or written here.
+/// end), swapped in through ControlClipboard.pasteboard; the user's clipboard is never named or written here. The history
+/// skip goes to a recorder (`ignored`), never to the real ClipboardMonitor.
 @MainActor
 final class ControlClipboardTests: XCTestCase {
     static let raw = NSPasteboard.PasteboardType("eu.illegible.prosper.test.raw")
 
+    /// The change counts handed to ControlClipboard.ignoreHistory, in order.
+    var ignored: [Int] = []
+
     /// A fresh scratch pasteboard behind the seams for `body`; the seams and the pasteboard are put back after.
-    func withScratch(access: ClipboardAccess = .allowed, _ body: (NSPasteboard) throws -> Void) rethrows {
+    func withScratch(access: ClipboardAccess = .allowed, saveCap: Int = Pasteboard.saveByteCap,
+                     _ body: (NSPasteboard) throws -> Void) rethrows {
         let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.clip.\(UUID().uuidString)"))
-        let saved = (ControlClipboard.pasteboard, ControlClipboard.access)
+        let saved = (ControlClipboard.pasteboard, ControlClipboard.access, ControlClipboard.ignoreHistory, ControlClipboard.saveCap)
         defer {
-            (ControlClipboard.pasteboard, ControlClipboard.access) = saved
+            (ControlClipboard.pasteboard, ControlClipboard.access, ControlClipboard.ignoreHistory, ControlClipboard.saveCap) = saved
             pb.releaseGlobally()
         }
+        ignored = []
         ControlClipboard.pasteboard = { pb }
         ControlClipboard.access = { access }
+        ControlClipboard.ignoreHistory = { [weak self] in self?.ignored.append($0) }
+        ControlClipboard.saveCap = saveCap
         try body(pb)
     }
 
@@ -86,14 +94,68 @@ final class ControlClipboardTests: XCTestCase {
         }
     }
 
-    /// Under denied paste access nothing is read before the write; the undo empties the clipboard (the seam's rule).
-    func testDeniedAccessReadsNothingAndTheUndoEmpties() throws {
-        try withScratch(access: .denied) { pb in
+    /// QA n158: under denied paste access the save reads nothing, so the undo would empty the person's clipboard; under
+    /// Ask or the system default the save's read raises macOS's paste alert. Refused, nothing written, nothing saved.
+    func testPutIsRefusedUnlessPasteAccessIsAllowed() throws {
+        let message = "clipboard left as it was: Undo needs Prosper allowed in \(ClipboardAccess.paneName)"
+        for state in [ClipboardAccess.denied, .asks, .systemDefault] {
+            withScratch(access: state) { pb in
+                fill(pb)
+                let before = Pasteboard.save(pb, access: .allowed)
+                let count = pb.changeCount
+                refused(text("agent text"), message)
+                XCTAssertEqual(pb.changeCount, count, "\(state)")
+                XCTAssertEqual(Pasteboard.save(pb, access: .allowed), before, "\(state)")
+                XCTAssertEqual(ignored, [], "\(state)")
+            }
+        }
+        // .unknown (older macOS, the test host) raises no alert: written.
+        try withScratch(access: .unknown) { pb in
+            fill(pb)
+            _ = try ControlClipboard.put(text("agent text"))
+            XCTAssertEqual(pb.string(forType: .string), "agent text")
+        }
+    }
+
+    /// QA n160: a clip past the save cap would be saved in part and the undo would put back the part; refused, untouched.
+    /// The cap is lowered through the seam: fill() holds 37 bytes, its rich text ends past 20.
+    func testPutIsRefusedWhenThePreviousClipIsPastTheSaveCap() throws {
+        withScratch(saveCap: 20) { pb in
+            fill(pb)
+            let before = Pasteboard.save(pb, access: .allowed)
+            XCTAssertTrue(before.bytesRead > 20)
+            let count = pb.changeCount
+            refused(text("agent text"), "clipboard left as it was: it holds more than Undo can put back (20 bytes)")
+            XCTAssertEqual(pb.changeCount, count)
+            XCTAssertEqual(Pasteboard.save(pb, access: .allowed), before)
+            XCTAssertEqual(ignored, [])
+        }
+        // A clip exactly at the cap is whole: written.
+        try withScratch { pb in
+            fill(pb)
+            let whole = Pasteboard.save(pb, access: .allowed).bytesRead
+            ControlClipboard.saveCap = whole
+            _ = try ControlClipboard.put(text("agent text"))
+            XCTAssertEqual(pb.string(forType: .string), "agent text")
+        }
+    }
+
+    /// QA n159: the agent's write and the undo's restore are both kept out of the clipboard history, each by the
+    /// change count it left; an undo that restores nothing (a copy made since) skips nothing.
+    func testWriteAndRestoreAreKeptOutOfTheHistory() throws {
+        try withScratch { pb in
             fill(pb)
             let c = try ControlClipboard.put(text("agent text"))
-            XCTAssertEqual(pb.string(forType: .string), "agent text")
+            XCTAssertEqual(ignored, [pb.changeCount])
             c.undo?()
-            XCTAssertEqual(pb.pasteboardItems?.count ?? 0, 0)
+            XCTAssertEqual(ignored.count, 2)
+            XCTAssertEqual(ignored.last, pb.changeCount)
+            XCTAssertEqual(pb.string(forType: .string), "the person's copy")
+            let d = try ControlClipboard.put(text("agent again"))
+            pb.clearContents()
+            pb.setString("copied since", forType: .string)
+            d.undo?()
+            XCTAssertEqual(ignored.count, 3)
         }
     }
 
@@ -126,13 +188,14 @@ final class ControlClipboardTests: XCTestCase {
     /// Through the registry: the change shows the notice with Undo and one log line; the notice's Undo restores.
     func testThroughTheRegistryTheNoticeUndoRestores() async throws {
         let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.clip.\(UUID().uuidString)"))
-        let saved = (ControlClipboard.pasteboard, ControlClipboard.access)
+        let saved = (ControlClipboard.pasteboard, ControlClipboard.access, ControlClipboard.ignoreHistory)
         defer {
-            (ControlClipboard.pasteboard, ControlClipboard.access) = saved
+            (ControlClipboard.pasteboard, ControlClipboard.access, ControlClipboard.ignoreHistory) = saved
             pb.releaseGlobally()
         }
         ControlClipboard.pasteboard = { pb }
         ControlClipboard.access = { .allowed }
+        ControlClipboard.ignoreHistory = { _ in }
         Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
         var r = ControlRegistry()
         ControlRegistry.registerClipboard(&r)
