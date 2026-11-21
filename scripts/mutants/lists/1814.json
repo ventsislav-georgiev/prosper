@@ -1,0 +1,55 @@
+{
+ "entry": "1814",
+ "filter": "XrayRichBlockTests",
+ "mutants": [
+  {
+   "name": "fence-not-code",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "if fence { out.append(XrayRich.Run(text: String(line), style: .code)); continue }",
+   "new": "if fence { out.append(XrayRich.Run(text: String(line))); continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "heading-not-bold",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "map { XrayRich.Run(text: $0.text, style: $0.style.union(.bold)) }\n                continue",
+   "new": "map { XrayRich.Run(text: $0.text, style: $0.style) }\n                continue",
+   "expect": "killed"
+  },
+  {
+   "name": "list-indent-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "out.append(XrayRich.Run(text: String(line.prefix(line.count - t.count))))",
+   "new": "_ = line",
+   "expect": "killed"
+  },
+  {
+   "name": "no-match",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "var a = XrayRich.attributed(shown, size: size, match: match.trimmingCharacters(in: .whitespaces))",
+   "new": "var a = XrayRich.attributed(shown, size: size)",
+   "expect": "killed"
+  },
+  {
+   "name": "strong-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "let shown = strong ? runs.map",
+   "new": "let shown = false ? runs.map",
+   "expect": "killed"
+  },
+  {
+   "name": "refs-not-linked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "if XrayRefLink.decorate(), !refs.isEmpty {",
+   "new": "if false, !refs.isEmpty {",
+   "expect": "killed"
+  },
+  {
+   "name": "parse-on-main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "await Task.detached(priority: .userInitiated) { runs(text) }.value",
+   "new": "await MainActor.run { runs(text) }",
+   "expect": "killed"
+  }
+ ]
+}

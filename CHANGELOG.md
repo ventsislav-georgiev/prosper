@@ -2268,6 +2268,9 @@ tag from the now-released section and put it on the new top draft.
   ⌘W) and dragging a session onto a pane now act right away and are saved, without turning on Edit
   layout first; Edit layout is still what lets a sidebar click change the focused pane's session.
   (#1817)
+- X-ray drawer: a prompt or memory opened from the drawer now shows its Markdown formatted (bold,
+  italics, lists, inline code, code blocks, links and headings) instead of raw ** and - marks, and
+  the word typed in the drawer's Filter is highlighted in the opened card. (#1814)
 
 ## v2.174.0
 

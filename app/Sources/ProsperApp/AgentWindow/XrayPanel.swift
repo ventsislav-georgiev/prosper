@@ -560,7 +560,7 @@ final class XrayPanelModel: ObservableObject {
     func openMemoryCard(_ m: XrayMemory.Item, note: String? = nil) {
         memoryCard = m
         let read: (() -> Void)? = XrayMemoryCard.canRead(m) ? { [weak self] in self?.readPrompt(m) } : nil
-        present(AnyView(XrayMemoryCard(item: m, now: now(), note: note, readPrompt: read)), XrayMemoryCard.size)
+        present(AnyView(XrayMemoryCard(item: m, now: now(), note: note, readPrompt: read, match: filter)), XrayMemoryCard.size)
     }
 
     /// The card's "Read the prompt" (#1472, #1471: every pane): the prompt's chapter card; a prompt not among the
@@ -632,7 +632,7 @@ final class XrayPanelModel: ObservableObject {
             }
         }
         presentRef(AnyView(XrayChapterCard(chapter: c, read: read, refs: refs?.entries ?? [],
-                                           link: { [weak self] in self?.openLink($0) ?? .discarded })),
+                                           link: { [weak self] in self?.openLink($0) ?? .discarded }, match: filter)),
                    XrayChapterCard.size) { [weak read] in read?.cancel() }
     }
 
@@ -1320,6 +1320,8 @@ struct XrayMemoryCard: View {
     var now = Date()
     var note: String?
     let readPrompt: (() -> Void)?
+    /// #1814: the drawer's filter when the card opened, highlighted in the title and the body.
+    var match = ""
 
     static let size = CGSize(width: 380, height: 360)
 
@@ -1344,7 +1346,7 @@ struct XrayMemoryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(8)) {
-            Text(verbatim: item.title).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(2)
+            XrayRichBlock(text: item.title, size: 12, strong: true, match: match).lineLimit(2)
             ForEach(Array(Self.fields(item, now: now).enumerated()), id: \.offset) { _, f in
                 HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
                     Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
@@ -1355,8 +1357,7 @@ struct XrayMemoryCard: View {
             }
             if let b = Self.bodyText(item) {
                 ScrollView {
-                    Text(verbatim: b).font(Neon.font(11)).foregroundStyle(Neon.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    XrayRichBlock(text: b, size: 11, match: match)   // #1814: Markdown drawn, the filter highlighted
                 }
                 .accessibilityLabel("Body")
             }

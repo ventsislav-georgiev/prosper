@@ -12,6 +12,8 @@ struct XrayChapterCard: View {
     /// The panel's refs (gate B underlines them) and the link handler (XrayPanelModel.openLink).
     var refs: [XrayRefs.Entry] = []
     var link: (URL) -> XrayRefLink.Outcome = { _ in .discarded }
+    /// #1814: the drawer's filter when the card opened; highlighted in the prompt and the response.
+    var match = ""
 
     static let size = XrayMemoryCard.size
     static let noResponse = "No response yet."
@@ -84,14 +86,10 @@ struct XrayChapterCard: View {
             Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: sz(8)) {
-                    Text(verbatim: pp.head).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    XrayRichBlock(text: pp.head, size: 12, strong: true, match: match)
                         .accessibilityLabel("Prompt: \(pp.head)")
                     if let n = pp.note { faint(n) }
-                    if let t = pp.tail {
-                        Text(verbatim: t).font(Neon.font(12, weight: .semibold)).foregroundStyle(Neon.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                    }
+                    if let t = pp.tail { XrayRichBlock(text: t, size: 12, strong: true, match: match) }
                     if let t = Self.tools(chapter) {
                         Text(verbatim: "Tools: " + t).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
                     }
@@ -113,18 +111,92 @@ struct XrayChapterCard: View {
 
     private func answerText(_ answer: String?, empty: String) -> some View {
         Group {
-            if let answer, let a = XrayRefSpans.attributed(answer, refs: refs, color: Neon.blue) {
-                Text(a)
+            if let answer {
+                XrayRichBlock(text: answer, size: 11, match: match, refs: refs)
             } else {
-                Text(verbatim: answer ?? empty)
+                Text(verbatim: empty).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
             }
         }
-        .font(Neon.font(11)).foregroundStyle(answer == nil ? Neon.textSecondary : Neon.textPrimary)
-        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
     }
 
     private func faint(_ s: String) -> some View {
         Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+    }
+}
+
+/// #1814: a card's text (the chapter card's prompt and response, the memory card's title and body) drawn with
+/// XrayRich, the ref card's renderer: bold, italics, inline code, links and lists inline; headings bold; fenced code in
+/// the mono face. The drawer's filter `match` is highlighted as the ref card's filter is. Parsed off main once per text
+/// (`.task(id:)`: a card's open, the --chapter read's arrival), never in a body; until then the plain text shows.
+struct XrayRichBlock: View {
+    let text: String
+    var size: CGFloat = 11
+    /// Every run semibold (the prompt, the memory title), as the plain text drew it.
+    var strong = false
+    var match = ""
+    /// The panel's refs: linked as XrayRefSpans.attributed links them (gate B).
+    var refs: [XrayRefs.Entry] = []
+    @State private var parsed: (text: String, runs: [XrayRich.Run])?
+
+    /// Inputs are capped upstream (memory 16 KB, a --chapter entry 6000 + 3000 scalars); this is a backstop.
+    nonisolated static let cap = 32 * 1024
+    /// Rows count the work, not time: one per document parsed. shortcut: unsynchronised (a test counter), atomics if read live.
+    nonisolated(unsafe) static var parses = 0
+
+    var body: some View {
+        Group {
+            if let p = parsed, p.text == text {
+                Text(Self.attributed(p.runs, size: size, strong: strong, match: match, refs: refs))
+            } else {
+                Text(verbatim: text).font(Neon.font(size, weight: strong ? .semibold : .regular)).foregroundStyle(Neon.textPrimary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+        .task(id: text) {
+            let t = text
+            let runs = await Self.parse(t)
+            if !Task.isCancelled { parsed = (t, runs) }
+        }
+    }
+
+    /// The parse, off main.
+    nonisolated static func parse(_ text: String) async -> [XrayRich.Run] {
+        await Task.detached(priority: .userInitiated) { runs(text) }.value
+    }
+
+    /// A document as runs: line by line, a fence line gone and the lines between it and the next fence code (never
+    /// parsed), a heading's text bold, a list item's indent kept, every other line XrayRich's inline parse (lists to
+    /// bullets, quotes unmarked); then XrayRich.clean over the whole (unseen scalars, marks, the cap).
+    nonisolated static func runs(_ text: String) -> [XrayRich.Run] {
+        parses += 1
+        var out: [XrayRich.Run] = [], fence = false
+        for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if n > 0 { out.append(XrayRich.Run(text: "\n")) }
+            let t = line.drop { $0 == " " }
+            if t.hasPrefix("```") || t.hasPrefix("~~~") { fence.toggle(); continue }
+            if fence { out.append(XrayRich.Run(text: String(line), style: .code)); continue }
+            let hashes = t.prefix { $0 == "#" }.count
+            if (1...6).contains(hashes), t.dropFirst(hashes).first == " " {
+                out += XrayRich.runs(String(t.dropFirst(hashes + 1)), max: cap).map { XrayRich.Run(text: $0.text, style: $0.style.union(.bold)) }
+                continue
+            }
+            if t.count < line.count, ["- ", "* ", "+ "].contains(where: { t.hasPrefix($0) }) {
+                out.append(XrayRich.Run(text: String(line.prefix(line.count - t.count))))
+            }
+            out += XrayRich.runs(String(line), max: cap)
+        }
+        return XrayRich.clean(out, max: cap)
+    }
+
+    /// The runs drawn by XrayRich.attributed (the filter's hits highlighted), every run semibold when `strong`, then
+    /// the refs linked when gate B is on.
+    @MainActor static func attributed(_ runs: [XrayRich.Run], size: CGFloat, strong: Bool = false, match: String = "",
+                                      refs: [XrayRefs.Entry] = []) -> AttributedString {
+        let shown = strong ? runs.map { XrayRich.Run(text: $0.text, style: $0.style.union(.bold)) } : runs
+        var a = XrayRich.attributed(shown, size: size, match: match.trimmingCharacters(in: .whitespaces))
+        if XrayRefLink.decorate(), !refs.isEmpty { XrayRefSpans.decorate(&a, refs: refs, color: Neon.blue) }
+        return a
     }
 }
 
