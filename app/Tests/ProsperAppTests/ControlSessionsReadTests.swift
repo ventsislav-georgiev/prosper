@@ -131,6 +131,26 @@ final class ControlSessionsReadTests: XCTestCase {
         XCTAssertEqual(ControlSessionsRead.waitChecks, 3, "the subscription ends with the call")
     }
 
+    /// changed:true skips the current value (idle now does not answer); the next store change to idle does.
+    /// Without it the current idle value answers at once.
+    func testWaitChangedSkipsTheCurrentValue() async {
+        let api = base.session("api", .idle)
+        let st = base.store([api, base.session("web", .working)])
+        use(st)
+        let t = Task { await Self.call("sessions.wait", ["name": .string("api"), "changed": .bool(true), "timeout": .number(20)]) }
+        await checks(1)
+        st.sessions = [api, base.session("web", .idle)] // another session changes: the target is unchanged, no answer
+        await checks(2)
+        st.sessions = [base.session("api", .working), base.session("web", .idle)]
+        await checks(3)
+        st.sessions = [base.session("api", .idle, ago: 5), base.session("web", .idle)] // idle again, later activity
+        let r = await t.value
+        XCTAssertEqual(r.result, .object(["reached": .bool(true), "state": .string("idle")]), r.error ?? "")
+        XCTAssertEqual(ControlSessionsRead.waitChecks, 4)
+        let now = await Self.call("sessions.wait", name("api"))
+        XCTAssertEqual(now.result, .object(["reached": .bool(true), "state": .string("idle")]))
+    }
+
     /// A session that leaves the list ends the wait ({"ended": true}), or reaches state "ended"; a state that already
     /// holds answers at once; an unknown or ambiguous name and a bad state or timeout are refused before any wait.
     func testWaitEndedAndRefusals() async {

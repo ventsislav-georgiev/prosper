@@ -2342,6 +2342,8 @@ tag from the now-released section and put it on the new top draft.
 - Agents can now look at a session through Prosper's control channel: its full details, its current
   screen and its Claude Code transcript (the last two only while agent control is on), and they can
   wait until a session is idle, needs you, or has ended. (#1840)
+- sessions.wait takes changed:true, which skips the current state so a wait right after sessions.say
+  no longer answers at once. (#1852)
 
 ## v2.174.0
 

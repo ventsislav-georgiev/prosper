@@ -26,8 +26,8 @@
   {
    "name": "wait-first-only",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
-   "old": "if let v = verdict(list.first(where: { $0.key == key }), state) { cont.yield(v); cont.finish() }",
-   "new": "if waitChecks == 1, let v = verdict(list.first(where: { $0.key == key }), state) { cont.yield(v); cont.finish() }",
+   "old": "if let v = verdict(me, state) { cont.yield(v); cont.finish() }",
+   "new": "if waitChecks == 1, let v = verdict(me, state) { cont.yield(v); cont.finish() }",
    "expect": "killed"
   },
   {

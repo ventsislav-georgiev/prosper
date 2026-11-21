@@ -1,0 +1,20 @@
+{
+ "entry": "1852",
+ "filter": "ControlSessionsReadTests",
+ "mutants": [
+  {
+   "name": "changed-skip-dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "                    if changed, let me, me.state == first.state, me.activity == first.activity { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "changed-skips-any-state",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if changed, let me, me.state == first.state, me.activity == first.activity { return }",
+   "new": "if changed, let me, me.state == first.state { return }",
+   "expect": "killed"
+  }
+ ]
+}

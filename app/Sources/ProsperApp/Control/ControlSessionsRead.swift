@@ -145,11 +145,13 @@ enum ControlSessionsRead {
 
     /// The session is found by name once (an unknown or ambiguous name is refused at once), then followed by its key
     /// through the store's own publisher: the current list first, then each change, until `state` holds, it ends, or
-    /// `timeout` (1-60 s, default 30) passes. The subscription lives only as long as the call.
+    /// `timeout` (1-60 s, default 30) passes. `changed: true` judges only once the session's own state or activity moves. The subscription lives only as long as the call.
     static func wait(_ args: [String: ControlJSON]) async throws -> ControlJSON {
         let st = try ControlSessions.store()
-        let key = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st).key
+        let first = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
+        let key = first.key
         let state = ControlSessions.string(args, "state") ?? "idle"
+        let changed = args["changed"] == .bool(true)
         let limit = try seconds(args, fallback: waitTimeout)
         let late = "sessions.wait: the session was not \(state) within \(Int(limit.rounded(.up))) s (timeout); ask again"
         return try await within(limit, "sessions.wait", late: late) {
@@ -158,7 +160,10 @@ enum ControlSessionsRead {
             let sub = st.$sessions.sink { list in
                 MainActor.assumeIsolated {
                     waitChecks += 1
-                    if let v = verdict(list.first(where: { $0.key == key }), state) { cont.yield(v); cont.finish() }
+                    let me = list.first(where: { $0.key == key })
+                    // changed: only the target's own (state, activity) moving counts, not another session's publish; gone = ended.
+                    if changed, let me, me.state == first.state, me.activity == first.activity { return }
+                    if let v = verdict(me, state) { cont.yield(v); cont.finish() }
                 }
             }
             defer { sub.cancel() }
@@ -324,9 +329,10 @@ extension ControlRegistry {
                                   args: ["name": name], mutates: false) { _, a in try ControlSessionsRead.get(a) })
         r.register(ControlCommand(
             name: "sessions.wait",
-            summary: "Wait until a session is idle, needs you, or ended: {reached, state}, {ended} when it ended first, an error on timeout.",
+            summary: "Wait until a session is idle, needs you, or ended: {reached, state}, {ended} when it ended first, an error on timeout. Pass changed:true right after sessions.say, or a still-idle session answers at once.",
             args: ["name": name,
                    "state": ControlArg(type: "string", allowed: ControlSessionsRead.states, summary: "idle when absent"),
+                   "changed": ControlArg(type: "boolean", summary: "true: ignore the current state, answer only after a later change"),
                    "timeout": timeout(ControlSessionsRead.waitTimeout)],
             mutates: false, run: awaits, runAsync: { _, a in try await ControlSessionsRead.wait(a) }))
         r.register(ControlCommand(
