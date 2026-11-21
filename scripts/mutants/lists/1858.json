@@ -134,6 +134,55 @@
    "old": "            guard !storeAll().contains(where: { $0.name == old.name }) else { return }",
    "new": "            guard true else { return }",
    "expect": "killed"
+  },
+  {
+   "name": "E1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "            taken.formUnion(PlaceholderEngine.snippetKeys(in: h.richText ? RichSnippet.plainText(rtf: h.text) : h.text))\n",
+   "new": "            _ = h.richText\n",
+   "expect": "killed"
+  },
+  {
+   "name": "E2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "h.richText ? RichSnippet.plainText(rtf: h.text) : h.text",
+   "new": "h.text",
+   "expect": "killed"
+  },
+  {
+   "name": "E3",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "                taken.formUnion(PlaceholderEngine.snippetKeys(in: s.text))\n",
+   "new": "                _ = s.text\n",
+   "expect": "killed"
+  },
+  {
+   "name": "K1",
+   "file": "app/Sources/ProsperApp/Snippets/PlaceholderEngine.swift",
+   "old": "if name.lowercased() == \"snippet\" {",
+   "new": "if name == \"snippet\" {",
+   "expect": "killed"
+  },
+  {
+   "name": "B1",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "taken.insert(b.item.trimmingCharacters(in: .whitespaces))",
+   "new": "_ = b",
+   "expect": "killed"
+  },
+  {
+   "name": "B2",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "taken.insert(b.item.trimmingCharacters(in: .whitespaces))",
+   "new": "taken.insert(b.item)",
+   "expect": "killed"
+  },
+  {
+   "name": "B3",
+   "file": "app/Sources/ProsperApp/Control/ControlSnippets.swift",
+   "old": "for b in bindings() where b.commandID == \"snippets.run\" {",
+   "new": "for b in bindings() {",
+   "expect": "killed"
   }
  ]
 }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import ProsperApp
@@ -6,14 +7,16 @@ import XCTest
 final class ControlSnippetsTests: XCTestCase {
     @MainActor
     func withStore(_ initial: [SnippetHit] = [], phone: [PhoneSnippetStore.Snippet] = [], replacements: [String: String] = [:],
-                   collections: [SnippetCollection] = [], _ body: (() -> [SnippetHit]) throws -> Void) rethrows {
+                   collections: [SnippetCollection] = [], bindings: [ExtensionShortcut] = [],
+                   _ body: (() -> [SnippetHit]) throws -> Void) rethrows {
         let saved = (ControlSnippets.storeAll, ControlSnippets.storeSave, ControlSnippets.storeRemove)
-        let seams = (ControlSnippets.storeCollections, ControlSnippets.phoneSets, ControlSnippets.replacements)
+        let seams = (ControlSnippets.storeCollections, ControlSnippets.phoneSets, ControlSnippets.replacements, ControlSnippets.bindings)
         defer {
             (ControlSnippets.storeAll, ControlSnippets.storeSave, ControlSnippets.storeRemove) = saved
-            (ControlSnippets.storeCollections, ControlSnippets.phoneSets, ControlSnippets.replacements) = seams
+            (ControlSnippets.storeCollections, ControlSnippets.phoneSets, ControlSnippets.replacements, ControlSnippets.bindings) = seams
         }
         ControlSnippets.storeCollections = { collections }
+        ControlSnippets.bindings = { bindings }
         ControlSnippets.phoneSets = { [(device: "phone-1", set: PhoneSnippetStore.DeviceSet(name: "Phone", hash: "h", updated: 1, snippets: phone))] }
         ControlSnippets.replacements = { replacements }
         var items = initial
@@ -154,6 +157,51 @@ final class ControlSnippetsTests: XCTestCase {
         }
     }
 
+    /// n184 (a): a person's snippet whose {snippet:key} embed points at a deleted snippet keeps that name: an agent snippet
+    /// by that name (or keyword) would be typed into their text. The key is read as the engine does (any case, spaced, piped,
+    /// in a rich body's plain text); a key no embed names stays free.
+    @MainActor
+    func testSetRefusesANameADanglingEmbedPointsAt() throws {
+        let host = SnippetHit(name: "letter", text: "Hi {snippet:gone}, { Snippet : gone2 | upper } {snippet sig3}", autoExpand: false)
+        let attr = NSAttributedString(string: "x {snippet:richgone}")   // its RTF source escapes the braces: \{snippet:richgone\}
+        let rtf = attr.rtf(from: NSRange(location: 0, length: attr.length), documentAttributes: [:]) ?? Data()
+        let rich = SnippetHit(name: "card", text: String(decoding: rtf, as: UTF8.self), autoExpand: false, richText: true)
+        try withStore([host, rich]) { items in
+            refused(try ControlSnippets.set(args(["name": "gone", "text": "t"])), contains: "gone is already")
+            refused(try ControlSnippets.set(args(["name": "n", "text": "t", "keyword": "gone2"])), contains: "gone2 is already")
+            refused(try ControlSnippets.set(args(["name": "sig3", "text": "t"])), contains: "sig3 is already")
+            refused(try ControlSnippets.set(args(["name": "richgone", "text": "t"])), contains: "richgone is already")
+            XCTAssertEqual(items(), [host, rich])
+            _ = try ControlSnippets.set(args(["name": "Gone", "text": "t"]))   // the lookup is exact: "Gone" is not "gone"
+            XCTAssertEqual(items().count, 3)
+        }
+    }
+
+    /// n184 (a): a phone snippet's dangling {snippet:key} embed holds its name too (the phone sets resolve embeds as well).
+    @MainActor
+    func testSetRefusesANameAPhoneSnippetsDanglingEmbedPointsAt() throws {
+        let phone = [PhoneSnippetStore.Snippet(name: "Reply", text: "Thanks {snippet: phonegone }", keyword: nil)]
+        try withStore(phone: phone) { items in
+            refused(try ControlSnippets.set(args(["name": "phonegone", "text": "t"])), contains: "phonegone is already")
+            XCTAssertEqual(items().count, 0)
+        }
+    }
+
+    /// n184 (b): a Shortcuts hotkey bound to snippets.run by name outlives the snippet; an agent snippet by that name
+    /// would be typed by the person's own hotkey. Only snippets.run bindings count; the item is trimmed as byName does.
+    @MainActor
+    func testSetRefusesANameADanglingSnippetHotkeyIsBoundTo() throws {
+        let combo = KeyCombo(keyCode: 0, carbonModifiers: 0, display: "")
+        let bound = [ExtensionShortcut(commandID: "snippets.run", item: " addr ", combo: combo, label: "Snippets › addr"),
+                     ExtensionShortcut(commandID: "quicklinks.run", item: "docs", combo: combo, label: "Quicklinks › docs")]
+        try withStore(bindings: bound) { items in
+            refused(try ControlSnippets.set(args(["name": "addr", "text": "t"])), contains: "addr is already")
+            XCTAssertEqual(items().count, 0)
+            _ = try ControlSnippets.set(args(["name": "docs", "text": "t"]))
+            XCTAssertEqual(items().count, 1)
+        }
+    }
+
     /// n166: an undo does nothing once the snippet is no longer what the agent left (edited, or made again after a remove).
     @MainActor
     func testUndoDoesNothingAfterThePersonChangedIt() throws {
@@ -203,6 +251,20 @@ final class ControlSnippetsTests: XCTestCase {
         try withStore { _ in
             ControlSnippets.storeSave = { _ in }
             refused(try ControlSnippets.set(args(["name": "n", "text": "ok"])), contains: "did not save")
+        }
+    }
+
+    /// n185: a store that keeps the snippet but with another text than asked is reported too.
+    @MainActor
+    func testSetReportsAStoreThatSavedOtherText() throws {
+        try withStore { items in
+            let save = ControlSnippets.storeSave
+            ControlSnippets.storeSave = { h in
+                save(SnippetHit(name: h.name, keyword: h.keyword, text: h.text + " (cut)", collection: h.collection,
+                                description: h.description, autoExpand: h.autoExpand, agentMade: h.agentMade))
+            }
+            refused(try ControlSnippets.set(args(["name": "n", "text": "ok"])), contains: "did not save")
+            XCTAssertEqual(items().last?.text, "ok (cut)")
         }
     }
 

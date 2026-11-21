@@ -2358,8 +2358,8 @@ tag from the now-released section and put it on the new top draft.
   A snippet an agent saves is marked as the agent's, never auto-expands and may only use the
   {cursor}, {date}, {time}, {datetime}, {uuid} and {argument} placeholders. An agent can change or
   delete only the snippets it saved, never yours, and cannot take a name or keyword your snippets,
-  your phone's snippets or a macOS Text Replacement already use; Undo leaves a snippet alone once
-  you have edited it since. (#1858)
+  your phone's snippets or a macOS Text Replacement already use, or that your snippet embeds or
+  snippet hotkeys still point at; Undo leaves a snippet alone once you have edited it since. (#1858)
 - Agents can jump Agent Sessions to the next session that needs you (like Command-J) and hold or
   release an account in the account pool, each with Undo. The agent's jump only shows a session one
   of your panes or layouts already shows and never moves your keyboard; if none shows it, the jump

@@ -110,6 +110,17 @@ enum PlaceholderEngine {
         return out
     }
 
+    /// Every `{snippet:key}` embed's key, as `embeddedSnippet` hands it to `snippetByKeyword` (#1858: names a person's
+    /// embed still points at, the target deleted or not).
+    static func snippetKeys(in template: String) -> [String] {
+        var out: [String] = []
+        forEachToken(template) { raw in
+            let (name, spec, _) = split(raw)
+            if name.lowercased() == "snippet" { out.append(spec.trimmingCharacters(in: .whitespaces)) }
+        }
+        return out
+    }
+
     // MARK: - Core
 
     private static func render(_ template: String, _ ctx: inout PlaceholderContext,

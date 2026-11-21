@@ -6,7 +6,8 @@ import Foundation
 /// the person's clipboard history, {snippet:…} embeds another snippet with the same context, custom ones run extensions).
 /// A snippet an agent writes never auto-expands and carries the stored agentMade marker: set and remove touch only
 /// such snippets, and set refuses a name or keyword that a person's snippet, a phone snippet or a Text Replacement
-/// already answers to, so an agent snippet never takes over their embeds, hotkeys or keywords. set and remove are
+/// already answers to, or that their embeds or snippet hotkeys still name (target deleted), so an agent snippet never
+/// takes over their embeds, hotkeys or keywords. set and remove are
 /// changes with undo; an undo does nothing once the snippet changed after the agent. On demand only.
 @MainActor
 enum ControlSnippets {
@@ -17,6 +18,7 @@ enum ControlSnippets {
     static var storeCollections: () -> [SnippetCollection] = { SnippetStore.allCollections() }
     static var phoneSets: () -> [(device: String, set: PhoneSnippetStore.DeviceSet)] = { PhoneSnippetStore.live.sets() }
     static var replacements: () -> [String: String] = { TextReplacements.items() }
+    static var bindings: () -> [ExtensionShortcut] = { ShortcutStore.extensionShortcuts() }
 
     static let maxName = 100, maxKeyword = 50, maxDescription = 500, maxText = 20_000   // text in UTF-8 bytes
 
@@ -25,15 +27,27 @@ enum ControlSnippets {
 
 
     /// The first of `name`, `keyword` or its trigger that a person's snippet (name, keyword, trigger), a phone snippet
-    /// (name, keyword) or a Text Replacement shortcut already is. Exact, as {snippet:key} lookups and the matcher compare.
+    /// (name, keyword) or a Text Replacement shortcut already is, or that still has a reference to it: a {snippet:key}
+    /// embed in a person's or phone snippet, or a Shortcuts snippets.run hotkey (n184: both outlive a deleted target).
+    /// Exact, as {snippet:key} lookups and the matcher compare; a hotkey's item trimmed, as SnippetStore.byName does.
     static func collision(name: String, keyword: String, collection: String) -> String? {
         let affix = Dictionary(storeCollections().map { ($0.name, (prefix: $0.prefix, suffix: $0.suffix)) }) { a, _ in a }
         func trigger(_ kw: String, _ col: String) -> String {
             kw.isEmpty ? "" : SnippetStore.effectiveTrigger(keyword: kw, collection: col, collections: affix)
         }
         var taken = Set(replacements().keys)
-        for h in storeAll() where !h.agentMade { taken.formUnion([h.name, h.keyword, trigger(h.keyword, h.collection)]) }
-        for (_, set) in phoneSets() { for s in set.snippets { taken.formUnion([s.name, SnippetStore.sanitizeKeyword(s.keyword ?? "")]) } }
+        for h in storeAll() where !h.agentMade {
+            taken.formUnion([h.name, h.keyword, trigger(h.keyword, h.collection)])
+            // A rich body's tokens are read through its plain projection, as fillInFields does.
+            taken.formUnion(PlaceholderEngine.snippetKeys(in: h.richText ? RichSnippet.plainText(rtf: h.text) : h.text))
+        }
+        for (_, set) in phoneSets() {
+            for s in set.snippets {
+                taken.formUnion([s.name, SnippetStore.sanitizeKeyword(s.keyword ?? "")])
+                taken.formUnion(PlaceholderEngine.snippetKeys(in: s.text))
+            }
+        }
+        for b in bindings() where b.commandID == "snippets.run" { taken.insert(b.item.trimmingCharacters(in: .whitespaces)) }
         taken.remove("")
         return [name, keyword, trigger(keyword, collection)].first { taken.contains($0) }
     }
@@ -98,7 +112,7 @@ enum ControlSnippets {
         }
         let keyword = SnippetStore.sanitizeKeyword(keywordArg ?? old?.keyword ?? ""), collection = old?.collection ?? ""
         if let clash = collision(name: name, keyword: keyword, collection: collection) {
-            throw ControlError("\(OutsideText.shown(clash, max: maxName)) is already the name or keyword of the person's snippet, a phone snippet or a Text Replacement")
+            throw ControlError("\(OutsideText.shown(clash, max: maxName)) is already the name or keyword of the person's snippet, a phone snippet or a Text Replacement, or a name their embeds or hotkeys point at")
         }
         let hit = SnippetHit(name: name, keyword: keyword, text: text, collection: collection,
                              description: description ?? old?.description ?? "", autoExpand: false, richText: false, agentMade: true)
@@ -138,7 +152,7 @@ extension ControlRegistry {
         r.register(ControlCommand(name: "snippets.get", summary: "One snippet with its text.", args: ["name": name], mutates: false) { _, a in
             try ControlSnippets.get(a)
         })
-        r.register(.change(name: "snippets.set", summary: "Save or replace a plain text snippet the agent made. It never auto-expands; only {cursor} {date} {time} {datetime} {uuid} {argument} placeholders; a name or keyword the person's, a phone's or a Text Replacement's snippet uses is refused.", args: [
+        r.register(.change(name: "snippets.set", summary: "Save or replace a plain text snippet the agent made. It never auto-expands; only {cursor} {date} {time} {datetime} {uuid} {argument} placeholders; a name or keyword the person's, a phone's or a Text Replacement's snippet uses, or that their embeds or hotkeys name, is refused.", args: [
             "name": name,
             "text": ControlArg(type: "string", required: true, summary: "the body; line breaks and tabs allowed, no other control characters"),
             "keyword": ControlArg(type: "string", summary: "its keyword (kept when replacing, if absent)"),
