@@ -211,6 +211,9 @@ final class CCPoolConnection: @unchecked Sendable {
     private var followedPin = false
     /// #1262: the first account's last throughput 429 once the conversation made its ONE move (Python `moved`, `back`).
     private var movedFrom: CCPoolExchange?
+    /// #1855: the first account's 429 once a keyed quota check was re-placed (its ONE re-placement); nowhere else to go
+    /// answers with it.
+    private var replacedFrom: CCPoolExchange?
     /// #1482: when the relay started, and how the last account was chosen ("pin", "place" or "pick").
     private var startedAt = 0.0
     private var routed = "pick"
@@ -432,7 +435,7 @@ final class CCPoolConnection: @unchecked Sendable {
         // R1278b-a: only when no account outside the refused ones is left at all; one that is merely benched could
         // serve later, so the client gets today's 429 with its reset time instead of a rejected token's 401.
         func lastResort(_ st: CCPoolState) -> Bool {
-            last == nil && !st.accounts.contains { !tried.contains($0.key) && $0.value.refused == nil }
+            last == nil && replacedFrom == nil && !st.accounts.contains { !tried.contains($0.key) && $0.value.refused == nil }
         }
         var anyway = false
         if key == nil {
@@ -469,11 +472,17 @@ final class CCPoolConnection: @unchecked Sendable {
             }
             if let skipped, let picked { log.note(skipped, "over share; new conversation placed on \(picked)") }
             // #1262: the move does not move `current` (Python's move calls place(), not choose()'s remember_last).
-            followedPin = followed || last != nil
+            // #1855: nor does a quota check's re-placement.
+            followedPin = followed || last != nil || replacedFrom != nil
             routed = followed ? "pin" : "place"
         }
         went(picked)
-        guard let label = picked else { return last.map { pinBack($0, answer: $0) } ?? noAccounts() }
+        guard let label = picked else {
+            if let last { return pinBack(last, answer: last) }
+            // #1855: no other account for the re-placed quota check: the first refusal goes out, not "every account is benched".
+            if let first = replacedFrom { return answerThrottle(first) }
+            return noAccounts()
+        }
         if anyway { log.note(label, "no other account is routable; trying a rejected token") }
         tried.insert(label)
         guard let id = store.read({ $0.accounts[label]?.id }) else { return last.map { pinBack($0, answer: $0) } ?? attempt() }
@@ -764,7 +773,8 @@ final class CCPoolConnection: @unchecked Sendable {
         exchange = nil
         ex.task?.cancel()
         // #1263 (R1263-a): what this 429 leads to is decided ONCE; its word is logged and the switch below acts on it.
-        // Each later `if` overrides the earlier ones: retry beats pinned-back beats move beats returned.
+        // Each later `if` overrides the earlier ones: retry beats pinned-back beats move beats returned. #1855: re-placed is
+        // for quota checks only, which never retry or move.
         var next = ThrottleNext.returned
         // #1262: after the same-account retries, ONE move (Python relay() 486-496). No usable key, a quota check or a
         // body that cannot be sent again never moves.
@@ -773,6 +783,16 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         // #1262: refused at the destination too (Python relay() 497-502): back where the cache is, never a second move.
         if movedFrom != nil { next = .pinnedBack }
+        // #1855: a keyed quota check (nothing spent: this is the snippet path) is re-placed ONCE on another account,
+        // the refusing one excluded (it is in `tried`); no same-account retry, no wait. A second refusal is returned.
+        if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+            next = .replace
+        }
+        // #1855: an account that refused a placement ranks last in place() for a short while (memory only, no write).
+        if routed == "place" {
+            let now = store.now, id = ex.accountID, secs = CCPoolCore.shunSeconds(retryAfter: ex.retryAfter)
+            store.mutate { st in if let owner = st.label(ofID: id) { st.shun(owner, seconds: secs, now: now) } }
+        }
         // #1256: a throughput 429 is retried on the SAME account, up to 3 times, unless the body is the
         // client's quota check or could not be sent again (above the replay cap). Python relay() 478-485.
         if replayable, !quotaCheck, throttleRetries < CCPoolCore.throttleBackoff.count, attempts < maxAttempts {
@@ -803,13 +823,17 @@ final class CCPoolConnection: @unchecked Sendable {
             movedFrom = ex
             log.note(ex.label, "throttled after \(throttleRetries) same-account retries; moving the conversation once")
             attempt(moving: ex)
+        case .replace:
+            replacedFrom = ex
+            log.note(ex.label, "quota check refused with nothing spent; re-placing it once on another account")
+            attempt()
         case .returned:
             answerThrottle(ex)
         }
     }
 
     /// #1263: what a throughput 429 leads to; the raw value is the logged outcome word.
-    private enum ThrottleNext: String { case retry, pinnedBack = "pinned-back", move, returned }
+    private enum ThrottleNext: String { case retry, pinnedBack = "pinned-back", move, replace = "re-placed", returned }
 
     /// #1262: the move did not help: the conversation's pin goes back to the first account (one write, a fresh
     /// stamp; no write when it is already there) and ONE 429 goes out, `answer`'s Retry-After. #1263 (R1262-a):

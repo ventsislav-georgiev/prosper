@@ -2348,6 +2348,9 @@ tag from the now-released section and put it on the new top draft.
   no longer answers at once. (#1852)
 - prosper ctl layouts.delete is back for agents: it deletes a saved layout (never the last one) and
   is final, it cannot be undone. (#1853)
+- Account pool: when an account briefly refuses a starting session's quota check with nothing spent,
+  the check is tried once on another account, and new sessions avoid that account for up to a
+  minute, so sessions starting together no longer all get a refusal from the same account. (#1855)
 
 ## v2.174.0
 

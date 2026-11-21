@@ -56,6 +56,9 @@ struct CCPoolState: Codable, Equatable, Sendable {
     var pins: [String: Pin] = [:]
     /// #1260: capacity learned from relayed replies, by Keychain id. Saved as "capacity": {id: numbers} (step B).
     var capacity: [String: CCPoolCapacityState] = [:]
+    /// #1855: label -> epoch until which `place` ranks it after every other account (it just refused a placement with a
+    /// 429 that spent nothing). Memory only: not encoded, not part of ==, so setting it never writes state.json.
+    var shunned: [String: Double] = [:]
 
     /// Equal = the same file content (CCPoolStore.mutate writes only on a change). #1260 (R1260-a): a capacity row
     /// counts by its `written` numbers only, so a reply that only adds pending dollars never rewrites the file.
@@ -298,12 +301,22 @@ enum CCPoolCore {
         }
         let ready = state.order.filter { state.accounts[$0] != nil && !exclude.contains($0)
             && eligible(state.accounts[$0], model: model, now: now) }
-            .map { (name: $0, rank: rank($0), reset: resetAt(state.accounts[$0], fiveHour, now: now)) }
+            .map { (name: $0, rank: rank($0), reset: resetAt(state.accounts[$0], fiveHour, now: now),
+                    shunned: (state.shunned[$0] ?? 0) > now) }
         return ready.min { a, b in
+            // #1855: an account that just refused a placement ranks after every other, full ones included.
+            if a.shunned != b.shunned { return !a.shunned }
             if a.rank.tier != b.rank.tier { return a.rank.tier < b.rank.tier }
             if a.rank.score != b.rank.score { return a.rank.score > b.rank.score }
             return a.reset != b.reset ? a.reset < b.reset : labelFirst(a.name, b.name)
         }?.name
+    }
+
+    /// #1855: how long `place` ranks an account last after it refused a placement with a 429 that spent nothing: the
+    /// reply's Retry-After when it is 1...60 s, else 30 s.
+    static func shunSeconds(retryAfter raw: String?) -> Int {
+        let wait = retryAfterSeconds(raw)
+        return (1...60).contains(wait) ? wait : 30
     }
 
     /// The recorded rollover for `claim`, or +inf when never seen (an unseen window is a full one).
@@ -540,6 +553,14 @@ extension CCPoolState {
             sessions[pin.account, default: []].insert(String(key.prefix { $0 != "/" }))
         }
         return sessions
+    }
+
+    /// #1855: rank `label` last in `place` for `seconds` from `now` (never shortening a longer one). Expired entries go
+    /// first, so the map stays bounded by the labels refused in the last minute. Memory only.
+    mutating func shun(_ label: String, seconds: Int, now: Double) {
+        guard now.isFinite, accounts[label] != nil else { return }
+        shunned = shunned.filter { $0.value > now }
+        shunned[label] = max(shunned[label] ?? 0, now + Double(seconds))
     }
 
     /// Re-stamp a live pin (Python re-pins on every request that follows it).

@@ -393,4 +393,59 @@ final class CCPoolPlacementTests: XCTestCase {
         let st = pool([orgA, orgB], rows: [orgA: row(cap: 3, util: 0.95, reset: t0 - 1), orgB: row(cap: 0.25, util: 0.1)])
         XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0, share: 0.5), orgA)
     }
+
+    // MARK: #1855: an account that just refused a placement (a 429 that spent nothing) ranks last for a short window
+
+    /// Shunned A ranks after B and C, after a FULL account too; at the window's end (exactly) it is back; never excluded:
+    /// all shunned, or the others excluded, still answers.
+    func testShunnedAccountRanksAfterEveryOtherUntilItsWindowEnds() {
+        var st = pool()
+        XCTAssertEqual(place(st), orgA, "the label tie without a shun")
+        st.shun(orgA, seconds: 30, now: t0)
+        XCTAssertEqual(place(st), orgB, "A just refused: B")
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0 + 29.5), orgB, "still inside the window")
+        XCTAssertEqual(CCPoolCore.place(st, model: opus, exclude: [], now: t0 + 30), orgA, "the window ended: A again")
+        let full = { () -> CCPoolState in
+            var f = pool([orgA, orgB], rows: [orgA: row(cap: 3), orgB: row(cap: 0.25, util: 1)])
+            f.shun(orgA, seconds: 30, now: t0)
+            return f
+        }()
+        XCTAssertEqual(place(full), orgB, "a shunned account ranks after a full one")
+        XCTAssertEqual(place(st, exclude: [orgB, orgC]), orgA, "a shun never excludes")
+        st.shun(orgB, seconds: 30, now: t0)
+        st.shun(orgC, seconds: 30, now: t0)
+        XCTAssertEqual(place(st), orgA, "all shunned: the order without the shun")
+    }
+
+    /// A pin is followed whatever the shun (place only), and a shun is memory only: not encoded, not part of ==.
+    func testShunIsMemoryOnlyAndNeverStopsAPin() throws {
+        var st = pool(pins: ["sess-example-1/": orgA])
+        let before = st
+        st.shun(orgA, seconds: 30, now: t0)
+        XCTAssertEqual(route(st, "sess-example-1/").account, orgA, "a pin is followed")
+        XCTAssertTrue(st == before, "== ignores the shun, so the store writes nothing for it")
+        let enc = JSONEncoder()
+        enc.outputFormatting = .sortedKeys
+        let text = String(decoding: try enc.encode(st), as: UTF8.self)
+        XCTAssertFalse(text.contains("shun"), text)
+        XCTAssertEqual(text, String(decoding: try enc.encode(before), as: UTF8.self))
+    }
+
+    /// The window: Retry-After when 1...60 s, else 30 s. A longer existing shun is kept; an unknown label is ignored;
+    /// expired entries are dropped on the next shun, so the map stays small.
+    func testShunWindowAndBookkeeping() {
+        let rows: [(String?, Int)] = [(nil, 30), ("1", 1), ("7", 7), ("60", 60), ("61", 30), ("0", 30), ("-3", 30),
+                                      ("3600", 30), ("soon", 30), (" 12 ", 12), ("99999999999999999999", 30)]
+        for (raw, want) in rows { XCTAssertEqual(CCPoolCore.shunSeconds(retryAfter: raw), want, raw ?? "nil") }
+        var st = pool()
+        st.shun(orgA, seconds: 60, now: t0)
+        st.shun(orgA, seconds: 5, now: t0)
+        XCTAssertEqual(st.shunned, [orgA: t0 + 60], "never shortened")
+        st.shun("Example Org Gone", seconds: 30, now: t0)
+        XCTAssertEqual(st.shunned, [orgA: t0 + 60], "a label outside the pool is ignored")
+        st.shun(orgB, seconds: 10, now: t0 + 61)
+        XCTAssertEqual(st.shunned, [orgB: t0 + 71], "the expired entry went")
+        st.shun(orgC, seconds: 10, now: .nan)
+        XCTAssertEqual(st.shunned, [orgB: t0 + 71], "a bad clock changes nothing")
+    }
 }
