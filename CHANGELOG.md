@@ -2361,6 +2361,8 @@ tag from the now-released section and put it on the new top draft.
   release an account in the account pool, each with Undo. (#1862)
 - Agents can put plain text on the clipboard; Undo puts back what was there unless you copied
   something since, and reading the clipboard stays yours only. (#1861)
+- Agents can list and set session groups, show a group tab on the island, and pin or unpin History
+  records, each with Undo; Forget and Clear unpinned stay yours only. (#1856)
 
 ## v2.174.0
 

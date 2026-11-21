@@ -1,0 +1,83 @@
+{
+ "entry": "1856",
+ "filter": "ControlSessionGroupsTests",
+ "mutants": [
+  {
+   "name": "pin-gate",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "if let why = ControlSessions.historyRefusal(r, .pin, in: st) { throw ControlError(why) }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "pin-same-state",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard r.pinned != pinned else { throw ControlError(\"\\(r.title) is already \\(pinned ? \"pinned\" : \"unpinned\")\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "pin-undo-state",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": ", back.pinned == pinned else { return }",
+   "new": " else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "set-count-cap",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard items.count <= SessionGroup.maxCount else { throw ControlError(\"at most \\(SessionGroup.maxCount) groups\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "set-no-idreuse",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "id = old.first { SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id\n                    ?? String(",
+   "new": "id = String(",
+   "expect": "killed"
+  },
+  {
+   "name": "set-same-list",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard list != old else { throw ControlError(\"these are already the groups\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "set-skip-reason",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "            if let why = editor.reason(g, stored: []) { throw ControlError(\"group \\(i + 1): \\(why)\") }",
+   "new": "            _ = editor",
+   "expect": "killed"
+  },
+  {
+   "name": "set-skip-unseen",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "where ControlSessionsTalk.hasUnseen(text) {",
+   "new": "where false && ControlSessionsTalk.hasUnseen(text) {",
+   "expect": "killed"
+  },
+  {
+   "name": "set-undo-noop",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "undo: { store(old) })",
+   "new": "undo: {})",
+   "expect": "killed"
+  },
+  {
+   "name": "show-already",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard wasHistory || was != target else { throw ControlError(\"that tab is already shown\") }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "show-undo-history",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "if wasHistory { showHistory() } else { showGroup(was) }",
+   "new": "showGroup(was)",
+   "expect": "killed"
+  }
+ ]
+}
