@@ -370,11 +370,11 @@ final class AgentTerminalKeepTests: XCTestCase {
         }
     }
 
-    /// #1799: dch takes an active client's size only at its next focus-in or resize, so a recorded `--active` that exits 0
-    /// re-sends the size (one redraw) for the client still shown; none for one switched away before it completed, none on
-    /// a non-zero exit or a timeout, none for `--passive`. Counts redraws (the main hop runs in spin()).
+    /// #1806 (was #1799's size re-send): switching back to a kept session runs no rows-1 redraw jiggle, which shifted the
+    /// screen up and back: no redraw for the shown client on `--active` exit 0, exit 1, a timeout or a late `--passive`,
+    /// none for one switched away before its `--active` completed. Counts redraws (the main hop runs in spin()).
     @MainActor
-    func testActiveToggleExitZeroResendsTheSizeForTheStillShownClientOnly() {
+    func testActiveToggleExitZeroRunsNoRedrawJiggleOnASwitchBack() {
         let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
         var runs: [(args: [String], done: @Sendable (Int32?) -> Void)] = []
         let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
@@ -399,7 +399,7 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertEqual(childA.redraws, redrawsA, "exit 1 or timed out: no re-send")
         active?(0)
         spin()
-        XCTAssertEqual(childA.redraws, redrawsA + 1, "exit 0: the shown client re-sends its size once")
+        XCTAssertEqual(childA.redraws, redrawsA, "exit 0: no rows-1 jiggle for the shown client")
         XCTAssertEqual(childB.redraws, redrawsB, "the kept one: nothing")
         c.attach(b)   // --passive api, --active api-qa
         let activeB = runs.last?.done
@@ -408,7 +408,7 @@ final class AgentTerminalKeepTests: XCTestCase {
         activeB?(0)
         spin()
         XCTAssertEqual(childB.redraws, redrawsB, "no longer shown: no re-send")
-        XCTAssertEqual(childA.redraws, redrawsA + 1, "nor for the client shown now")
+        XCTAssertEqual(childA.redraws, redrawsA, "nor for the client shown now")
         c.attach(nil)
     }
 
@@ -416,7 +416,8 @@ final class AgentTerminalKeepTests: XCTestCase {
     /// program. A recorded `--active` that exits 0 hands libghostty one focus false then true (focusSent: what core.setFocus
     /// tells the view) for the still-shown client, only while its surface holds libghostty focus (#1656: key window,
     /// focused pane, first responder); none when the window is not key or another pane is focused, none for a client kept
-    /// or switched away before the hop, none on exit 1 or a timeout. The size re-send stays. The window is a never-shown
+    /// or switched away before the hop, none on exit 1, a timeout or a late `--passive`. #1806: no redraw jiggle in any case
+    /// (the client re-sends its size on the focus-in). The window is a never-shown
     /// CaretWindow whose key state is a stored flag; the clients are fakes (no surface: the hooks still record).
     @MainActor
     func testActiveToggleExitZeroResendsFocusInOnlyWhileTheShownSurfaceHoldsFocus() {
@@ -447,6 +448,7 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertTrue(win.makeFirstResponder(va))
         rig.grid(100, 30)
         c.attach(b)
+        let passiveA = runs.last?.done
         _ = mount()
         c.attach(a)   // --passive api-qa, --active api
         XCTAssertTrue(mount() === va && win.firstResponder === va, "a's view is back with the keys")
@@ -462,7 +464,7 @@ final class AgentTerminalKeepTests: XCTestCase {
         active(0)
         spin()
         XCTAssertEqual(sent, [], "a window that is not key: no focus")
-        XCTAssertEqual(childA.redraws, redrawsA + 1, "the size is still re-sent")
+        XCTAssertEqual(childA.redraws, redrawsA, "#1806: no rows-1 jiggle")
         win.key = true
         paneFocused = false
         active(0)
@@ -472,8 +474,12 @@ final class AgentTerminalKeepTests: XCTestCase {
         active(0)
         spin()
         XCTAssertEqual(sent, [false, true], "shown and focused: one focus-out then focus-in, the focus-in last")
-        XCTAssertEqual(childA.redraws, redrawsA + 3, "and the size, once per exit 0")
+        XCTAssertEqual(childA.redraws, redrawsA, "#1806: no rows-1 jiggle on any exit 0, the focus-in carries the size")
         XCTAssertTrue(win.firstResponder === va, "the keys stay where they were")
+        sent = []
+        passiveA?(0)   // a's --passive exits 0 only now a is shown and focused again
+        spin()
+        XCTAssertEqual(sent, [], "--passive: no focus")
         c.attach(b)   // --passive api, --active api-qa
         _ = mount()
         let activeB = runs.last?.done

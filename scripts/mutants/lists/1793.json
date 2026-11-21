@@ -12,7 +12,7 @@
   {
    "name": "no-active-on-restore",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1799: the size is re-sent once --active exits 0\n",
+   "old": "        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1803/#1806: focus-in once --active exits 0\n",
    "new": "\n",
    "expect": "killed"
   },

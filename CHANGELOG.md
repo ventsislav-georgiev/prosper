@@ -2250,6 +2250,7 @@ tag from the now-released section and put it on the new top draft.
   own tabs; a saved group with either name is dropped. (#1801)
 - Agent Sessions: a session you switch back to tells Claude Code its terminal is focused again (dch
   1.135.0 drops the focus reports of a hidden view). (#1803)
+- Agent Sessions: switching back to a session no longer shifts its terminal up and down. (#1806)
 
 ## v2.174.0
 

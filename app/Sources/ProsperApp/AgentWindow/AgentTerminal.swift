@@ -472,7 +472,7 @@ final class AgentTerminalController: ObservableObject {
 
     /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
     private func restore(_ k: Kept) {
-        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1799: the size is re-sent once --active exits 0
+        setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1803/#1806: focus-in once --active exits 0
         generation += 1   // the timers of the attach before end
         screenGeneration = k.screenGeneration
         child = k.child
@@ -499,7 +499,7 @@ final class AgentTerminalController: ObservableObject {
     /// #1793: a kept client goes passive, a restored one active again, when its client is dch >= 1.130.0 (the version
     /// probed for this attach; unknown or older: nothing runs, as before). #1799: dch takes the size of an active client
     /// only at its next focus-in or resize, and the view's focus-in reaches the master while the client is still passive,
-    /// so once `--active` exits 0 one main hop re-sends the size (redraw, as fitHere) if that client is still the shown one.
+    /// so once `--active` exits 0 one main hop runs activated() if that client is still the shown one.
     private func setPassive(_ on: Bool, key: AgentSessionKey, child: AgentTerminalChild, version: [Int]?) {
         guard let pid = child.clientPid, let version,
               DchCommand.gate(.init(path: DchCommand.dchPath, version: version), masters: [], minimum: Self.passiveDch).isOK
@@ -513,12 +513,13 @@ final class AgentTerminalController: ObservableObject {
         }
     }
 
-    /// #1799: `--active` exited 0: the still-shown client re-sends its size (a client kept or switched away meanwhile: nothing).
-    /// #1803: and its focus-in: dch >= 1.135.0 drops the focus reports of a passive client, so the view's focus-in at the
-    /// restore never reached the program; libghostty sends it again now the client is active (only with libghostty focus).
+    /// #1799/#1803: `--active` exited 0 for the still-shown client (a client kept or switched away meanwhile: nothing).
+    /// dch >= 1.135.0 drops the focus reports of a passive client, so the view's focus-in at the restore never reached the
+    /// program; libghostty sends it again now the client is active (only with libghostty focus), and the client (>= 1.39.0,
+    /// DEC 1004) re-sends its size on it. #1806: no rows-1 redraw here: it shifted the screen up and back on every switch.
+    /// Unfocused, the size goes with the next focus-in.
     private func activated(_ c: AgentTerminalChild) {
         guard child === c else { return }
-        c.redraw()
         view?.refocusSurface()
     }
 

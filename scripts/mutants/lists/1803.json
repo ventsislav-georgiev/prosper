@@ -5,8 +5,8 @@
   {
    "name": "focus-resend-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        c.redraw()\n        view?.refocusSurface()\n",
-   "new": "        c.redraw()\n",
+   "old": "        guard child === c else { return }\n        view?.refocusSurface()\n    }\n",
+   "new": "        guard child === c else { return }\n    }\n",
    "expect": "killed"
   },
   {
@@ -19,8 +19,8 @@
   {
    "name": "focus-for-kept-client",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        guard child === c else { return }\n        c.redraw()\n        view?.refocusSurface()\n",
-   "new": "        c.redraw()\n        view?.refocusSurface()\n",
+   "old": "        guard child === c else { return }\n        view?.refocusSurface()\n",
+   "new": "        view?.refocusSurface()\n",
    "expect": "killed"
   },
   {
