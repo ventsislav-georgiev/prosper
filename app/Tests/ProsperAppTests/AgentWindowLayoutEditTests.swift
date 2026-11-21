@@ -432,6 +432,25 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
+    /// #1832 (n128): Open to the Side on the session the single-pane view already shows (PaneLayout.show rule 1: same order)
+    /// saves nothing: no new layout, the active layout and the parked one stay, the view stays parked.
+    @MainActor
+    func testAgentWindowLayoutEditOpenToTheSideOnTheShownSessionOfTheViewSavesNothing() throws {
+        try withGate(true) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            m.click(row("docs"))
+            XCTAssertTrue(m.parked?.id == two.id, "set up: the single-pane view, the layout parked")
+            let count = m.layouts?.layouts.count
+            let active = m.layouts?.activeLayout
+            m.openToTheSide(row("docs"))
+            XCTAssertEqual(m.layouts?.layouts.count, count, "no layout stored")
+            XCTAssertTrue(m.layouts?.activeLayout == active, "the active layout is unchanged")
+            XCTAssertTrue(m.parked?.id == two.id, "the parked layout is kept")
+        }
+    }
+
     /// #1700: the notice never names a control that is not drawn. In the single-pane view (no Edit anywhere) Close Pane,
     /// a pane retarget, a drop and Open to the Side never answer "Edit layout to change it": the retarget takes the pick,
     /// an edge drop and Open to the Side make a new layout as Command-D does. At 9 layouts the split says so instead.

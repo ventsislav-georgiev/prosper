@@ -2145,7 +2145,7 @@ final class AgentWindowModel: ObservableObject {
             // #1700: Open to the Side from the single-pane view: a new layout of the view and the side pane
             if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else {
                 layout = l
-                if placement == .side { autosave(explicit: true) }   // #1826: Open to the Side is explicit: saved while locked too
+                if placement == .side, parked == nil { autosave(explicit: true) }   // #1826: Open to the Side is explicit: saved while locked too; #1832: never the parked single-pane view
             }
         case let .failure(r):
             paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
