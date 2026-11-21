@@ -111,6 +111,21 @@ final class XrayPanelTasksTests: XCTestCase {
 
     // MARK: rows, groups, count, footer
 
+    /// #1815 (operator 11-21 item 2, op-1121-36: a gap under "Pending"). Red at base: the view drew a ForEach per group
+    /// with `id: \.offset` inside one LazyVStack (XrayPanel.swift:1021-1023), so every group reused ids 0, 1, ... and the
+    /// Pending rows that shared one with an In progress row went undrawn. One list, one id per line, each group's first
+    /// task right after its header.
+    func testTaskLinesHaveOneIdEachAndEachGroupsRowsFollowItsHeader() {
+        let p = panel()
+        let lines = p.taskLines
+        XCTAssertEqual(lines.map(\.id), ["g0", "g0.0", "g1", "g1.0", "g1.1", "g2", "g2.0"])
+        XCTAssertEqual(Set(lines.map(\.id)).count, lines.count, "no id twice")
+        XCTAssertEqual(lines.map { $0.header ?? $0.task?.id ?? "?" }, ["In progress 1", "1", "Pending 2", "12", "13", "Done 1", "9"])
+        XCTAssertTrue(lines.allSatisfy { ($0.header == nil) != ($0.task == nil) }, "a line is a header or a task")
+        p.filter = "ship"
+        XCTAssertEqual(p.taskLines.map { $0.header ?? $0.task?.id ?? "?" }, ["Pending 1", "13"], "the filter's groups only")
+    }
+
     func testGroupsRowsCountAndFooter() {
         let p = panel()
         XCTAssertEqual(p.tabs, [.tasks, .memory], "dch's order; only the tabs that exist")

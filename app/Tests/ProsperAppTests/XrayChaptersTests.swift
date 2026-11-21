@@ -88,12 +88,15 @@ final class XrayChaptersTests: XCTestCase {
         }
     }
 
-    /// dch's `auto` hides a row until "Show automatic" (titled by its summary); `peer` is shown, marked with its sender,
-    /// and hidden by "Hide agent messages"; a hand-back (auto and peer) is automatic. Red at TIP: no XrayChapters.parse.
+    /// dch's `auto` hides a row until "Show automatic" (titled by its summary); `peer` is marked with its sender and
+    /// hidden until "Show agent messages" (#1815: hidden by default); a hand-back (auto and peer) is automatic. Red at
+    /// TIP: no XrayChapters.parse.
     func testAutoAndPeerFromTheDchKeys() async throws {
         let clock = Clock(), run = Run(), p = panel(XrayTarget(name: "example-host:api", dir: nil), clock)
         await open(p, run)
-        XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory])
+        XCTAssertEqual(p.shownPrompts.map(\.title), ["Continue the api work", "Fix the login test"], "#1815: hidden by default")
+        p.hidePeer = false
+        XCTAssertEqual(p.tabs, [.prompts, .tasks, .memory])
         XCTAssertEqual(p.chapters.map(\.from), [.own, .auto, .peer, .auto, .auto, .own])
         XCTAssertEqual(p.shownPrompts.map(\.title), ["Continue the api work", "Please rerun the api suite", "Fix the login test"],
                        "newest first, the 3 automatic rows hidden")
@@ -102,9 +105,6 @@ final class XrayChaptersTests: XCTestCase {
         XCTAssertEqual(p.shownPrompts.map { XrayPromptRow($0).robot }, [false, true, false], "with the robot glyph (#1546)")
         XCTAssertEqual(p.hidden(.prompts).auto, 3)
         XCTAssertEqual(p.hidden(.prompts).peer, 1)
-        XCTAssertEqual(p.shownResponses.map(\.response), ["Continuing", "Rerunning", "Done: login fixed"])
-        XCTAssertEqual(p.shownResponses.last?.tools, "Bash 1")
-        XCTAssertEqual(p.count(.responses), 3)
 
         p.hidePeer = true
         XCTAssertEqual(p.shownPrompts.map(\.title), ["Continue the api work", "Fix the login test"], "agent messages hidden")
@@ -218,7 +218,7 @@ final class XrayChaptersTests: XCTestCase {
 
             let c2 = Clock(), r2 = Run(), q = panel(remote, c2)
             await open(q, r2)
-            XCTAssertEqual(q.tabs, [.prompts, .responses, .tasks, .memory])
+            XCTAssertEqual(q.tabs, [.prompts, .tasks, .memory])
             r2.chapters = (code, Data())
             await tick(q, c2, at: 15)
             XCTAssertTrue(q.dchChapters == nil, "exit \(code) on a poll: the tabs go")
@@ -235,7 +235,7 @@ final class XrayChaptersTests: XCTestCase {
             run.chapters = (code, Data())
             await tick(p, clock, at: 15)
             XCTAssertEqual(p.chapters.count, 6, "exit \(code): the rows are kept")
-            XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory])
+            XCTAssertEqual(p.tabs, [.prompts, .tasks, .memory])
             XCTAssertTrue(p.memoryFooter.contains(Self.label), "exit \(code): \(p.memoryFooter)")
         }
     }
@@ -262,7 +262,7 @@ final class XrayChaptersTests: XCTestCase {
 
     static let lastTabKey = "xrayLastTab"
 
-    /// A Terminal-mode window whose dch answers the chapters (tabs Prompts, Responses, Tasks, Memory), the remember seam on
+    /// A Terminal-mode window whose dch answers the chapters (tabs Prompts, Tasks, Memory), the remember seam on
     /// and the stored tab cleared before and after; `body` opens through `open`: a read panel, closed again afterwards.
     func lastTabWindow(_ body: (AgentsNSWindow) async throws -> Void) async throws {
         let fake = Run()
@@ -289,7 +289,7 @@ final class XrayChaptersTests: XCTestCase {
         XCTAssertTrue(win.toggleXray(on: tab))
         let p = try XCTUnwrap(XrayPanels.shared.open[pane])
         await p.reading?.value
-        XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory])
+        XCTAssertEqual(p.tabs, [.prompts, .tasks, .memory])
         XCTAssertTrue(win.toggleXray(), "closes")
         XCTAssertTrue(XrayPanels.shared.open[pane] == nil)
         return p
@@ -307,10 +307,10 @@ final class XrayChaptersTests: XCTestCase {
     func testTheNextDefaultOpenIsTheTabChosenLast() async throws {
         try await lastTabWindow { win in
             let first = try await openLast(win, nil)
-            first.select(.responses)
-            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Responses")
+            first.select(.memory)
+            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Memory")
             let second = try await openLast(win, nil)
-            XCTAssertEqual(second.tab, .responses)
+            XCTAssertEqual(second.tab, .memory)
             second.select(.tasks)
             let third = try await openLast(win, nil)
             XCTAssertEqual(third.tab, .tasks)
@@ -321,13 +321,13 @@ final class XrayChaptersTests: XCTestCase {
     /// jump that sets `tab` directly (a ref card's Search) is not a choice either.
     func testAnExplicitTabOpensThereAndKeepsTheStoredOne() async throws {
         try await lastTabWindow { win in
-            try await openLast(win, nil).select(.responses)
+            try await openLast(win, nil).select(.memory)
             let chip = try await openLast(win, .tasks)
             XCTAssertEqual(chip.tab, .tasks)
-            chip.tab = .memory
-            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Responses", "a jump is not remembered")
+            chip.tab = .prompts
+            XCTAssertEqual(Preferences.defaults.string(forKey: Self.lastTabKey), "Memory", "a jump is not remembered")
             let next = try await openLast(win, nil)
-            XCTAssertEqual(next.tab, .responses)
+            XCTAssertEqual(next.tab, .memory)
         }
     }
 
@@ -349,7 +349,7 @@ final class XrayChaptersTests: XCTestCase {
         Preferences.defaults.removeObject(forKey: Self.lastTabKey)
         XCTAssertFalse(XrayPanels.rememberTab())
         let p = XrayPanelModel(target: Self.local, tab: .prompts)
-        p.select(.responses)
+        p.select(.memory)
         XCTAssertTrue(Preferences.defaults.object(forKey: Self.lastTabKey) == nil)
     }
 

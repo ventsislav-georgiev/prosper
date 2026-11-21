@@ -494,6 +494,8 @@ enum Preferences {
         static let xrayDrawerWidth = "xrayDrawerWidth"
         // #1623: whether an X-ray ref read may look an issue or PR up through the user's gh login (dch 1.111.0+); on unless set off; per Mac, not in SyncedKeys.
         static let xrayGithubLookups = "xrayGithubLookups"
+        // #1815: whether X-ray's Prompts hides other agent sessions' messages; on unless set off; per Mac, not in SyncedKeys.
+        static let xrayHideAgentMessages = "xrayHideAgentMessages"
         // MCP servers for the coding agent (JSON-encoded [MCPServer]). Rendered into
         // codex config.toml at harness spawn. See MCPServer.swift.
         static let agentMCPServers = "agentMCPServers"
@@ -1501,6 +1503,12 @@ enum Preferences {
     static var xrayLastTab: XrayTab {
         get { XrayTab(rawValue: defaults.string(forKey: Keys.xrayLastTab) ?? "") ?? .prompts }
         set { defaults.set(newValue.rawValue, forKey: Keys.xrayLastTab) }
+    }
+
+    /// #1815: X-ray's Prompts hides other agent sessions' messages; on unless set off.
+    static var xrayHideAgentMessages: Bool {
+        get { defaults.object(forKey: Keys.xrayHideAgentMessages) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.xrayHideAgentMessages) }
     }
 
     /// #1623: X-ray ref reads may look issues and pull requests up through gh; on unless set off.

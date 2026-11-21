@@ -1,0 +1,48 @@
+{
+ "entry": "1815",
+ "filter": "XrayPanelTasksTests|XrayPromptsTabTests|AgentWindowNoModeToggleTests",
+ "mutants": [
+  {
+   "name": "ids-per-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "XrayTaskLine(id: \"g\\(i).\\(j)\", header: nil, task: t)",
+   "new": "XrayTaskLine(id: \"\\(j)\", header: nil, task: t)",
+   "expect": "killed"
+  },
+  {
+   "name": "header-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "[XrayTaskLine(id: \"g\\(i)\", header: \"\\(g.title) \\(g.tasks.count)\", task: nil)]\n                + ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "peer-default-shown",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "defaults.object(forKey: Keys.xrayHideAgentMessages) as? Bool ?? true",
+   "new": "defaults.object(forKey: Keys.xrayHideAgentMessages) as? Bool ?? false",
+   "expect": "killed"
+  },
+  {
+   "name": "hide-not-saved",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "didSet { if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer } }",
+   "new": "didSet { }",
+   "expect": "killed"
+  },
+  {
+   "name": "hide-saved-without-seam",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "didSet { if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer } }",
+   "new": "didSet { Preferences.xrayHideAgentMessages = hidePeer }",
+   "expect": "killed"
+  },
+  {
+   "name": "hide-not-read",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "@Published var hidePeer = Preferences.xrayHideAgentMessages {",
+   "new": "@Published var hidePeer = true {",
+   "expect": "killed"
+  }
+ ]
+}

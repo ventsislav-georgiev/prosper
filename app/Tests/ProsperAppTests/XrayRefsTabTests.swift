@@ -70,11 +70,11 @@ final class XrayRefsTabTests: XCTestCase {
         defer { XrayPanels.refsTab = gate }
         XCTAssertTrue(XrayPanels.refsTabShips, "#1417: gate A is on in the product")
         XCTAssertFalse(XrayPanels.refsTab(), "gate A is off under XCTest")
-        XCTAssertEqual(applied().tabs, [.prompts, .responses, .tasks, .memory], "gate off: the tab set is unchanged")
+        XCTAssertEqual(applied().tabs, [.prompts, .tasks, .memory], "gate off: the tab set is unchanged")
         XCTAssertTrue(applied().refs == nil, "gate off: no refs kept")
         XrayPanels.refsTab = { true }
-        XCTAssertEqual(applied().tabs, [.prompts, .responses, .refs, .tasks, .memory], "between Responses and Search")
-        XCTAssertEqual(applied("[]").tabs, [.prompts, .responses, .tasks, .memory], "an empty list: no tab")
+        XCTAssertEqual(applied().tabs, [.prompts, .refs, .tasks, .memory], "after Prompts, before Search")
+        XCTAssertEqual(applied("[]").tabs, [.prompts, .tasks, .memory], "an empty list: no tab")
     }
 
     func testCountIsEveryRefHiddenKindsIncluded() {

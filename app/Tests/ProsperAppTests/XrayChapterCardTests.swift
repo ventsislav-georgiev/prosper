@@ -63,7 +63,7 @@ final class XrayChapterCardTests: XCTestCase {
         let p = try XCTUnwrap(XrayPanels.shared.open[m.layout.focused])
         await p.reading?.value
         p.apply(tasks: XrayChaptersTests.ok, memory: (0, Self.memory), chapters: XrayChaptersTests.chapters)
-        XCTAssertEqual(p.tabs, [.prompts, .responses, .tasks, .memory], "dch's chapters")
+        XCTAssertEqual(p.tabs, [.prompts, .tasks, .memory], "dch's chapters")
         try await body(p, cards)
         XCTAssertEqual(spawns.count, 0, "no terminal spawned")
         XCTAssertFalse(win.isVisible, "never shown")
@@ -82,8 +82,8 @@ final class XrayChapterCardTests: XCTestCase {
             XCTAssertTrue(text.contains("Fix the login test"), text)
             XCTAssertTrue(text.contains("Done: login fixed"), text)
             XCTAssertTrue(text.contains("Tools: Bash 1"), text)
-            // A Responses row: the same card for its chapter.
-            let r = try XCTUnwrap(p.shownResponses.first { $0.ordinal == 3 })
+            // Another session's message (hidden by default, #1815): the same card for its chapter.
+            let r = try XCTUnwrap(p.chapters.first { $0.ordinal == 3 })
             p.activate(r)
             XCTAssertEqual(cards.presents, 2)
             XCTAssertEqual(p.chapterCard, r)

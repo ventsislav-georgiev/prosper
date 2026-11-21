@@ -296,7 +296,6 @@ final class XrayFollowTests: XCTestCase {
             await open(p, run.run)
             fake.send(1, Self.snapshot())
             await tick(p, clock, at: 5)
-            p.tab = .responses
             await tick(p, clock, at: 10)
             await tick(p, clock, at: 40)
             XCTAssertEqual(run.chapterReads, 0)
@@ -407,9 +406,8 @@ final class XrayFollowTests: XCTestCase {
             await tick(p, clock, at: 5)
             XCTAssertEqual(run.chapterReads, 1, "the 5 s poll resumes")
             XCTAssertEqual(p.dchChapters?.count, 6, "Prompts update again")
-            p.tab = .responses
             await tick(p, clock, at: 10)
-            XCTAssertEqual(run.chapterReads, 2, "and on Responses")
+            XCTAssertEqual(run.chapterReads, 2, "and the next")
             p.tab = .refs
             await tick(p, clock, at: 39)
             XCTAssertEqual(run.chapterReads, 2, "Refs: not before its 30 s")

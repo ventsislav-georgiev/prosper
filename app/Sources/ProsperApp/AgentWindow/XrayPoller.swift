@@ -36,7 +36,7 @@ extension XrayPanelModel {
         quiet.spacing(quietKey, base: loaded && (tab == .memory || tab == .refs) ? 30 : target.dir == nil ? 15 : 5)
     }
     var quietKey: String {
-        loaded && tab == .memory ? "m" : loaded && tab == .refs ? "r" : tab == .prompts || tab == .responses ? "c" : "t"
+        loaded && tab == .memory ? "m" : loaded && tab == .refs ? "r" : tab == .prompts ? "c" : "t"
     }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
@@ -53,9 +53,9 @@ extension XrayPanelModel {
         if !s.visible { quiet.reset() }   // #1636: shown again: the base spacing
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
-        // #1389: Prompts/Responses poll dch only on a dch-chapters pane whose read answered (a Transcript pane never)
+        // #1389: Prompts polls dch only on a dch-chapters pane whose read answered (a Transcript pane never)
         // #1475: a follow keeps both live: no chapters or Refs poll beside it
-        let prose = (tab == .prompts || tab == .responses) && dchChapters != nil && fromDch() && follow == nil
+        let prose = tab == .prompts && dchChapters != nil && fromDch() && follow == nil
         let refsShown = tab == .refs && refs != nil && follow == nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
         let streamed = follow?.carriesTasks == true   // #1475 c: the follow carries Tasks and Memory: no poll beside it
         guard !loaded || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || prose || refsShown) else { return }

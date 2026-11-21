@@ -116,7 +116,7 @@ final class AgentWindowNoModeToggleTests: XCTestCase {
             XCTAssertEqual(fake.calls.filter { $0 == Self.chaptersArgv }.count, 1, "the chapters read ran: \(fake.calls)")
             XCTAssertTrue(p.fromDch())
             p.apply(tasks: XrayChaptersTests.ok, memory: (0, XrayChapterCardTests.memory), chapters: XrayChaptersTests.chapters)
-            XCTAssertTrue(p.tabs.contains(.prompts) && p.tabs.contains(.responses), "dch's chapters: \(p.tabs)")
+            XCTAssertTrue(p.tabs.contains(.prompts), "dch's chapters: \(p.tabs)")
             XCTAssertEqual(p.chapters.count, p.dchChapters?.count, "the rows are dch's")
         }
     }

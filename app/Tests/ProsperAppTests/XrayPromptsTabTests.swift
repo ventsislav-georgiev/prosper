@@ -2,10 +2,10 @@ import AppKit
 import XCTest
 @testable import ProsperApp
 
-/// #1354 (#1346 P6 step A, design 1.3, 3.8, 3.10; operator ruling Q1 "Match dch"): the X-ray Prompts and Responses tabs
-/// from the pane's own chapters. A fake transcript in tempDir() read inline by a standalone model (JumpFixture: no watch,
-/// no timer, no dch); the jump is the jumper's request (no view, no scroll). No window is shown, no key is posted, no
-/// process runs. Senders are fakes ("api-qa", "worker-a").
+/// #1354 (#1346 P6 step A, design 1.3, 3.8, 3.10; operator ruling Q1 "Match dch"): the X-ray Prompts tab from the
+/// pane's own chapters (#1815: no Responses tab; agent messages hidden by default, the choice saved). A fake transcript
+/// in tempDir() read inline by a standalone model (JumpFixture: no watch, no timer, no dch); the jump is the jumper's
+/// request (no view, no scroll). No window is shown, no key is posted, no process runs. Senders are fakes ("api-qa", "worker-a").
 @MainActor
 final class XrayPromptsTabTests: XCTestCase {
     typealias F = JumpFixture
@@ -54,12 +54,12 @@ final class XrayPromptsTabTests: XCTestCase {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
         XCTAssertEqual(m.chapters.count, 7)
-        XCTAssertEqual(p.tabs, [.prompts, .responses], "the transcript's tabs; no Tasks or Memory read")
-        XCTAssertEqual(titles(p.shownPrompts), [Self.lookAlike, "Continue the api work", "Please rerun the api suite",
-                                                "Fix the login test"], "newest first, the 3 automatic rows hidden")
+        XCTAssertEqual(p.tabs, [.prompts], "the transcript's tab; no Tasks or Memory read, no Responses (#1815)")
+        XCTAssertEqual(titles(p.shownPrompts), [Self.lookAlike, "Continue the api work", "Fix the login test"],
+                       "newest first, the 3 automatic rows and the agent message hidden")
         XCTAssertEqual(p.shownPrompts.first?.from, .own, "a typed look-alike stays the user's: no guessing on text")
-        XCTAssertEqual(p.title(.prompts), "Prompts 4")
-        XCTAssertEqual(p.spoken(.prompts), "Prompts, 4")
+        XCTAssertEqual(p.title(.prompts), "Prompts 3")
+        XCTAssertEqual(p.spoken(.prompts), "Prompts, 3")
         let f = p.promptFooter(.prompts)
         XCTAssertEqual(f.first?.text, "3 automatic hidden")
         XCTAssertEqual(f.first?.button, "Show automatic")
@@ -69,6 +69,7 @@ final class XrayPromptsTabTests: XCTestCase {
     func testShowAutomaticShowsThemFaint() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
+        p.hidePeer = false   // the agent message counted too
         p.promptFooter(.prompts).first?.toggle()
         XCTAssertTrue(p.showAuto)
         let rows = p.shownPrompts
@@ -92,10 +93,16 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(p.shownPrompts.count, 4, "hidden again")
     }
 
-    /// Red with peer-mark-raw: the sender's bidi override reaches the row.
+    /// Red with peer-mark-raw: the sender's bidi override reaches the row. #1815: hidden by default, Show brings it back.
     func testPeerMarkAndItsToggle() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
+        XCTAssertFalse(p.shownPrompts.contains { $0.from == .peer }, "#1815: hidden by default")
+        let show = try XCTUnwrap(p.promptFooter(.prompts).last)
+        XCTAssertEqual(show.text, "1 agent message hidden")
+        XCTAssertEqual(show.button, "Show agent messages")
+        show.toggle()
+        XCTAssertFalse(p.hidePeer)
         let c = try XCTUnwrap(p.shownPrompts.first { $0.from == .peer })
         XCTAssertEqual(c.title, "Please rerun the api suite", "titled by its body, never the wrapper")
         let row = XrayPromptRow(c)
@@ -104,7 +111,7 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(row.spoken, "Message from api-qa, prompt 3, Please rerun the api suite")
         XCTAssertFalse(row.faint)
         let toggle = try XCTUnwrap(p.promptFooter(.prompts).last)
-        XCTAssertEqual(toggle.text, nil, "shown by default")
+        XCTAssertEqual(toggle.text, nil, "shown")
         XCTAssertEqual(toggle.button, "Hide agent messages")
         toggle.toggle()
         XCTAssertTrue(p.hidePeer)
@@ -115,19 +122,16 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(p.shownPrompts.filter { $0.from == .peer }.count, 1)
     }
 
-    /// Red with peer-counted-when-hidden. Responses counts the items without the automatic ones, whatever `n` says.
+    /// Red with peer-counted-when-hidden.
     func testCountsWithPeerHidden() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
-        XCTAssertEqual(p.title(.responses), "Responses 4")
+        p.hidePeer = false
+        XCTAssertEqual(p.title(.prompts), "Prompts 4")
         p.hidePeer = true
         XCTAssertEqual(p.title(.prompts), "Prompts 3")
-        XCTAssertEqual(p.title(.responses), "Responses 3")
-        XCTAssertEqual(p.shownResponses.count, 3)
         p.showAuto = true
         XCTAssertEqual(p.title(.prompts), "Prompts 6", "auto rows in, the peer still out")
-        XCTAssertEqual(p.title(.responses), "Responses 3", "items shown without n")
-        XCTAssertEqual(p.shownResponses.count, 5, "the automatic items with an answer are listed")
         XCTAssertEqual(p.hidden(.prompts).auto, 3)
         XCTAssertEqual(p.hidden(.prompts).peer, 1)
     }
@@ -138,30 +142,17 @@ final class XrayPromptsTabTests: XCTestCase {
         defer { m.stop() }
         XCTAssertEqual(titles(p.shownPrompts), ["Prompt 2", "Prompt 1", "Prompt 0"])
         XCTAssertEqual(p.title(.prompts), "Prompts 3")
-        XCTAssertEqual(p.title(.responses), "Responses 3")
         XCTAssertTrue(p.promptFooter(.prompts).isEmpty)
-        XCTAssertTrue(p.promptFooter(.responses).isEmpty)
         XCTAssertTrue(p.shownPrompts.allSatisfy { $0.from == .own && XrayPromptRow($0).mark == nil })
     }
 
-    /// The Responses row: the prompt's row, the tools on one line, the answer (at most 8 lines, then "more").
-    func testResponsesRowText() throws {
+    /// #1815: the row is the prompt's only (its answer is the card's); a peer's row spoken with its sender.
+    func testPromptRowTextHasNoAnswer() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
-        let first = try XCTUnwrap(p.shownResponses.last)
-        let row = XrayPromptRow(first, response: true)
-        XCTAssertEqual(row.title, "Fix the login test")
-        XCTAssertEqual(row.tools, "Bash 1")
-        XCTAssertEqual(row.answer, "Done: login fixed")
-        XCTAssertFalse(row.more)
-        XCTAssertEqual(row.spoken, "Response to prompt 1, Fix the login test, tools Bash 1, Done: login fixed")
-        XCTAssertEqual(XrayPromptRow(first).answer, nil, "Prompts shows no answer")
-        var long = TranscriptOutline.Chapter(id: 1, ordinal: 1, title: "t", kind: .prompt, hasError: false)
-        long.response = (1...10).map { "line \($0)" }.joined(separator: "\n")
-        let cut = XrayPromptRow(long, response: true)
-        XCTAssertEqual(cut.answer?.split(separator: "\n").count, 8)
-        XCTAssertEqual(cut.answer?.split(separator: "\n").last, "line 8")
-        XCTAssertTrue(cut.more)
+        let first = try XCTUnwrap(p.shownPrompts.last)
+        XCTAssertEqual(XrayPromptRow(first).title, "Fix the login test")
+        XCTAssertEqual(XrayPromptRow(first).spoken, "Prompt 1, Fix the login test", "no tools, no answer")
     }
 
     /// Supervisor round 1: the transcript is TIP's. A peer record (and a hand-back) draws no block and is counted hidden
@@ -186,7 +177,7 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(c.title, "Please rerun the api suite")
         XCTAssertEqual(XrayPromptRow(c).mark, "api-qa")
         XCTAssertTrue(XrayPromptRow(c).robot)
-        XCTAssertEqual(p.title(.prompts), "Prompts 4")
+        XCTAssertEqual(p.title(.prompts), "Prompts 3", "#1815: the agent message hidden by default")
         XCTAssertEqual(tip.chapters.count, 5, "without the two records: two chapters fewer")
     }
 
@@ -211,6 +202,7 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(shape(m.blocks), shape(plain.blocks), "the drawn blocks are those of the session without them")
         XCTAssertFalse(m.blocks.contains { if case .command = $0.body { true } else { false } })
         p.showAuto = true
+        p.hidePeer = false
         let marked = p.shownPrompts.filter { $0.from != .own }
         XCTAssertEqual(marked.count, 2, "both listed in Prompts")
         XCTAssertTrue(marked.allSatisfy { XrayPromptRow($0).mark != nil }, "marked (robot for the message, inbox for the hand-back)")
@@ -219,11 +211,51 @@ final class XrayPromptsTabTests: XCTestCase {
     }
 
     /// Return or a click on a row: the pane's jumper is asked for that chapter's block (#1319's seam).
-    func testNoDchChaptersNoPromptsOrResponsesTab() throws {
+    func testNoDchChaptersNoPromptsTab() throws {
         let (p, m) = try panel(Self.session())
         defer { m.stop() }
-        XCTAssertTrue(p.tabs.contains(.prompts) && p.tabs.contains(.responses), "dch's chapters: both tabs")
+        XCTAssertTrue(p.tabs.contains(.prompts), "dch's chapters: the tab")
         p.dchChapters = nil
-        XCTAssertFalse(p.tabs.contains(.prompts) || p.tabs.contains(.responses), "#1471: no dch chapters read: no Prompts or Responses tab")
+        XCTAssertFalse(p.tabs.contains(.prompts), "#1471: no dch chapters read: no Prompts tab")
+    }
+
+    // MARK: #1815 (operator 11-21 items 3-4)
+
+    static let hideKey = "xrayHideAgentMessages"
+
+    /// Item 3. Red at base: XrayTab had `responses = "Responses"` (XrayPanel.swift:16) and the strip listed it.
+    func testNoResponsesTab() {
+        XCTAssertEqual(XrayTab.allCases.map(\.rawValue), ["Prompts", "Refs", "Search", "Tasks", "Memory"])
+        XCTAssertTrue(XrayTab(rawValue: "Responses") == nil, "a stored last tab of Responses reads as Prompts")
+    }
+
+    /// Item 4. Red at base: `@Published var hidePeer = false` (XrayPanel.swift:300): shown at every open, nothing saved.
+    func testAgentMessagesHiddenByDefaultAndTheChoiceIsSaved() throws {
+        let rem = XrayPanels.rememberTab
+        Preferences.defaults.removeObject(forKey: Self.hideKey)
+        defer { XrayPanels.rememberTab = rem; Preferences.defaults.removeObject(forKey: Self.hideKey) }
+        XrayPanels.rememberTab = { true }
+        let (p, m) = try panel(Self.session())
+        defer { m.stop() }
+        XCTAssertTrue(p.hidePeer, "unset: hidden")
+        XCTAssertTrue(Preferences.xrayHideAgentMessages)
+        try XCTUnwrap(p.promptFooter(.prompts).last).toggle()   // Show agent messages
+        XCTAssertEqual(Preferences.defaults.object(forKey: Self.hideKey) as? Bool, false, "the choice is saved")
+        let (next, m2) = try panel(Self.session())
+        defer { m2.stop() }
+        XCTAssertFalse(next.hidePeer, "the next open keeps it")
+        next.hidePeer = true
+        XCTAssertEqual(Preferences.defaults.object(forKey: Self.hideKey) as? Bool, true)
+        XCTAssertTrue(XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .prompts).hidePeer)
+    }
+
+    /// Under XCTest the remember seam is off: a toggle in another row stores nothing (no row leaks into another's default).
+    func testTheHideToggleStoresNothingWithTheSeamOff() throws {
+        Preferences.defaults.removeObject(forKey: Self.hideKey)
+        XCTAssertFalse(XrayPanels.rememberTab())
+        let (p, m) = try panel(Self.session())
+        defer { m.stop() }
+        p.hidePeer = false
+        XCTAssertTrue(Preferences.defaults.object(forKey: Self.hideKey) == nil)
     }
 }

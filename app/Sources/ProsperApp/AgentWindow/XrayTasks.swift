@@ -184,3 +184,11 @@ struct XrayTasks: Equatable {
         return r
     }
 }
+
+/// #1815: one line of the Tasks list as drawn: a group's header ("Pending 30") or one of its tasks, under an id unique in
+/// the whole list (XrayPanelModel.taskLines).
+struct XrayTaskLine: Identifiable, Equatable {
+    let id: String
+    let header: String?
+    let task: XrayTasks.Task?
+}

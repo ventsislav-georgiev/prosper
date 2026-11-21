@@ -2261,6 +2261,9 @@ tag from the now-released section and put it on the new top draft.
   ...") appears for a few seconds with an Undo button, `ProsperApp ctl log` lists the recent
   changes, and Settings > General > Agent control has a "Let agents control Prosper" switch (on by
   default) to refuse all changes. (#1808)
+- X-ray: the Tasks tab no longer leaves an empty gap under "Pending"; the Responses tab is gone
+  (click a prompt to see its response); "Hide agent messages" in Prompts is now on by default and
+  remembered between opens. (#1815)
 
 ## v2.174.0
 
