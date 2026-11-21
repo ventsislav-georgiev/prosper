@@ -497,4 +497,51 @@ final class AgentTerminalKeepTests: XCTestCase {
         spin()
         XCTAssertEqual(sent, [], "a kept client: no focus")
     }
+
+    /// #1805 (operator, beta.43: typing stopped reaching every session until an app switch): the restore's focus pair goes
+    /// as the app switch's does, through the wrapper's window-key handlers (core.setFocus only), never through the NSView
+    /// resign and become on the first responder outside makeFirstResponder (#1803's pair). The stuck input context itself
+    /// needs a real key window, so the row pins the path: focus out then in, no NSView resign, the keys where they were.
+    @MainActor
+    func testRestoreRefocusSendsTheAppSwitchFocusPairWithoutAResponderResign() {
+        _ = NSApplication.shared
+        let rig = AgentTerminalTests.Rig(version: [1, 130, 0], keep: AgentTerminalController.keptSessions)
+        var runs: [(args: [String], done: @Sendable (Int32?) -> Void)] = []
+        var sent: [Bool] = []
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.passiveToggle = { r, done in runs.append((r.args, done)) }
+        c.focusSent = { sent.append($0) }
+        c.paneFocused = { true }
+        let slot = AgentTerminalHostSlot(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        let win = AgentWindowD1Tests.CaretWindow(contentRect: slot.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.key = true
+        win.contentView = slot
+        defer { c.attach(nil); win.contentView = nil; win.close() }
+        @MainActor func mount() -> AgentTerminalHostView {
+            let v = c.hostView()
+            slot.hold(v)
+            v.owner = c
+            c.view = v
+            return v
+        }
+        c.attach(a)
+        let va = mount()
+        XCTAssertTrue(win.makeFirstResponder(va))
+        rig.grid(100, 30)
+        c.attach(b)
+        _ = mount()
+        c.attach(a)   // --passive api-qa, --active api
+        XCTAssertTrue(mount() === va && win.firstResponder === va)
+        guard let active = runs.last?.done else { return XCTFail("a's --active") }
+        XCTAssertTrue(va.responds(to: AgentTerminalHostView.resignKey) && va.responds(to: AgentTerminalHostView.becomeKey),
+                      "the wrapper's window-key handlers are there")
+        let resigns = va.surfaceResigns
+        sent = []
+        active(0)
+        spin()
+        XCTAssertEqual(sent, [false, true], "the app switch's pair: focus-out then focus-in")
+        XCTAssertEqual(va.surfaceResigns, resigns, "no NSView resign on the first responder")
+        XCTAssertTrue(win.firstResponder === va, "the keys stay where they were")
+    }
 }

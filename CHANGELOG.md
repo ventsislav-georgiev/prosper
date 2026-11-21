@@ -2251,6 +2251,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a session you switch back to tells Claude Code its terminal is focused again (dch
   1.135.0 drops the focus reports of a hidden view). (#1803)
 - Agent Sessions: switching back to a session no longer shifts its terminal up and down. (#1806)
+- Agent Sessions: typing no longer stops reaching every session after switching between kept
+  sessions (beta.43). (#1805)
 
 ## v2.174.0
 

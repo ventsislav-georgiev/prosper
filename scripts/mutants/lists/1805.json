@@ -1,0 +1,27 @@
+{
+ "entry": "1805",
+ "filter": "AgentTerminalKeepTests/(testRestoreRefocusSendsTheAppSwitchFocusPairWithoutAResponderResign|testActiveToggleExitZeroResendsFocusInOnlyWhileTheShownSurfaceHoldsFocus)",
+ "mutants": [
+  {
+   "name": "m1-old-pair",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        _ = perform(Self.resignKey, with: Notification(name: NSWindow.didResignKeyNotification, object: window))\n        _ = perform(Self.becomeKey, with: Notification(name: NSWindow.didBecomeKeyNotification, object: window))\n",
+   "new": "        unfocusSurface()\n        _ = super.becomeFirstResponder()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "m2-no-become",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        _ = perform(Self.becomeKey, with: Notification(name: NSWindow.didBecomeKeyNotification, object: window))\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "m3-swapped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "Selector((\"windowDidResignKey:\")), becomeKey = Selector((\"windowDidBecomeKey:\"))",
+   "new": "Selector((\"windowDidBecomeKey:\")), becomeKey = Selector((\"windowDidResignKey:\"))",
+   "expect": "killed"
+  }
+ ]
+}

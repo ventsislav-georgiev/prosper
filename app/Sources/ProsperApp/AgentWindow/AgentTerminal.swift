@@ -1163,15 +1163,26 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// #1656: focus false through the wrapper's own call (its resign hook runs core.setFocus(false); NSView's answers yes
     /// and changes nothing): the responder chain, the grid and the pty stay as they are.
     /// Hosted through the wrapper's TerminalViewRepresentable instead, this would also flip its FocusState (QA R1656 n3).
-    private func unfocusSurface() { _ = super.resignFirstResponder() }
-
-    /// #1803: a focus false then true through the wrapper's own calls (core.setFocus), so libghostty writes the program
-    /// its focus-out then focus-in itself; only while the surface holds libghostty focus (#1656). The responder chain stays.
-    func refocusSurface() {
-        guard libghosttyFocus(responder: window?.firstResponder === self) else { return }
-        unfocusSurface()
-        _ = super.becomeFirstResponder()
+    private func unfocusSurface() {
+        surfaceResigns += 1
+        _ = super.resignFirstResponder()
     }
+    /// #1805: NSView resigns run by unfocusSurface (rows: a refocus runs none).
+    private(set) var surfaceResigns = 0
+
+    /// #1803: a focus false then true, so libghostty writes the program its focus-out then focus-in itself; only while the
+    /// surface holds libghostty focus (#1656). The responder chain stays.
+    /// #1805: through the wrapper's window-key handlers (core.setFocus only), the pair an app switch sends. beta.43 ran the
+    /// NSView resign and become on the first responder itself, outside makeFirstResponder; typing then stopped reaching
+    /// every session until an app switch. Handlers missing (a wrapper update): no re-send rather than the old pair.
+    func refocusSurface() {
+        guard libghosttyFocus(responder: window?.firstResponder === self), let window,
+              responds(to: Self.resignKey), responds(to: Self.becomeKey) else { return }
+        _ = perform(Self.resignKey, with: Notification(name: NSWindow.didResignKeyNotification, object: window))
+        _ = perform(Self.becomeKey, with: Notification(name: NSWindow.didBecomeKeyNotification, object: window))
+    }
+    /// AppTerminalView+Lifecycle.swift's @objc observers (internal to GhosttyTerminal, so by name).
+    static let resignKey = Selector(("windowDidResignKey:")), becomeKey = Selector(("windowDidBecomeKey:"))
 
     func terminalDidChangeFocus(_ focused: Bool) { owner?.focusSent?(focused) }
 

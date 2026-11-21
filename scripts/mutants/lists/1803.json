@@ -12,8 +12,8 @@
   {
    "name": "focus-ignores-libghostty-rule",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        guard libghosttyFocus(responder: window?.firstResponder === self) else { return }\n        unfocusSurface()\n",
-   "new": "        unfocusSurface()\n",
+   "old": "        guard libghosttyFocus(responder: window?.firstResponder === self), let window,\n              responds(to: Self.resignKey), responds(to: Self.becomeKey) else { return }\n",
+   "new": "        guard let window, responds(to: Self.resignKey), responds(to: Self.becomeKey) else { return }\n",
    "expect": "killed"
   },
   {
