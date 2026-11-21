@@ -802,6 +802,14 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.dragSnapEnabled) }
     }
 
+    /// #1808: "Let agents control Prosper". Off makes every state-changing `ctl` command refuse; reads still work.
+    /// Absent key → on (operator ruling: allowed by default).
+    static let agentControlKey = "agentControlEnabled"
+    static var agentControlEnabled: Bool {
+        get { defaults.object(forKey: agentControlKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: agentControlKey) }
+    }
+
     /// Footprint preview look: flat (default, Rectangle-parity translucent fill —
     /// lighter to draw) or vibrancy (blur + theme accent, the richer default).
     /// Stored as a raw string; absence ⇒ vibrancy.

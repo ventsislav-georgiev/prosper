@@ -84,7 +84,8 @@ struct ControlCommand: Sendable {
     let name: String
     let summary: String
     let args: [String: ControlArg]
-    /// True when the command changes Prosper's state (later phases show an "Agent changed" notice for these).
+    /// True when the command changes Prosper's state: refused while the Settings switch is off. Build these with
+    /// `ControlCommand.change` (ControlNotice.swift), which adds the notice, the undo and the log line.
     let mutates: Bool
     let run: @MainActor @Sendable (_ registry: ControlRegistry, _ args: [String: ControlJSON]) throws -> ControlJSON
 
@@ -121,6 +122,8 @@ struct ControlCommand: Sendable {
 /// from one call. Later phases add their commands with one `register` line each in `standard()`.
 struct ControlRegistry: Sendable {
     private(set) var commands: [String: ControlCommand] = [:]
+    /// #1808: where mutating commands log their changes and undos; rows swap in their own.
+    var changes = ControlChanges.shared
 
     mutating func register(_ c: ControlCommand) { commands[c.name] = c }
 
@@ -135,6 +138,8 @@ struct ControlRegistry: Sendable {
                                   args: [:], mutates: false) { _, _ in
             .object(["version": .string(AppInfo.shortVersion), "build": AppInfo.buildNumber.map { .string($0) } ?? .null])
         })
+        r.register(ControlCommand(name: "log", summary: "The last changes agents made to Prosper, oldest first, with whether each was undone.",
+                                  args: [:], mutates: false) { reg, _ in reg.changes.logJSON })
         return r
     }
 
@@ -155,7 +160,11 @@ struct ControlRegistry: Sendable {
         do {
             try cmd.validate(args)
             let registry = self
-            let result = try await MainActor.run { try cmd.run(registry, args) }
+            let result = try await MainActor.run { () throws -> ControlJSON in
+                // Checked on main with the run itself, so a flip of the switch cannot land between check and change.
+                if cmd.mutates, !Preferences.agentControlEnabled { throw ControlError(ControlChanges.offError) }
+                return try cmd.run(registry, args)
+            }
             return ControlReply(ok: true, result: result, error: nil)
         } catch let e as ControlError {
             return .failure(e.message)

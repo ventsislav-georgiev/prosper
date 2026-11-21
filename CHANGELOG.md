@@ -2257,6 +2257,10 @@ tag from the now-released section and put it on the new top draft.
   (only ping and version so far; more commands follow). (#1807)
 - X-ray: the ref card's Mentions list draws every row in view at once; rows under later turn headers
   no longer stay blank until scrolled. (#1816)
+- When a coding agent changes Prosper through `ProsperApp ctl`, a small notice ("Agent changed:
+  ...") appears for a few seconds with an Undo button, `ProsperApp ctl log` lists the recent
+  changes, and Settings > General > Agent control has a "Let agents control Prosper" switch (on by
+  default) to refuse all changes. (#1808)
 
 ## v2.174.0
 

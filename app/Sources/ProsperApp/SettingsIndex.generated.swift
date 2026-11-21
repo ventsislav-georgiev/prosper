@@ -14,6 +14,8 @@ let nativeSettingsIndex: [SettingsIndexEntry] = [
                        keywords: ["Enable clipboard history", "History size", "Use clipboard text as completion context"]),
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Quick-select",
                        keywords: ["Quick-select modifier"]),
+    SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Agent control",
+                       keywords: ["Let agents control Prosper"]),
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Remote Terminal",
                        keywords: ["Serve sessions over Tailscale", "Isolate sessions", "Live status on iPhone", "Prosper Remote"]),
     SettingsIndexEntry(paneID: "general", paneTitle: "General", section: "Local AI",

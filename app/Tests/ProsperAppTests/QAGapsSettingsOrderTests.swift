@@ -115,7 +115,7 @@ final class QAGapsSettingsOrderTests: XCTestCase {
     func testGeneralPaneSectionOrder() {
         let general = nativeSettingsIndex.filter { $0.paneID == "general" }
         XCTAssertEqual(general.map(\.section),
-                       ["", "Essentials", "Permissions", "Clipboard", "Quick-select", "Remote Terminal", "Local AI"])
+                       ["", "Essentials", "Permissions", "Clipboard", "Quick-select", "Agent control", "Remote Terminal", "Local AI"])
     }
 
     // MARK: - QA #59: System Stats module rows, the section title, the ⌘ conversion

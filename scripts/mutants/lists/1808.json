@@ -1,0 +1,76 @@
+{
+ "entry": "1808",
+ "filter": "ControlChannelTests|ControlNoticeTests|QAGapsSettingsOrderTests",
+ "mutants": [
+  {
+   "name": "switch-ignored",
+   "file": "app/Sources/ProsperApp/Control/ControlRegistry.swift",
+   "old": "if cmd.mutates, !Preferences.agentControlEnabled {",
+   "new": "if false, !Preferences.agentControlEnabled {",
+   "expect": "killed"
+  },
+  {
+   "name": "switch-blocks-reads",
+   "file": "app/Sources/ProsperApp/Control/ControlRegistry.swift",
+   "old": "if cmd.mutates, !Preferences.agentControlEnabled {",
+   "new": "if !Preferences.agentControlEnabled {",
+   "expect": "killed"
+  },
+  {
+   "name": "switch-default-off",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "defaults.object(forKey: agentControlKey) as? Bool ?? true",
+   "new": "defaults.object(forKey: agentControlKey) as? Bool ?? false",
+   "expect": "killed"
+  },
+  {
+   "name": "no-record",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "reg.changes.record(command: name, summary: c.summary, undo: c.undo)",
+   "new": "_ = c",
+   "expect": "killed"
+  },
+  {
+   "name": "no-notice",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "present(Self.noticeText(summary)) { [weak self] in _ = self?.undo(id) }",
+   "new": "_ = id",
+   "expect": "killed"
+  },
+  {
+   "name": "undo-twice",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "guard let u = undos.removeValue(forKey: id) else { return false }",
+   "new": "guard let u = undos[id] else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "unbounded-log",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "if entries.count > Self.capacity {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "undo-not-marked",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "if let i = entries.lastIndex(where: { $0.id == id }) { entries[i].undone = true }",
+   "new": "_ = id",
+   "expect": "killed"
+  },
+  {
+   "name": "panel-can-be-key",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "override var canBecomeKey: Bool { false }",
+   "new": "override var canBecomeKey: Bool { true }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-log-command",
+   "file": "app/Sources/ProsperApp/Control/ControlRegistry.swift",
+   "old": "r.register(ControlCommand(name: \"log\",",
+   "new": "_ = (ControlCommand(name: \"log\",",
+   "expect": "killed"
+  }
+ ]
+}

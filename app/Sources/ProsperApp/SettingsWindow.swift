@@ -1437,6 +1437,8 @@ private struct GeneralPane: View {
     // (granting happens out-of-process); the user fixes it on the Context pane
     // and returns. There's no first-run wizard, so this is the only nudge.
     @State private var hasAccessibility = PermissionsManager.isAccessibilityTrusted()
+    /// #1808: on by default (operator ruling); Preferences.agentControlEnabled reads the same key.
+    @AppStorage(Preferences.agentControlKey, store: Preferences.defaults) private var agentControl = true
 
     /// #523: the "Live status on iPhone" footnote (LiveStatusPublisher.settingsNote).
     private var liveStatusNote: String {
@@ -1532,6 +1534,14 @@ private struct GeneralPane: View {
                     }
                     .labelsHidden()
                     .frame(width: sz(150))
+                }
+            }
+
+            NeonSection("Agent control",
+                        footer: "Coding agents can change Prosper's settings with the ProsperApp ctl command. Each change shows a short notice with Undo, and ProsperApp ctl log lists the recent ones. Off refuses every change; agents can still read.") {
+                NeonRow("Let agents control Prosper",
+                        subtitle: "Allow agents on this Mac to change Prosper's state.") {
+                    Toggle("", isOn: $agentControl).labelsHidden()
                 }
             }
 

@@ -133,7 +133,7 @@ final class ControlChannelTests: XCTestCase {
         XCTAssertEqual(r?.ok, true)
         guard case .object(let o)? = r?.result, case .array(let cmds)? = o["commands"] else { return XCTFail(String(describing: r)) }
         let names = cmds.compactMap { c -> String? in if case .object(let d) = c, case .string(let n)? = d["name"] { return n }; return nil }
-        XCTAssertEqual(names, ["describe", "ping", "version"])
+        XCTAssertEqual(names, ["describe", "log", "ping", "version"])
         XCTAssertEqual(names, ControlRegistry.standard().commands.keys.sorted())
         for c in cmds {
             guard case .object(let d) = c else { return XCTFail("not an object: \(c)") }
