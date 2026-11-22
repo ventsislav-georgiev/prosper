@@ -7,7 +7,8 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "            .equatable()   // #1786",
    "new": "            // .equatable()   // #1786",
-   "expect": "killed"
+   "expect": "survives",
+   "note": "#1883 equivalent: AgentSidebarRowView is a non-POD View (an @ObservedObject, class refs) conforming to Equatable, so SwiftUI diffs it through its own == with or without the .equatable() wrapper; the counting row testSessionSwitchRedrawsOnlyTheTwoRowsWhoseSelectionChanged stays at 2 bodies per switch without it (11-21 and 11-22 nightlies) while eq-always-false and every eq-drops-* are killed, so the == is what the rows pin"
   },
   {
    "name": "eq-drops-row",

@@ -27,8 +27,9 @@
    "name": "focus_click",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
    "old": "        m.keepingKeys { m.select(.live(s.key)) }\n        return ControlChange(summary: \"focus",
-   "new": "        m.keepingKeys { m.click(.live(s.key)) }\n        return ControlChange(summary: \"focus",
-   "expect": "killed"
+   "new": "        m.click(.live(s.key))\n        return ControlChange(summary: \"focus",
+   "expect": "killed",
+   "note": "#1883 re-anchor: eaa9c088 (#1864) wrapped the select in keepingKeys, where click's focusSelection refuses (keysStay), so click inside it equals select; the mutant is again the click that moves the keys, red at ControlSessionsTests.swift:143 (terminal.focusPending)"
   },
   {
    "name": "quiet_present",

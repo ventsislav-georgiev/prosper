@@ -110,6 +110,22 @@ final class ControlNavTests: XCTestCase {
         }
     }
 
+    /// #1883: the undo puts the focused pane back by itself, also when the row it would restore is no longer listed
+    /// (api left the store, so the row restore is skipped). Red under nav-no-undo: the focus stays on api-qa's pane.
+    @MainActor
+    func testUndoRefocusesThePaneWhenTheOldRowIsGone() throws {
+        try withModel((.idle, .blocked, .idle)) { m, st, a, _ in
+            let pane = m.layout.focused
+            let c = try ControlNav.nextNeedsYou()
+            XCTAssertEqual(focusedName(m), "api-qa")
+            XCTAssertNotEqual(m.layout.focused, pane)
+            st.sessions = [base.session("api-qa", .idle), base.session("web", .idle)]
+            c.undo?()
+            XCTAssertEqual(m.layout.id, a.id)
+            XCTAssertEqual(m.layout.focused, pane, "undo puts the focused pane back without the row's select")
+        }
+    }
+
     /// n171: a New session form the person opened after the jump stays open: the undo does nothing meanwhile.
     @MainActor
     func testUndoDoesNothingWhileAFormIsOpen() throws {

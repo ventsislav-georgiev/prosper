@@ -148,6 +148,16 @@ final class ControlSnippetsTests: XCTestCase {
         }
     }
 
+    /// #1883: a set over the person's snippet is refused by the agentMade guard in its own words; the collision check
+    /// would refuse it as well, but as a name clash ("is already the name or keyword"). Red under P1.
+    @MainActor
+    func testSetOverThePersonsSnippetSaysOnlyItsOwnMayBeReplaced() throws {
+        try withStore([sig]) { items in
+            refused(try ControlSnippets.set(args(["name": "sig", "text": "New"])), contains: "an agent may only replace snippets it made")
+            XCTAssertEqual(items(), [sig])
+        }
+    }
+
     /// The marker is stored only when on: a person's snippet encodes with no agentMade key (its file stays byte-identical)
     /// and decodes back unmarked; an agent's encodes "agentMade":true and decodes back marked.
     @MainActor

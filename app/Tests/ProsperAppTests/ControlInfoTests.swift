@@ -89,6 +89,15 @@ final class ControlInfoTests: XCTestCase {
         XCTAssertTrue((shown.last?.count ?? 999) <= "Agent notified: ".count + ControlChanges.summaryMax)
     }
 
+    /// #1883: title and body are each cleaned before they are cut: unseen characters ahead of the text never fill the cut.
+    /// Red under clean_title (the title is 80 BELs, the notice ": ok") and clean_body (the body is 200 BELs: "Done: ").
+    func testNotifyCleansTitleAndBodyBeforeEachIsCut() async {
+        let pad = String(repeating: "\u{0007}", count: 300)
+        let r = await call("notify", ["title": .string(pad + "Done"), "body": .string(pad + "ok")])
+        XCTAssertTrue(r.ok, "\(r)")
+        XCTAssertEqual(shown, ["Agent notified: Done: ok"])
+    }
+
     // MARK: - stats.get
 
     func testStatsReportsOnlySampledModulesAndNeverANonFiniteNumber() async {

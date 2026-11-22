@@ -202,6 +202,31 @@ final class TranscriptOutlineBuilderTests: XCTestCase {
         XCTAssertEqual(o.chapters, full(blocks, []))
     }
 
+    /// #1883: the answer alone rewritten in place (no other step of the last part changed): the turn is folded again, so
+    /// the chapter's response follows it. Red under retally-answer (the answer re-tallies alone, the response stays old).
+    func testAnAnswerRewrittenInPlaceAloneRefoldsTheTurn() {
+        var blocks = [user(0, "Refactor the parser"), bash(1, "make"), say(2, "working")]
+        var o = TranscriptOutline.Builder()
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.chapters.last?.response, "working")
+        blocks[2] = say(2, "all green")
+        o.update(blocks: blocks, asides: [], dirty: [2])
+        XCTAssertEqual(o.chapters.last?.response, "all green")
+        XCTAssertEqual(o.chapters, full(blocks, []))
+    }
+
+    /// #1883: blocks that now start below the kept floor (one assembler only drops from the front; a caller that reuses
+    /// a Builder across a reopen does this): it starts over and still equals a full build. Red under restart-off.
+    func testBlocksBelowTheFloorStartTheBuilderOver() {
+        let blocks = [user(0, "A"), bash(1, "make"), say(2, "a"), user(3, "B"), bash(4, "ls"), say(5, "b")]
+        var o = TranscriptOutline.Builder()
+        o.update(blocks: Array(blocks.dropFirst(3)), asides: [], dirty: [])
+        XCTAssertEqual(o.chapters.map(\.id), [3])
+        o.update(blocks: blocks, asides: [], dirty: [])
+        XCTAssertEqual(o.chapters.map(\.id), [0, 3])
+        XCTAssertEqual(o.chapters, full(blocks, []))
+    }
+
     /// CI 44507460812 step 287: a front drop leaves only an image of the cut turn, so `turns` joins it to the next
     /// prompt's turn. Red before: the drop kept it a partial chapter of its own (id 2) ahead of the slash chapter (id 3).
     func testADropThatLeavesOnlyAnImageJoinsItToTheNextTurn() {

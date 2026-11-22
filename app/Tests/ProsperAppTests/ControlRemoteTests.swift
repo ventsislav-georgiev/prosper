@@ -291,6 +291,28 @@ final class ControlRemoteTests: XCTestCase {
         XCTAssertEqual(out.refused, 0)
     }
 
+    /// #1883: the FIFO is never opened. A writer blocks in open(2) until some reader opens the FIFO; through the write it
+    /// stays blocked (0.5 s). Red under images_fifo_read: Data(contentsOf:) opens the read end (blocking, then refuses the
+    /// non-regular file), which releases the writer. The row then opens the read end itself to let the writer go.
+    func testPromptImagesWriteNeverOpensAFIFO() throws {
+        let dir = tempDir(), fifo = dir.appendingPathComponent("pipe.png")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        let opened = DispatchSemaphore(value: 0), path = fifo.path
+        Thread.detachNewThread {
+            let fd = open(path, O_WRONLY)   // blocks until a reader opens the FIFO
+            opened.signal()
+            if fd >= 0 { close(fd) }
+        }
+        let out = AgentPromptImages.write([.file(fifo)], dir: dir.appendingPathComponent("out", isDirectory: true), now: Date())
+        let early = opened.wait(timeout: .now() + 0.5)
+        let release = open(fifo.path, O_RDONLY | O_NONBLOCK)
+        if early == .timedOut { XCTAssertEqual(opened.wait(timeout: .now() + 5), .success, "the writer was released") }
+        if release >= 0 { close(release) }
+        XCTAssertEqual(early, .timedOut, "the write opened the FIFO")
+        XCTAssertEqual(out.made.count, 0)
+        XCTAssertEqual(out.failed, 1)
+    }
+
     /// n173 (a): a link named like an image whose target is not is failed, though the target's bytes are a PNG; the
     /// same bytes under an image name behind a link are made.
     func testPromptImagesWriteChecksTheLinkTargetsName() throws {
