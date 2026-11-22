@@ -38,13 +38,6 @@
    "expect": "killed"
   },
   {
-   "name": "no-save",
-   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
-   "old": "let previous = Pasteboard.save(pb, access: state, cap: saveCap)",
-   "new": "let previous = Pasteboard.SavedClip()",
-   "expect": "killed"
-  },
-  {
    "name": "summary-uncapped",
    "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
    "old": "OutsideText.shown(text, max: summaryMax)",
@@ -113,13 +106,26 @@
    "old": "{ ignoreHistory(pb.changeCount) }",
    "new": "{ }",
    "expect": "killed"
+  }
+ ],
+ "refused": [
+  {
+   "name": "no-save",
+   "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
+   "old": "let previous = Pasteboard.save(pb, access: state, cap: saveCap)",
+   "new": "let previous = Pasteboard.SavedClip()",
+   "expect": "survives",
+   "filter": "ControlClipboardTests",
+   "note": "refused by GUARD: Pasteboard (it drops the save of the person's clip, a clipboard change); covered by ControlClipboardTests/testPutWritesTheTextAndUndoRestoresEveryItemAndType"
   },
   {
    "name": "history_on_unrestored",
    "file": "app/Sources/ProsperApp/Control/ControlClipboard.swift",
    "old": "if Pasteboard.restore(saved, to: pb, ifChangeCount: written) {",
    "new": "if Pasteboard.restore(saved, to: pb, ifChangeCount: written) || true {",
-   "expect": "killed"
+   "expect": "survives",
+   "filter": "ControlClipboardTests",
+   "note": "refused by GUARD: Pasteboard (it flips the history skip on a restore, a clipboard change); covered by ControlClipboardTests/testUndoLeavesACopyMadeSinceAlone and testWriteAndRestoreAreKeptOutOfTheHistory"
   }
  ]
 }

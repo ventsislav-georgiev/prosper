@@ -19,8 +19,8 @@
   {
    "name": "undo_new_noop",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
-   "old": "undo: { [weak m] in _ = m?.deleteLayout(made) })",
-   "new": "undo: nil)",
+   "old": "Layout(made) })",
+   "new": "Layout(UUID()) })",
    "expect": "killed"
   },
   {

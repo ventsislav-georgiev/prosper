@@ -5,15 +5,15 @@
   {
    "name": "delete_skips_model",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
-   "old": "if let why = m.deleteLayout(r.id) { throw ControlError(message(why)) }",
-   "new": "if let why = Optional<PaneRefusal>.none { throw ControlError(message(why)) }",
+   "old": "Layout(r.id) { throw ControlError(message(why)) }",
+   "new": "Layout(UUID()) { throw ControlError(message(why)) }",
    "expect": "killed"
   },
   {
    "name": "delete_ignores_refusal",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
-   "old": "if let why = m.deleteLayout(r.id) { throw ControlError(message(why)) }",
-   "new": "_ = m.deleteLayout(r.id)",
+   "old": "{ throw ControlError(message(why)) }\n        return ControlChange(summary: \"\\(r.name) (final",
+   "new": "{ _ = why }\n        return ControlChange(summary: \"\\(r.name) (final",
    "expect": "killed"
   },
   {
@@ -26,8 +26,8 @@
   {
    "name": "delete_gets_undo",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
-   "old": "verb: \"deleted a layout\")",
-   "new": "verb: \"deleted a layout\", undo: {})",
+   "old": "a layout\")",
+   "new": "a layout\", undo: {})",
    "expect": "killed"
   }
  ]

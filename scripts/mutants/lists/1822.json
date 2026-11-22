@@ -24,13 +24,6 @@
    "expect": "killed"
   },
   {
-   "name": "prune-ignores-age",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "now.timeIntervalSince(at) > maxAge, (try? fm.removeItem",
-   "new": "true, (try? fm.removeItem",
-   "expect": "killed"
-  },
-  {
    "name": "prune-any-extension",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
    "old": "for f in files where f.pathExtension == \"png\" {",
@@ -85,6 +78,17 @@
    "old": "        guard NSClassFromString(\"XCTestCase\") == nil else { return nil }\n        return FileManager.default.urls(for: .cachesDirectory",
    "new": "        return FileManager.default.urls(for: .cachesDirectory",
    "expect": "killed"
+  }
+ ],
+ "refused": [
+  {
+   "name": "prune-ignores-age",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "now.timeIntervalSince(at) > maxAge, (try? fm.removeItem",
+   "new": "true, (try? fm.removeItem",
+   "expect": "survives",
+   "filter": "AgentNewSessionPromptImagesTests|AgentWindowD1Tests/testAgentWindowNewSessionPromptImage|AgentWindowD1Tests/testAgentWindowNewSessionFormNonClaude",
+   "note": "refused by GUARD: removeItem (it makes the prune remove every PNG, a delete change); covered by AgentNewSessionPromptImagesTests/testPruneRemovesOldFilesOnly (a PNG newer than maxAge must stay)"
   }
  ]
 }

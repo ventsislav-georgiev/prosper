@@ -19,8 +19,8 @@
   {
    "name": "peer-default-shown",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "defaults.object(forKey: Keys.xrayHideAgentMessages) as? Bool ?? true",
-   "new": "defaults.object(forKey: Keys.xrayHideAgentMessages) as? Bool ?? false",
+   "old": "forKey: Keys.xrayHideAgentMessages) as? Bool ?? true",
+   "new": "forKey: Keys.xrayHideAgentMessages) as? Bool ?? false",
    "expect": "killed"
   },
   {
