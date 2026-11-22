@@ -198,8 +198,13 @@ final class DchConfigWriterTests: XCTestCase {
     func testHarnessTitleSplitsAsDchsPickerAlsoWithAnAlias() {
         let restore = Self.cLocale()
         defer { restore() }
+        // #1882: a 24 KB title under the 10 ms CPU deadline on a busy runner is no hit by design (#1220); lift it, as
+        // testSplitSlowCallTallyFlipsToText does. The cap rows' own pattern: no other row's tally on "-qa$" reaches them.
+        let saved = (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal)
+        defer { (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall, AgentIsland.sidekickSlowTotal) = saved }
+        (AgentIsland.sidekickDeadline, AgentIsland.sidekickSlowCall) = (.max, .max)
         let cap = DchListRow.maxHarnessBytes
-        let atCap = String(repeating: "x", count: cap - 3) + "-qa", overCap = "x" + atCap
+        let atCap = String(repeating: "x", count: cap - 6) + "-atcap", overCap = "x" + atCap
         let table: [(name: String, alias: String, title: String?, pattern: String, dch: Bool, island: Bool)] = [
             ("api", "Agent A", "web-qa", "-qa$", true, true),      // title only, alias set
             ("api", "web-qa", "notes", "-qa$", true, true),        // alias
@@ -211,8 +216,8 @@ final class DchConfigWriterTests: XCTestCase {
             ("api-qa", "", nil, "-qa$", true, true),
             ("api", "Agent A", "Web-1", "^web", true, true),       // anchored on the title alone
             ("api", "web-a", "qa", "aqa", false, false),           // never joined: "web-a"+"qa"
-            ("api", "Agent A", atCap, "-qa$", true, true),         // at the cap
-            ("api", "Agent A", overCap, "-qa$", true, false),      // over it: dch prints none so long; dropped
+            ("api", "Agent A", atCap, "-atcap$", true, true),       // at the cap
+            ("api", "Agent A", overCap, "-atcap$", true, false),    // over it: dch prints none so long; dropped
         ]
         for (name, alias, title, p, dch, island) in table {
             let what = "\(name)|\(alias)|\(title?.prefix(12) ?? "nil")|\(p)"
