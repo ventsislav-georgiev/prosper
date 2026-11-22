@@ -129,10 +129,14 @@ final class XrayTerminalRefTests: XCTestCase {
         XCTAssertEqual(far.calls.last?.key, remote)
     }
 
-    /// Red if a Cmd-down skips refClick or a plain down runs it. The NSEvent is built and handed to the view, never posted.
+    /// Red if a Cmd-down skips refClick or a plain down runs it, or (#1881, mutant M13-click-swallowed) a Cmd-down that
+    /// opened a card off a mark stops the click (it goes on to libghostty). The NSEvent is built and handed to the view,
+    /// never posted.
     func testOnlyACommandDownLooksForARef() throws {
         let opened = Opened()
         let (v, t) = view(local, opened)
+        var passed: [NSEvent.EventType] = []
+        v.passedClick = { passed.append($0.type) }
         try withExtendedLifetime(t) {
             func down(_ flags: NSEvent.ModifierFlags) throws -> NSEvent {
                 // locationInWindow with no window is the view's own space (unflipped): row 1, column 4 from the top
@@ -146,6 +150,7 @@ final class XrayTerminalRefTests: XCTestCase {
                 v.mouseDown(with: try down(.command))
                 XCTAssertEqual(opened.calls.count, 1)
                 XCTAssertEqual(opened.calls.last?.col, 4)
+                XCTAssertEqual(passed, [.leftMouseDown, .leftMouseDown], "both downs go on, the card's too")
             }
         }
     }

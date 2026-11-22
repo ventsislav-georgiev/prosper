@@ -131,6 +131,23 @@ final class XrayClearTests: XCTestCase {
         }
     }
 
+    /// #1881: the pane holds a follow of ANOTHER session whose snapshot carries a session_id: the name, never that id
+    /// (red with the follow's target unchecked, mutant sid-any-follow).
+    func testCommandKWithAnotherSessionsFollowClearsByName() async throws {
+        let runs = Runs()
+        try await withSeams(runs) { fake in
+            let f = try XCTUnwrap(XrayFollows().attach(XrayTarget(name: "api-qa", dir: Self.dir), dch: "/fake/dch"))
+            fake.send(1, XrayFollowTests.snapshot(XrayChaptersTests.json))
+            XCTAssertEqual(f.state?.corpus?.sessionID, Self.sid)
+            let r = rig(follow: f)
+            defer { tearDown(r) }
+            XCTAssertTrue(r.v.marks.follow === f)
+            XCTAssertTrue(r.v.performKeyEquivalent(with: Self.cmd("k")))
+            await until { runs.calls.count >= 1 }
+            XCTAssertEqual(runs.calls, [["/fake/dch", "--xray", "api", "--clear", "--json"]])
+        }
+    }
+
     /// An ended pane: the local clear, 0 runs (red with the live check gone).
     func testCommandKInAnEndedPaneRunsNothing() async throws {
         let runs = Runs()

@@ -7,7 +7,8 @@
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
    "old": "guard let self, self.over == key, self.card == nil else { return }",
    "new": "guard let self, self.card == nil else { return }",
-   "expect": "killed"
+   "expect": "survives",
+   "note": "#1881 equivalent: `over` is private(set) and set only in point() (XrayGridMarks.swift:437), which cancels the dwell item on the next line on main; asyncAfter never runs a cancelled DispatchWorkItem, so a dwell that fires always has over == key"
   },
   {
    "name": "full-not-light",

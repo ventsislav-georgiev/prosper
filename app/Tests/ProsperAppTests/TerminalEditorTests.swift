@@ -332,6 +332,23 @@ final class TerminalEditorTests: XCTestCase {
         XCTAssertTrue(rig.ended.isEmpty, "an ended editor is not ended again")
     }
 
+    /// #1881: the editor quits with the file untouched: Read reads it again all the same. The row above writes the file,
+    /// so the watcher's reload passed it with editorEnded's reload gone; here no write, no watcher fire, and only that
+    /// reload bumps `loads` (red under mutant M10-no-reload-on-exit).
+    func testEditorExitReloadsWithoutADiskChange() async throws {
+        let rig = Rig()
+        let w = windows(rig)
+        let model = try await openAsync(w, try file("te-exit-same"))
+        model.edit()
+        await model.planning?.value
+        XCTAssertEqual(model.mode, .terminal)
+        let loads = model.loads
+        rig.ios.last?.exit(0)
+        await TextViewerEditorRig.waitUntilAsync("back in Read", { model.mode == .read })
+        await TextViewerEditorRig.waitUntilAsync("read again on the editor's exit", { model.loads > loads })
+        for e in w.entries { e.window.close() }
+    }
+
     /// Read detaches the client and keeps the session; Edit again attaches the same name; the window's close ends it.
     func testReadDetachesAndCloseEndsTheSession() async throws {
         let rig = Rig()

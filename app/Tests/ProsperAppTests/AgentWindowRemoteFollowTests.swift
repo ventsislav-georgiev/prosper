@@ -223,6 +223,25 @@ final class AgentWindowRemoteFollowTests: XCTestCase {
         XCTAssertEqual(rig.follows.count, 4, "closed: none")
     }
 
+    /// #1881: a restart queued before a hide, run after the show again while the new child's own restart waits, starts
+    /// nothing (red with the generation check gone, mutant late-restart-runs: it would start a child before the backoff).
+    @MainActor
+    func testARestartQueuedBeforeAHideStartsNothingAfterTheShowAgain() throws {
+        let (m, _, rig) = model([1, 62, 0])
+        defer { m.close() }
+        try XCTUnwrap(rig.follows.last).exit(0)   // its restart waits
+        let stale = try XCTUnwrap(rig.pending.last)
+        m.setVisible(false)
+        m.setVisible(true)
+        XCTAssertEqual(rig.follows.count, 2, "showing again starts one child")
+        try XCTUnwrap(rig.follows.last).exit(0)   // the new child's restart waits its backoff
+        XCTAssertEqual(rig.pending.count, 2)
+        stale()
+        XCTAssertEqual(rig.follows.count, 2, "the restart queued before the hide starts nothing")
+        try XCTUnwrap(rig.pending.last)()
+        XCTAssertEqual(rig.follows.count, 3, "the current restart does")
+    }
+
     // MARK: #896 ask 2: remote scrollback (no code change)
 
     /// dch >= 1.40.0's client forwards `--scrollback` as the remote frame's "scrollback" key: the remote attach carries it.

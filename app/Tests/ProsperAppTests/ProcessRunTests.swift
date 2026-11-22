@@ -172,6 +172,26 @@ final class ProcessRunTests: XCTestCase {
         XCTAssertEqual(r.status, 0)
     }
 
+    /// #1881: stdin is /dev/null whatever ours is. A CI xctest's own stdin is already at EOF, so the row above passes
+    /// with the child inheriting ours; here our fd 0 is a pipe holding a line for the run (red with standardInput
+    /// unset, mutant stdin: the child reads the line and prints read=0). Our fd 0 is put back before the row ends.
+    func testStdinIsNullEvenWhenOursHoldsALine() async throws {
+        let dir = tempDir()
+        let pipe = Pipe()
+        pipe.fileHandleForWriting.write(Data("line\n".utf8))
+        let saved = dup(0)
+        guard saved >= 0 else { return XCTFail("dup(0) failed") }
+        defer {
+            dup2(saved, 0)
+            close(saved)
+            try? pipe.fileHandleForWriting.close()
+        }
+        XCTAssertEqual(dup2(pipe.fileHandleForReading.fileDescriptor, 0), 0)
+        let r = await ProcessRun.run(argv: ["/bin/sh", "-c", "read x; echo \"read=$?\""], cwd: dir)
+        XCTAssertEqual(r.stdout, "read=1\n", "the child read our stdin")
+        XCTAssertEqual(r.status, 0)
+    }
+
     /// At most two run at once for the app; a live group is registered for the quit drain.
     func testAtMostTwoRunAtOnceAndGroupsAreRegistered() async throws {
         let dir = tempDir()

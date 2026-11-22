@@ -232,8 +232,24 @@ final class XrayRemoteMarksTests: XCTestCase {
                        ["api", "example-host:api-qa"])
         let local = XrayTarget(name: "api", dir: "/Users/example/dch")
         XCTAssertEqual(XrayRefPopover.groupTitle("api-qa", own: "api", target: local), "api-qa")
+        // #1881: a local name may hold ":" (#1442); only `dir` says local (red with the dir check gone, group_host_local)
+        let colon = XrayTarget(name: "dev:api", dir: "/Users/example/dch")
+        XCTAssertEqual(XrayRefPopover.groupTitle("api-qa", own: "dev:api", target: colon), "api-qa")
         let odd = XrayTarget(name: "example\u{202E}-host:api", dir: nil)
         XCTAssertEqual(XrayRefPopover.groupTitle("api-qa", own: "api", target: odd), "example-host:api-qa")
+    }
+
+    /// #1881: the Mentions view's group header is groupTitle's, as an AX client reads it (red with the header drawing
+    /// g.session again, mutant group_call_site). Hosted like XrayRefPopoverTests.testAccessibilityTabGroupAndLabels.
+    func testMentionsViewHeaderNamesTheHost() throws {
+        let p = XrayPanelModel(target: target, tab: .refs)
+        p.refContext = XrayRefContext(XrayRefStream.parse(Data(XrayHoverTests.stream.utf8)), ref: "#12", tasks: nil, memory: nil)
+        XCTAssertTrue(p.refContext?.turns == nil, "no sentence: the flat per-session list")
+        let refs = try XCTUnwrap(XrayRefs.parse(XrayRefsParseTests.object(refs: XrayRefPopoverTests.refs)))
+        let e = try XCTUnwrap(refs.entries.first { $0.text == "#12" })
+        let v = XrayRefPopover(panel: p, entry: e, complete: true, tab: .mentions)
+        let tree = AXTreeSupport.tree(v, XrayRefPopover.size) { t in t.contains { $0.reads("example-host:api-qa") } }
+        XCTAssertTrue(tree.contains { $0.reads("example-host:api-qa") }, "the other session's header names its host")
     }
 
     /// Red if a remote exit 6 (the host's dch has no X-ray, README v1.99.0:1267-1269) reads "The ref read failed", or a

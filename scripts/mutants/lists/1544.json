@@ -47,9 +47,10 @@
   {
    "name": "discard-stays-dirty",
    "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
-   "old": "        saveError = nil\n        setDirty(false)\n",
-   "new": "        saveError = nil\n",
-   "expect": "killed"
+   "old": "        diskChange = nil\n        keptHash = nil\n        setDirty(false)\n",
+   "new": "        diskChange = nil\n        keptHash = nil\n",
+   "expect": "killed",
+   "note": "#1881 re-anchor: 621e0f2d (#1545) put diskChange/keptHash between saveError and setDirty in discard() and gave reloadFromDisk the old two lines; killed by TextViewerCloseTests/testDontSaveClosesAndReportsClean"
   },
   {
    "name": "teardown-no-discard",

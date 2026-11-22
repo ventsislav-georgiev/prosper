@@ -362,7 +362,8 @@ final class DchCtlTests: XCTestCase {
             XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", bad, "--json"], create: true), "not a ref", bad.debugDescription)
         }
         XCTAssertNil(DchCtl.refusal(["--xray", "alpha", "--ref", "a-b", "--json"], create: true), "a dash inside the text runs")
-        for bad in ["49", "301", "0", "", "1e2", "-50", "100.0", "abc", "\u{FF15}0", "1000", "99999999999999999999"] {
+        for bad in ["49", "301", "0", "", "1e2", "-50", "100.0", "abc", "\u{FF15}0", "1000", "99999999999999999999",
+                    "18446744073709551716"] {   // #1881: 2^64 + 100, read as 100 if the clamp at 1000 is gone
             XCTAssertEqual(DchCtl.refusal(["--xray", "alpha", "--ref", "x", "--budget-ms", bad, "--json"], create: true), DchCtl.budgetRange,
                            bad.debugDescription)
         }
