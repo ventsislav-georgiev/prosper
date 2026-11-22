@@ -1432,6 +1432,8 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
+- Ships dch 1.148.0 (was 1.147.0). A message is no longer reported as sent when the session's connection drops
+  mid-send while the session is still running. (#1877)
 - Ships dch 1.147.0 (was 1.146.0). Sending /exit to a session now reports it as delivered when the session ends,
   instead of "not submitted". (#1877)
 - Ships dch 1.146.0 (was 1.143.0). A message sent to a session that has just started (or one long enough to
