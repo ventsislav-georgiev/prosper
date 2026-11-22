@@ -2,8 +2,8 @@
 # scripts/mutants/lists/ (format in scripts/mutants/README.md). Every night, the same 7 days a week: the
 # lists whose files changed in the last 25 h plus the weekday's rotation slice (entry % 7, see README), in
 # ONE wave of at most 3 shards (#1884; operator 2026-11-19: the full run was too slow), each sized by
-# estimated time (run.py EST_LIST/EST_MUTANT) to fit the step's --budget; slice lists that do not fit wait
-# a week. workflow_dispatch: the given glob, one wave of at most 4 shards (overflow deferred). Per list the filter
+# estimated time (run.py EST_LIST/EST_MUTANT) to fit the step's --budget; order: broken anchor, changed list JSON, the slice, other changed
+# lists (README); what does not fit waits for its rotation day. workflow_dispatch: the given glob, one wave of at most 4 shards (overflow deferred). Per list the filter
 # runs once unmutated, then each mutant is applied, built, tested and restored.
 # A "killed" mutant that survives, or a broken or hung one, turns the job red;
 # red runs are fixed later (operator 2026-11-18: "we fix them retroactively").
