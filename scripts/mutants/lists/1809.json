@@ -40,8 +40,8 @@
   {
    "name": "layout_no_rollback",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "            m.deleteLayout(made)\n            m.setLayoutEditing(editing)\n            throw",
-   "new": "            m.setLayoutEditing(editing)\n            throw",
+   "old": "(made)\n            m.setLayoutEditing(editing)\n            throw",
+   "new": "(UUID())\n            m.setLayoutEditing(editing)\n            throw",
    "expect": "killed"
   },
   {

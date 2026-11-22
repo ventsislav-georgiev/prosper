@@ -1,10 +1,21 @@
 # Mutation checks
 
 A mutant is a one-line change to app code that a test must catch. The lists here
-run in `.github/workflows/mutants.yml`: Monday to Saturday 03:30 UTC only the lists
-whose files changed in the last 25 h (2 shards, max 2 macOS jobs); Sunday 03:30 UTC
-every list (5 shards, max 4 jobs); by hand with a `ref` and a `lists` glob, always in
-full (max 4 jobs). A red run is fixed later, by a test or by updating the list.
+run in `.github/workflows/mutants.yml`: every night at 03:30 UTC the lists whose files
+changed in the last 25 h plus that day's rotation slice, in one wave of at most 3 shards
+(max 3 macOS jobs); by hand with a `ref` and a `lists` glob, every list it matches as far as one wave of at most 4
+shards (max 4 jobs) holds; the rest is deferred and listed. `--plan --budget S` makes only as many shards as the lists need at S
+seconds each, estimated from `EST_LIST` and `EST_MUTANT` in run.py.
+
+Rotation slice: a list belongs to the UTC weekday `entry % 7` of its file name
+(`1788.json`: 1788 % 7 = 3), with 0 = Monday, 1 = Tuesday, 2 = Wednesday, 3 = Thursday,
+4 = Friday, 5 = Saturday, 6 = Sunday, so every list runs at least once a week. Changed
+lists come first. The plan never schedules more than shards x budget by estimate; in order
+of priority it takes lists with a broken anchor (an `old` no longer exactly once), then
+lists whose JSON changed, then other changed lists by their newest commit, then the slice.
+The overflow is deferred: never planned and never a NOT RUN row, listed with its estimate
+in the plan log and the plan job's step summary. A deferred list runs again on its own
+rotation day within a week (when that day's changed lists leave room for it). A red run is fixed later, by a test or by updating the list.
 
 ## List format
 
@@ -31,7 +42,8 @@ One file per ledger entry, `lists/<entry>.json`:
 - `expect`: `killed` (a test must fail) or `survives` (a known survivor, kept on
   record; it does not fail the run). An optional `note` says why (the reason a survivor is accepted).
 - Never a mutant of a clipboard, event, defaults, delete or sandbox guard: `run.py`
-  refuses text that names one (`GUARD` in run.py).
+  refuses text that names one (`GUARD` in run.py). A mutant it refuses is kept on record under a list-level
+  `refused` array (never run), with a `note` naming the row that pins the same check.
 
 ## What run.py does
 
@@ -40,7 +52,8 @@ test, or every mutant would read as killed). Per mutant: applies it, `swift buil
 --build-tests`, `swift test --skip-build --filter <filter>` with
 `PROSPER_HEAVY_TESTS=1`, then restores the file byte for byte (also on Ctrl-C or
 SIGTERM). Results: KILLED, SURVIVED, BROKEN (anchor missing or repeated, build
-error, red baseline), HANG (`--timeout`), NOT RUN (`--budget` spent). The exit code
+error, red baseline), HANG (`--timeout`), NOT RUN (`--budget` spent: no list baseline or
+mutant starts after it). The exit code
 is 1 when a `killed` mutant SURVIVED or any row is BROKEN, HANG or NOT RUN; the
 table goes to stdout and `$GITHUB_STEP_SUMMARY`.
 
@@ -52,12 +65,17 @@ python3 -I scripts/mutants/run.py scripts/mutants/lists/1572.json         # the 
 ## Changed lists only (`--plan --since`)
 
 ```sh
-python3 -I scripts/mutants/run.py --plan --shards 2 --since <rev> [--root DIR] [--lists GLOB]
+python3 -I scripts/mutants/run.py --plan --shards 3 --budget 15000 --since <rev> [--weekday D] [--root DIR] [--lists GLOB]
 ```
 
-Keeps a list when `<rev>..HEAD` changed its JSON, a file named in its mutants, or a test
+Keeps a list when `<rev>..HEAD` changed its JSON, a file named in its mutants where a
+`git diff -U0` hunk lies within 3 lines of one of its `old` texts (or an `old` no longer
+occurs exactly once: a broken anchor, always kept), or a test
 file under `app/Tests` that declares a class (or extension or struct) named in its
-`filter` (regex-only filter parts are not matched). An unknown `<rev>` (shallow clone,
+`filter` (regex-only filter parts are not matched). A class named by more than `COMMON`
+(10) lists, such as the whole-tree guard rows most filters carry, is common: a change to
+its test file keeps no list. With `--weekday D` (default today, UTC) the day's rotation
+slice is added. An unknown `<rev>` (shallow clone,
 force-push, no commit that old) keeps every list; zero kept lists give an empty matrix,
 and the mutants job is skipped. Self-check: `python3 -I scripts/mutants/test_plan.py`.
 

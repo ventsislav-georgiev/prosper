@@ -27,7 +27,7 @@
    "name": "wait-sub-leaks",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
    "old": "defer { sub.cancel() }",
-   "new": "_ = sub; WaitLeak.keep.append(sub)",
+   "new": "_ = Unmanaged.passRetained(sub)",
    "expect": "killed"
   },
   {

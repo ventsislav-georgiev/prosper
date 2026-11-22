@@ -1,7 +1,9 @@
 # Mutation checks (#1578): scripts/mutants/run.py runs the lists in
-# scripts/mutants/lists/ (format in scripts/mutants/README.md). Nightly: only the
-# lists whose files changed in the last 25 h, 2 shards, max 2 macOS jobs (#1652;
-# operator 2026-11-19: the full run was too slow). Sundays and workflow_dispatch: every list. Per list the filter
+# scripts/mutants/lists/ (format in scripts/mutants/README.md). Every night, the same 7 days a week: the
+# lists whose files changed in the last 25 h plus the weekday's rotation slice (entry % 7, see README), in
+# ONE wave of at most 3 shards (#1884; operator 2026-11-19: the full run was too slow), each sized by
+# estimated time (run.py EST_LIST/EST_MUTANT) to fit the step's --budget; slice lists that do not fit wait
+# a week. workflow_dispatch: the given glob, one wave of at most 4 shards (overflow deferred). Per list the filter
 # runs once unmutated, then each mutant is applied, built, tested and restored.
 # A "killed" mutant that survives, or a broken or hung one, turns the job red;
 # red runs are fixed later (operator 2026-11-18: "we fix them retroactively").
@@ -14,9 +16,8 @@ name: mutants
 
 on:
   schedule:
-    # Both cron strings are compared verbatim in FULL (plan) and max-parallel (mutants): edit all three together.
-    - cron: "30 3 * * 1-6" # nightly 03:30 UTC, off-peak, after heavy.yml: changed lists only
-    - cron: "30 3 * * 0" # Sunday 03:30 UTC: every list
+    # One schedule; FULL (plan) and max-parallel (mutants) tell it from workflow_dispatch by event_name.
+    - cron: "30 3 * * *" # nightly 03:30 UTC, off-peak, after heavy.yml: changed lists + rotation slice
   workflow_dispatch:
     inputs:
       ref:
@@ -52,18 +53,21 @@ jobs:
         id: plan
         env:
           LISTS: ${{ inputs.lists || '*.json' }}
-          # Only the Sunday cron and workflow_dispatch run in full.
-          FULL: ${{ github.event.schedule == '30 3 * * 0' || github.event_name == 'workflow_dispatch' }}
+          # Only workflow_dispatch runs in full.
+          FULL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           if [[ "$FULL" == true ]]; then
-            # Up to 5 macOS jobs, balanced by mutant count.
-            m=$(python3 -I scripts/mutants/run.py --plan --shards 5 --lists "$LISTS")
+            # As many shards as the estimate needs at 15000 s each (the Mutants step's --budget), at most
+            # max-parallel (4): one wave; lists that do not fit are deferred (plan log and step summary).
+            m=$(python3 -I scripts/mutants/run.py --plan --shards 4 --budget 15000 --lists "$LISTS")
           else
             # Last commit older than 25 h (the nightly period plus slack): simpler than asking the API
-            # for the last green run, and a failed night is caught by the Sunday run. No such commit
-            # (empty) or an unknown rev: run.py keeps every list.
+            # for the last green run; the weekly rotation slice catches what a failed night missed. No such
+            # commit (empty) or an unknown rev: run.py counts every list as changed. One wave of at most 3
+            # shards (max-parallel 3), never more than 3 x 15000 s by estimate; the UTC weekday picks the
+            # slice; the overflow (lowest priority first) is deferred, listed in the log and the step summary.
             since=$(git rev-list -1 --before="25 hours ago" HEAD)
-            m=$(python3 -I scripts/mutants/run.py --plan --shards 2 --lists "$LISTS" --since "${since:-none}")
+            m=$(python3 -I scripts/mutants/run.py --plan --shards 3 --budget 15000 --lists "$LISTS" --since "${since:-none}")
           fi
           echo "$m"
           echo "matrix=$m" >> "$GITHUB_OUTPUT"
@@ -77,9 +81,9 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      # Leaves one of the account's 5 concurrent macOS jobs for a release or CI run (heavy.yml or push CI may still take it).
-      # Nightly has 2 shards (plan), so 2 jobs at most; the Sunday full run and dispatch use 4.
-      max-parallel: ${{ github.event.schedule == '30 3 * * 1-6' && 2 || 4 }}
+      # Nightly: 3 of the account's 5 concurrent macOS jobs (03:30 UTC, nothing else runs then), 2 left for
+      # CI or a release; the plan never makes more shards than this, so every run is one wave. Dispatch: 4.
+      max-parallel: ${{ github.event_name == 'schedule' && 3 || 4 }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: mutants (shard ${{ matrix.shard }})
     steps:
@@ -132,8 +136,9 @@ jobs:
           swift build --build-tests --disable-keychain --build-system native
 
       - name: Mutants
-        # 250 min budget + one last mutant (2 x 15 min) stays inside the step limit,
-        # and build (<= 45) + step (290) + setup stays inside the job's 350.
+        # 250 min budget + one last mutant or list baseline (2 x 15 min) stays inside the step limit: past
+        # the budget run.py starts no list baseline either (#1884), and writes NOT RUN rows and the summary.
+        # Build (<= 45) + step (290) + setup stays inside the job's 350.
         timeout-minutes: 290
         env:
           NSUnbufferedIO: "YES"

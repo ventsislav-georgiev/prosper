@@ -12,8 +12,8 @@
   {
    "name": "migration_default",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "pattern: defaults.string(forKey: Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault)]",
-   "new": "pattern: AgentIsland.sidekickDefault)]",
+   "old": "Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault)]",
+   "new": "Keys.agentIslandSidekickPattern).map { _ in AgentIsland.sidekickDefault } ?? AgentIsland.sidekickDefault)]",
    "expect": "killed"
   },
   {

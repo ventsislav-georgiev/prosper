@@ -19,8 +19,8 @@
   {
    "name": "switch-default-off",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "defaults.object(forKey: agentControlKey) as? Bool ?? true",
-   "new": "defaults.object(forKey: agentControlKey) as? Bool ?? false",
+   "old": "agentControlKey) as? Bool ?? true }",
+   "new": "agentControlKey) as? Bool ?? false }",
    "expect": "killed"
   },
   {

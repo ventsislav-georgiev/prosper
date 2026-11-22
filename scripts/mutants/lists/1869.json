@@ -33,14 +33,17 @@
    "new": "            guard let rec = reg.record(id: id) ?? reg.records.first else { throw ControlError(\"unknown extension",
    "expect": "killed",
    "filter": "ControlExtensionsTests/testUpdateRefusesAnUnknownABuiltInAndANonUpdatableId"
-  },
+  }
+ ],
+ "refused": [
   {
    "name": "throttle-only",
    "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
    "old": "        if only == nil { defaults.set(Date(), forKey: Self.updateCheckKey) }",
    "new": "        defaults.set(Date(), forKey: Self.updateCheckKey)",
-   "expect": "killed",
-   "filter": "ControlExtensionsTests/testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone"
+   "expect": "survives",
+   "filter": "ControlExtensionsTests/testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone",
+   "note": "refused by GUARD: defaults (it flips the guard on a defaults write); covered by ControlExtensionsTests/testUpdateOfOneIdLeavesTheOthersAndTheDailyDateAlone"
   }
  ]
 }

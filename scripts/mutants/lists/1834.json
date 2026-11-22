@@ -20,7 +20,7 @@
    "name": "M3-cwdExact",
    "file": "app/Sources/ProsperApp/Control/ControlXray.swift",
    "old": "let s = st.sessions.first { std($0.cwd) == f } ?? st.sessions.first",
-   "new": "let s = st.sessions.first { false } ?? st.sessions.first",
+   "new": "let s = st.sessions.first { _ in false } ?? st.sessions.first",
    "expect": "killed"
   },
   {
