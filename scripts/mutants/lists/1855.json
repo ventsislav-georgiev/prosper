@@ -40,15 +40,15 @@
   {
    "name": "no-shun",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "if routed == \"place\" {",
+   "old": "if routed == \"place\", ex.unified {",
    "new": "if false {",
    "expect": "killed"
   },
   {
    "name": "shun-on-pin",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "if routed == \"place\" {",
-   "new": "if true {",
+   "old": "if routed == \"place\", ex.unified {",
+   "new": "if ex.unified {",
    "expect": "killed"
   },
   {

@@ -69,6 +69,9 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var pendingPrivate = ""
     /// The upstream Retry-After of a pass-through 429, handed on to the client (P2a follow-up a).
     var retryAfter: String?
+    /// #1878: that 429 carried the unified rate-limit headers (an account-level refusal); without them upstream refused
+    /// the request itself, and neither a re-place nor a shun helps.
+    var unified = false
     var suspended = false
     /// #1260, #1482: reads the usage off every relayed reply (the record); `fiveHour` is set only where learn runs
     /// (a 200 that is not a quota check). The status and the rate-limit rows go to the usage record.
@@ -572,7 +575,8 @@ final class CCPoolConnection: @unchecked Sendable {
             var spent = CCPoolCore.exhaustedClaims(limits, now: now)
             let retry = headers["retry-after"]
             let wait = CCPoolCore.retryAfterSeconds(retry)
-            let detail = limits.isEmpty ? "NO unified rate-limit headers"
+            let unified = !limits.isEmpty
+            let detail = !unified ? "NO unified rate-limit headers"
                 : limits.keys.sorted().map { "\($0)=\(limits[$0]?.status ?? "?")/\(limits[$0]?.utilization ?? "?")" }.joined(separator: ", ")
             var reason = spent.isEmpty ? "no exhausted quota" : "reported exhausted quota"
             if spent.isEmpty, wait > CCPoolCore.longRetryAfter {
@@ -593,6 +597,7 @@ final class CCPoolConnection: @unchecked Sendable {
                 // #1263: the shape and the attempts go between the cooldown and the reason; finishSnippet adds them.
                 ex.pendingNote = lead
                 ex.pendingReason = "reason=\(reason)"
+                ex.unified = unified
                 ex.responseHeaders = CCPoolThrottleShape.headers(response.allHeaderFields.keys.compactMap { $0 as? String })
                 ex.pendingPrivate = privateDetail
                 // Header-safe: one line, printable ASCII only.
@@ -785,11 +790,15 @@ final class CCPoolConnection: @unchecked Sendable {
         if movedFrom != nil { next = .pinnedBack }
         // #1855: a keyed quota check (nothing spent: this is the snippet path) is re-placed ONCE on another account,
         // the refusing one excluded (it is in `tried`); no same-account retry, no wait. A second refusal is returned.
-        if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+        // #1878: only a 429 with the unified rate-limit headers; one without them is upstream refusing the check itself
+        // (every account refuses it while serving real work), so a second account would only spend a second refusal.
+        if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil, ex.unified {
             next = .replace
         }
         // #1855: an account that refused a placement ranks last in place() for a short while (memory only, no write).
-        if routed == "place" {
+        // #1878: and only for a 429 with the unified headers, quota check or real work: one without them says nothing
+        // about the account, and a shun would rank a healthy account last for every new session.
+        if routed == "place", ex.unified {
             let now = store.now, id = ex.accountID, secs = CCPoolCore.shunSeconds(retryAfter: ex.retryAfter)
             store.mutate { st in if let owner = st.label(ofID: id) { st.shun(owner, seconds: secs, now: now) } }
         }
@@ -800,7 +809,7 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         log.note(ex.label, ex.pendingNote + shape + "; beta=" + CCPoolThrottleShape.beta(head?.header("anthropic-beta"))
                  + "; should-retry=" + ex.shouldRetry + "; resp-headers=" + ex.responseHeaders
-                 + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(next.rawValue); " + ex.pendingReason,
+                 + "; error=" + CCPoolThrottleShape.errorType(ex.snippet) + "; attempt=\(attempts); retry=\(throttleRetries); outcome=\(next.rawValue); " + ex.pendingReason,
                  private: ex.pendingPrivate + "; body=" + String(decoding: ex.snippet.prefix(Self.snippetCap), as: UTF8.self))
         switch next {
         case .retry:
@@ -1015,6 +1024,20 @@ enum CCPoolThrottleShape {
         }, as: UTF8.self)
         if kept.isEmpty { return "none" }
         return kept.utf8.count > betaMax ? String(kept.prefix(betaMax)) + "+" : kept
+    }
+
+    /// #1878: the upstream error.type words the log may print; anything else is "other".
+    static let errorTypes: Set<String> = ["rate_limit_error", "overloaded_error", "api_error", "invalid_request_error",
+                                          "permission_error", "authentication_error", "not_found_error", "request_too_large"]
+
+    /// #1878: the body's error.type as a fixed word: an allow-listed type, else "other"; "none" when the held snippet
+    /// (at most snippetCap bytes, so possibly cut mid-body) has no `"error":{..."type":"..."` to read. A scan, not a JSON
+    /// parse: the real bodies are longer than the snippet. The message text is never returned.
+    static func errorType(_ snippet: Data) -> String {
+        let text = String(decoding: snippet.prefix(CCPoolConnection.snippetCap), as: UTF8.self)
+        guard let m = text.firstMatch(of: #/"error"\s*:\s*\{[^{}]*?"type"\s*:\s*"([^"\\]{0,64})"/#) else { return "none" }
+        let word = String(m.1)
+        return errorTypes.contains(word) ? word : "other"
     }
 
     /// The upstream x-should-retry value as a fixed word: "true", "false", "absent" (no header) or "other".

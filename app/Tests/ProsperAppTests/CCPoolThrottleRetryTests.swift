@@ -59,7 +59,9 @@ final class ThrottleWaitRecorder: @unchecked Sendable {
 /// Stands in for the upstream; each token answers its script in order, then 200.
 final class ThrottleUpstream: @unchecked Sendable {
     /// `drop`: run the closure, then close the connection without an answer (a pooled connection the far end dropped).
-    enum Step { case throttle(String?), spent, status(Int), drop(@Sendable () -> Void) }
+    /// `bare` (#1878): a 429 with NO unified rate-limit headers (upstream refusing the request itself), its Retry-After
+    /// and its body.
+    enum Step { case throttle(String?), bare(String?, String), spent, status(Int), drop(@Sendable () -> Void) }
     private let lock = NSLock()
     private var script: [String: [Step]] = [:]
     private var _calls: [String: Int] = [:]
@@ -88,6 +90,8 @@ final class ThrottleUpstream: @unchecked Sendable {
             case .throttle(let ra)?:
                 if let ra { h.append(("Retry-After", ra)) }
                 return .respond(429, h, Data(#"{"type":"error","error":{"type":"rate_limit_error","message":"busy"}}"#.utf8))
+            case .bare(let ra, let body)?:
+                return .respond(429, [("content-type", "application/json")] + (ra.map { [("Retry-After", $0)] } ?? []), Data(body.utf8))
             case .spent?:
                 return .respond(429, h, Data(#"{"type":"error","error":{"type":"rate_limit_error","message":"spent"}}"#.utf8))
             case .drop(let before)?:

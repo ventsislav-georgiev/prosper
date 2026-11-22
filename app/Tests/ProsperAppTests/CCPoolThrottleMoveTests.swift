@@ -244,6 +244,48 @@ final class CCPoolThrottleMoveTests: XCTestCase {
         XCTAssertEqual(r.store.snapshot.shunned, [orgA: now + 30], "three 429s without Retry-After (30 s), then 6 s: the longer kept")
     }
 
+    // MARK: #1878: a 429 with no unified rate-limit headers is upstream refusing the request, not the account
+
+    /// The shape of the real refusal (session-tokens 2026-11-22): no unified headers, x-should-retry, a rate_limit_error.
+    static let bareBody = #"{"type":"error","error":{"type":"rate_limit_error","message":"Example refusal text"},"request_id":"req_example"}"#
+
+    /// A placed quota check refused WITHOUT the unified headers: its 429 goes out at once (one call, no second account,
+    /// no shun, no pin, nothing written). A later quota check refused WITH them on the same, unshunned account is still
+    /// re-placed once (#1855) and that account shunned.
+    func testQuotaCheckRefusedWithoutUnifiedHeadersIsReturnedAndShunsNothing() throws {
+        let r = try rig(3)
+        r.up.set("tok-a", [.bare("2", Self.bareBody), .throttle("3")])
+        let w = r.seams.writes, now = r.seams.now
+        let resp = try XCTUnwrap(r.post(sid, body: throttleQuotaCheck))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "2")
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 1], "no re-place: the refusal is not the account's")
+        XCTAssertEqual(outcomes(r), ["Example Org A returned"])
+        XCTAssertTrue(r.log.lines.filter { $0.contains("re-placing it once") }.isEmpty)
+        XCTAssertTrue(r.store.snapshot.shunned.isEmpty, "no shun on a 429 without the unified headers")
+        XCTAssertEqual(r.pins, [:])
+        XCTAssertEqual(r.seams.writes, w, "nothing written")
+        XCTAssertEqual(r.rec.waits, [])
+        XCTAssertEqual(r.log.lines.filter { $0.contains(": 429 quota=") }.map { $0.contains("; error=rate_limit_error; ") }, [true])
+        // With the unified headers: still #1855's account-level refusal. A is placed again (no shun), refuses, B answers.
+        XCTAssertEqual(r.post("sess-example-2", body: throttleQuotaCheck)?.status, 200)
+        XCTAssertEqual(r.calls(from: 1), ["tok-a": 1, "tok-b": 1])
+        XCTAssertEqual(outcomes(r), ["Example Org A returned", "Example Org A re-placed"])
+        XCTAssertEqual(r.store.snapshot.shunned, [orgA: now + 3])
+    }
+
+    /// Decision (#1878): a real request placed on A and throttled WITHOUT the unified headers does not shun A either; the
+    /// same-account retries and the one move run as before (they do not depend on the headers).
+    func testThrottledPlacementWithoutUnifiedHeadersShunsNothing() throws {
+        let r = try rig()
+        r.up.set("tok-a", Array(repeating: .bare(nil, Self.bareBody), count: 4))
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 4, "tok-b": 1])
+        XCTAssertEqual(r.pins, [key: orgB])
+        XCTAssertEqual(r.rec.waits, [1, 2, 4])
+        XCTAssertTrue(r.store.snapshot.shunned.isEmpty, "no shun on a 429 without the unified headers")
+    }
+
     // A body above the replay cap went upstream as a stream: no retry, no move (CCPoolConnection finishSnippet).
     func testBodyAboveTheReplayCapNeverMoves() throws {
         let r = try rig(replayCap: 64 << 10)

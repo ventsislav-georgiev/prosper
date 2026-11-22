@@ -2426,6 +2426,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent control: resuming a History session with your own first message now waits (up to 60 s) and
   tells the agent whether the message was delivered, why it was not (a draft, not submitted, a
   prompt), or that it is still unknown. (#1877)
+- Account pool: when Anthropic refuses Claude Code's quota check without any rate-limit details, the
+  pool now answers at once instead of sending it to a second account, and it no longer sends new
+  sessions to other accounts first because of that refusal. The pool log names the upstream error
+  type. (#1878)
 
 ## v2.174.0
 

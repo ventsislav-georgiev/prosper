@@ -33,16 +33,17 @@ final class ShapeUpstream: @unchecked Sendable {
     private let bThrottles: Int
     private let extra: [(String, String)]
     private let after: Int
+    private let throttleBody: String
     static let busy = "SNIPPET-BUSY-TEXT"
-    init(throttles: Int, bThrottles: Int = 0, extra: [(String, String)], after: Int = 200) {
-        self.throttles = throttles; self.bThrottles = bThrottles; self.extra = extra; self.after = after
+    init(throttles: Int, bThrottles: Int = 0, extra: [(String, String)], after: Int = 200, body: String = busy) {
+        self.throttles = throttles; self.bThrottles = bThrottles; self.extra = extra; self.after = after; self.throttleBody = body
     }
     func reply(_ head: CCPoolRequestHead, _ body: Data) -> CCPoolFakeServer.Reply {
         let token = String((head.header("authorization") ?? "").dropFirst("Bearer ".count))
         let n = lock.withLock { () -> Int in if token == "tok-a" { aCalls += 1 }; return aCalls }
         let m = lock.withLock { () -> Int in if token == "tok-b" { bCalls += 1 }; return bCalls }
         if (token == "tok-a" && n >= 2 && n <= 1 + throttles) || (token == "tok-b" && m <= bThrottles) {
-            return .respond(429, [("content-type", "application/json")] + extra, Data(Self.busy.utf8))
+            return .respond(429, [("content-type", "application/json")] + extra, Data(throttleBody.utf8))
         }
         if token == "tok-a", n == 2 + throttles, after != 200 { return .respond(after, [("content-type", "application/json")], Data(#"{"type":"error"}"#.utf8)) }
         return .respond(200, [("content-type", "application/json")], Data(#"{"type":"message","content":[]}"#.utf8))
@@ -67,13 +68,14 @@ final class CCPoolThrottleLogTests: XCTestCase {
         }
     }
 
-    private func rig(throttles: Int, bThrottles: Int = 0, extra: [(String, String)] = [], after: Int = 200) throws -> Rig {
+    private func rig(throttles: Int, bThrottles: Int = 0, extra: [(String, String)] = [], after: Int = 200,
+                     body: String = ShapeUpstream.busy) throws -> Rig {
         // The delay recorder first: no row waits.
         let rec = ThrottleWaitRecorder()
         let saved = CCPoolConnection.throttleWait
         CCPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
         addTeardownBlock { CCPoolConnection.throttleWait = saved }
-        let up = ShapeUpstream(throttles: throttles, bThrottles: bThrottles, extra: extra, after: after)
+        let up = ShapeUpstream(throttles: throttles, bThrottles: bThrottles, extra: extra, after: after, body: body)
         let server = try CCPoolFakeServer { h, b in up.reply(h, b) }
         XCTAssertNotEqual(server.port, 0)
         let log = SplitLog()
@@ -103,7 +105,7 @@ final class CCPoolThrottleLogTests: XCTestCase {
         XCTAssertEqual(r.post(Self.work, sid: sid)?.status, 200)
         XCTAssertEqual(r.rec.waits, [1, 2, 4])
         let common = "429 quota=NO unified rate-limit headers; retry-after=?; cooldown=none; bytes=106; max_tokens=4096; "
-            + "effort=high; speed=fast; beta=none; should-retry=absent; resp-headers=x-queue-depth,x-trace-id; "
+            + "effort=high; speed=fast; beta=none; should-retry=absent; resp-headers=x-queue-depth,x-trace-id; error=none; "
         let outcomes = ["attempt=1; retry=0; outcome=retry", "attempt=2; retry=1; outcome=retry",
                         "attempt=3; retry=2; outcome=retry", "attempt=4; retry=3; outcome=move"]
         XCTAssertEqual(r.log.throttles.map(\.pub), outcomes.map { common + $0 + "; reason=no exhausted quota" })
@@ -220,6 +222,47 @@ final class CCPoolThrottleLogTests: XCTestCase {
         let first = try XCTUnwrap(r.log.throttles.first)
         XCTAssertTrue(first.pub.contains("speed=fast; beta=context-1m-2025-08-07,interleaved-thinking-2025-05-14; should-retry=true; resp-headers="),
                       first.pub)
+    }
+
+    // #1878: the body's error.type is a fixed word on the public line; the message text stays private. The real body is
+    // longer than the snippet (313 bytes against 200), so the word is read off a cut body.
+    func testUpstreamErrorTypeIsAWordAndTheMessageStaysPrivate() throws {
+        let message = "EXAMPLE-MESSAGE-TEXT " + String(repeating: "m", count: 180)
+        let body = #"{"type":"error","error":{"type":"overloaded_error","message":""# + message + #""},"request_id":"req_example"}"#
+        XCTAssertGreaterThan(body.utf8.count, CCPoolConnection.snippetCap, "the snippet cuts this body")
+        let r = try rig(throttles: 1, body: body)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 200)
+        XCTAssertEqual(r.post(Self.work, sid: nil)?.status, 200)
+        let first = try XCTUnwrap(r.log.throttles.first)
+        XCTAssertTrue(first.pub.contains("; error=overloaded_error; attempt=1; "), first.pub)
+        XCTAssertFalse(first.pub.contains("EXAMPLE-MESSAGE-TEXT"), first.pub)
+        XCTAssertTrue(first.priv.contains("EXAMPLE-MESSAGE-TEXT"), "the body stays in the private part")
+    }
+
+    // #1878: every allow-listed type is itself; an unknown, empty or overlong type is "other"; no error object, a body
+    // that is not JSON, an empty snippet or a type that is not a string is "none". A "type" inside the message or the
+    // top-level "type":"error" is never read as the error type.
+    func testErrorTypeWordAllowListOtherAndNone() {
+        func word(_ s: String) -> String { CCPoolThrottleShape.errorType(Data(s.utf8)) }
+        let listed = ["rate_limit_error", "overloaded_error", "api_error", "invalid_request_error", "permission_error",
+                      "authentication_error", "not_found_error", "request_too_large"]
+        XCTAssertEqual(CCPoolThrottleShape.errorTypes, Set(listed))
+        for t in listed { XCTAssertEqual(word(#"{"type":"error","error":{"type":""# + t + #"","message":"x"}}"#), t) }
+        XCTAssertEqual(word(#"{"type":"error","error":{"message":"x","type":"rate_limit_error"}}"#), "rate_limit_error", "key order")
+        XCTAssertEqual(word(#"{ "error" : { "type" : "api_error" } }"#), "api_error", "spaces")
+        XCTAssertEqual(word(#"{"type":"error","error":{"type":"billing_error","message":"x"}}"#), "other")
+        XCTAssertEqual(word(#"{"error":{"type":"RATE_LIMIT_ERROR"}}"#), "other", "case is not folded")
+        XCTAssertEqual(word(#"{"error":{"type":""}}"#), "other")
+        XCTAssertEqual(word(#"{"error":{"type":""# + String(repeating: "a", count: 65) + #""}}"#), "none", "over 64 is not read")
+        XCTAssertEqual(word(ShapeUpstream.busy), "none")
+        XCTAssertEqual(word(""), "none")
+        XCTAssertEqual(word(#"{"type":"error"}"#), "none")
+        XCTAssertEqual(word(#"{"error":{"type":7}}"#), "none")
+        XCTAssertEqual(word(#"{"error":{"message":"say \"type\":\"api_error\" here"}}"#), "none", "an escaped type in the message")
+        XCTAssertEqual(word(#"{"error":"rate_limit_error"}"#), "none")
+        // Only the first snippetCap bytes are read.
+        let late = String(repeating: " ", count: CCPoolConnection.snippetCap) + #"{"error":{"type":"api_error"}}"#
+        XCTAssertEqual(word(late), "none")
     }
 
     // Both absent: the fixed words "none" and "absent".
