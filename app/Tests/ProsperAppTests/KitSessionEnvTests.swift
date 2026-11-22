@@ -30,6 +30,22 @@ final class KitSessionEnvTests: XCTestCase {
         XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: [Self.binA], env: ["DCH_SOCKET_DIR": "/d"]), [])
     }
 
+    /// #1876: a Resume's override is the interactive login PATH (the ~/.zshrc dirs dch's own revive env holds) with the
+    /// kit bins after it, through the seams a Resume uses: LoginPath.read (a fake probe, no shell), controlEnv, reviveFlags.
+    func testReviveFlagsKeepTheInteractiveLoginDirsThenTheKitBins() {
+        let rc = "/opt/homebrew/share/google-cloud-sdk/bin:/Users/example/.bun/bin:/Users/example/.local/state/fnm_multishells/1/bin"
+        let login = rc + ":/opt/homebrew/bin:/usr/bin:/bin"
+        let m = LoginPath.marker
+        let login0 = LoginPath.read(shell: "/bin/zsh", cache: LoginPath.Cache()) { _, script in
+            script == LoginPath.script ? Data("Agent pid 7\n\(m)\(login)\(m)\u{1B}[?2004l\n".utf8) : nil
+        }
+        XCTAssertEqual(login0, login)
+        let env = AgentIsland.controlEnv(dir: "/d", login: login0, base: ["PATH": "/usr/bin:/bin", "HOME": "/Users/example"])
+        XCTAssertEqual(KitSessionEnv.reviveFlags(kitBins: [Self.binA, Self.binB], env: env),
+                       ["--env", "PATH=" + login + ":/opt/homebrew/sbin:/usr/local/bin:/Users/example/.local/bin:"
+                        + Self.binA + ":" + Self.binB], "login dirs in their order, then the well-known ones, then the kit bins")
+    }
+
     func testNoKitAddsNothing() {
         XCTAssertEqual(run([]), Self.base, "no bins: byte-identical")
         XCTAssertEqual(run([], ["DCH_SOCKET_DIR": "/d"]), ["DCH_SOCKET_DIR": "/d"], "no bins, no PATH: still none")

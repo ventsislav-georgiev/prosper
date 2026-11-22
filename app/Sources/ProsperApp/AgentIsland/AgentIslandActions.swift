@@ -1525,20 +1525,24 @@ extension AgentIsland {
     }
 }
 
-/// The user's login PATH, read once from `$SHELL -lc` (#578 r2).
+/// The user's login PATH, read once from `$SHELL -l -i -c` (#578 r2). #1876: interactive, as dch --revive's own
+/// login env (dch.c `-l -i -c`), so the ~/.zshrc dirs are in it and a Resume's PATH override keeps them.
 enum LoginPath {
     static let marker = "__PROSPER_LOGIN_PATH__"
     /// Markers around the value, so profile output before or after is ignored.
     static let script = "printf '\(marker)%s\(marker)' \"$PATH\""
     static let timeout: TimeInterval = 4
+    /// #1876: the login shell's flags, interactive so it reads ~/.zshrc too (dch --revive's own flags).
+    static let shellArgs = ["-l", "-i", "-c"]
 
-    /// stdout of `shell -lc script`; nil when it timed out.
+    /// stdout of `shell -l -i -c script`; nil when it timed out.
     typealias Probe = @Sendable (_ shell: String, _ script: String) -> Data?
 
     static let shellProbe: Probe = { shell, script in
         DchCommand.bounded(timeout) { onPid, onExit in
-            DchCommand.runCapturingBoth(args: ["-lc", script], env: ProcessInfo.processInfo.environment,
-                                        path: shell, onPid: onPid, onExit: onExit).out
+            // stdin: an empty pipe (dch uses /dev/null), so an rc that reads input gets EOF, never a terminal
+            DchCommand.runCapturingBoth(args: shellArgs + [script], env: ProcessInfo.processInfo.environment,
+                                        path: shell, onPid: onPid, onExit: onExit, stdin: Data()).out
         }
     }
 
@@ -1549,8 +1553,7 @@ enum LoginPath {
         return parts[1]
     }
 
-    /// Always present: `zsh -l` reads no .zshrc, where ~/.local/bin (headroom)
-    /// is usually added.
+    /// Always present, in case the probe failed or an rc file left one out (~/.local/bin: headroom).
     static func wellKnown(home: String) -> [String] {
         ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", home + "/.local/bin"]
     }

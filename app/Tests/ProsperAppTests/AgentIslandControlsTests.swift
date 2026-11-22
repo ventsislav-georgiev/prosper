@@ -713,6 +713,16 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(LoginPath.parse("\(m)\(m)"))
     }
 
+    /// #1876: an interactive rc prints around the markers (prompt setup, an agent's pid, a theme's escapes): only the
+    /// text between the first two markers is the PATH.
+    func testMarkerParseIgnoresInteractiveRcNoise() {
+        let m = LoginPath.marker
+        let rc = "Agent pid 4242\n\u{1B}]0;~\u{07}\u{1B}[?2004hfnm: using node v22\n"
+        XCTAssertEqual(LoginPath.parse(rc + "\(m)/Users/example/.bun/bin:/opt/homebrew/bin\(m)" + rc + "\u{1B}[?2004l\n"),
+                       "/Users/example/.bun/bin:/opt/homebrew/bin")
+        XCTAssertEqual(LoginPath.shellArgs, ["-l", "-i", "-c"], "interactive, as dch --revive's own login env")
+    }
+
     private final class Probes: @unchecked Sendable {
         let lock = NSLock()
         var calls: [String] = []
@@ -735,10 +745,13 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// The default probe end to end against a fake shell (never a real login
-    /// shell): it gets `-lc` and the script, and profile noise around it is dropped.
+    /// shell): it gets `-l -i -c` (#1876: interactive, so ~/.zshrc is read) and the script, with an empty stdin;
+    /// rc noise on stdout around it is dropped and stderr ("no job control") is ignored.
     func testShellProbeRunsTheScriptAndDropsNoise() throws {
         let shell = tempDir().appendingPathComponent("fakesh")
-        try "#!/bin/sh\ntest \"$1\" = -lc || exit 1\necho \"Agent pid 1\"\nPATH=/p/q:/r /bin/sh -c \"$2\"\necho bye\n".write(to: shell, atomically: true, encoding: .utf8)
+        try ("#!/bin/sh\ntest \"$1 $2 $3\" = \"-l -i -c\" || exit 1\ntest -t 0 && exit 1\nread -r line && exit 1\n"
+             + "echo \"Agent pid 1\"\necho 'zsh: no job control in this shell' >&2\n"
+             + "PATH=/p/q:/r /bin/sh -c \"$4\"\necho bye\n").write(to: shell, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shell.path)
         XCTAssertEqual(LoginPath.read(shell: shell.path, cache: LoginPath.Cache()), "/p/q:/r")
     }

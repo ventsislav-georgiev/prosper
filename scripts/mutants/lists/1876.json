@@ -1,0 +1,14 @@
+{
+ "entry": "1876",
+ "filter": "AgentIslandControlsTests",
+ "mutants": [
+  {
+   "name": "no-interactive",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "static let shellArgs = [\"-l\", \"-i\", \"-c\"]",
+   "new": "static let shellArgs = [\"-l\", \"-c\"]",
+   "expect": "killed",
+   "filter": "AgentIslandControlsTests/testShellProbeRunsTheScriptAndDropsNoise|AgentIslandControlsTests/testMarkerParseIgnoresInteractiveRcNoise"
+  }
+ ]
+}

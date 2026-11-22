@@ -2413,6 +2413,9 @@ tag from the now-released section and put it on the new top draft.
 - `ctl sessions.say` now waits for the message to go through and answers delivered, the reason it
   was not (for example a draft already in Claude's input), or unknown, instead of always answering
   ok. (#1875)
+- Sessions you resume or start from Prosper get the same command search path as your terminal again,
+  including the folders your ~/.zshrc adds (for example the Google Cloud SDK, bun or fnm), with the
+  agent kit's tools after them. (#1876)
 
 ## v2.174.0
 

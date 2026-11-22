@@ -21,7 +21,8 @@ enum KitSessionEnv {
 
     /// #1684: the same PATH change as `--env PATH=<path>` for a local --revive (dch 1.94.0, applied after its login-shell
     /// env, so an rc file cannot reorder the kit bins). `env` is the control env the spawn path starts from. Nothing to
-    /// add, or no PATH: no flag.
+    /// add, or no PATH: no flag. #1876: env's PATH is LoginPath's `-l -i -c` probe, the same shell dch's own revive env
+    /// comes from, so the override keeps the ~/.zshrc dirs and only adds the kit bins after them.
     static func reviveFlags(kitBins: [String], env: [String: String]) -> [String] {
         guard let path = contributor(kitBins: { kitBins })([], env)["PATH"], path != env["PATH"] else { return [] }
         return ["--env", "PATH=\(path)"]
