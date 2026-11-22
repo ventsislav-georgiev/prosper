@@ -325,8 +325,9 @@ enum ControlSessions {
     /// A History row's Resume, or its Resume (no message): the History menu's gate, then the controller's resume (this
     /// Mac) or the window's resumeRemote (another Mac). `message`: resumed as Resume (no message), then the New session
     /// first prompt's path (sayFirst: it waits for the revived Claude's prompt); refused for a non-Claude record or another Mac's.
-    /// No undo: a resume is not reversible.
-    static func resume(_ args: [String: ControlJSON]) throws -> ControlChange {
+    /// No undo: a resume is not reversible. #1877: `said` gets the message's outcome on main, only when one was sent:
+    /// nil when delivered, else the error naming the resume (ControlSessionsTalk.resume awaits it).
+    static func resume(_ args: [String: ControlJSON], said: (@MainActor (_ failure: String?) -> Void)? = nil) throws -> ControlChange {
         let st = try store(), id = try required(args, "id")
         let hits = records(st).filter { recordID($0) == id }
         guard hits.count < 2 else { throw ControlError("\(hits.count) History records are \(id): resume it from Agent Sessions") }
@@ -357,8 +358,11 @@ enum ControlSessions {
             name = AgentIsland.reviveAs(r, live: live, records: taken) ?? r.name
             guard resumeRecord(r, noMessage) else { throw ControlError(busy) }
             if let message {
-                let key = AgentSessionKey(dir: r.key.dir, name: name)
-                if let m = model() { m.sayFirst(key, message, nil) } else { AgentIslandController.shared.sayFirst(key, message) }
+                let key = AgentSessionKey(dir: r.key.dir, name: name), title = r.title, revived = name
+                let then: @MainActor (String?) -> Void = { why in
+                    said?(why.map { "\(title): resumed as \(revived), message not delivered: \(OutsideText.shown($0, max: 200))" })
+                }
+                if let m = model() { m.sayFirst(key, message, then) } else { AgentIslandController.shared.sayFirst(key, message, then: then) }
             }
         }
         return ControlChange(summary: "\(r.title) (a resume has no undo)", result: .string(name), verb: "resumed")
@@ -394,10 +398,12 @@ extension ControlRegistry {
         r.register(ControlCommand(name: "sessions.history",
                                   summary: "List History records: id, name, cwd, ended, status, age, pinned, host, and whether Resume runs.",
                                   args: [:], mutates: false) { _, _ in try ControlSessions.history() })
-        r.register(.change(name: "sessions.resume", summary: "Resume a History record, optionally without dch's message or with your own (no undo).", args: [
+        // #1877: awaited (reply(to:) calls runAsync) when it carries a message; ControlSessionsTalk.resume records the change.
+        r.register(ControlCommand(name: "sessions.resume", summary: "Resume a History record, optionally without dch's message or with your own (no undo). Without a message the reply is the name it revives as; with one it waits (up to 60 s) for the message: {name, delivered: true}, an error naming the resume and why the message was not sent, or {name, delivered: \"unknown\", note}.", args: [
             "id": ControlArg(type: "string", required: true, summary: "the record's id from sessions.history"),
             "noMessage": ControlArg(type: "boolean", summary: "Resume (no message): dch types no carry-on message"),
             "message": ControlArg(type: "string", summary: "your first message once it is up, instead of dch's (a Claude session on this Mac only)"),
-        ]) { _, a in try ControlSessions.resume(a) })
+        ], mutates: true, run: { _, _ in throw ControlError("sessions.resume waits for its outcome: send it through the control channel") },
+           runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes) }))
     }
 }

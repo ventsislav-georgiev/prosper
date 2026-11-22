@@ -252,7 +252,7 @@ extension AgentWindowD1Tests {
             m.select(.live(a.key))
             @MainActor func say(_ key: AgentSessionKey, _ text: String) {
                 let done = expectation(description: "then \(key.name)")
-                m.sayFirst(key, text) { done.fulfill() }
+                m.sayFirst(key, text) { _ in done.fulfill() }
                 wait(for: [done], timeout: 10)
             }
             say(a.key, "Example task for api")

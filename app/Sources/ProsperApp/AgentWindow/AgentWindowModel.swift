@@ -2512,11 +2512,12 @@ final class AgentWindowModel: ObservableObject {
     /// #847 D3.7: a first message into a started session, then `then`: the island controller's sayFirst (#1369).
     /// #1370 (R1369 rider): a failure seeds the draft at once when that session is the selected one (follow() seeds
     /// the others when they are selected later).
-    lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor () -> Void)?) -> Void = {
+    /// #1877: `then` gets the controller's outcome (nil when sent, else why not).
+    lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor (_ notSent: String?) -> Void)?) -> Void = {
         [weak self] key, text, then in
-        self?.island().sayFirst(key, text) { @MainActor [weak self] in
+        self?.island().sayFirst(key, text) { @MainActor [weak self] why in
             self?.showUnsentFirst(key, selectedOnly: true)
-            then?()
+            then?(why)
         }
     }
     /// #847 D2.4: the prompt as last typed, kept across Cancel while the window lives; a Start that takes it drops it.

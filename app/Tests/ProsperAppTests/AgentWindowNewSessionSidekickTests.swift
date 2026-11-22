@@ -7,7 +7,7 @@ import XCTest
 extension AgentWindowD1Tests {
 
     final class SayCalls {
-        var calls: [(key: AgentSessionKey, text: String, then: (@MainActor () -> Void)?)] = []
+        var calls: [(key: AgentSessionKey, text: String, then: (@MainActor (String?) -> Void)?)] = []
     }
 
     @MainActor

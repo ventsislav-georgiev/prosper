@@ -1,0 +1,70 @@
+{
+ "entry": "1877",
+ "filter": "ControlSessionsHistoryTests|ControlSessionsTalkTests|AgentIslandSayFirstTests|AgentWindowUnsentFirstTests",
+ "mutants": [
+  {
+   "name": "say_no_record",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "            reg.changes.record(command: \"sessions.say\", summary: c.summary, verb: c.verb, undo: c.undo)\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "ControlSessionsTalkTests/testSayThroughTheRegistryRecordsTheChange"
+  },
+  {
+   "name": "resume_no_record",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "        changes.record(command: \"sessions.resume\", summary: c.summary, verb: c.verb, undo: c.undo)\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "ControlSessionsHistoryTests"
+  },
+  {
+   "name": "resume_never_waits",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard ControlSessions.string(args, \"message\") != nil else { return c.result }",
+   "new": "guard false else { return c.result }",
+   "expect": "killed",
+   "filter": "ControlSessionsHistoryTests"
+  },
+  {
+   "name": "resume_always_waits",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "guard ControlSessions.string(args, \"message\") != nil else { return c.result }",
+   "new": "guard true else { return c.result }",
+   "expect": "killed",
+   "filter": "ControlSessionsHistoryTests/testResumeWithoutAMessageRepliesAtOnce"
+  },
+  {
+   "name": "resume_failure_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "said?(why.map {",
+   "new": "said?(Optional<String>.none.map {",
+   "expect": "killed",
+   "filter": "ControlSessionsHistoryTests"
+  },
+  {
+   "name": "controller_then_nil",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "            then?(why)\n",
+   "new": "            then?(nil)\n",
+   "expect": "killed",
+   "filter": "AgentIslandSayFirstTests|AgentWindowUnsentFirstTests"
+  },
+  {
+   "name": "model_then_nil",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            then?(why)\n",
+   "new": "            then?(nil)\n",
+   "expect": "killed",
+   "filter": "AgentWindowUnsentFirstTests"
+  },
+  {
+   "name": "resume_not_runasync",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes) }))",
+   "new": "runAsync: nil))",
+   "expect": "killed",
+   "filter": "ControlSessionsHistoryTests"
+  }
+ ]
+}

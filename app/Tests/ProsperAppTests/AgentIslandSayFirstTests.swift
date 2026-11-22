@@ -93,11 +93,14 @@ final class AgentIslandSayFirstTests: XCTestCase {
     }
 
     /// Runs sayFirst to its end; `then` must run exactly once (an over-fulfilled expectation fails the test).
-    @MainActor
-    private func sayFirst(_ c: AgentIslandController, _ text: String) {
+    /// #1877: returns what `then` got (nil: sent, else the reason).
+    @MainActor @discardableResult
+    private func sayFirst(_ c: AgentIslandController, _ text: String) -> String? {
         let done = expectation(description: "then")
-        c.sayFirst(key, text) { done.fulfill() }
+        var got: String?
+        c.sayFirst(key, text) { got = $0; done.fulfill() }
         wait(for: [done], timeout: 10)
+        return got
     }
 
     /// T12: skipped not_claude, no_screen and prompt typed nothing, so each waits one step; ok on the fourth call.
@@ -108,7 +111,8 @@ final class AgentIslandSayFirstTests: XCTestCase {
         let f = FirstIO(replies: [Self.reply("skipped", "not_claude"), Self.reply("skipped", "no_screen"),
                                   Self.reply("skipped", "prompt"), Self.reply("ok")])
         let c = controller(f)
-        sayFirst(c, "  Example task\r\n")
+        let sent = sayFirst(c, "  Example task\r\n")
+        XCTAssertTrue(sent == nil, "#1877: sent: `then` gets nil")
         XCTAssertEqual(f.lock.withLock { f.says }, Array(repeating: "Example task", count: 4))
         XCTAssertEqual(f.lock.withLock { f.pauses }, [2, 2, 2])
         XCTAssertTrue(c.store?.actions[key] == nil, "ok clears the line")
@@ -141,7 +145,8 @@ final class AgentIslandSayFirstTests: XCTestCase {
         for (reply, why) in cases {
             let f = FirstIO(replies: [reply, Self.reply("ok")])
             let c = controller(f)
-            sayFirst(c, "Example task")
+            let got = sayFirst(c, "Example task")
+            XCTAssertEqual(got, why, "#1877: `then` gets the mapped reason: \(reply)")
             XCTAssertEqual(f.counts.says, 1, "no retry: \(reply)")
             XCTAssertEqual(f.counts.pauses, 0, reply)
             XCTAssertEqual(c.store?.actions[key], AgentWindowText.firstNotSent(why), reply)
@@ -155,14 +160,16 @@ final class AgentIslandSayFirstTests: XCTestCase {
     func testASkippedDraftFailsAndLiteFailsAtOnce() {
         let f = FirstIO(replies: [Self.reply("skipped", "draft"), Self.reply("ok")])
         let c = controller(f)
-        sayFirst(c, "Example task")
+        let draft = sayFirst(c, "Example task")
+        XCTAssertEqual(draft, AgentWindowText.draft, "#1877: the draft reason, not another failure's")
         XCTAssertEqual(f.counts.says, 1)
         XCTAssertEqual(c.store?.actions[key], AgentWindowText.firstNotSent(AgentWindowText.draft))
 
         let lite = FirstIO(screens: [""], replies: [Self.reply("ok")])
         lite.noMirror = true
         let d = controller(lite)
-        sayFirst(d, "Example task")
+        let lit = sayFirst(d, "Example task")
+        XCTAssertEqual(lit, AgentWindowText.noScreen, "#1877")
         let n = lite.counts
         XCTAssertEqual(n.says, 0, "dch-lite: nothing is typed")
         XCTAssertEqual(n.reads, 1)
@@ -182,7 +189,7 @@ final class AgentIslandSayFirstTests: XCTestCase {
         f.replies[45] = Self.reply("skipped", "prompt")
         let c = controller(f)
         let done = expectation(description: "then")
-        c.sayFirst(key, "Example task") { done.fulfill() }
+        c.sayFirst(key, "Example task") { _ in done.fulfill() }
         XCTAssertEqual(c.store?.actions[key], AgentIsland.firstSendingText)
         XCTAssertTrue(AgentIsland.runningTexts.contains(AgentIsland.firstSendingText), "the composer locks on it")
         wait(for: [done], timeout: 10)
@@ -205,7 +212,7 @@ final class AgentIslandSayFirstTests: XCTestCase {
         f.onPause = { let h = Self.onMain { c.heldByAutoAllow(key) }; f.lock.withLock { f.held.append(h) } }
         let done = expectation(description: "then")
         var heldInThen: Bool?
-        c.sayFirst(key, "Example task") {
+        c.sayFirst(key, "Example task") { _ in
             heldInThen = c.heldByAutoAllow(key)
             done.fulfill()
         }
@@ -269,8 +276,8 @@ final class AgentIslandSayFirstTests: XCTestCase {
         let done = expectation(description: "then")
         done.expectedFulfillmentCount = 2
         // The first `then` is the holder's: the waiter cannot end before the key is released.
-        c.sayFirst(key, "Example task") { holderDone.signal(); done.fulfill() }
-        c.sayFirst(key, "Example task") { holderDone.signal(); done.fulfill() }
+        c.sayFirst(key, "Example task") { _ in holderDone.signal(); done.fulfill() }
+        c.sayFirst(key, "Example task") { _ in holderDone.signal(); done.fulfill() }
         wait(for: [done], timeout: 10)
         XCTAssertEqual(f.lock.withLock { f.held }, [true], "the key is held at the waiter's 2nd pause")
         XCTAssertEqual(f.lock.withLock { f.saysAt }, 1, "only the holder's say while it holds the key")
@@ -323,7 +330,7 @@ final class AgentIslandSayFirstTests: XCTestCase {
             let f = FirstIO(replies: [Self.reply("ok")])
             let c = controller(f)
             var ran = 0
-            c.sayFirst(key, text) { ran += 1 }
+            c.sayFirst(key, text) { _ in ran += 1 }
             XCTAssertEqual(ran, 1, "then ran at once: \(text.debugDescription)")
             XCTAssertFalse(c.heldByAutoAllow(key))
             XCTAssertTrue(c.store?.actions[key] == nil)

@@ -2416,6 +2416,9 @@ tag from the now-released section and put it on the new top draft.
 - Sessions you resume or start from Prosper get the same command search path as your terminal again,
   including the folders your ~/.zshrc adds (for example the Google Cloud SDK, bun or fnm), with the
   agent kit's tools after them. (#1876)
+- Agent control: resuming a History session with your own first message now waits (up to 60 s) and
+  tells the agent whether the message was delivered, why it was not (a draft, not submitted, a
+  prompt), or that it is still unknown. (#1877)
 
 ## v2.174.0
 

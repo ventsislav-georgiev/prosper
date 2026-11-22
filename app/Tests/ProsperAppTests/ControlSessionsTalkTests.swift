@@ -337,4 +337,22 @@ final class ControlSessionsTalkTests: XCTestCase {
         XCTAssertEqual(r.commands["sessions.say"]?.args["text"]?.required, true)
         XCTAssertTrue(r.commands["sessions.say"]?.runAsync != nil, "#1875: say is awaited for its outcome")
     }
+
+    /// #1877 (QA R1875 q1): through reply(to:), say's hand-written record line logs the change once, with its notice.
+    @MainActor
+    func testSayThroughTheRegistryRecordsTheChange() async {
+        let st = base.store([base.session("api", .idle, alias: "API")])
+        await withSeams(st) { changes in
+            Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
+            var r = ControlRegistry()
+            ControlRegistry.registerSessionsTalk(&r)
+            r.changes = changes
+            let registry = r
+            let reply = await registry.reply(to: Data(#"{"cmd":"sessions.say","args":{"name":"api","text":"go on"}}"#.utf8))
+            XCTAssertEqual(reply, ControlReply(ok: true, result: .object(["delivered": .bool(true)]), error: nil))
+            XCTAssertEqual(changes.entries.map(\.command), ["sessions.say"], "recorded once")
+            XCTAssertEqual(changes.entries.last?.summary, "API: go on")
+            XCTAssertEqual(notices, ["Agent messaged: API: go on"], "the change's notice, no failure notice")
+        }
+    }
 }

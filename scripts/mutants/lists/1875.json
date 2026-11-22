@@ -37,8 +37,8 @@
   {
    "name": "noStateGuard",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "        guard s.state == .idle || s.state == .done else {\n            throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)\n        }\n        let key = s.key, once = Once()",
-   "new": "        let key = s.key, once = Once()",
+   "old": "        guard s.state == .idle || s.state == .done else {\n            throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)\n        }\n        let key = s.key, once = Once<AgentWindowOutcome>()",
+   "new": "        let key = s.key, once = Once<AgentWindowOutcome>()",
    "expect": "killed",
    "filter": "ControlSessionsTalkTests/testSayRefusalsTypeNothing"
   }

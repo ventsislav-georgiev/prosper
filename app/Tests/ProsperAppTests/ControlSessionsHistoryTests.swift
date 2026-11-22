@@ -11,6 +11,9 @@ final class ControlSessionsHistoryTests: XCTestCase {
     /// The resume seam's calls ("<name> <noMessage>") and its answer, on self: the seam is a @MainActor closure.
     var calls: [String] = []
     var started = true
+    /// #1877: the model's sayFirst seam: what it was asked ("<name>: <text>") and its last `then`, for a row to answer.
+    var said: [String] = []
+    var pending: (@MainActor (String?) -> Void)?
 
     @MainActor
     func withSeams(model: AgentWindowModel? = nil, store: AgentIslandStore? = nil,
@@ -189,9 +192,119 @@ final class ControlSessionsHistoryTests: XCTestCase {
         ControlRegistry.registerSessions(&reg)
         XCTAssertEqual(reg.commands["sessions.history"]?.mutates, false)
         XCTAssertEqual(reg.commands["sessions.resume"]?.mutates, true)
+        XCTAssertTrue(reg.commands["sessions.resume"]?.runAsync != nil, "#1877: resume with a message is awaited for its outcome")
         XCTAssertEqual(reg.commands["sessions.resume"]?.args["noMessage"]?.type, "boolean")
         let registry = reg
         let bad = await registry.reply(to: Data(#"{"cmd":"sessions.resume","args":{"id":"api","noMessage":"yes"}}"#.utf8))
         XCTAssertEqual(bad, .failure("argument 'noMessage' must be boolean, got string"))
+    }
+
+    // MARK: - #1877: sessions.resume waits for its message
+
+    /// historyStore with Resume (no message)'s gate open, the window model's sayFirst a recorder keeping `then`, the
+    /// change log a fresh one; ControlSessions' and ControlSessionsTalk's seams put back after.
+    @MainActor
+    func withResume(_ body: (AgentWindowModel, ControlChanges) async throws -> Void) async rethrows {
+        let st = historyStore(), m = base.windowModel(st)
+        defer { m.close() }
+        st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 27, 0])
+        let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow, ControlSessions.resumeRecord)
+        let talk = (ControlSessionsTalk.resumeBound, ControlSessionsTalk.sleep)
+        defer {
+            (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow, ControlSessions.resumeRecord) = saved
+            (ControlSessionsTalk.resumeBound, ControlSessionsTalk.sleep) = talk
+        }
+        ControlSessions.model = { m }
+        ControlSessions.islandStore = { nil }
+        ControlSessions.showWindow = { nil }
+        calls = []; said = []; pending = nil; started = true
+        ControlSessions.resumeRecord = { r, quiet in self.calls.append("\(r.name) \(quiet)"); return self.started }
+        // A lost outcome ends a row in seconds (the sleep is cancelled once an outcome lands).
+        ControlSessionsTalk.resumeBound = 2
+        m.sayFirst = { key, text, then in self.said.append("\(key.name): \(text)"); self.pending = then }
+        let changes = ControlChanges()
+        changes.present = { _, _ in }
+        try await body(m, changes)
+    }
+
+    /// A message: the reply waits for sayFirst's outcome, here landing after resume awaits: {name, delivered: true};
+    /// the resume is recorded once.
+    @MainActor
+    func testResumeWithAMessageWaitsForItsDelivery() async throws {
+        try await withResume { _, changes in
+            ControlSessionsTalk.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
+            let a = args(["id": "api", "message": "hello"])
+            let run = Task { @MainActor in try await ControlSessionsTalk.resume(a, changes: changes) }
+            var spins = 0
+            while pending == nil, spins < 10_000 { spins += 1; await Task.yield() }
+            XCTAssertEqual(said, ["api-2: hello"], "api is live: it revives as api-2 and the message goes there")
+            pending?(nil)
+            let r = try await run.value
+            XCTAssertEqual(r, .object(["name": .string("api-2"), "delivered": .bool(true)]))
+            XCTAssertEqual(calls, ["api true"], "resumed as Resume (no message)")
+            XCTAssertEqual(changes.entries.map(\.command), ["sessions.resume"], "recorded once")
+        }
+    }
+
+    /// The message not sent: an error naming the resume (it happened, and is recorded) and sayFirst's reason.
+    @MainActor
+    func testResumeWithAMessageNotSentThrowsNamingTheResume() async throws {
+        await withResume { m, changes in
+            ControlSessionsTalk.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
+            m.sayFirst = { key, text, then in self.said.append("\(key.name): \(text)"); then?(AgentWindowText.notSubmitted) }
+            do {
+                _ = try await ControlSessionsTalk.resume(args(["id": "api", "message": "hello"]), changes: changes)
+                XCTFail("not delivered is an error")
+            } catch {
+                XCTAssertEqual((error as? ControlError)?.message, "api: resumed as api-2, message not delivered: \(AgentWindowText.notSubmitted)")
+            }
+            XCTAssertEqual(said, ["api-2: hello"])
+            XCTAssertEqual(calls, ["api true"])
+            XCTAssertEqual(changes.entries.map(\.command), ["sessions.resume"], "the resume ran: still recorded")
+        }
+    }
+
+    /// No outcome within the bound: {name, delivered: "unknown", note}, not an error.
+    @MainActor
+    func testResumeWithAMessageWithoutOutcomeInTimeIsUnknown() async throws {
+        try await withResume { _, changes in
+            ControlSessionsTalk.sleep = { _ in }
+            let r = try await ControlSessionsTalk.resume(args(["id": "api", "message": "hello"]), changes: changes)
+            XCTAssertEqual(r, .object(["name": .string("api-2"), "delivered": .string("unknown"),
+                                       "note": .string(ControlSessionsTalk.resumeUnknownNote)]))
+            XCTAssertEqual(said.count, 1)
+            XCTAssertEqual(changes.entries.count, 1)
+        }
+    }
+
+    /// No message: the reply is the name as before, at once (a wait would sit out the minute-long sleep), recorded once.
+    @MainActor
+    func testResumeWithoutAMessageRepliesAtOnce() async throws {
+        try await withResume { _, changes in
+            ControlSessionsTalk.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
+            let r = try await ControlSessionsTalk.resume(args(["id": "web"]), changes: changes)
+            XCTAssertEqual(r, .string("web"), "a wait would answer unknown")
+            XCTAssertEqual(calls, ["web false"])
+            XCTAssertEqual(said, [], "nothing said")
+            XCTAssertEqual(changes.entries.map(\.command), ["sessions.resume"])
+        }
+    }
+
+    /// Through reply(to:): the awaited resume answers on the wire and its change is logged once; a refusal logs none.
+    @MainActor
+    func testResumeThroughTheRegistryRecordsTheChange() async throws {
+        try await withResume { _, changes in
+            Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
+            var reg = ControlRegistry()
+            ControlRegistry.registerSessions(&reg)
+            reg.changes = changes
+            let registry = reg
+            let ok = await registry.reply(to: Data(#"{"cmd":"sessions.resume","args":{"id":"web"}}"#.utf8))
+            XCTAssertEqual(ok, ControlReply(ok: true, result: .string("web"), error: nil))
+            XCTAssertEqual(changes.entries.map(\.command), ["sessions.resume"], "recorded once")
+            let bad = await registry.reply(to: Data(#"{"cmd":"sessions.resume","args":{"id":"nope"}}"#.utf8))
+            XCTAssertEqual(bad, .failure("no History record nope (sessions.history lists them)"))
+            XCTAssertEqual(changes.entries.count, 1, "a refusal records nothing")
+        }
     }
 }

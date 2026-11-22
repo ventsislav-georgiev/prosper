@@ -1696,8 +1696,9 @@ final class AgentIslandController {
     /// is needed and no card is cleared. #1384 (R1369-s1): the key is held in inFlight only around each round's read
     /// and say (claimed and released on main), never across a wait, so Stop, Restart and the answer buttons work
     /// between rounds; a round whose key is held elsewhere or has a runner job just waits. A blank text: no call.
-    func sayFirst(_ key: AgentSessionKey, _ text: String, then: (@MainActor () -> Void)? = nil) {
-        guard let message = AgentWindowDriver.message(text) else { then?(); return }
+    /// #1877: `then` gets firstRun's outcome: nil when sent (or a blank text, nothing to send), else the reason shown.
+    func sayFirst(_ key: AgentSessionKey, _ text: String, then: (@MainActor (_ notSent: String?) -> Void)? = nil) {
+        guard let message = AgentWindowDriver.message(text) else { then?(nil); return }
         store?.actions[key] = AgentIsland.firstSendingText
         let io = io, pause = firstPause, clock = firstClock
         // Called by firstRun's queue; main.sync is safe, main never waits on that queue (the Task awaits a continuation).
@@ -1729,7 +1730,7 @@ final class AgentIslandController {
                     store?.actions[key] = nil
                 }
             }
-            then?()
+            then?(why)
         }
     }
 

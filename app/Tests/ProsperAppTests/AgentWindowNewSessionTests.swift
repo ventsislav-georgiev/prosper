@@ -68,7 +68,7 @@ extension AgentWindowD1Tests {
             }
             for (s, text) in [(a, "Example task for api"), (b, "Example task for web")] {
                 let done = expectation(description: "then \(s.name)")
-                island.sayFirst(s.key, text) { done.fulfill() }
+                island.sayFirst(s.key, text) { _ in done.fulfill() }
                 wait(for: [done], timeout: 10)
             }
             XCTAssertEqual(island.unsentFirst[a.key], "Example task for api")

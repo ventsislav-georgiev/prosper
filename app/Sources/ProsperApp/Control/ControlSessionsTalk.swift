@@ -75,7 +75,7 @@ enum ControlSessionsTalk {
         guard s.state == .idle || s.state == .done else {
             throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)
         }
-        let key = s.key, once = Once()
+        let key = s.key, once = Once<AgentWindowOutcome>()
         try start(s, in: st, changes: changes, what: "message", run: { AgentWindowDriver(key: key, io: $0).send(message) },
                   then: { once.give($0) })
         let sleep = Self.sleep, bound = Self.bound
@@ -91,15 +91,43 @@ enum ControlSessionsTalk {
         return ControlChange(summary: "\(s.title): \(message)", result: result, verb: "messaged")
     }
 
-    /// The first of the driver's outcome and the bound (nil), handed to the one waiter whichever comes first.
-    @MainActor private final class Once {
-        private var given = false, value: AgentWindowOutcome?, waiter: CheckedContinuation<AgentWindowOutcome?, Never>?
-        func give(_ r: AgentWindowOutcome?) {
+    // MARK: - sessions.resume with a message
+
+    /// #1877: how long sessions.resume waits for its message: the revive, Claude's start and the first message's rounds
+    /// (AgentIslandController.firstWait, 90 s) do not fit under ControlCLI.replyTimeout (70 s), so 60 s (kits.install's
+    /// deadline): a later outcome is {"delivered": "unknown"} while sayFirst keeps trying. One-shot wait through `sleep`.
+    static var resumeBound = 60.0
+    static let resumeUnknownNote = "resumed; no outcome for the message within the wait: Prosper keeps trying to type it until "
+        + "\(Int(AgentIslandController.firstWait)) s after the resume; sessions.wait or sessions.screen tells"
+
+    /// sessions.resume (ControlSessions.resume): the change is recorded once the resume runs, whatever the message does.
+    /// Without a message the reply is the name, at once. With one it waits (at most `resumeBound`) for sayFirst:
+    /// {"name", "delivered": true}; a failure throws naming the resume and why; no outcome in time is "unknown".
+    static func resume(_ args: [String: ControlJSON], changes: ControlChanges) async throws -> ControlJSON {
+        let once = Once<String?>()
+        let c = try ControlSessions.resume(args) { once.give(.some($0)) }
+        changes.record(command: "sessions.resume", summary: c.summary, verb: c.verb, undo: c.undo)
+        guard ControlSessions.string(args, "message") != nil else { return c.result }
+        let sleep = Self.sleep, bound = Self.resumeBound
+        let timer = Task { @MainActor in await sleep(bound); once.give(nil) }
+        let outcome = await withCheckedContinuation { once.wait($0) }
+        timer.cancel()
+        switch outcome {
+        case .some(.some(let failure)): throw ControlError(failure)
+        case .some(nil): return .object(["name": c.result, "delivered": .bool(true)])
+        case nil: return .object(["name": c.result, "delivered": .string("unknown"), "note": .string(resumeUnknownNote)])
+        }
+    }
+
+    /// The first of the outcome and the bound (nil), handed to the one waiter whichever comes first.
+    @MainActor final class Once<T: Sendable> {
+        private var given = false, value: T?, waiter: CheckedContinuation<T?, Never>?
+        func give(_ r: T?) {
             guard !given else { return }
             given = true; value = r
             waiter?.resume(returning: r); waiter = nil
         }
-        func wait(_ c: CheckedContinuation<AgentWindowOutcome?, Never>) {
+        func wait(_ c: CheckedContinuation<T?, Never>) {
             if given { c.resume(returning: value) } else { waiter = c }
         }
     }
