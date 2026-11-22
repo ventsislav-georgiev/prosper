@@ -16,6 +16,8 @@ final class ControlSessionsTalkTests: XCTestCase {
         var after = "working"
         var said: [String] = []
         var keys: [[String]] = []
+        /// dch --say --json's answer.
+        var reply = #"{"result":"ok"}"#
 
         var io: AgentPromptIO {
             AgentPromptIO(read: { _ in self.lock.withLock { self.screen } }, status: { _ in self.lock.withLock { self.status } },
@@ -23,7 +25,7 @@ final class ControlSessionsTalkTests: XCTestCase {
                           keys: { _, k in self.lock.withLock { self.keys.append(k); self.status = self.after } },
                           say: { _, t in
                               self.lock.withLock { self.said.append(t); self.status = self.after }
-                              return #"{"result":"ok"}"#
+                              return self.lock.withLock { self.reply }
                           })
         }
     }
@@ -37,13 +39,16 @@ final class ControlSessionsTalkTests: XCTestCase {
     var free = true
 
     @MainActor
-    func withSeams(_ store: AgentIslandStore?, dch: FakeDch = FakeDch(), _ body: (ControlChanges) throws -> Void) rethrows {
+    func withSeams(_ store: AgentIslandStore?, dch: FakeDch = FakeDch(), _ body: (ControlChanges) async throws -> Void) async rethrows {
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow,
-                     ControlSessionsTalk.act, ControlSessionsTalk.read)
+                     ControlSessionsTalk.act, ControlSessionsTalk.read, ControlSessionsTalk.bound, ControlSessionsTalk.sleep)
         defer {
             (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow) = (saved.0, saved.1, saved.2)
             (ControlSessionsTalk.act, ControlSessionsTalk.read) = (saved.3, saved.4)
+            (ControlSessionsTalk.bound, ControlSessionsTalk.sleep) = (saved.5, saved.6)
         }
+        // #1875: a lost outcome ends a row in seconds (the default sleep is cancelled once an outcome lands).
+        ControlSessionsTalk.bound = 2
         ControlSessions.model = { nil }
         ControlSessions.islandStore = { store }
         ControlSessions.showWindow = { nil }
@@ -60,7 +65,7 @@ final class ControlSessionsTalkTests: XCTestCase {
         ControlSessionsTalk.read = { key, done in self.reads.append(key); self.pendingRead = done }
         let changes = ControlChanges()
         changes.present = { text, _ in self.notices.append(text) }
-        try body(changes)
+        try await body(changes)
     }
 
     func args(_ d: [String: String]) -> [String: ControlJSON] { d.mapValues { .string($0) } }
@@ -69,6 +74,17 @@ final class ControlSessionsTalkTests: XCTestCase {
     func refused<T>(_ expr: @autoclosure () throws -> T, _ message: String, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertThrowsError(try expr(), file: file, line: line) {
             XCTAssertEqual(($0 as? ControlError)?.message, message, file: file, line: line)
+        }
+    }
+
+    /// `refused` for an awaited call (an autoclosure cannot await).
+    @MainActor
+    func refusedAsync<T>(_ expr: () async throws -> T, _ message: String, file: StaticString = #filePath, line: UInt = #line) async {
+        do {
+            _ = try await expr()
+            XCTFail("no error, expected: \(message)", file: file, line: line)
+        } catch {
+            XCTAssertEqual((error as? ControlError)?.message, message, file: file, line: line)
         }
     }
 
@@ -111,17 +127,17 @@ final class ControlSessionsTalkTests: XCTestCase {
     // MARK: - sessions.say
 
     /// The composer's send through the human-click path: the driver's say with the text, confirmed by Claude starting
-    /// work; the change names the session and has no undo.
+    /// work; #1875: the reply waits for that outcome and says delivered; the change names the session, no undo.
     @MainActor
-    func testSayRunsTheDriversSendOnTheHumanPath() throws {
+    func testSayRunsTheDriversSendOnTheHumanPath() async throws {
         let st = base.store([base.session("api", .idle, alias: "API")])
         let dch = FakeDch()
-        try withSeams(st, dch: dch) { changes in
-            let c = try ControlSessionsTalk.say(args(["name": "api", "text": "run the tests"]), changes: changes)
+        try await withSeams(st, dch: dch) { changes in
+            let c = try await ControlSessionsTalk.say(args(["name": "api", "text": "run the tests"]), changes: changes)
             XCTAssertEqual(acted, ["api"])
             XCTAssertEqual(dch.said, ["run the tests"])
             XCTAssertEqual(outcomes, [.done])
-            XCTAssertEqual(c.result, .string("api"))
+            XCTAssertEqual(c.result, .object(["delivered": .bool(true)]))
             XCTAssertEqual(c.summary, "API: run the tests", "the notice names the session")
             XCTAssertEqual(c.verb, "messaged")
             XCTAssertTrue(c.undo == nil, "no inverse")
@@ -129,56 +145,102 @@ final class ControlSessionsTalkTests: XCTestCase {
         }
     }
 
-    /// A failure the driver finds after the reply (here a prompt on screen) is a notice naming the session.
+    /// #1875: the outcome lands after say awaits (the real path hands it back on main later): the reply waits for it.
     @MainActor
-    func testSayFailureLaterIsANoticeNamingTheSession() throws {
+    func testSayWaitsForAnOutcomeThatLandsLater() async throws {
+        let st = base.store([base.session("api", .idle, alias: "API")])
+        try await withSeams(st) { changes in
+            ControlSessionsTalk.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
+            ControlSessionsTalk.act = { _, _, done in Task { @MainActor in done(.done) }; return true }
+            let c = try await ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            XCTAssertEqual(c.result, .object(["delivered": .bool(true)]))
+        }
+    }
+
+    /// A failure the driver finds (here a prompt on screen) is an error naming the session, and still a notice.
+    @MainActor
+    func testSayFailureLaterIsANoticeNamingTheSession() async throws {
         let st = base.store([base.session("api", .done, alias: "API")])
         let dch = FakeDch()
         dch.screen = Self.permission
-        try withSeams(st, dch: dch) { changes in
-            _ = try ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+        try await withSeams(st, dch: dch) { changes in
+            do {
+                _ = try await ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+                XCTFail("a prompt on screen is not delivered")
+            } catch let e as ControlError {
+                XCTAssertTrue(e.message.hasPrefix("API: not delivered: "), e.message)
+            }
             XCTAssertEqual(dch.said, [], "nothing typed over a prompt")
             XCTAssertEqual(notices.count, 1)
             XCTAssertEqual(notices.last?.hasPrefix("Agent's message to API failed: "), true, "\(notices)")
         }
     }
 
-    /// The late-failure reason is outside text too: a hidden character in it is dropped from the notice.
+    /// #1875 (session-tokens, 2026-11-22): dch --say skips over a composer that already holds a draft; the ctl reply
+    /// was ok and nothing showed. Now the reply is an error naming the draft.
     @MainActor
-    func testSayFailureReasonIsCleaned() throws {
+    func testSayOverADraftThrowsTheReason() async throws {
+        let st = base.store([base.session("api", .idle, alias: "API")])
+        let dch = FakeDch()
+        dch.reply = #"{"result":"skipped","reason":"draft"}"#
+        await withSeams(st, dch: dch) { changes in
+            await refusedAsync({ try await ControlSessionsTalk.say(self.args(["name": "api", "text": "(end of note)"]), changes: changes) },
+                               "API: not delivered: \(AgentWindowText.draft)")
+            XCTAssertEqual(outcomes, [.failed(AgentWindowText.draft)])
+            XCTAssertEqual(notices, ["Agent's message to API failed: \(AgentWindowText.draft)"], "the UI notice stays")
+        }
+    }
+
+    /// The failure reason is outside text too: a hidden character in it is dropped from the error and the notice.
+    @MainActor
+    func testSayFailureReasonIsCleaned() async throws {
         let st = base.store([base.session("api", .done, alias: "API")])
-        try withSeams(st) { changes in
+        await withSeams(st) { changes in
             ControlSessionsTalk.act = { s, _, done in done(.failed("no\u{202E}pe")); return true }
-            _ = try ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            await refusedAsync({ try await ControlSessionsTalk.say(self.args(["name": "api", "text": "go on"]), changes: changes) },
+                               "API: not delivered: nope")
             XCTAssertEqual(notices, ["Agent's message to API failed: nope"])
+        }
+    }
+
+    /// #1875: no outcome within the bound is not an error: {"delivered": "unknown", note}.
+    @MainActor
+    func testSayWithoutOutcomeInTimeIsUnknown() async throws {
+        let st = base.store([base.session("api", .idle, alias: "API")])
+        try await withSeams(st) { changes in
+            ControlSessionsTalk.sleep = { _ in }
+            ControlSessionsTalk.act = { _, _, _ in true }
+            let c = try await ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            XCTAssertEqual(c.result, .object(["delivered": .string("unknown"), "note": .string(ControlSessionsTalk.unknownNote)]))
         }
     }
 
     /// Blocked, working, a row lock, Claude not in front, a held session and an unknown name are errors; none but the
     /// held one reaches the human-click path, and nothing is typed.
     @MainActor
-    func testSayRefusalsTypeNothing() throws {
+    func testSayRefusalsTypeNothing() async throws {
         var away = base.session("away", .idle)
         away.claudeForeground = false
         let st = base.store([base.session("ask", .blocked), base.session("busy", .working), base.session("api", .idle), away])
         st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "api")] = AgentIsland.restartingText
         let dch = FakeDch()
-        try withSeams(st, dch: dch) { changes in
-            @MainActor func say(_ name: String) throws { _ = try ControlSessionsTalk.say(args(["name": name, "text": "hi"]), changes: changes) }
-            refused(try say("ask"), AgentWindowText.blocked)
-            refused(try say("busy"), AgentWindowText.working)
-            refused(try say("api"), AgentWindowControls.lockPlaceholder(AgentIsland.restartingText))
-            refused(try say("away"), AgentWindowText.notForeground)
-            refused(try say("nope"), "no live session named nope (sessions.list lists them)")
+        await withSeams(st, dch: dch) { changes in
+            @MainActor func say(_ name: String) async throws { _ = try await ControlSessionsTalk.say(args(["name": name, "text": "hi"]), changes: changes) }
+            await refusedAsync({ try await say("ask") }, AgentWindowText.blocked)
+            await refusedAsync({ try await say("busy") }, AgentWindowText.working)
+            await refusedAsync({ try await say("api") }, AgentWindowControls.lockPlaceholder(AgentIsland.restartingText))
+            await refusedAsync({ try await say("away") }, AgentWindowText.notForeground)
+            await refusedAsync({ try await say("nope") }, "no live session named nope (sessions.list lists them)")
             XCTAssertEqual(acted, [])
             st.actions = [:]
             free = false
-            refused(try say("api"), AgentWindowText.busy)
+            await refusedAsync({ try await say("api") }, AgentWindowText.busy)
             XCTAssertEqual(acted, ["api"])
             XCTAssertEqual(dch.said, [])
         }
-        try withSeams(nil) { changes in
-            refused(try ControlSessionsTalk.say(args(["name": "api", "text": "hi"]), changes: changes), ControlSessions.islandOff)
+        await withSeams(nil) { changes in
+            await refusedAsync({ try await ControlSessionsTalk.say(self.args(["name": "api", "text": "hi"]), changes: changes) },
+                               ControlSessions.islandOff)
         }
     }
 
@@ -186,12 +248,12 @@ final class ControlSessionsTalkTests: XCTestCase {
 
     /// Esc only while the list says working, through the driver (which presses it only with no prompt on screen).
     @MainActor
-    func testInterruptPressesEscOnlyWhileWorking() throws {
+    func testInterruptPressesEscOnlyWhileWorking() async throws {
         let st = base.store([base.session("api", .working), base.session("idle", .idle), base.session("ask", .blocked)])
         let dch = FakeDch()
         dch.status = "working"
         dch.after = "idle"
-        try withSeams(st, dch: dch) { changes in
+        try await withSeams(st, dch: dch) { changes in
             refused(try ControlSessionsTalk.interrupt(args(["name": "idle"]), changes: changes), AgentWindowText.notWorking)
             refused(try ControlSessionsTalk.interrupt(args(["name": "ask"]), changes: changes), AgentWindowText.notWorking)
             XCTAssertEqual(acted, [])
@@ -210,13 +272,13 @@ final class ControlSessionsTalkTests: XCTestCase {
     /// without one: one read starts (none more while it runs), the reply says reading; once it lands the question is
     /// there; a changed activity reads again.
     @MainActor
-    func testPromptReadsTheCardOrOneScreenRead() throws {
+    func testPromptReadsTheCardOrOneScreenRead() async throws {
         let dir = "/tmp/dch-test-\(UUID().uuidString)"
         let st = base.store([base.session("api", .idle, dir: dir), base.session("ask", .blocked, dir: dir),
                              base.session("card", .blocked, dir: dir)])
         let p = try XCTUnwrap(AgentPrompt.screen(Self.permission)?.prompt)
         st.cards[AgentSessionKey(dir: dir, name: "card")] = .prompt(p)
-        try withSeams(st) { _ in
+        try await withSeams(st) { _ in
             let idle = object(try ControlSessionsTalk.prompt(args(["name": "api"])))
             XCTAssertEqual(idle["waiting"], .bool(false))
             XCTAssertTrue(idle["question"] == nil)
@@ -249,10 +311,10 @@ final class ControlSessionsTalkTests: XCTestCase {
 
     /// Screen text in a reply is outside text: a bidi override in the question is dropped and flagged as hidden.
     @MainActor
-    func testPromptStripsHiddenCharacters() throws {
+    func testPromptStripsHiddenCharacters() async throws {
         let dir = "/tmp/dch-test-\(UUID().uuidString)"
         let st = base.store([base.session("ask", .blocked, dir: dir)])
-        try withSeams(st) { _ in
+        try await withSeams(st) { _ in
             _ = try ControlSessionsTalk.prompt(args(["name": "ask"]))
             pendingRead?(Self.permission.replacingOccurrences(of: "Do you want", with: "Do\u{202E} you want"))
             let r = object(try ControlSessionsTalk.prompt(args(["name": "ask"])))
@@ -273,5 +335,6 @@ final class ControlSessionsTalkTests: XCTestCase {
         XCTAssertEqual(r.commands["sessions.interrupt"]?.mutates, true)
         XCTAssertEqual(r.commands["sessions.prompt"]?.mutates, false)
         XCTAssertEqual(r.commands["sessions.say"]?.args["text"]?.required, true)
+        XCTAssertTrue(r.commands["sessions.say"]?.runAsync != nil, "#1875: say is awaited for its outcome")
     }
 }

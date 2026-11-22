@@ -60,17 +60,48 @@ enum ControlSessionsTalk {
         return s.claudeForeground == false ? AgentWindowText.notForeground : nil
     }
 
+    /// #1875: how long say waits for the driver's outcome (dch --say's composer gate presses Enter more than once,
+    /// then the driver's confirm reads, about 6 s). One-shot wait, no poll; rows shorten it through `sleep`.
+    static var bound = 20.0
+    static var sleep: @Sendable (Double) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000)) }
+    static let unknownNote = "no outcome within the wait: the message may still be on its way; sessions.wait or sessions.screen tells"
+
     /// The composer's send: only while the list says idle or done (a blocked session's prompt is never typed into).
-    /// The reply is the start; a failure the driver finds later (a prompt came up, nothing confirmed) shows as a notice.
-    static func say(_ args: [String: ControlJSON], changes: ControlChanges) throws -> ControlChange {
+    /// #1875: waits (at most `bound`) for the driver: {"delivered": true}; a failure (a draft in the composer, a prompt,
+    /// nothing confirmed) throws its reason; no outcome in time is {"delivered": "unknown"}. The UI notice stays.
+    static func say(_ args: [String: ControlJSON], changes: ControlChanges) async throws -> ControlChange {
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
         let message = try text(args)
         guard s.state == .idle || s.state == .done else {
             throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)
         }
-        let key = s.key
-        try start(s, in: st, changes: changes, what: "message") { AgentWindowDriver(key: key, io: $0).send(message) }
-        return ControlChange(summary: "\(s.title): \(message)", result: .string(s.name), verb: "messaged")
+        let key = s.key, once = Once()
+        try start(s, in: st, changes: changes, what: "message", run: { AgentWindowDriver(key: key, io: $0).send(message) },
+                  then: { once.give($0) })
+        let sleep = Self.sleep, bound = Self.bound
+        let timer = Task { @MainActor in await sleep(bound); once.give(nil) }
+        let outcome = await withCheckedContinuation { once.wait($0) }
+        timer.cancel()
+        let result: ControlJSON
+        switch outcome {
+        case .failed(let why)?: throw ControlError("\(s.title): not delivered: \(OutsideText.shown(why, max: 200))")
+        case nil: result = .object(["delivered": .string("unknown"), "note": .string(unknownNote)])
+        case .done?, .answered(_)?: result = .object(["delivered": .bool(true)])
+        }
+        return ControlChange(summary: "\(s.title): \(message)", result: result, verb: "messaged")
+    }
+
+    /// The first of the driver's outcome and the bound (nil), handed to the one waiter whichever comes first.
+    @MainActor private final class Once {
+        private var given = false, value: AgentWindowOutcome?, waiter: CheckedContinuation<AgentWindowOutcome?, Never>?
+        func give(_ r: AgentWindowOutcome?) {
+            guard !given else { return }
+            given = true; value = r
+            waiter?.resume(returning: r); waiter = nil
+        }
+        func wait(_ c: CheckedContinuation<AgentWindowOutcome?, Never>) {
+            if given { c.resume(returning: value) } else { waiter = c }
+        }
     }
 
     // MARK: - sessions.interrupt
@@ -85,11 +116,13 @@ enum ControlSessionsTalk {
     }
 
     private static func start(_ s: AgentSession, in st: AgentIslandStore, changes: ControlChanges, what: String,
-                              run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome) throws {
+                              run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome,
+                              then: @escaping @MainActor @Sendable (AgentWindowOutcome) -> Void = { _ in }) throws {
         if let why = refusal(s, in: st) { throw ControlError(why) }
         let title = s.title
         let ok = act(s, run) { r in
             if case .failed(let why) = r { changes.present("Agent's \(what) to \(OutsideText.shown(title, max: 60)) failed: \(OutsideText.shown(why, max: 200))", nil) }
+            then(r)
         }
         guard ok else { throw ControlError(AgentWindowText.busy) }
     }
@@ -144,10 +177,16 @@ extension ControlRegistry {
     /// #1839: wired in ControlRegistry.standard().
     static func registerSessionsTalk(_ r: inout ControlRegistry) {
         let name = ControlArg(type: "string", required: true, summary: "the session's dch name or shown title")
-        r.register(.change(name: "sessions.say", summary: "Send a message to an idle session, as its composer does (no undo).", args: [
+        // #1875: awaited (reply(to:) calls runAsync); the record is ControlCommand.change's, made once delivered or unknown.
+        r.register(ControlCommand(name: "sessions.say", summary: "Send a message to an idle session, as its composer does, and wait (up to 20 s) for the outcome: {delivered: true}, an error naming why it was not sent (a draft already in the composer, a prompt, nothing confirmed), or {delivered: \"unknown\", note} when no outcome came in time (no undo).", args: [
             "name": name,
             "text": ControlArg(type: "string", required: true, summary: "the message; line breaks and tabs allowed, no other control characters"),
-        ]) { reg, a in try ControlSessionsTalk.say(a, changes: reg.changes) })
+        ], mutates: true, run: { _, _ in throw ControlError("sessions.say waits for its outcome: send it through the control channel") },
+           runAsync: { reg, a in
+            let c = try await ControlSessionsTalk.say(a, changes: reg.changes)
+            reg.changes.record(command: "sessions.say", summary: c.summary, verb: c.verb, undo: c.undo)
+            return c.result
+        }))
         r.register(.change(name: "sessions.interrupt", summary: "Press Esc in a working session, as its Interrupt does (no undo).",
                            args: ["name": name]) { reg, a in try ControlSessionsTalk.interrupt(a, changes: reg.changes) })
         r.register(ControlCommand(name: "sessions.prompt",

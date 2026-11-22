@@ -47,8 +47,8 @@
   {
    "name": "no-notice-clean",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "OutsideText.shown(why, max: 200)",
-   "new": "why",
+   "old": "failed: \\(OutsideText.shown(why, max: 200))\", nil)",
+   "new": "failed: \\(why)\", nil)",
    "expect": "killed"
   },
   {

@@ -2410,6 +2410,9 @@ tag from the now-released section and put it on the new top draft.
 - New `prosper ctl updates.install` lets an agent install a found Prosper update right away (Prosper
   relaunches by itself), and an update found in the background now installs in the same check
   instead of waiting for the next one, so new betas arrive up to 30 minutes sooner. (#1871)
+- `ctl sessions.say` now waits for the message to go through and answers delivered, the reason it
+  was not (for example a draft already in Claude's input), or unknown, instead of always answering
+  ok. (#1875)
 
 ## v2.174.0
 
