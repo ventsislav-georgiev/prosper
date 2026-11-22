@@ -1432,6 +1432,9 @@ tag from the now-released section and put it on the new top draft.
 - Claude Account Pool: terminal sessions can start through the pool with the shipped ccpool-launch
   script (its path is shown in Settings), a ccpool-statusline script shows which account a Claude
   Code session is using, and extensions can read the pool's state with host.ccpool.status().
+- Ships dch 1.146.0 (was 1.143.0). A message sent to a session that has just started (or one long enough to
+  wrap over several lines) is no longer reported as sent while it still sits unsent in Claude Code's input:
+  dch presses Enter again until the input clears, or says it was not submitted. (#1877)
 - Ships dch 1.143.0 (was 1.74.0). dch's own session tabs follow your session groups (Settings),
   one tab per group (a group named Sessions or History, or repeating an earlier name, is skipped),
   and the selected tab stays in view when they overflow. A kept session's hidden view no longer
