@@ -14,7 +14,8 @@
    "file": "app/Sources/ProsperApp/Preferences.swift",
    "old": "Keys.agentIslandSidekickPattern) ?? AgentIsland.sidekickDefault)]",
    "new": "Keys.agentIslandSidekickPattern).map { _ in AgentIsland.sidekickDefault } ?? AgentIsland.sidekickDefault)]",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: read only (the default is read through a map with the same value; nothing is written)"
   },
   {
    "name": "max_count",

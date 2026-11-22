@@ -282,17 +282,17 @@ def hunks_of(diff):
 
 
 def changed_lists(files, root, since):
-    """Lists to run with their priority (lower first): {file: rank}. All (rank 2) when `since` is unknown to
-    git. Else: 0 a broken anchor in a changed mutated file; 1 the list JSON changed; (2, -newest commit time)
+    """Lists to run with their priority (lower first): {file: rank}. All (rank 3) when `since` is unknown to
+    git. Else: 0 a broken anchor in a changed mutated file; 1 the list JSON changed; (3, -newest commit time)
     a diff hunk within 3 lines of a mutant's `old`, or a changed test file of a list-specific (not COMMON)
     filter class."""
     def git(*a):
         return subprocess.run(["git", "-C", root] + list(a), capture_output=True, text=True)
     if git("rev-parse", "--verify", "-q", since + "^{commit}").returncode != 0:
-        return {f: (2, 0) for f in files}
+        return {f: (3, 0) for f in files}
     d = git("diff", "--name-only", since + "..HEAD")
     if d.returncode != 0:
-        return {f: (2, 0) for f in files}
+        return {f: (3, 0) for f in files}
     changed = set(d.stdout.split())
     tests = {}  # test file -> source text, only those under app/Tests
     for dp, _, fs in os.walk(os.path.join(root, "app", "Tests")):
@@ -340,7 +340,7 @@ def changed_lists(files, root, since):
             rx = re.compile(r"\b(class|extension|struct)\s+" + c)
             why |= {t for t, src in tests.items() if t in changed and rx.search(src)}
         if why:
-            keep[f] = (2, -when(why))
+            keep[f] = (3, -when(why))
     return keep
 
 
@@ -350,7 +350,7 @@ EST_LIST, EST_MUTANT = 100, 85
 
 def plan(pattern, shards, root=REPO, since=None, budget=0, weekday=None):
     """Matrix of at most `shards` jobs. Without a `budget`: every list, greedy by estimated time. With one:
-    lists in priority order (with `since`: changed_lists' rank, then the rotation slice of `weekday`, 0 =
+    lists in priority order (with `since`: changed_lists' rank 0 and 1, then the rotation slice of `weekday` (rank 2), then its other changed lists; 0 =
     Monday: entry number % 7 == weekday) each go to the least loaded job that stays within `budget`, else
     to a new job, else they are deferred: never planned, printed to stderr and $GITHUB_STEP_SUMMARY."""
     files = sorted(glob.glob(os.path.join(root, "scripts", "mutants", "lists", pattern)))
@@ -364,7 +364,7 @@ def plan(pattern, shards, root=REPO, since=None, budget=0, weekday=None):
         if weekday is not None:
             for f in files:
                 if f not in rank and int(os.path.basename(f).split(".")[0]) % 7 == weekday:
-                    rank[f] = (3, 0)
+                    rank[f] = (2, 0)  # ahead of changed lists: an overflowed changed list still leaves the slice day
         files = sorted(rank, key=lambda f: (rank[f], f))
     sizes = {f: cost(f) for f in files}
     jobs, deferred = [], []

@@ -21,7 +21,8 @@
    "file": "app/Sources/ProsperApp/Preferences.swift",
    "old": "forKey: Keys.xrayHideAgentMessages) as? Bool ?? true",
    "new": "forKey: Keys.xrayHideAgentMessages) as? Bool ?? false",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: read only (flips the default of a read of a display flag)"
   },
   {
    "name": "hide-not-saved",

@@ -7,14 +7,16 @@
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
    "old": "Layout(r.id) { throw ControlError(message(why)) }",
    "new": "Layout(UUID()) { throw ControlError(message(why)) }",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: in-model layout id, no file (a fresh UUID asks the model about no real layout)"
   },
   {
    "name": "delete_ignores_refusal",
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
    "old": "{ throw ControlError(message(why)) }\n        return ControlChange(summary: \"\\(r.name) (final",
    "new": "{ _ = why }\n        return ControlChange(summary: \"\\(r.name) (final",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: deletes less (drops the refusal throw, so a refused delete does nothing more)"
   },
   {
    "name": "delete_not_final_summary",
@@ -28,7 +30,8 @@
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
    "old": "a layout\")",
    "new": "a layout\", undo: {})",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: deletes less (an empty undo closure, so nothing is restored or removed)"
   }
  ]
 }

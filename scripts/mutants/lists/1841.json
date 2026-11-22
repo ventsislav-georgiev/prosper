@@ -21,7 +21,8 @@
    "file": "app/Sources/ProsperApp/Control/ControlLayouts.swift",
    "old": "Layout(made) })",
    "new": "Layout(UUID()) })",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: in-model layout id, no file (undo targets a fresh UUID, so it removes nothing)"
   },
   {
    "name": "new_leaves_editing_on",

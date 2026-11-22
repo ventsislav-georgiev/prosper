@@ -21,7 +21,8 @@
    "file": "app/Sources/ProsperApp/Preferences.swift",
    "old": "agentControlKey) as? Bool ?? true }",
    "new": "agentControlKey) as? Bool ?? false }",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: read only (flips the default of a read; no write, no control action)"
   },
   {
    "name": "no-record",

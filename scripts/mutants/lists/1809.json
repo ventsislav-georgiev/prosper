@@ -42,7 +42,8 @@
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
    "old": "(made)\n            m.setLayoutEditing(editing)\n            throw",
    "new": "(UUID())\n            m.setLayoutEditing(editing)\n            throw",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "#1884/#1885 past GUARD: in-model layout id, no file (a fresh UUID, so the rollback finds no layout)"
   },
   {
    "name": "layout_rows",

@@ -146,10 +146,23 @@ class SincePlan(unittest.TestCase):
         self.add_list(51, "app/Sources/A.swift", "a ")  # the list JSON changed
         self.commit_at("app/Sources/A.swift", "a", 1700000400)
         order = lambda m: [os.path.basename(p) for j in m["include"] for p in j["lists"].split()]
-        # broken anchor, changed JSON, hunks newest first, then Tuesday's slice in file order (1.json is in it too)
+        # #1886: broken anchor, changed JSON, Tuesday's slice in file order (1.json, 57.json), then hunks newest first
         self.assertEqual(order(run.plan("*.json", 1, self.r, base, 185 * 6, 1)),
-                         ["50.json", "51.json", "53.json", "52.json", "1.json", "57.json"])
-        self.assertEqual(order(run.plan("*.json", 1, self.r, base, 185 * 3, 1)), ["50.json", "51.json", "53.json"])
+                         ["50.json", "51.json", "1.json", "57.json", "53.json", "52.json"])
+        self.assertEqual(order(run.plan("*.json", 1, self.r, base, 185 * 3, 1)), ["50.json", "51.json", "1.json"])
+
+    def test_changed_lists_that_fill_capacity_leave_the_whole_slice_planned(self):
+        for n, src in ((52, "R"), (53, "S"), (54, "T")):
+            self.w(f"app/Sources/{src}.swift", "a\nq\nb\n")
+            self.add_list(n, f"app/Sources/{src}.swift", "q\n")
+        self.add_list(57, "app/Sources/Z.swift", "z")  # 57 % 7 = 64 % 7 = 1 % 7 = 1: Tuesday's slice (with 1.json)
+        self.add_list(64, "app/Sources/Z.swift", "z")
+        self.commit_at("README.md", "x", 1700000000)
+        base = self.git("rev-parse", "HEAD").stdout.strip()
+        for i, src in enumerate("RST"):  # three changed lists (rank 3), 185 s each, alone over the capacity
+            self.commit_at(f"app/Sources/{src}.swift", "a\nq\nb2\n", 1700000100 + i)
+        order = lambda m: [os.path.basename(p) for j in m["include"] for p in j["lists"].split()]
+        self.assertEqual(order(run.plan("*.json", 1, self.r, base, 185 * 3, 1)), ["1.json", "57.json", "64.json"])  # all 3 changed lists deferred
 
 
 class FilterRegex(unittest.TestCase):
