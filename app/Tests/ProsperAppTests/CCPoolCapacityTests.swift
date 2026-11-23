@@ -149,6 +149,23 @@ final class CCPoolCapacityTests: XCTestCase {
         XCTAssertEqual(C.capacity(of: nil, among: [CCPoolCapacityState(dollars: .nan, points: .nan)]), 1.0)
     }
 
+    /// #1910: place's rank reads a row with no reset as 0 used (CCPoolCore.place). That is right only because such a
+    /// row is the never-sampled one, at 0: learn sets the reset with any running max, and a state-file row without a
+    /// number reset is dropped. A reply with no reset never reaches learn (CCPoolConnection.learn's guard).
+    func testRowWithoutResetIsOnlyTheUnsampledZero() throws {
+        let inputs: [(Double, Double, Double)] = [(1200, 0.9, 5000), (1200, .nan, 5000), (1200, 0.9, .nan),
+                                                  (-5, 0.9, 5000), (1200, 50, 5000), (0, 0.97, 0)]
+        for (output, util, reset) in inputs {
+            let s = C.learn(CCPoolCapacityState(), model: nil, usage: CCPoolTokenUsage(output: output), utilization: util, reset: reset)
+            XCTAssertTrue(s.reset != nil || s.maxUtilization == 0, "\(output) \(util) \(reset)")
+        }
+        for json in [#"{"x":{"reset":null,"maxUtilization":0.9,"pendingDollars":0,"dollars":1,"points":1}}"#,
+                     #"{"x":{"maxUtilization":0.9,"pendingDollars":0,"dollars":1,"points":1}}"#] {
+            let rows = try JSONDecoder().decode([String: CCPoolCapacityState.Row].self, from: Data(json.utf8))
+            XCTAssertTrue(rows["x"]?.state == nil, json)
+        }
+    }
+
     func testStateCodableRoundTrip() throws {
         let s = feed(CCPoolCapacityState(), output: 1200, utils: [0.10, 0.12, 0.15])
         let back = try JSONDecoder().decode(CCPoolCapacityState.self, from: JSONEncoder().encode(s))
