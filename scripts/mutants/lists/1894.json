@@ -1,0 +1,48 @@
+{
+ "entry": "1894",
+ "filter": "AgentWindowLayoutEditTests/testAgentWindowLayoutEditCloseToOnePaneDeletesTheLayoutEditingOrNot",
+ "mutants": [
+  {
+   "name": "close-pane-no-delete",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "cancelFormOfClosed(pane, shown: shown); closedToOne()",
+   "new": "cancelFormOfClosed(pane, shown: shown)",
+   "expect": "killed"
+  },
+  {
+   "name": "perform-close-no-delete",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if closing != nil { closedToOne() }   // #1894\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "two-panes-delete",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "parked == nil, layout.panes.count == 1 else { return }",
+   "new": "parked == nil, layout.panes.count <= 2 else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "editing-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let left = layout.panes.first?.target\n        layoutEditing = false\n",
+   "new": "let left = layout.panes.first?.target\n",
+   "expect": "killed"
+  },
+  {
+   "name": "never-locked-show",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "= layoutLocked ? lockedShowing(id) : showing(id), l != layout",
+   "new": "= showing(id), l != layout",
+   "expect": "killed"
+  },
+  {
+   "name": "left-not-shown",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if case let .success(l) = layoutLocked ? lockedShowing(id) : showing(id), l != layout { adopt(l) }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
