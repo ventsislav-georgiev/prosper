@@ -2,11 +2,12 @@ import AppKit
 import XCTest
 @testable import ProsperApp
 
-/// #1538 (operator 2026-11-18, "Explicit edit mode"): a saved layout is locked; a pick of a session it shows focuses that
-/// pane, any other opens the single-pane view and the layout is neither rewritten nor saved (the blob byte-equal); the
-/// Layouts row or Control-<n> brings it back as it was left. Edit layout (or "+") is the behaviour before #1538. Structural
-/// changes are refused while locked. The band takes no height with nothing to show. The model only: no window is shown,
-/// no event is posted, the layouts live in a private XCTestDefaults suite; sessions are fakes ("api", "web", "docs").
+/// #1538, #1895 (operator 2026-11-23: no edit mode): on a layout the person made, a pick of a session it shows focuses that
+/// pane, any other opens the single-pane view and the layout is not rewritten (the view is never saved); the Layouts row or
+/// Control-<n> brings it back as it was left. An empty focused pane takes the next pick; Swap Session… and a pane header's
+/// drag change the layout; every change is saved at once. The band takes no height with nothing to show. The model only: no
+/// window is shown, no event is posted, the layouts live in a private XCTestDefaults suite; sessions are fakes ("api", "web",
+/// "docs").
 final class AgentWindowLayoutEditTests: XCTestCase {
     let base = AgentWindowD1Tests()
     static let blobKey = "agentWindowLayouts"
@@ -24,22 +25,21 @@ final class AgentWindowLayoutEditTests: XCTestCase {
     func row(_ name: String) -> AgentSidebar.RowID { .live(base.paneKey(name)) }
 
     /// A two-pane layout (api | web, api focused) saved as the only layout, a visible model over api, web, docs (web
-    /// blocked, so Command-J has a target) and the blob's bytes as saved. Locked unless `editing`.
+    /// blocked, so Command-J has a target) and the blob's bytes as saved. #1895: no mode; the helper keeps its name.
     @MainActor
-    func locked(editing: Bool = false) throws -> (m: AgentWindowModel, d: UserDefaults, two: PaneLayout, bytes: Data?) {
+    func locked() throws -> (m: AgentWindowModel, d: UserDefaults, two: PaneLayout, bytes: Data?) {
         let two = base.paneLayout([t("api"), t("web")])
         let d = base.layoutSuite()
         d.set(try PaneLayoutStore(layouts: [two], active: two.id, mru: [two.id]).encode(), forKey: Self.blobKey)
         let st = base.store([base.session("api", .idle), base.session("web", .blocked), base.session("docs", .idle),
                              base.session("ops", .idle)])
-        let m = base.windowModel(st, layouts: d)   // starts in Edit layout (the helper's rule)
+        let m = base.windowModel(st, layouts: d)
         m.setVisible(true)
-        m.setLayoutEditing(editing)
         return (m, d, two, d.data(forKey: Self.blobKey))
     }
 
-    /// A fresh window opens locked: no Edit layout, the saved two-pane layout locked. One layout of one pane is never
-    /// locked (nothing the person made); the gate off is never locked and a click goes into the pane as before.
+    /// #1895: a saved two-pane layout is a made layout in a fresh window (there is no mode to open in). One layout of one
+    /// pane is not (nothing the person made); the gate off never is and a click goes into the pane as before.
     @MainActor
     func testAgentWindowLayoutEditDefaultsToLockedAndTheGateOffIsUnchanged() throws {
         try withGate(true) {
@@ -48,32 +48,30 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             d.set(try PaneLayoutStore(layouts: [two], active: two.id, mru: [two.id]).encode(), forKey: Self.blobKey)
             let fresh = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: d)
             defer { fresh.close() }
-            XCTAssertFalse(fresh.layoutEditing, "a new window opens locked (the flag is never saved)")
-            XCTAssertTrue(fresh.layoutLocked)
+            XCTAssertTrue(fresh.layoutMade)
             let lone = base.windowModel(base.store([base.session("api", .idle)]), layouts: base.layoutSuite())
             defer { lone.close() }
-            lone.setLayoutEditing(false)
-            XCTAssertFalse(lone.layoutLocked, "one layout of one pane: never locked")
+            XCTAssertFalse(lone.layoutMade, "one layout of one pane: not a made layout")
         }
         try withGate(false) {
             let (m, _, two, _) = try locked()
             defer { m.close() }
-            XCTAssertFalse(m.layoutLocked, "gate off: nothing locks")
+            XCTAssertFalse(m.layoutMade, "gate off: never")
             m.click(row("docs"))
             XCTAssertTrue(m.parked == nil, "gate off: no single-pane view")
             XCTAssertEqual(m.layout.id, two.id, "gate off: the click goes into the layout as before")
         }
     }
 
-    /// Locked: a click on a session outside the layout shows it in the single-pane view; the saved layout is parked, the
-    /// blob byte-equal, no write, no Layouts row active and the view is not a layout (the store still holds one). A second
-    /// outside click stays in the same view.
+    /// #1895 rule 1: a click on a session outside the layout shows it in the single-pane view; the saved layout is parked,
+    /// the blob byte-equal, no write, no Layouts row active and the view is not a layout (the store still holds one). A
+    /// second outside click stays in the same view.
     @MainActor
     func testAgentWindowLayoutEditLockedClickOutsideOpensTheSinglePaneViewBlobByteEqual() throws {
         try withGate(true) {
             let (m, d, two, bytes) = try locked()
             defer { m.close() }
-            XCTAssertTrue(m.layoutLocked)
+            XCTAssertTrue(m.layoutMade)
             let writes = m.layoutWrites
             m.click(row("docs"))
             XCTAssertEqual(m.layout.panes.count, 1, "the single-pane view")
@@ -92,15 +90,17 @@ final class AgentWindowLayoutEditTests: XCTestCase {
     }
 
     /// The Layouts row (switchLayout) and Control-1 bring the layout back as it was left: its panes and the focus moved
-    /// before the outside click (a focus move while locked writes nothing).
+    /// before the outside click. #1895: the focus move itself is saved at once (rule 5); the view and the return write nothing.
     @MainActor
     func testAgentWindowLayoutEditReturnBringsTheLayoutBackWithItsFocus() throws {
         try withGate(true) {
-            let (m, d, two, bytes) = try locked()
+            let (m, d, two, _) = try locked()
             defer { m.close() }
             let second = try XCTUnwrap(two.order.last)
             m.focusPane(second)
             XCTAssertEqual(m.layout.focused, second)
+            XCTAssertTrue(m.layouts?.activeLayout?.focused == second, "#1895: the focus move is saved")
+            let bytes = d.data(forKey: Self.blobKey)
             m.click(row("docs"))
             XCTAssertTrue(m.switchLayout(two.id) == nil, "the Layouts row")
             XCTAssertEqual(m.layout.id, two.id)
@@ -112,12 +112,13 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.switchLayout(number: 1) == nil, "Control-1")
             XCTAssertEqual(m.layout.id, two.id)
             XCTAssertEqual(m.layout.focused, second, "Control-1 keeps the focus too")
-            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes, "never written")
+            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes, "never written after the focus move")
         }
     }
 
-    /// Locked: a click on a session the layout shows focuses its pane (as before); from the single-pane view it returns
-    /// to the layout with that pane focused. Command-J from the view to a blocked session in the layout does the same.
+    /// #1895 rule 1: a click on a session the layout shows focuses its pane (never a retarget, never the single-pane view);
+    /// from the single-pane view it returns to the layout with that pane focused. Command-J from the view does the same.
+    /// The saved panes keep their sessions; the focus is saved (rule 5).
     @MainActor
     func testAgentWindowLayoutEditLockedInsideClickFocusesItsPane() throws {
         try withGate(true) {
@@ -125,6 +126,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             defer { m.close() }
             let second = try XCTUnwrap(two.order.last)
             m.click(row("web"))
+            XCTAssertTrue(m.parked == nil && m.layout.panes.map(\.target) == two.panes.map(\.target), "focused, not retargeted")
             XCTAssertEqual(m.layout.id, two.id)
             XCTAssertEqual(m.layout.focused, second, "its pane focused")
             m.click(row("api"))
@@ -137,64 +139,70 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.nextNeedsYou(), "Command-J")
             XCTAssertEqual(m.layout.id, two.id, "Command-J returns to the layout")
             XCTAssertEqual(m.layout.focused, second, "on the blocked session's pane")
-            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes)
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), two.panes.map(\.target),
+                           "the saved panes keep their sessions")
+            XCTAssertTrue(Preferences.agentWindowLayouts(in: d).activeLayout?.focused == second, "the focus saved")
+            XCTAssertNotEqual(d.data(forKey: Self.blobKey), bytes, "the focus move is a saved change")
         }
     }
 
-    /// Edit layout is the behaviour before #1538: a click fills the focused pane and is saved once. Done saves and locks.
+    /// #1895 rule 3 (replaces #1538's Edit-layout-is-the-old-behaviour row): the pane "⋯" has Swap Session… (only for a
+    /// pane that shows a session); choosing it focuses the pane and asks its title switcher to open (swapRequest); the list
+    /// is the title switcher's and its pick replaces the pane's session, saved at once; a session another pane shows swaps.
     @MainActor
-    func testAgentWindowLayoutEditModeIsTheOldBehaviour() throws {
-        try withGate(true) {
-            let (m, d, two, bytes) = try locked(editing: true)
-            defer { m.close() }
-            XCTAssertFalse(m.layoutLocked)
-            let writes = m.layoutWrites
-            m.click(row("docs"))
-            XCTAssertTrue(m.parked == nil, "no single-pane view while editing")
-            XCTAssertEqual(m.layout.id, two.id)
-            XCTAssertTrue(m.layout.panes.first?.target == t("docs"), "into the focused pane")
-            XCTAssertEqual(m.layoutWrites, writes + 1, "saved once")
-            XCTAssertNotEqual(d.data(forKey: Self.blobKey), bytes)
-            m.setLayoutEditing(false)
-            XCTAssertTrue(m.layoutLocked, "Done locks")
-            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "Done leaves the layout saved")
-        }
-    }
-
-    /// Locked: a pane retarget (the title switcher's pick) is still refused with "Edit layout to change it"; the layout and
-    /// the blob stay. A focus move still works. #1817, #1826: Close Pane, a drop, Split, Open to the Side and the dividers
-    /// are not refused (the rows below).
-    @MainActor
-    func testAgentWindowLayoutEditLockedTitleSwitcherPickIsRefused() throws {
+    func testAgentWindowLayoutEditSwapSessionReplacesAndSaves() throws {
         try withGate(true) {
             let (m, d, two, bytes) = try locked()
             defer { m.close() }
-            let second = try XCTUnwrap(two.order.last)
-            XCTAssertEqual(PaneRefusal.layoutLocked.notice, "Edit layout to change it")
-            m.choose(row("docs"), into: second)
-            XCTAssertEqual(m.paneRefusal, .layoutLocked)
-            XCTAssertTrue(m.layout.panes.last?.target == t("web"), "no retarget")
-            XCTAssertEqual(d.data(forKey: Self.blobKey), bytes)
-            XCTAssertTrue(m.perform(.cycle(1)), "a focus move still acts")
-            XCTAssertEqual(m.layout.focused, second)
-            m.setLayoutEditing(true)
-            m.closePane(second)
-            XCTAssertEqual(m.layout.panes.count, 1, "editing: Close Pane acts")
+            let first = try XCTUnwrap(two.order.first), second = try XCTUnwrap(two.order.last)
+            XCTAssertEqual(AgentWindowControls.swapLabel, "Swap Session\u{2026}")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: second), [.pane(AgentWindowControls.swapLabel, enabled: true, verb: .swap)],
+                           "Swap Session… in the pane's ⋯ (after the pane items)")
+            XCTAssertEqual(AgentWindowMenuEntry.pane("x", enabled: true, verb: .swap).symbol, AgentMenuSymbol.swap)
+            AgentWindowControls.runPane(.swap, pane: second, in: m)
+            XCTAssertTrue(m.swapRequest == second && m.layout.focused == second, "the pane focused, its switcher asked")
+            let list = AgentPaneSwitcherList.of(AgentPaneSwitch(model: m, pane: second), dismiss: {})
+            XCTAssertEqual(list.items.map(\.id), m.switcherRows(for: second).map(\.row.id), "the title switcher's list")
+            list.pick(row("docs"))
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("api"), t("docs")], "replaced")
+            XCTAssertTrue(m.paneRefusal == nil && m.parked == nil)
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("api"), t("docs")], "saved at once")
+            XCTAssertNotEqual(d.data(forKey: Self.blobKey), bytes)
+            AgentPaneSwitcherList.of(AgentPaneSwitch(model: m, pane: first), dismiss: {}).pick(row("docs"))
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("docs"), t("api")], "a session another pane shows swaps places")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
         }
     }
 
-    /// #1826 (operator 2026-11-21): locked, Split (Command-D, the Split menu items: perform) splits at once: no notice, saved.
-    /// Edit layout turns on for the new empty pane's pick (the decision in the report): the next sidebar click fills it.
+    /// #1895 (replaces #1538's refusal row): the title switcher's pick retargets its pane with no notice and is saved; a
+    /// focus move still acts.
+    @MainActor
+    func testAgentWindowLayoutEditTitleSwitcherPickActsAndIsSaved() throws {
+        try withGate(true) {
+            let (m, d, two, _) = try locked()
+            defer { m.close() }
+            let second = try XCTUnwrap(two.order.last)
+            m.choose(row("docs"), into: second)
+            XCTAssertTrue(m.paneRefusal == nil, "no notice")
+            XCTAssertTrue(m.layout.panes.last?.target == t("docs"), "retargeted")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("api"), t("docs")], "saved")
+            XCTAssertTrue(m.perform(.cycle(1)), "a focus move still acts")
+            XCTAssertNotEqual(m.layout.focused, second)
+        }
+    }
+
+    /// #1826 (operator 2026-11-21): Split (Command-D, the Split menu items: perform) splits at once: no notice, saved.
+    /// #1895 rule 2: the new empty pane is focused and takes the next sidebar click; once filled, an outside click parks.
     @MainActor
     func testAgentWindowLayoutEditLockedSplitActsWithNoNotice() throws {
         try withGate(true) {
             let (m, _, two, _) = try locked()
             defer { m.close() }
             m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
-            XCTAssertTrue(m.layoutLocked)
+            XCTAssertTrue(m.layoutMade)
             if case .failure = m.splitting(.columns) { XCTFail("the dry run answers a split, not a refusal") }
             XCTAssertTrue(m.perform(.split(.columns)))
-            XCTAssertTrue(m.paneRefusal == nil, "no Edit layout notice")
+            XCTAssertTrue(m.paneRefusal == nil, "no notice")
             XCTAssertEqual(m.layout.panes.count, 3, "split")
             XCTAssertNotEqual(m.layout.order, two.order)
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the split is saved")
@@ -202,10 +210,12 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.parked == nil && m.layout.panes.contains { $0.target == t("docs") }, "the pick fills the new pane")
             XCTAssertEqual(m.layout.panes.count, 3)
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "and is saved")
+            m.click(row("ops"))
+            XCTAssertTrue(m.parked != nil, "the pane is filled: the next outside pick opens the single-pane view")
         }
     }
 
-    /// #1826: locked, Open to the Side (Option-click, the row menu) splits at once: no notice, Edit layout stays off, saved.
+    /// #1826: Open to the Side (Option-click, the row menu) splits at once: no notice, saved.
     @MainActor
     func testAgentWindowLayoutEditLockedOpenToTheSideActsWithNoNotice() throws {
         try withGate(true) {
@@ -214,7 +224,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             if case .failure = m.showing(row("docs"), placement: .side) { XCTFail("the dry run answers a split") }
             m.openToTheSide(row("docs"))
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
+            XCTAssertTrue(m.paneRefusal == nil && m.layoutMade, "no notice")
             XCTAssertEqual(m.layout.panes.count, 3, "the side split")
             XCTAssertTrue(m.layout.panes.contains { $0.target == t("docs") })
             XCTAssertTrue(m.parked == nil)
@@ -222,8 +232,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
-    /// #1826: locked, a divider drag moves the ratio, no notice, Edit layout stays off, and the drag's end saves it. The
-    /// double-click equalize and the keyboard nudge save too.
+    /// #1826: a divider drag moves the ratio, no notice, and the drag's end saves it. The double-click equalize and the
+    /// keyboard nudge save too.
     @MainActor
     func testAgentWindowLayoutEditLockedDividerDragNudgeAndEqualizeAreSaved() throws {
         try withGate(true) {
@@ -231,8 +241,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             defer { m.close() }
             let size = CGSize(width: 3000, height: 1000)
             m.paneArea = CGRect(origin: .zero, size: size)
-            XCTAssertTrue(m.layoutLocked)
-            let div = try XCTUnwrap(m.dividers(in: size).first, "a divider is drawn while locked")
+            XCTAssertTrue(m.layoutMade)
+            let div = try XCTUnwrap(m.dividers(in: size).first, "a divider is drawn")
             let start = CGPoint(x: div.line.midX, y: div.line.midY)
             let writes = m.layoutWrites
             XCTAssertTrue(m.dragBegan(at: start, in: size))
@@ -241,7 +251,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             m.dragEnded()
             XCTAssertEqual(m.layoutWrites, writes + 1, "the drag's end saves once")
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the dragged ratio is saved")
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked)
+            XCTAssertTrue(m.paneRefusal == nil)
             m.nudge(div.path, up: false, in: size)
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the nudge is saved")
             let moved = m.layout
@@ -250,30 +260,27 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.layout != moved, "the double-click equalizes")
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the equalize is saved")
             m.dragEnded()
-            XCTAssertFalse(m.layoutEditing)
         }
     }
 
-    /// #1817 (operator 2026-11-21): locked, the pane's Close Pane closes it at once: no notice, Edit layout stays off, the
-    /// close is saved (the blob's active layout is the one pane left).
+    /// #1817 (operator 2026-11-21): the pane's Close Pane closes it at once: no notice, the close is saved (#1894: closed to
+    /// one pane of the lone layout, the layout stays as the one-pane layout).
     @MainActor
     func testAgentWindowLayoutEditLockedClosePaneActsWithNoNotice() throws {
         try withGate(true) {
             let (m, _, two, _) = try locked()
             defer { m.close() }
-            XCTAssertTrue(m.layoutLocked)
+            XCTAssertTrue(m.layoutMade)
             let second = try XCTUnwrap(two.order.last)
             m.closePane(second)
             XCTAssertEqual(m.layout.panes.count, 1, "closed")
-            XCTAssertTrue(m.paneRefusal == nil, "no Edit layout notice")
-            XCTAssertFalse(m.layoutEditing, "Edit layout not turned on")
+            XCTAssertTrue(m.paneRefusal == nil, "no notice")
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the close is saved")
         }
     }
 
-    /// #1817: Command-W is the close-pane shortcut with two panes or more (PaneKeys); locked, perform closes the focused
-    /// pane, no notice, saved. Four panes: a header Close Pane then Command-W, so the layout stays locked after each close
-    /// and only the explicit save writes.
+    /// #1817: Command-W is the close-pane shortcut with two panes or more (PaneKeys); perform closes the focused pane, no
+    /// notice, saved. Four panes: a header Close Pane then Command-W.
     @MainActor
     func testAgentWindowLayoutEditLockedCommandWClosesTheFocusedPane() throws {
         try withGate(true) {
@@ -284,12 +291,11 @@ final class AgentWindowLayoutEditTests: XCTestCase {
                                                  base.session("docs", .idle), base.session("ops", .idle)]), layouts: d)
             defer { m.close() }
             m.setVisible(true)
-            m.setLayoutEditing(false)
             let last = try XCTUnwrap(four.order.last)
             m.closePane(last)
             XCTAssertEqual(m.layout.panes.count, 3, "the header's Close Pane closed it")
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
-            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the header close is saved while locked")
+            XCTAssertTrue(m.paneRefusal == nil && m.layoutMade, "no notice")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the header close is saved")
             let c = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 3, splitsEnabled: true)
             let e = try XCTUnwrap(AgentsNSWindow.keyEvent("w", .command, 13))
             XCTAssertEqual(PaneKeys.action(for: e, context: c), .closePane, "Command-W is the shortcut")
@@ -297,8 +303,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.perform(.closePane))
             XCTAssertEqual(m.layout.panes.count, 2)
             XCTAssertFalse(m.layout.order.contains(focused), "the focused pane closed")
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked, "no notice, still locked")
-            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved while locked")
+            XCTAssertTrue(m.paneRefusal == nil && m.layoutMade, "no notice")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
         }
     }
 
@@ -306,7 +312,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
     /// item has the short label.
     @MainActor
     func testAgentWindowLayoutEditClosePaneMenuItems() {
-        let all = AgentGoMenu.entries(splits: true, panes: 2) + AgentGoMenu.layoutEntries(splits: true)
+        let all = AgentGoMenu.entries(splits: true, panes: 2)
         let layout = AgentGoMenu.entries(all, in: .layout).compactMap { $0 }
         XCTAssertTrue(layout.contains { $0.title == "Close Pane" && $0.key == "w" && $0.action == .pane(.closePane) })
         XCTAssertFalse(AgentGoMenu.entries(all, in: .session).contains { $0?.title == "Close Pane" })
@@ -315,9 +321,9 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         XCTAssertTrue(pane.contains(.pane("Close Pane", enabled: true, verb: .action(.closePane))))
     }
 
-    /// #1817: locked, a drop places the session (the centre retargets, an edge splits), no notice, Edit layout stays off,
-    /// saved. The old guard stays: a sidebar click outside Edit layout never replaces the focused pane's session (it opens
-    /// the single-pane view; the saved layout keeps its panes).
+    /// #1817: a drop places the session (the centre retargets, an edge splits), no notice, saved. A sidebar click of a
+    /// session outside the layout never replaces the focused pane's session (rule 1: the single-pane view; the saved
+    /// layout keeps its panes).
     @MainActor
     func testAgentWindowLayoutEditLockedDropPlacesAndASidebarClickStillDoesNot() throws {
         try withGate(true) {
@@ -327,11 +333,11 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             let second = try XCTUnwrap(two.order.last)
             XCTAssertTrue(m.drop(row("docs"), into: second, zone: .centre))
             XCTAssertTrue(m.layout.panes.last?.target == t("docs"), "the centre drop retargets")
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing, "no notice, Edit layout off")
+            XCTAssertTrue(m.paneRefusal == nil, "no notice")
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
             XCTAssertTrue(m.drop(row("ops"), into: second, zone: .edge(.right)))
             XCTAssertEqual(m.layout.panes.map(\.target), [t("api"), t("docs"), t("ops")], "the edge drop splits")
-            XCTAssertTrue(m.paneRefusal == nil && !m.layoutEditing && m.layoutLocked)
+            XCTAssertTrue(m.paneRefusal == nil && m.layoutMade)
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
             let saved = m.layout
             m.click(row("web"))
@@ -341,96 +347,148 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
-    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout, Edit layout on or off alike, and the
-    /// session left is shown on its own (the single-pane view over the layout handed over to; a session that layout shows:
-    /// its pane focused). The lone layout stays (today's rule: closed to one pane, the Layouts section hides). A layout of
-    /// three panes closing one keeps the layout.
+    /// #1895 rule 4: a pane header's drag carries its session's row token (none for an empty pane, none with the gate off);
+    /// dropped on another pane's edge it MOVES the pane there (the old pane closes, PaneLayout.split), saved at once; on
+    /// another pane's centre the two swap; on its own pane's edge nothing but the focus changes.
+    @MainActor
+    func testAgentWindowLayoutEditPaneDragMovesAndSaves() throws {
+        try withGate(true) {
+            let three = base.paneLayout([t("api"), t("web"), t("docs")])
+            let d = base.layoutSuite()
+            d.set(try PaneLayoutStore(layouts: [three], active: three.id, mru: [three.id]).encode(), forKey: Self.blobKey)
+            let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle),
+                                                 base.session("docs", .idle)]), layouts: d)
+            defer { m.close() }
+            m.setVisible(true)
+            let size = CGSize(width: 1000, height: 1000)
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            let first = try XCTUnwrap(three.order.first), last = try XCTUnwrap(three.order.last)
+            let token = try XCTUnwrap(m.paneDragToken(first), "a pane that shows a session drags")
+            XCTAssertEqual(token, AgentWindowModel.dragToken(row("api")), "its session's row token")
+            let writes = m.layoutWrites
+            XCTAssertTrue(m.drop(token, into: last, at: CGPoint(x: 999, y: 500), in: size), "onto the last pane's right edge")
+            XCTAssertEqual(m.layout.panes.count, 3, "moved, not copied")
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("web"), t("docs"), t("api")], "api now after docs")
+            XCTAssertFalse(m.layout.order.contains(first), "the old pane closed")
+            XCTAssertTrue(m.paneRefusal == nil && m.parked == nil)
+            XCTAssertGreaterThan(m.layoutWrites, writes, "written")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("web"), t("docs"), t("api")],
+                           "saved at once")
+            let webPane = try XCTUnwrap(m.layout.pane(showing: t("web"))), apiPane = try XCTUnwrap(m.layout.pane(showing: t("api")))
+            XCTAssertTrue(m.drop(try XCTUnwrap(m.paneDragToken(webPane)), into: apiPane, at: CGPoint(x: 500, y: 500), in: size))
+            XCTAssertEqual(m.layout.panes.map(\.target), [t("api"), t("docs"), t("web")], "the centre swaps the two")
+            XCTAssertTrue(m.layouts?.activeLayout == m.layout, "saved")
+            let before = m.layout.panes.map(\.target), own = try XCTUnwrap(m.layout.pane(showing: t("docs")))
+            XCTAssertTrue(m.drop(try XCTUnwrap(m.paneDragToken(own)), into: own, at: CGPoint(x: 999, y: 500), in: size))
+            XCTAssertEqual(m.layout.panes.map(\.target), before, "its own edge: no move")
+            XCTAssertTrue(m.newLayout() == nil)
+            XCTAssertTrue(m.paneDragToken(m.layout.focused) == nil, "an empty pane does not drag")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: m.layout.focused), [], "#1895: no Swap Session for an empty pane")
+        }
+        try withGate(false) {
+            let (m, _, two, _) = try locked()
+            defer { m.close() }
+            XCTAssertTrue(m.paneDragToken(try XCTUnwrap(two.order.first)) == nil, "gate off: no pane drag")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: try XCTUnwrap(two.order.first)), [], "gate off: no Swap Session")
+        }
+    }
+
+    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout, and the session left is shown on its
+    /// own (the single-pane view over the layout handed over to; a session that layout shows: its pane focused). The lone
+    /// layout stays. A layout of three panes closing one keeps the layout. #1895 (QA R1894 i2): handed over to the lone
+    /// one-pane layout, its pane takes the session left and that is saved at once.
     @MainActor
     func testAgentWindowLayoutEditCloseToOnePaneDeletesTheLayoutEditingOrNot() throws {
         try withGate(true) {
-            /// `two` (api | web) and `pair` saved, `pair` active; Edit layout as `editing`.
-            @MainActor func pairs(_ targets: [PaneTarget], editing: Bool) throws -> (AgentWindowModel, UserDefaults, PaneLayout, PaneLayout) {
-                let two = base.paneLayout([t("api"), t("web")]), pair = base.paneLayout(targets)
+            /// `other` and `pair` saved, `pair` active.
+            @MainActor func pairs(_ targets: [PaneTarget], other: [PaneTarget]? = nil) throws -> (AgentWindowModel, UserDefaults, PaneLayout, PaneLayout) {
+                let two = base.paneLayout(other ?? [t("api"), t("web")]), pair = base.paneLayout(targets)
                 let d = base.layoutSuite()
                 d.set(try PaneLayoutStore(layouts: [two, pair], active: pair.id, mru: [pair.id, two.id]).encode(), forKey: Self.blobKey)
                 let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle),
                                                      base.session("docs", .idle), base.session("ops", .idle)]), layouts: d)
                 m.setVisible(true)
-                m.setLayoutEditing(editing)
                 return (m, d, two, pair)
             }
-            // Edit layout on, the header's Close Pane: deleted, Edit layout ends, docs on its own.
-            let (e, d, two, pair) = try pairs([t("docs"), t("ops")], editing: true)
+            // The header's Close Pane: deleted, docs on its own.
+            let (e, d, two, pair) = try pairs([t("docs"), t("ops")])
             defer { e.close() }
-            XCTAssertTrue(e.layoutEditing && e.layout.id == pair.id, "set up: the pair active, editing")
+            XCTAssertTrue(e.layout.id == pair.id, "set up: the pair active")
             e.closePane(try XCTUnwrap(pair.order.last))
             XCTAssertEqual(e.layouts?.layouts.map(\.id), [two.id], "the layout closed to one pane is deleted")
             XCTAssertEqual(Preferences.agentWindowLayouts(in: d).layouts.map(\.id), [two.id], "and saved deleted")
-            XCTAssertFalse(e.layoutEditing, "Edit layout ends with it")
             XCTAssertEqual(e.layout.panes.map(\.target), [t("docs")], "the session left is shown on its own")
             XCTAssertTrue(e.parked?.id == two.id, "the single-pane view over the layout handed over to")
             XCTAssertTrue(e.layoutRows?.count == 1, "one Layouts row left")
-            // Edit layout off, Command-W (perform) on the focused pane: deleted the same way.
-            let (r, _, two2, _) = try pairs([t("docs"), t("ops")], editing: false)
+            // Command-W (perform) on the focused pane: deleted the same way.
+            let (r, _, two2, _) = try pairs([t("docs"), t("ops")])
             defer { r.close() }
             XCTAssertTrue(r.perform(.closePane))
-            XCTAssertEqual(r.layouts?.layouts.map(\.id), [two2.id], "locked: deleted too")
+            XCTAssertEqual(r.layouts?.layouts.map(\.id), [two2.id], "deleted too")
             XCTAssertEqual(r.layout.panes.map(\.target), [t("ops")])
-            XCTAssertTrue(r.parked?.id == two2.id && !r.layoutEditing)
+            XCTAssertTrue(r.parked?.id == two2.id)
             // The session left is in the layout handed over to: that layout, its pane focused.
-            let (s, _, two3, pair3) = try pairs([t("web"), t("ops")], editing: true)
+            let (s, _, two3, pair3) = try pairs([t("web"), t("ops")])
             defer { s.close() }
             s.closePane(try XCTUnwrap(pair3.order.last))
             XCTAssertTrue(s.parked == nil && s.layout.id == two3.id, "the layout that shows web")
             XCTAssertTrue(s.layout.panes.first { $0.id == s.layout.focused }?.target == t("web"), "web's pane focused")
-            // The lone layout, Edit layout on: kept (the store refuses the last), Edit layout ends.
-            let (lone, _, one, _) = try locked(editing: true)
+            // R1894 i2: handed over to the lone one-pane layout (api): its pane takes docs, saved at once.
+            let (l, ld, one, pair4) = try pairs([t("docs"), t("ops")], other: [t("api")])
+            defer { l.close() }
+            l.closePane(try XCTUnwrap(pair4.order.last))
+            XCTAssertTrue(l.parked == nil && l.layout.id == one.id && l.layout.panes.map(\.target) == [t("docs")], "the lone pane shows docs")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: ld).activeLayout?.panes.map(\.target), [t("docs")],
+                           "the stored layout holds the shown session")
+            // The lone two-pane layout closed to one: kept (the store refuses the last).
+            let (lone, _, only, _) = try locked()
             defer { lone.close() }
-            lone.closePane(try XCTUnwrap(one.order.last))
-            XCTAssertEqual(lone.layouts?.layouts.map(\.id), [one.id], "the lone layout is kept")
+            lone.closePane(try XCTUnwrap(only.order.last))
+            XCTAssertEqual(lone.layouts?.layouts.map(\.id), [only.id], "the lone layout is kept")
             XCTAssertTrue(lone.layout.panes.count == 1 && lone.layouts?.activeLayout == lone.layout && lone.layoutRows == nil)
-            XCTAssertFalse(lone.layoutEditing)
-            // Three panes, one closed: the layout stays, Edit layout stays on.
-            let (three, _, _, trio) = try pairs([t("docs"), t("ops"), t("web")], editing: true)
+            // Three panes, one closed: the layout stays.
+            let (three, _, _, trio) = try pairs([t("docs"), t("ops"), t("web")])
             defer { three.close() }
             three.closePane(try XCTUnwrap(trio.order.last))
             XCTAssertEqual(three.layouts?.layouts.count, 2, "three panes closed to two: kept")
             XCTAssertTrue(three.layout.id == trio.id && three.layout.panes.count == 2 && three.parked == nil)
-            XCTAssertTrue(three.layoutEditing, "still editing")
         }
     }
 
-    /// "+" opens the new layout in Edit layout: a click fills its pane, no single-pane view.
+    /// #1895 rule 2 (replaces "+ opens in Edit layout"): "+" makes one empty pane; a click fills it (no single-pane view),
+    /// saved at once; the pane filled, the next click of a session outside it opens the single-pane view.
     @MainActor
-    func testAgentWindowLayoutEditNewLayoutOpensInEditMode() throws {
+    func testAgentWindowLayoutEditNewLayoutEmptyPaneTakesTheNextPick() throws {
         try withGate(true) {
-            let (m, _, _, _) = try locked()
+            let (m, d, _, _) = try locked()
             defer { m.close() }
             XCTAssertTrue(m.newLayout() == nil)
-            XCTAssertTrue(m.layoutEditing, "a new layout opens in Edit layout")
             let made = m.layout.id
+            XCTAssertTrue(m.layout.panes.first?.target == nil, "one empty pane")
             m.click(row("docs"))
             XCTAssertTrue(m.parked == nil)
             XCTAssertEqual(m.layout.id, made)
             XCTAssertTrue(m.layout.panes.first?.target == t("docs"))
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("docs")], "saved at once")
+            m.click(row("ops"))
+            XCTAssertTrue(m.parked?.id == made, "filled: an outside pick parks")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("docs")], "the view is not saved")
         }
     }
 
-    /// #1617: Command-D (and the Split menu items, the same perform) on the lone one-pane layout opens Edit layout, so the
-    /// next sidebar click fills the new empty focused pane and the layout keeps both (saved). A refused split (no room)
-    /// changes nothing: still not editing, the click replaces the one pane as before.
+    /// #1617, #1895 rule 2: Command-D (and the Split menu items, the same perform) on the lone one-pane layout focuses the
+    /// new empty pane, so the next sidebar click fills it and the layout keeps both (saved). A refused split (no room)
+    /// changes nothing: the click replaces the one pane as before.
     @MainActor
-    func testAgentWindowLayoutEditSplitOpensEditModeAndAClickFillsTheNewPane() throws {
+    func testAgentWindowLayoutEditSplitEmptyPaneTakesTheNextPick() throws {
         try withGate(true) {
             let d = base.layoutSuite()
             let m = base.windowModel(base.store([base.session("api", .idle), base.session("docs", .idle)]), layouts: d)
             defer { m.close() }
             m.setVisible(true)
-            m.setLayoutEditing(false)
             m.click(row("api"))
             m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             XCTAssertTrue(m.perform(.split(.columns)))
-            XCTAssertTrue(m.layoutEditing, "a split opens Edit layout")
             XCTAssertEqual(m.layout.panes.count, 2)
             XCTAssertTrue(m.layouts?.activeLayout == m.layout, "the split itself saved")
             XCTAssertTrue(m.layout.panes.first { $0.id == m.layout.focused }?.target == nil, "the new empty pane focused")
@@ -444,21 +502,18 @@ final class AgentWindowLayoutEditTests: XCTestCase {
                                          layouts: base.layoutSuite())
             defer { small.close() }
             small.setVisible(true)
-            small.setLayoutEditing(false)
             small.click(row("api"))
             small.paneArea = CGRect(x: 0, y: 0, width: 10, height: 10)
             XCTAssertTrue(small.perform(.split(.columns)), "the refusal is swallowed")
-            XCTAssertFalse(small.layoutEditing, "a refused split leaves Edit layout off")
             XCTAssertEqual(small.layout.panes.count, 1)
             small.click(row("docs"))
             XCTAssertTrue(small.layout.panes.first?.target == t("docs"), "the click replaces the one pane as before")
         }
     }
 
-    /// #1700 (operator 2026-11-20: "pressing cmd+d in a single session does not do the split, it shows to click edit, but
-    /// there is no such button"): Command-D in the single-pane view makes a new layout of the view's session plus an
-    /// empty pane, Edit layout on, saved; the parked layout stays saved as it was. The next click fills the new pane. The
-    /// Split menu item (runPane, the same perform) from another single-pane view does the same and is drawn enabled.
+    /// #1700 (operator 2026-11-20): Command-D in the single-pane view makes a new layout of the view's session plus an
+    /// empty pane, saved; the parked layout stays saved as it was. The next click fills the new pane. The Split menu item
+    /// (runPane, the same perform) from another single-pane view does the same and is drawn enabled.
     @MainActor
     func testAgentWindowLayoutEditCommandDInTheSinglePaneViewMakesANewLayout() throws {
         try withGate(true) {
@@ -468,9 +523,8 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             m.click(row("docs"))
             XCTAssertTrue(m.parked != nil, "the single-pane view")
             XCTAssertTrue(m.perform(.split(.columns)), "the chord is swallowed")
-            XCTAssertTrue(m.paneRefusal == nil, "no Edit notice")
+            XCTAssertTrue(m.paneRefusal == nil, "no notice")
             XCTAssertTrue(m.parked == nil, "the view became a layout")
-            XCTAssertTrue(m.layoutEditing, "Edit layout on (#1617)")
             XCTAssertEqual(m.layout.panes.map(\.target), [t("docs"), nil], "the session in pane 1, an empty pane 2")
             XCTAssertTrue(m.layout.panes.first { $0.id == m.layout.focused }?.target == nil, "the empty pane focused")
             XCTAssertEqual(m.layouts?.layouts.count, 2, "a new layout")
@@ -479,14 +533,13 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             m.click(row("ops"))
             XCTAssertEqual(m.layout.panes.map(\.target), [t("docs"), t("ops")], "the next click fills the new pane")
             XCTAssertTrue(m.switchLayout(two.id) == nil)
-            m.setLayoutEditing(false)
             m.click(row("ops"))   // not in `two`: the single-pane view again
             XCTAssertTrue(m.parked != nil)
             let pane = m.layout.focused
             XCTAssertEqual(AgentWindowControls.paneMenu(m, pane: pane).filter { if case .pane(_, true, .action(.split)) = $0 { true } else { false } }.count,
                            2, "Split Right and Split Down drawn enabled")
             AgentWindowControls.runPane(.action(.split(.rows)), pane: pane, in: m)
-            XCTAssertTrue(m.parked == nil && m.layoutEditing, "the Split menu item makes a layout too")
+            XCTAssertTrue(m.parked == nil, "the Split menu item makes a layout too")
             XCTAssertEqual(m.layout.panes.map(\.target), [t("ops"), nil])
         }
     }
@@ -509,10 +562,9 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.parked?.id == two.id, "the parked layout is kept")
         }
     }
-
-    /// #1700: the notice never names a control that is not drawn. In the single-pane view (no Edit anywhere) Close Pane,
-    /// a pane retarget, a drop and Open to the Side never answer "Edit layout to change it": the retarget takes the pick,
-    /// an edge drop and Open to the Side make a new layout as Command-D does. At 9 layouts the split says so instead.
+    /// #1700: the notice never names a control that is not drawn. In the single-pane view Close Pane, a pane retarget, a
+    /// drop and Open to the Side answer no notice: the retarget takes the pick, an edge drop and Open to the Side make a
+    /// new layout as Command-D does. At 9 layouts the split says so instead.
     @MainActor
     func testAgentWindowLayoutEditSinglePaneViewNeverNamesAMissingEdit() throws {
         try withGate(true) {
@@ -520,7 +572,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
                 let m = try locked().m
                 m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
                 m.click(row("docs"))
-                XCTAssertTrue(m.parked != nil && !m.layoutShown, "the single-pane view")
+                XCTAssertTrue(m.parked != nil && m.layoutRows?.contains { $0.active } == false, "the single-pane view")
                 return m
             }
             let m = try view()
@@ -537,18 +589,18 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.paneRefusal == nil, "a retarget: no notice")
             XCTAssertTrue(m.layout.panes.first?.target == t("ops"), "the view's pane takes the pick")
             XCTAssertTrue(m.drop(row("docs"), into: m.layout.focused, zone: .edge(.right)))
-            XCTAssertTrue(m.paneRefusal == nil && m.parked == nil && m.layoutEditing, "an edge drop makes a layout")
+            XCTAssertTrue(m.paneRefusal == nil && m.parked == nil, "an edge drop makes a layout")
             XCTAssertEqual(m.layout.panes.map(\.target), [t("ops"), t("docs")])
             let side = try view()
             defer { side.close() }
             side.openToTheSide(row("ops"))
-            XCTAssertTrue(side.paneRefusal == nil && side.parked == nil && side.layoutEditing, "Open to the Side makes a layout")
+            XCTAssertTrue(side.paneRefusal == nil && side.parked == nil, "Open to the Side makes a layout")
             XCTAssertEqual(side.layout.panes.map(\.target), [t("docs"), t("ops")])
             let full = try locked().m
             defer { full.close() }
             full.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             for _ in 0..<8 { XCTAssertTrue(full.newLayout() == nil) }
-            full.setLayoutEditing(false)
+            XCTAssertTrue(full.switchLayout(number: 1) == nil, "back on the saved two-pane layout (#1895: the 9th's empty pane would take the click)")
             full.click(row("docs"))
             XCTAssertTrue(full.parked != nil)
             XCTAssertTrue(full.perform(.split(.columns)))
@@ -583,7 +635,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             gated(full)
             full.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             for _ in 0..<8 { XCTAssertTrue(full.newLayout() == nil) }
-            full.setLayoutEditing(false)
+            XCTAssertTrue(full.switchLayout(number: 1) == nil, "#1895: off the new empty pane, so the click parks")
             full.remoteListed(Data(json.utf8))
             full.click(row("docs"))
             full.openNewSession()
@@ -600,23 +652,32 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             gated(room)
             room.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
             for _ in 0..<7 { XCTAssertTrue(room.newLayout() == nil) }
-            room.setLayoutEditing(false)
+            XCTAssertTrue(room.switchLayout(number: 1) == nil)
             room.remoteListed(Data(json.utf8))
             room.click(row("docs"))
             room.openNewSession()
             XCTAssertTrue(room.parked != nil && room.newSession != nil)
             XCTAssertTrue(room.drop(remote, into: room.layout.focused, zone: .edge(.right)))
-            XCTAssertTrue(room.paneRefusal == nil && room.parked == nil && room.layoutEditing, "the layout is made")
+            XCTAssertTrue(room.paneRefusal == nil && room.parked == nil, "the layout is made")
             XCTAssertTrue(room.newSession == nil, "the form is cleared")
             XCTAssertTrue(room.terminal.armed == key, "the remote key is armed on success")
         }
     }
 
-    /// The Go menu's Edit Layout: with the split gate on only.
+    /// #1895 (replaces the Go menu's Edit Layout row): no Edit Layout anywhere in the window's menus (every kind, the list
+    /// of a two-layout window included) and no Layout menu item without a pane or list action.
     @MainActor
-    func testAgentWindowLayoutEditGoMenuItem() {
-        XCTAssertTrue(AgentGoMenu.layoutEntries(splits: true).contains { $0?.action == .editLayout })
-        XCTAssertTrue(AgentGoMenu.layoutEntries(splits: false).isEmpty)
+    func testAgentWindowLayoutEditControlsAbsent() throws {
+        try withGate(true) {
+            let (m, _, _, _) = try locked()
+            defer { m.close() }
+            XCTAssertTrue(m.newLayout() == nil)
+            let all = AgentGoMenu.entries(splits: true, panes: 2) + AgentGoMenu.modeEntries + AgentGoMenu.layoutListEntries(m.layoutRows)
+            for k in [AgentGoMenu.Kind.session, .layout, .view, .go] {
+                XCTAssertFalse(AgentGoMenu.entries(all, in: k).contains { $0?.title.localizedCaseInsensitiveContains("edit layout") == true }, "\(k)")
+            }
+            XCTAssertTrue(AgentGoMenu.entries(all, in: .layout).compactMap { $0 }.allSatisfy { if case .pane = $0.action { true } else { false } })
+        }
     }
 
     /// #1726: the Layout menu's list item for layout 1 does what Control-1 does: from the single-pane view the saved layout
@@ -664,7 +725,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertEqual(m.paneAreaFrame(in: size)?.height, 900)
             XCTAssertTrue(m.newLayout() == nil)
             XCTAssertTrue(m.layoutRows != nil, "two layouts: the Layouts section is built")
-            XCTAssertFalse(AgentWindowBand.shows(m), "#1646: two layouts of one pane: no band (Edit is on the sidebar row)")
+            XCTAssertFalse(AgentWindowBand.shows(m), "#1646: two layouts of one pane: no band")
             XCTAssertEqual(m.paneAreaFrame(in: size)?.minY, 0, "#1646: the pane area from the top")
             let z = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle)]))
             defer { z.close() }
@@ -680,31 +741,27 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertFalse(AgentWindowBand.shows(m), "gate off: no band, as before")
         }
     }
-
-    /// #1646 (operator 2026-11-19: "clicking it, goes and opens my saved layout which has nothing to do with the current
-    /// session"): in the single-pane view no saved layout is shown, so the Go menu's Edit Layout is off (layoutShown) and
-    /// the toggle does nothing: the view stays, the layout stays parked, nothing written. Back on the layout, it toggles.
+    /// #1895 (replaces #1646's toggle-in-the-view row): in the single-pane view the pane's Swap Session… pick stays in the
+    /// view (the view's one pane takes it): the layout stays parked, nothing is written, the blob byte-equal. Back on the
+    /// layout, the same pick changes the layout and is saved.
     @MainActor
-    func testAgentWindowLayoutEditToggleInTheSinglePaneViewDoesNothing() throws {
+    func testAgentWindowLayoutEditSwapInTheSinglePaneViewWritesNothing() throws {
         try withGate(true) {
             let (m, d, two, bytes) = try locked()
             defer { m.close() }
-            XCTAssertTrue(m.layoutShown, "the saved layout on screen")
             m.click(row("docs"))
-            let view = m.layout.id, writes = m.layoutWrites
-            XCTAssertFalse(m.layoutShown, "the single-pane view is not a layout")
-            m.toggleLayoutEditing()
-            XCTAssertFalse(m.layoutEditing, "no Edit layout from the view")
-            XCTAssertEqual(m.layout.id, view, "the view stays (no switch to the parked layout)")
+            let writes = m.layoutWrites
+            XCTAssertTrue(m.parked?.id == two.id, "the single-pane view")
+            AgentWindowControls.runPane(.swap, pane: m.layout.focused, in: m)
+            AgentPaneSwitcherList.of(AgentPaneSwitch(model: m, pane: m.layout.focused), dismiss: {}).pick(row("ops"))
+            XCTAssertTrue(m.layout.panes.count == 1 && m.layout.panes.first?.target == t("ops"), "the view's pane takes it")
             XCTAssertTrue(m.parked?.id == two.id, "still parked")
             XCTAssertEqual(m.layoutWrites, writes, "nothing written")
             XCTAssertEqual(d.data(forKey: Self.blobKey), bytes, "the blob byte-equal")
             XCTAssertTrue(m.switchLayout(two.id) == nil)
-            XCTAssertTrue(m.layoutShown)
-            m.toggleLayoutEditing()
-            XCTAssertTrue(m.layoutEditing, "on the layout: Edit")
-            m.toggleLayoutEditing()
-            XCTAssertFalse(m.layoutEditing, "Done")
+            let second = try XCTUnwrap(two.order.last)
+            AgentPaneSwitcherList.of(AgentPaneSwitch(model: m, pane: second), dismiss: {}).pick(row("ops"))
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).activeLayout?.panes.map(\.target), [t("api"), t("ops")], "on the layout: saved")
         }
     }
 

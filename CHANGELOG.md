@@ -2446,6 +2446,10 @@ tag from the now-released section and put it on the new top draft.
   its own ANTHROPIC_BASE_URL. (#1892)
 - Agent Sessions: closing a layout's pane so that only one session is left now deletes that layout
   and shows the session on its own, also while the layout is being edited. (#1894)
+- Layouts no longer have an Edit mode: a session you pick that isn't in the layout opens on its own,
+  an empty pane (after Split or a new layout) takes the next session you pick, the pane's ⋯ menu has
+  Swap Session… to put another session in that pane, and you can drag a pane by its header onto
+  another pane's edge to move it. Every change is saved right away. (#1895)
 
 ## v2.174.0
 

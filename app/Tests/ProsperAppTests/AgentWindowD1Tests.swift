@@ -123,9 +123,6 @@ final class AgentWindowD1Tests: XCTestCase {
             r.transcript.tickInterval = 3600
         }
         m.runtimes.values.forEach(m.onNewRuntime)
-        // #1538: a model with a layouts store starts in Edit layout, the behaviour every row before #1538 pins (clicks fill
-        // the focused pane, every change saved); AgentWindowLayoutEditTests turns it off for the locked rows.
-        if layouts != nil { m.setLayoutEditing(true) }
         m.bind(store)
         return m
     }

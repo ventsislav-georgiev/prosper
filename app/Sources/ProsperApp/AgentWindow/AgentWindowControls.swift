@@ -50,6 +50,8 @@ enum AgentWindowMenuEntry: Equatable {
 enum AgentPaneVerb: Equatable {
     case action(PaneAction)
     case equalize
+    /// #1895: Swap Session…: the pane's title switcher opens (AgentWindowModel.swapRequest).
+    case swap
 }
 
 /// #901 B3 step 4b (8.1): what a Layouts row's context menu entry runs.
@@ -74,7 +76,7 @@ enum AgentMenuSymbol {
     static let pin = "pin", unpin = "pin.slash", remove = "trash", duplicate = "plus.square.on.square"
     static let side = "sidebar.right", chapters = "list.bullet", splitRight = "rectangle.split.2x1"
     static let splitDown = "rectangle.split.1x2", zoom = "arrow.up.left.and.arrow.down.right"
-    static let equalize = "equal.square", closePane = "xmark.rectangle"
+    static let equalize = "equal.square", closePane = "xmark.rectangle", swap = "arrow.left.arrow.right"
     static let newSession = "plus", folder = "folder", chooseFolder = "folder.badge.plus"
     static let sort = "arrow.up.arrow.down", sortActivity = "clock", sortName = "textformat"
     static let rowDetails = "list.bullet.rectangle", rowDetail = "list.bullet", autoAllow = "checkmark.shield"
@@ -85,7 +87,7 @@ enum AgentMenuSymbol {
 
     /// Every name above, for the test that resolves each one (a typo draws no image).
     static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
-                                   chapters, splitRight, splitDown, zoom, equalize, closePane, newSession, folder, chooseFolder,
+                                   chapters, splitRight, splitDown, zoom, equalize, closePane, swap, newSession, folder, chooseFolder,
                                    sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, model, effort, xray]
 }
 
@@ -117,6 +119,7 @@ extension AgentWindowMenuEntry {
         case .pane(_, _, let verb):
             switch verb {
             case .equalize: AgentMenuSymbol.equalize
+            case .swap: AgentMenuSymbol.swap
             case .action(.split(.columns)): AgentMenuSymbol.splitRight
             case .action(.split(.rows)): AgentMenuSymbol.splitDown
             case .action(.zoom): AgentMenuSymbol.zoom
@@ -269,6 +272,7 @@ enum AgentWindowControls {
     }
 
     static let closePaneLabel = "Close Pane"   // #1817 (operator 2026-11-21): the short label
+    static let swapLabel = "Swap Session\u{2026}"   // #1895 (operator 2026-11-23)
     /// #1351: the "..." item of the X-ray panel.
     static let xrayLabel = "X-Ray\u{2026} \u{21E7}\u{2318}X"
 
@@ -308,6 +312,14 @@ enum AgentWindowControls {
                         down: refusal(.rows))
     }
 
+    /// #1895 (operator 2026-11-23): Swap Session…, after the pane items, for a pane that shows a session with the split gate
+    /// on: the pane's title switcher list (the same rows), whose pick replaces the pane's session and is saved.
+    @MainActor
+    static func swapMenu(_ m: AgentWindowModel, pane: UUID) -> [AgentWindowMenuEntry] {
+        guard AgentPaneLayout.splitsEnabled, m.layout.panes.contains(where: { $0.id == pane && $0.target != nil }) else { return [] }
+        return [.pane(swapLabel, enabled: true, verb: .swap)]
+    }
+
     /// A pane item chosen in `pane`'s header: that pane is focused in the action's result (every drawn pane has its own
     /// header; one layout write per choice, R900-6a-1), the key's action running through perform (a refused
     /// split puts the key's notice in the notice line). Equalize: the whole tree, as the divider's double-click adopts
@@ -322,6 +334,9 @@ enum AgentWindowControls {
             let l = (try? m.layout.focus(pane).get()) ?? m.layout
             let e = (try? l.equalize(path: [], deep: true).get()) ?? l   // R900-6b1-5: refused, the pane is still focused
             if e != m.layout { m.adopt(e) }
+        case .swap:
+            m.focusPane(pane)
+            m.swapRequest = pane   // the pane's title switcher opens its list (AgentPaneSwitcherButton)
         }
     }
 

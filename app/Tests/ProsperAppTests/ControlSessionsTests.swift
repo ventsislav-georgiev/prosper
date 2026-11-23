@@ -244,20 +244,17 @@ final class ControlSessionsTests: XCTestCase {
             try withGate(true) {
                 let before = m.layout.id, count = m.layouts?.layouts.count ?? 0
                 m.paneArea = CGRect(x: 0, y: 0, width: 400, height: 300)
-                m.setLayoutEditing(false)   // #1846 n134: the fixture starts in Edit layout; off first, on below
                 refused(try ControlSessions.setLayout(a), PaneRefusal.noRoom.notice ?? "")
                 XCTAssertEqual(m.layout.id, before, "a refusal brings the layout before back")
                 XCTAssertEqual(m.layouts?.layouts.count, count, "and leaves no layout behind")
-                XCTAssertFalse(m.layoutEditing, "#1846 n134: and Edit layout as it was (off)")
-                m.setLayoutEditing(true)
                 refused(try ControlSessions.setLayout(a), PaneRefusal.noRoom.notice ?? "")
-                XCTAssertTrue(m.layoutEditing, "#1846 n134: and Edit layout as it was (on)")
+                XCTAssertEqual(m.layouts?.layouts.count, count, "#1895: a second refusal leaves none either")
                 m.paneArea = AgentWindowD1Tests.wideArea
                 let ch = try ControlSessions.setLayout(a)
                 XCTAssertEqual(m.layout.panes.compactMap(\.target), [base.paneTarget("api"), base.paneTarget("web")])
                 guard case let .split(axis, _, _, _) = m.layout.tree else { return XCTFail("two panes: one split") }
                 XCTAssertEqual(axis, .columns, "side by side")
-                XCTAssertFalse(m.layoutEditing, "Done: saved and locked")
+                XCTAssertTrue(m.layouts?.activeLayout == m.layout, "#1895: saved at once")
                 XCTAssertEqual(m.layouts?.layouts.count, count + 1)
                 XCTAssertEqual(ch.result, .string(m.layout.id.uuidString))
                 ch.undo?()

@@ -14,7 +14,6 @@ final class ControlLayoutsTests: XCTestCase {
         defer { m.close() }
         AgentPaneLayout.splitsEnabled = true
         ControlSessions.model = { m }
-        m.setLayoutEditing(false)   // the D1 helper turns Edit layout on with a layouts suite; a person's window opens locked
         try body(m)
     }
 
@@ -109,21 +108,19 @@ final class ControlLayoutsTests: XCTestCase {
         refused(try ControlLayouts.list(), "Agent Sessions is not open")
     }
 
-    /// QA n134: Edit layout stays off after layouts.new, on success and on refusal.
+    /// #1895 (replaces QA n134's Edit layout row: there is no mode left): layouts.new makes one empty pane, saved, which
+    /// takes the next pick (saved at once); the 9-layout cap is still refused.
     @MainActor
-    func testNewLeavesEditLayoutAsItWas() throws {
+    func testNewMakesAnEmptyPaneThatTakesTheNextPick() throws {
         try withModel { m in
-            XCTAssertFalse(m.layoutEditing)
             _ = try ControlLayouts.new([:])
-            XCTAssertFalse(m.layoutEditing, "off before, off after")
+            XCTAssertTrue(m.layout.panes.count == 1 && m.layout.panes.first?.target == nil, "one empty pane")
+            m.select(.live(base.paneKey("web")))
+            XCTAssertEqual(m.layout.panes.map(\.target), [base.paneTarget("web")], "the empty pane took the pick")
+            XCTAssertTrue(m.parked == nil && m.layouts?.activeLayout == m.layout, "saved at once, no single-pane view")
             for _ in 0..<7 { _ = try ControlLayouts.new([:]) }
             XCTAssertEqual(m.layouts?.layouts.count, 9)
             XCTAssertThrowsError(try ControlLayouts.new([:]))
-            XCTAssertFalse(m.layoutEditing, "off after a refusal too")
-            m.setLayoutEditing(true)
-            _ = try ControlLayouts.delete(args(["id": m.layout.id.uuidString]))
-            _ = try ControlLayouts.new([:])
-            XCTAssertTrue(m.layoutEditing, "on before, on after")
         }
     }
 

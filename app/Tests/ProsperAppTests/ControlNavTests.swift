@@ -23,7 +23,6 @@ final class ControlNavTests: XCTestCase {
         defer { m.close() }
         m.paneArea = AgentWindowD1Tests.wideArea
         m.runtimes.values.forEach { $0.transcript.taskStoreDirectory = { _ in nil } }
-        m.setLayoutEditing(false)
         m.setVisible(true)   // the model flag only (no window exists): sections publish on a visible refresh
         ControlSessions.model = { m }
         try body(m, st, a, b)
@@ -277,7 +276,7 @@ final class ControlNavTests: XCTestCase {
             XCTAssertEqual(m.layout.id, b.id, "web is only in layout B: switched")
             let web = try XCTUnwrap(m.selection)
             XCTAssertTrue(m.switchLayout(a.id) == nil)
-            m.choose(web, into: pane, drop: true)
+            m.choose(web, into: pane)
             XCTAssertEqual(m.layout.focused, pane)
             XCTAssertEqual(focusedName(m), "web", "the person's drop")
             XCTAssertTrue(m.wouldRetargetFocusedPane(before), "the restore would retarget the focused pane")

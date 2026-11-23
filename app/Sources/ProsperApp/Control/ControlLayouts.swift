@@ -5,7 +5,7 @@ import Foundation
 /// split gate and the store's refusals are the window's. Pane changes only: no session is started, stopped or attached.
 /// The lock (#1817/#1826/#1832) only gates picks into the focused pane and structural pane edits, none of which these
 /// commands do. Deleting is final (no undo: the model cannot restore a layout's panes; operator 2026-11-21 over QA n148);
-/// the undo of `layouts.new` removes only the layout it made. `layouts.new` puts Edit layout back as it was. None of them closes an open New session form (adopt never clears it, unlike select(manual:)). On demand only: no observer, no poll.
+/// the undo of `layouts.new` removes only the layout it made. None of them closes an open New session form (adopt never clears it, unlike select(manual:)). On demand only: no observer, no poll.
 @MainActor
 enum ControlLayouts {
     static let off = "split panes are off in this build"
@@ -88,14 +88,11 @@ enum ControlLayouts {
 
     // MARK: - layouts.new
 
-    /// The Layouts "+": one empty pane, appended, active, in Edit layout. `name` set after. Undo deletes it (the layout
+    /// The Layouts "+": one empty pane, appended, active. `name` set after. Undo deletes it (the layout
     /// before comes back, the MRU's next).
     static func new(_ args: [String: ControlJSON]) throws -> ControlChange {
         let m = try openModel()
         if case .string(_)? = args["name"], ControlSessions.string(args, "name") == nil { throw ControlError("argument 'name' is empty") }
-        // newLayout turns Edit layout on (the "+"); an agent's change leaves the person's mode as it was (QA n134).
-        let wasEditing = m.layoutEditing
-        defer { if !wasEditing { m.setLayoutEditing(false) } }
         if let r = m.newLayout() { throw ControlError(message(r)) }
         let made = m.layout.id
         if let n = ControlSessions.string(args, "name") { m.renameLayout(made, to: n) }

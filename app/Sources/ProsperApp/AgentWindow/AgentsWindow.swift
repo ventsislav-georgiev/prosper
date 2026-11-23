@@ -496,12 +496,6 @@ final class AgentsNSWindow: NSWindow {
         model?.setSidebarMode(m)
     }
 
-    /// #1538: the Go menu's Edit Layout (no key) through the window as every item (#1586): the model's toggle.
-    func performEditLayout() {
-        lastPerformed = .editLayout
-        model?.toggleLayoutEditing()
-    }
-
     /// #1359: what a routed key does, for the key (performKeyEquivalent) and the Go menu's items alike: one function.
     /// False: not the window's (.sidebar, .pass, a refused Command-T), so the key goes on to super.
     @discardableResult func perform(_ r: KeyRoute) -> Bool {
@@ -1276,7 +1270,7 @@ struct AgentSidebarTitleRow: View {
 /// #901 B3 step 4a (8.1 :625-631): the Layouts section, built only from `model.layoutRows` (gate on and the show rule).
 /// Header: the section label and count, then "+" (New layout); at 9 layouts the "+" is disabled and the fixed words
 /// "(9 layouts max)" show. Rows: the name (one line, middle-truncated), the fixed attention slot (step 5), the active
-/// row's Edit / Done (#1646), the ⌃N keycap chip in the session rows' chip column (#1654); the active row in accent text.
+/// the ⌃N keycap chip in the session rows' chip column (#1654); the active row in accent text.
 /// Height: the header plus one fixed-height row per layout (text height at the scale + sz paddings); the chip and the
 /// words are fixedSize, never an sz frame on text. Not in `sections`, so out of the
 /// up/down walk and the ⌘1…9 jump. Closures run on the main actor (Buttons, the field's handlers).
@@ -1326,7 +1320,7 @@ struct AgentLayoutsSection: View {
                     model.endLayoutRename(r.id, $0)
                 }, showShortcut: show.shortcut)
             } else {
-                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, editLabel: r.active ? editLabel : nil, showShortcut: show.shortcut) }
+                Button { Self.click(model, r) } label: { AgentLayoutRowView(row: r, showShortcut: show.shortcut) }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Self.label(r))
                     .accessibilityValue(Self.value(r))
@@ -1338,31 +1332,8 @@ struct AgentLayoutsSection: View {
                             }.disabled(!e.enabled)
                         }
                     }
-                    // #1646: only the layout on screen (the single-pane view has no active row, so none there).
-                    // #1654: over the room the row keeps for it, left of the chip column (outside the row's
-                    // Button: its own element, read after the row).
-                    .overlay(alignment: .trailing) {
-                        if r.active {
-                            HStack(spacing: sz(8)) { editButton; if show.shortcut { AgentSidebarRowView.digitColumn } }
-                                .padding(.trailing, sz(10))
-                        }
-                    }
             }
         }
-    }
-
-    var editLabel: String { model.layoutEditing ? "Done" : "Edit" }
-
-    /// #1646 (operator 2026-11-19: "the edit ... and done buttons directly on the sidebar, right aligned"): the active
-    /// row's Edit / Done (the band's Edit layout before); its own element after the row's name. #1654: just left of the
-    /// row's ⌃N chip, over the room the row keeps for it (`AgentLayoutRowView.editText`, the same text and width).
-    var editButton: some View {
-        Button { model.toggleLayoutEditing() } label: { AgentLayoutRowView.editText(editLabel) }   // main actor
-            .buttonStyle(.plain)
-            .foregroundStyle(model.layoutEditing ? Neon.blue : Neon.textSecondary)
-            .help(model.layoutEditing ? "Stop editing: the layout is saved and locked" : "Change this layout: clicks fill the focused pane")
-            .accessibilityLabel(model.layoutEditing ? "Done editing layout" : "Edit layout")
-            .modifier(AgentSidebarRowProbe(kind: "layoutEdit", title: editLabel, global: true))
     }
 
     /// R901-s4a-a: VoiceOver reads what a sighted person sees, the name and the "⌃N" key.
@@ -1407,7 +1378,7 @@ struct AgentLayoutNameField: View {
 
 /// #901 B3 step 4a: one Layouts row (the name and the attention slot). #1654 (operator 2026-11-19: "the layout shortcut
 /// ... to the right and with border etc like cmd + 1"): its ⌃N is a session row's keycap chip (AgentDigitChip, glyph ⌃)
-/// in the session rows' chip column, the attention slot and the active row's Edit / Done room to its left.
+/// in the session rows' chip column, the attention slot to its left (#1895: no Edit / Done).
 struct AgentLayoutRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: AgentWindowModel.LayoutRow
@@ -1415,25 +1386,14 @@ struct AgentLayoutRowView: View {
     var edit: String?
     /// The field's end, once: Return's text, or nil (Escape, the focus left, the field gone). Main actor.
     var end: (String?) -> Void = { _ in }
-    /// #1654: the active row's Edit / Done words: their room is kept before the chip (the section draws the button there).
-    var editLabel: String? = nil
     /// #1657: Row details > Shortcut; off: no chip and no chip column (the session rows' rule). The ⌃N keys work regardless.
     var showShortcut = true
 
-    /// #1654: the Edit / Done words, the button's label and the row's room for it alike.
-    static func editText(_ s: String) -> some View {
-        Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()
-    }
-
-    /// #1654: the trailing parts after the name, in order: the attention slot (`count`), the Edit room, the chip column.
+    /// #1654: the trailing parts after the name, in order: the attention slot (`count`), the chip column.
     /// The row lays them out hidden; the overlay draws them over the same places (no frame moves).
     private func trailing(count: some View, chip: some View) -> some View {
         HStack(alignment: .center, spacing: sz(8)) {
             count.frame(width: AgentLayoutsSection.attentionWidth, alignment: .trailing)
-            if let editLabel {
-                Self.editText(editLabel).hidden()
-                    .modifier(AgentSidebarRowProbe(kind: "layoutEditRoom", title: editLabel, global: true))
-            }
             if showShortcut { ZStack { AgentSidebarRowView.digitColumn; chip } }
         }
     }
@@ -2580,7 +2540,7 @@ struct AgentDetailView: View {
         // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
         let id = model.layout.focused, ended = model.focusedEnded
         let panes = [.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
-            + AgentWindowControls.paneMenu(model, pane: id)
+            + AgentWindowControls.paneMenu(model, pane: id) + AgentWindowControls.swapMenu(model, pane: id)   // #1895
         Group {
             if compact {
                 AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
@@ -2752,7 +2712,7 @@ struct AgentWindowBand: View {
     }
 
     /// The layout slot: its fixed empty room in the wide tiers. #1646 (operator 2026-11-19): the layout name and Edit layout
-    /// / Done left the band (the Layouts section's active row has Edit / Done), so a layout alone never shows the band.
+    /// / Done left the band (#1895: no edit mode at all), so a layout alone never shows the band.
     @ViewBuilder func layoutSlotView(_ t: Tier) -> some View {
         if t == .full || t == .noChip {
             Color.clear.frame(width: Self.layoutWidth).accessibilityHidden(true).modifier(AgentBandProbe(kind: "layout"))
@@ -3175,7 +3135,7 @@ struct AgentPaneTerminalColumn: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            header.modifier(AgentRowDrag(token: model.paneDragToken(runtime.pane)))   // #1895: drag the pane to move it
             Rectangle().fill(Neon.stroke).frame(height: 1)
             VStack(spacing: 0) {
                 if terminalShown {
@@ -3210,7 +3170,8 @@ struct AgentPaneTerminalColumn: View {
                                       ask: { model.ask($0, s) }, open: open,
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
                                       panes: (focused ? [AgentWindowMenuEntry.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 } : [])
-                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),
+                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane)
+                                          + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
                                       xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))
@@ -3279,10 +3240,12 @@ struct AgentUnfocusedPane: View {
                 AgentCompactHeader.of(p.row, p.session, cwd: transcript.cwd, ended: ended, store: model.store,
                                       ask: { model.ask($0, p.session) }, open: { model.openSession(p.session) },
                                       // #900 B2 step 6a: this pane's items; choosing one focuses this pane first.
-                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane),
+                                      panes: AgentWindowControls.paneMenu(model, pane: runtime.pane)
+                                          + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
                                       xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))
+                    .modifier(AgentRowDrag(token: model.paneDragToken(runtime.pane)))   // #1895
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if !ended || kept != nil {   // #1471: Terminal is the only mode
                     AgentTerminalPane(controller: kept ?? model.paneTerminal(runtime), open: { model.openSession(p.session) })
@@ -3307,6 +3270,7 @@ struct AgentUnfocusedPane: View {
                 // else Connect (arms the attach and focuses the pane); never "isn't running", never an attach by itself.
                 AgentRemoteHeader(row: row, remote: x, pane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))
                     .modifier(AgentPaneProbe(kind: "header"))
+                    .modifier(AgentRowDrag(token: model.paneDragToken(runtime.pane)))   // #1895
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTerminalPane(controller: model.paneTerminal(runtime), open: {})
                     .overlay {
@@ -3488,6 +3452,15 @@ struct AgentPaneSwitcherButton<T: View>: View {
         .accessibilityValue(project ?? "")
         .popover(isPresented: Binding(get: { list != nil }, set: { if !$0 { list = nil } }), arrowEdge: .bottom) {
             if let list { AgentPaneSwitcherView(list: list) }
+        }
+        // #1895: the ⋯ menu's Swap Session… for this pane opens the same list; after this update (never inside it), once.
+        .onReceive(switcher.model.$swapRequest) { p in
+            guard p == switcher.pane else { return }
+            DispatchQueue.main.async {
+                guard switcher.model.swapRequest == switcher.pane else { return }
+                switcher.model.swapRequest = nil
+                list = AgentPaneSwitcherList.of(switcher, dismiss: { list = nil })
+            }
         }
     }
 }

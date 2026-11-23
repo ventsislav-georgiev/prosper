@@ -243,9 +243,9 @@ enum ControlSessions {
 
     // MARK: - layout.set
 
-    /// "side-by-side": a new layout (Layouts "+", Edit layout on), `left` picked into its pane, Split Right, `right`
-    /// picked into the new pane, then Done (saved, locked). A refusal (the split gate off, 9 layouts, no room) deletes
-    /// the layout it made, puts Edit layout back as it was (#1846 n134) and is the error. An open New session form is
+    /// "side-by-side": a new layout (Layouts "+"), `left` picked into its empty pane, Split Right, `right` picked into
+    /// the new empty pane (#1895: an empty focused pane takes the pick; each step saved). A refusal (the split gate off,
+    /// 9 layouts, no room) deletes the layout it made and is the error. An open New session form is
     /// refused (n135: a pick closes it). Undo deletes it: the layout before comes back (the MRU's next).
     static func setLayout(_ args: [String: ControlJSON]) throws -> ControlChange {
         let (m, st) = try window()
@@ -253,7 +253,6 @@ enum ControlSessions {
         let left = try session(try required(args, "left"), in: st), right = try session(try required(args, "right"), in: st)
         guard left.key != right.key else { throw ControlError("left and right are the same session") }
         guard AgentPaneLayout.splitsEnabled else { throw ControlError("split panes are off in this build") }
-        let editing = m.layoutEditing
         if let r = m.newLayout() { throw ControlError(r.notice ?? "no new layout: \(r)") }
         let made = m.layout.id
         m.select(.live(left.key))
@@ -263,10 +262,8 @@ enum ControlSessions {
         guard shown == [.session(dir: left.key.dir, name: left.name), .session(dir: right.key.dir, name: right.name)] else {
             let why = m.paneRefusal?.notice
             m.deleteLayout(made)
-            m.setLayoutEditing(editing)
             throw ControlError(why ?? "the two sessions could not be put side by side")
         }
-        m.setLayoutEditing(false)
         return ControlChange(summary: "\(left.title) beside \(right.title)", result: .string(made.uuidString), verb: "set the layout", undo: { [weak m] in
             _ = m?.deleteLayout(made)
         })

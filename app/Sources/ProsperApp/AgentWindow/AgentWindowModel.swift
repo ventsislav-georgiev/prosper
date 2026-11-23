@@ -469,35 +469,18 @@ final class AgentWindowModel: ObservableObject {
     private(set) var layouts: PaneLayoutStore?
     /// Counts blob writes (tests: a change writes once, a publish that changes nothing writes nothing).
     private(set) var layoutWrites = 0
-    /// #1538 (operator 2026-11-18, "Explicit edit mode"): Edit layout is on: a pick fills the focused pane and every change
-    /// is saved (the behaviour before #1538). Per window session, never saved: a new window opens locked. "+" turns it on.
-    @Published private(set) var layoutEditing = false
-    /// #1538: the active layout set aside while the single-pane view shows a session outside it (locked); nil otherwise.
+    /// #1538: the active layout set aside while the single-pane view shows a session outside a made layout; nil otherwise.
     /// The single-pane view is not a layout: never stored, never counted against the 9, no Layouts row is active.
     private(set) var parked: PaneLayout?
-    /// #1538: the layout is locked: the split gate on, a store loaded, Edit layout off and a layout the person made (the
-    /// Layouts section's show rule: two panes or more, or two layouts or more; the lone one-pane layout behaves as before).
-    /// Locked: nothing autosaves, a pick outside the layout opens the single-pane view, structural changes are refused.
-    /// #1817, #1826: but Close Pane, a drop, Split, Open to the Side and a divider act and are saved; Edit layout gates only
-    /// the pick of a session into the focused pane (the sidebar click, the title switcher).
-    var layoutLocked: Bool {
-        guard AgentPaneLayout.splitsEnabled, !layoutEditing, let s = layouts else { return false }
+    /// #1538, #1895 (operator 2026-11-23: no edit mode): a layout the person made: the split gate on, a store loaded and the
+    /// Layouts section's show rule (two panes or more, or two layouts or more; the lone one-pane layout follows the pick).
+    /// Then a sidebar pick of a session outside it opens the single-pane view (lockedShowing) unless the focused pane is
+    /// empty (it takes the pick); every change of it is saved at once (autosave); the single-pane view never is.
+    var layoutMade: Bool {
+        guard AgentPaneLayout.splitsEnabled, let s = layouts else { return false }
         return parked != nil || layout.panes.count >= 2 || s.layouts.count >= 2
     }
 
-    /// #1646 (operator 2026-11-19): a saved layout is the one on screen: the Layouts section is built and the single-pane
-    /// view is not up (then a Layouts row is active, the one with Edit / Done). The Go menu's Edit Layout only then.
-    var layoutShown: Bool { parked == nil && layoutRows != nil }
-
-    /// #1538: Edit / Done (#1646: the active Layouts row's) and the Go menu's item. Off: the layout as it is now is saved once (still
-    /// editing, so autosave writes). #1646: on is refused in the single-pane view (it never switches to the parked layout).
-    func setLayoutEditing(_ on: Bool) {
-        guard on != layoutEditing, !closed, !on || parked == nil else { return }
-        if !on { autosave() }
-        layoutEditing = on
-    }
-
-    func toggleLayoutEditing() { setLayoutEditing(!layoutEditing) }
     /// #901 B3 step 2 (decision c): the pane bind(nil) emptied in memory and the target it had; nil while the island is on.
     private var offEmptied: (layout: UUID, pane: UUID, target: PaneTarget?)?
     /// R899-2: the browse rule's refusal of the last pick (select() kept the layout as it was); the next pick that
@@ -785,25 +768,23 @@ final class AgentWindowModel: ObservableObject {
 
     /// 4.2 "Close Pane": the last pane is refused (7.3), so a one-pane window draws no Close Pane. 7.2: a close moves the
     /// keys to the panes.
-    /// #1817 (operator 2026-11-21): an explicit close acts without Edit layout and is saved; the single-pane view's one
+    /// #1817 (operator 2026-11-21): a close is saved; the single-pane view's one
     /// pane never closes (close refuses the last pane).
     func closePane(_ pane: UUID) {
         let shown = layout.focused
         if case let .success(l) = layout.close(pane) {
-            keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed(pane, shown: shown); closedToOne()
+            keyFocus = .pane; adopt(l); autosave(); cancelFormOfClosed(pane, shown: shown); closedToOne()
         }
     }
 
-    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout, Edit layout on or off alike: Edit
-    /// layout ends and the session left is shown on its own (the pick rule over the layout deleteLayout handed over to:
+    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout: the session left is shown on its own (the pick rule over the layout deleteLayout handed over to:
     /// a pane of it that shows the session is focused, else the single-pane view; unlocked, the one pane takes it). The
     /// lone layout is never deleted (.lastLayout): it stays as the one-pane layout, the Layouts section hidden as before.
     private func closedToOne() {
         guard AgentPaneLayout.splitsEnabled, parked == nil, layout.panes.count == 1 else { return }
         let left = layout.panes.first?.target
-        layoutEditing = false
         guard deleteLayout(layout.id) == nil, let id = Self.rowID(left) else { return }
-        if case let .success(l) = layoutLocked ? lockedShowing(id) : showing(id), l != layout { adopt(l) }
+        if case let .success(l) = layoutMade ? lockedShowing(id) : showing(id), l != layout { adopt(l); autosave() }   // #1895 (R1894 i2): saved at once
     }
 
     /// #1659: the one rule for every close (⌘W, Close Pane, the pills, a VoiceOver press): the form is drawn in the focused
@@ -830,10 +811,10 @@ final class AgentWindowModel: ObservableObject {
         switch a {
         case let .split(axis):
             next = splitting(axis, pane: pane)
-            // #1700: the single-pane view's split makes a new layout of it, Edit layout on (as "+" then a split)
+            // #1700: the single-pane view's split makes a new layout of it (as "+" then a split)
             if parked != nil, case let .success(l) = next { keyFocus = .pane; unpark(l); return true }
         case .closePane:
-            // #1817: acts locked too (saved below). #1700: the single-pane view swallows it with no notice (never the window close)
+            // #1817: saved below. #1700: the single-pane view swallows it with no notice (never the window close)
             if parked != nil { return true }
             closing = base.focused
             next = base.close(base.focused)
@@ -858,12 +839,9 @@ final class AgentWindowModel: ObservableObject {
             guard l != layout else { return false }
             if paneRefusal != nil { paneRefusal = nil }
             keyFocus = .pane   // 7.2: every pane focus action, split and close
-            // #1617: a split (Command-D, the Split menu items) edits the layout it makes, so the next sidebar pick fills
-            // the new empty pane (a locked click would park it instead); set before adopt, so its autosave saves the split.
-            // #1826: the split itself needs no Edit layout; only that pick does.
-            if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }
+            // #1895: a split focuses its new empty pane, which takes the next sidebar pick (select's empty-pane rule).
             adopt(l)
-            if closing != nil { autosave(explicit: true) }   // #1817: a close is saved while locked too
+            if closing != nil { autosave() }   // #1817: a close is saved
             closing.map { cancelFormOfClosed($0, shown: shown) }
             if closing != nil { closedToOne() }   // #1894
             return true
@@ -879,7 +857,7 @@ final class AgentWindowModel: ObservableObject {
     /// unfocused pane focuses it first): perform's own call, so the menu and the key share one cap and one room rule.
     func splitting(_ axis: PaneNode.Axis, pane: UUID? = nil) -> Result<PaneLayout, PaneRefusal> {
         countDryRun()
-        // #1826 (operator 2026-11-21): Split is explicit and acts locked too (perform saves it); #1700: the single-pane view splits (unpark).
+        // #1826 (operator 2026-11-21): Split is saved (perform); #1700: the single-pane view splits (unpark).
         let l = pane.flatMap { try? layout.focus($0).get() } ?? layout
         // The same minimum paneFrames tiles with, so a split that passes here is drawn tiled.
         return l.split(axis: axis, minimum: paneMinimum, in: CGRect(origin: .zero, size: paneArea.size))
@@ -896,6 +874,9 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
+    /// #1895: Swap Session… chosen for this pane: its title switcher opens its list and clears it (AgentPaneSwitcherButton).
+    @Published var swapRequest: UUID?
+
     func focusPane(_ pane: UUID) {
         keyFocus = .pane
         if pane != layout.focused, case let .success(l) = layout.focus(pane) { adopt(l) }
@@ -967,7 +948,7 @@ final class AgentWindowModel: ObservableObject {
     /// 7.5: the dividers in a pane area of `size`, parents before children. None with the gate off, one pane, zoomed,
     /// too small (3.4: the focused pane alone) or a size that is not finite (refused before any use).
     func dividers(in size: CGSize) -> [Divider] {
-        // #1826: a divider drag, equalize and nudge act locked too (saved explicitly, like #1817's close)
+        // #1826: a divider drag, equalize and nudge are saved, like #1817's close
         guard AgentPaneLayout.splitsEnabled, size.width.isFinite, size.height.isFinite, layout.zoomed == nil
         else { return [] }
         let area = CGRect(origin: .zero, size: size)
@@ -1007,7 +988,7 @@ final class AgentWindowModel: ObservableObject {
     func dragBegan(at p: CGPoint, in size: CGSize, clicks: Int = 1) -> Bool {
         if dividerDrag != nil { dragEnded() }
         guard !closed, let d = divider(at: p, in: size) else { return false }
-        if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l); autosave(explicit: true) }
+        if clicks >= 2, case let .success(l) = layout.equalize(path: d.path, deep: false), l != layout { adopt(l); autosave() }
         guard case let .split(_, ratio, _, _)? = layout.tree.locate(d.path[...], in: .zero)?.node else { return false }
         dividerDrag = (d, d.axis == .columns ? p.x : p.y, ratio, size)
         for t in allTerminals { t.liveResizeStarted() }   // 7.5: each terminal re-grids at the drag's end only (one setSize)
@@ -1035,7 +1016,7 @@ final class AgentWindowModel: ObservableObject {
         guard dividerDrag != nil else { return }
         dividerDrag = nil
         for t in allTerminals { t.liveResizeEnded() }
-        autosave(explicit: true)   // #1826: saved while locked too
+        autosave()   // #1826: a drag saves once, at its end
     }
 
     /// 13: a divider's value: its split's ratio in whole percent, rounded. nil: no split at `path`, or a ratio (outside
@@ -1058,7 +1039,7 @@ final class AgentWindowModel: ObservableObject {
               case let .success(l) = layout.setRatio(path: path, r + (up ? 0.05 : -0.05), minimum: paneMinimum,
                                                      in: CGRect(origin: .zero, size: size)), l != layout else { return }
         adopt(l)
-        autosave(explicit: true)   // #1826: saved while locked too
+        autosave()   // #1826
     }
 
     private(set) var store: AgentIslandStore? { didSet { drawnMemo = nil } }
@@ -1448,8 +1429,8 @@ final class AgentWindowModel: ObservableObject {
         addLayout { s in s.layouts.first { $0.id == id }.map { $0.duplicated(name: s.duplicateName(of: $0.name)) } }
     }
 
-    /// #1700: the single-pane view is not a layout and draws no Edit, so a change to its panes (`l`) is saved as a new
-    /// layout in Edit layout (addLayout: the view's layout left, the parked one stays saved); at 9 layouts the notice says so.
+    /// #1700: the single-pane view is not a layout, so a change to its panes (`l`) is saved as a new
+    /// layout (addLayout: the view's layout left, the parked one stays saved); at 9 layouts the notice says so.
     /// #1722: false when no layout was made (the cap, the notice set): the caller's after-success steps do not run.
     @discardableResult
     private func unpark(_ l: PaneLayout) -> Bool {
@@ -1472,8 +1453,8 @@ final class AgentWindowModel: ObservableObject {
         case let .success(out):
             autosave(out)
             parked = nil
-            layoutEditing = true   // #1538: a new layout opens in Edit layout
-            adopt(l)
+            adopt(l)   // #1895: "+" makes one empty pane, focused: it takes the next pick
+
             return nil
         }
     }
@@ -1587,7 +1568,7 @@ final class AgentWindowModel: ObservableObject {
     /// #1862 n180 (#1864 reuses it for sessions.focus): `select(id)` would put another target into the focused pane (the
     /// browse rule's answer, `showing`), so its terminal view is swapped and takes the keys the old one had. An agent path
     /// (keepingKeys) skips such a select. A refused show retargets nothing: false.
-    /// shortcut: reads the unlocked browse rule; a locked layout's pick (lockedShowing) parks it for a single-pane view
+    /// shortcut: reads the browse rule; a made layout's pick (lockedShowing) parks it for a single-pane view
     /// instead, which this counts as a retarget too (the conservative answer), upgrade if an agent path must pick there.
     func wouldRetargetFocusedPane(_ id: AgentSidebar.RowID) -> Bool {
         guard case let .success(l) = showing(id) else { return false }
@@ -1723,10 +1704,10 @@ final class AgentWindowModel: ObservableObject {
     /// (`storing` nil); and no change.
     /// shortcut: one write per committed change, not coalesced per run-loop turn (8.1); B2's divider (save at drag end)
     /// and B3's chained verbs are where coalescing pays.
-    /// #1817: `explicit` (a Close Pane, a drop) saves while locked; browsing still never does.
-    private func autosave(_ next: PaneLayoutStore? = nil, explicit: Bool = false) {
+    /// #1895: every change of a layout is saved at once; the single-pane view (`parked`) is never a layout, never saved.
+    private func autosave(_ next: PaneLayoutStore? = nil) {
         guard let d = layoutDefaults, !closed, let s = layouts else { return }
-        if next == nil, layoutLocked, !explicit { return }   // #1538: locked, browsing never rewrites the saved layout
+        if next == nil, parked != nil { return }   // #1538: the parked layout stays as saved under the single-pane view
         guard let n = next ?? (store == nil ? islandOffLayout().flatMap(s.storing) : s.storing(layout)), n != s else { return }
         layouts = n
         layoutWrites += 1
@@ -2168,8 +2149,9 @@ final class AgentWindowModel: ObservableObject {
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
-        // #1538: a locked layout's own pick (the human's, into the focused pane) goes through lockedShowing.
-        let next = if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) } else {
+        // #1538: a made layout's own pick (the human's, into the focused pane) goes through lockedShowing; #1895: an empty
+        // focused pane takes it instead (after Split or "+"); a session the layout shows still only focuses its pane.
+        let next = if let id, manual, placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) } else {
             id.map { showing($0, placement: placement) } ?? layout.replace(layout.focused, target: nil)
         }
         switch next {
@@ -2178,7 +2160,7 @@ final class AgentWindowModel: ObservableObject {
             // #1700: Open to the Side from the single-pane view: a new layout of the view and the side pane
             if placement == .side, parked != nil, l.order != layout.order { unpark(l) } else {
                 layout = l
-                if placement == .side, parked == nil { autosave(explicit: true) }   // #1826: Open to the Side is explicit: saved while locked too; #1832: never the parked single-pane view
+                if placement == .side, parked == nil { autosave() }   // #1826; #1832: never the parked single-pane view
             }
         case let .failure(r):
             paneRefusal = r   // R899-2: kept for the pane notice line, never dropped silently
@@ -2221,9 +2203,9 @@ final class AgentWindowModel: ObservableObject {
         return try body()
     }
 
-    /// #1538: a pick while locked. A session the layout shows: the browse rule on the layout (its pane focused; from the
+    /// #1538: a pick on a made layout (select). A session the layout shows: the browse rule on the layout (its pane focused; from the
     /// single-pane view, back to the layout as it was left). Any other: the single-pane view shows it, the layout parked
-    /// (set before select's write, so its autosave sees the lock); already there, the view's own pane takes it.
+    /// (set before select's write, so its autosave saves nothing); already there, the view's own pane takes it.
     private func lockedShowing(_ id: AgentSidebar.RowID) -> Result<PaneLayout, PaneRefusal> {
         let t = target(id), home = parked ?? layout
         let area = CGRect(origin: .zero, size: paneArea.size)
@@ -2258,15 +2240,14 @@ final class AgentWindowModel: ObservableObject {
     /// #1491: a pick in pane `pane`'s title switcher: row `id` goes into THAT pane (focused or not), swapping with a pane
     /// that already shows it (PaneLayout.put), then the pane takes the focus and the keys as a sidebar click does (a remote
     /// row arms its attach). The pane's own session, or a pane no longer in the layout: nothing changes.
-    /// #1817: `drop` (a drag onto the pane) acts while locked and is saved; the title switcher's pick keeps the #1538 gate.
-    func choose(_ id: AgentSidebar.RowID, into pane: UUID, drop: Bool = false) {
-        if layoutLocked, !drop || parked != nil { if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }; return }   // #1538: a pane retarget; #1700: the view's one pane takes the pick
+    /// #1895: the title switcher's pick, Swap Session… and a centre drop act alike and are saved (autosave).
+    func choose(_ id: AgentSidebar.RowID, into pane: UUID) {
+        if parked != nil { select(id); focusSelection(); return }   // #1700: the single-pane view's one pane takes the pick
         guard case let .success(put) = layout.put(target(id), in: pane), put != layout,
               case let .success(l) = put.focus(pane) else { return }
         removing = nil; pendingSpawn = nil; newSession = nil
         if paneRefusal != nil { paneRefusal = nil }
         layout = l
-        if drop { autosave(explicit: true) }
         if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }
         follow()
         focusSelection()
@@ -2279,6 +2260,14 @@ final class AgentWindowModel: ObservableObject {
     static func dragToken(_ id: AgentSidebar.RowID) -> String? {
         if case .history = id { return nil }
         return String(describing: id)
+    }
+
+    /// #1895 (rule 4): a pane header's drag payload: its session's row token, so a drop on another pane's edge moves the
+    /// pane there (PaneLayout.split closes the pane that showed it) and on its centre swaps the two (put); always on, no
+    /// mode. An empty pane, a row with no token (History) or the split gate off: nil, no drag.
+    func paneDragToken(_ pane: UUID) -> String? {
+        guard AgentPaneLayout.splitsEnabled else { return nil }
+        return Self.rowID(layout.panes.first { $0.id == pane }?.target).flatMap(Self.dragToken)
     }
 
     /// #1492: the zone at `p` in pane of `size`; the split gate off, only the centre.
@@ -2314,15 +2303,15 @@ final class AgentWindowModel: ObservableObject {
     func drop(_ id: AgentSidebar.RowID, into pane: UUID, zone: PaneDropZone) -> Bool {
         dropHover = nil
         guard !closed, Self.dragToken(id) != nil, row(id) != nil, layout.order.contains(pane) else { return false }
-        // #1817 (operator 2026-11-21): a drop is explicit: it retargets or splits without Edit layout, and is saved
-        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }
+        // #1817, #1895: a drop (a sidebar row or a pane header) retargets, or splits with a move, and is saved
+        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }
         switch layout.split(pane, side: side, target: target(id), minimum: paneMinimum,
                             in: CGRect(origin: .zero, size: paneArea.size)) {
         case let .failure(r):
             paneRefusal = r
         case let .success(l):
             // #1722: a refused unpark (9 layouts) keeps the pending state and arms, follows and focuses nothing
-            if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave(explicit: true) }   // #1700: an edge drop on the single-pane view
+            if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave() }   // #1700: an edge drop on the single-pane view
             removing = nil; pendingSpawn = nil; newSession = nil
             if paneRefusal != nil { paneRefusal = nil }
             if case let .remote(h, n) = id { terminal.arm(AgentTerminalSpawn.remoteKey(host: h, name: n)) }

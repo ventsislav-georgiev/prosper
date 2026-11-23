@@ -243,7 +243,7 @@ final class AgentEndSymbolTests: XCTestCase {
     func testEverySymbolNameResolves() {
         let names = ["terminal", "pencil", "arrow.clockwise", "stop.circle", Self.door, "play.fill", "forward.end", "pin",
                      "pin.slash", "trash", "plus.square.on.square", "sidebar.right", "list.bullet", "rectangle.split.2x1",
-                     "rectangle.split.1x2", "arrow.up.left.and.arrow.down.right", "equal.square", "xmark.rectangle", "plus",
+                     "rectangle.split.1x2", "arrow.up.left.and.arrow.down.right", "equal.square", "xmark.rectangle", "arrow.left.arrow.right", "plus",
                      "folder", "folder.badge.plus", "arrow.up.arrow.down", "clock", "textformat", "list.bullet.rectangle",
                      "checkmark.shield", "gearshape", "stethoscope", "cpu", "speedometer", "rectangle.righthalf.inset.filled"]
         XCTAssertEqual(Set(names), AgentMenuSymbol.all)

@@ -28,7 +28,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         switch a {
         case .key(.newSession), .key(.newShell), .key(.stopOrRemove), .key(.close): .session
         // #1817 (operator 2026-11-21): Close Pane (Command-W, more than one pane) is in the Layout menu
-        case .pane(.closePane), .pane(.split), .pane(.cycle), .pane(.layout), .editLayout: .layout
+        case .pane(.closePane), .pane(.split), .pane(.cycle), .pane(.layout): .layout
         case .pane(.toggleSidebar), .pane(.zoom), .sidebarMode, .key(.font): .view
         default: .go
         }
@@ -56,8 +56,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         case pane(PaneAction)
         /// #1379: the sidebar's mode (no shortcut; the open mode checked).
         case sidebarMode(AgentSidebarMode)
-        /// #1538: Edit layout on or off (no shortcut; checked while on).
-        case editLayout
     }
 
     struct Entry: Equatable {
@@ -115,9 +113,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         [nil] + AgentSidebarMode.allCases.map { Entry($0.menuTitle, "", [], .sidebarMode($0)) }
     }
 
-    /// #1538: Edit Layout, after the pane items (a separator first); split gate on only.
-    static func layoutEntries(splits: Bool) -> [Entry?] { splits ? [nil, Entry("Edit Layout", "", [], .editLayout)] : [] }
-
     /// The main menu, read only outside XCTest (as `AgentsNSWindow.inputSourceID`): no row ever changes the app's.
     static var mainMenu: @MainActor () -> NSMenu? = { NSClassFromString("XCTestCase") == nil ? NSApp.mainMenu : nil }
 
@@ -154,7 +149,7 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let all = Self.entries(splits: AgentPaneLayout.splitsEnabled, panes: window?.model?.layout.panes.count ?? 1) + Self.layoutEntries(splits: AgentPaneLayout.splitsEnabled)
+        let all = Self.entries(splits: AgentPaneLayout.splitsEnabled, panes: window?.model?.layout.panes.count ?? 1)
             + Self.modeEntries + Self.layoutListEntries(window?.model?.layoutRows)
         let list = Self.entries(all, in: kind)
         let mode = window?.model?.sidebarMode
@@ -167,7 +162,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
             i.target = self
             i.tag = tag
             if case .sidebarMode(let m) = e.action { i.state = m == mode ? .on : .off }
-            if e.action == .editLayout { i.state = window?.model?.layoutEditing == true ? .on : .off }
             if case .pane(.layout(let n)) = e.action { i.state = window?.model?.layoutRows?.first { $0.number == n }?.active == true ? .on : .off }
             tag += 1
             return i
@@ -184,7 +178,6 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         case .key(let r): window.perform(r)
         case .pane(let a): window.perform(pane: a)
         case .sidebarMode(let m): window.perform(mode: m)
-        case .editLayout: window.performEditLayout()
         }
     }
 
@@ -202,8 +195,6 @@ extension AgentsNSWindow {
         let renaming = model.renaming != nil || model.layoutRenaming != nil, form = model.newSession != nil
         switch a {
         case .sidebarMode: return true
-        // #1538: while a saved layout is shown (#1646: not the single-pane view; the band's Edit layout), or to turn an open edit off
-        case .editLayout: return AgentPaneLayout.splitsEnabled && !renaming && (model.layoutShown || model.layoutEditing)
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form
         case .key(.xray) where XrayPanels.dch() == nil: return false   // #1351: below the gate the item is off (no process)
         case .key(let r):

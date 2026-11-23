@@ -131,10 +131,10 @@ final class AgentGoMenuTests: XCTestCase {
             XCTAssertEqual(PaneKeys.action(for: ev, context: c), a, "\(e.title): the shown chord is the handled key")
         }
         XCTAssertEqual(entries.count, codes.count)
-        // the list lands in Layout only, after Edit Layout
-        let all = AgentGoMenu.entries(splits: true) + AgentGoMenu.layoutEntries(splits: true) + list
+        // the list lands in Layout only, after the pane items (#1895: no Edit Layout)
+        let all = AgentGoMenu.entries(splits: true) + list
         XCTAssertEqual(AgentGoMenu.entries(all, in: .layout).compactMap { $0 }.map(\.title),
-                       ["Split Right", "Split Down", "Next Pane", "Previous Pane", "Edit Layout"] + rows.map(\.name))
+                       ["Split Right", "Split Down", "Next Pane", "Previous Pane"] + rows.map(\.name))
         for k in [AgentGoMenu.Kind.session, .view, .go] {
             XCTAssertFalse(AgentGoMenu.entries(all, in: k).contains { $0.map { rows.map(\.name).contains($0.title) } ?? false }, "\(k)")
         }
