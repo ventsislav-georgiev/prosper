@@ -1,0 +1,13 @@
+{
+ "entry": 1905,
+ "filter": "XrayRefTurnTests/testSpeakerHiddenOnlyWhenArrowSpeaksIt",
+ "mutants": [
+  {
+   "name": "always-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "static func speakerHidden(opens: Bool) -> Bool { opens }",
+   "new": "static func speakerHidden(opens: Bool) -> Bool { true }",
+   "expect": "killed"
+  }
+ ]
+}
