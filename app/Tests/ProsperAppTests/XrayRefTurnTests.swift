@@ -113,6 +113,12 @@ final class XrayRefTurnTests: XCTestCase {
         XCTAssertEqual(m.map(XrayRefPopover.spokenRow), "Reply: Work on #12 please")
     }
 
+    /// #1905, red with the old `.accessibilityHidden(true)`: a row with no arrow shows its speaker to AX; one with an arrow hides it.
+    func testSpeakerHiddenOnlyWhenArrowSpeaksIt() {
+        XCTAssertTrue(XrayRefPopover.speakerHidden(opens: true))
+        XCTAssertTrue(!XrayRefPopover.speakerHidden(opens: false))
+    }
+
     /// Red with jump-no-chapter (the chapter lookup ignored: the first chapter opens): a header opens its turn's chapter
     /// card; Earlier, or a turn the chapters do not hold, opens nothing.
     func testHeaderJumpsToItsTurn() {

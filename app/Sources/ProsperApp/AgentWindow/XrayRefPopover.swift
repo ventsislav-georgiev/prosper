@@ -360,15 +360,16 @@ struct XrayRefPopover: View {
     /// and (#1900) an arrow only when the mention has a chapter to open (XrayPanelModel.mentionChapter): this session's,
     /// by its anchor or its turn. Another session's mention, or one with no chapter read yet, has no arrow.
     @ViewBuilder func mentionRow(_ m: XrayRefStream.Mention, _ c: XrayRefContext, _ q: String) -> some View {
+        let opens = panel.mentionChapter(m, in: c) != nil
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             if let s = Self.speaker(m) {
                 Text(verbatim: s).font(Neon.font(9.5, weight: .semibold)).foregroundStyle(Neon.textSecondary)
                     .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
                     .background(Capsule().fill(Neon.textSecondary.opacity(0.12))).fixedSize()
-                    .accessibilityHidden(true)
+                    .accessibilityHidden(Self.speakerHidden(opens: opens))
             }
             snippet(m.rich.isEmpty ? [XrayRich.Run(text: m.line)] : m.rich, q)
-            if panel.mentionChapter(m, in: c) != nil {
+            if opens {
                 Button { panel.jumpRef(m, in: c) } label: {
                     Image(systemName: "arrow.turn.down.right").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
                         .contentShape(Rectangle())
@@ -457,6 +458,9 @@ struct XrayRefPopover: View {
         let said = m.sentence.map { $0.before + $0.hit + $0.after } ?? ""
         return said.count > m.line.count ? said : m.line
     }
+
+    /// #1905: the arrow's label already speaks the speaker (spokenRow); a row with no arrow lets the capsule speak it.
+    static func speakerHidden(opens: Bool) -> Bool { opens }
 
     static func spokenRow(_ m: XrayRefStream.Mention) -> String {
         let said = m.sentence.map { $0.before + $0.hit + $0.after } ?? m.line
