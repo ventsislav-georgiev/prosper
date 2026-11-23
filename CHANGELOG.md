@@ -23,13 +23,7 @@ tag from the now-released section and put it on the new top draft.
 - Settings, Claude Account Pool: "Start new Claude sessions through the pool" is now on by default
   (a choice you already made is kept). A session whose environment or shell startup files already
   set ANTHROPIC_BASE_URL to another address keeps it and is not routed, and the pane says so under
-  the switch. (#1890)
-- Settings, Claude Account Pool: the first new Claude session after Prosper starts no longer waits
-  up to 4 seconds while the pool reads your shell's ANTHROPIC_BASE_URL; Prosper reads it once at
-  launch, in the background. (#1891)
-- Settings, Claude Account Pool and the New session form: the "via ccpool" hint and the line under
-  the pool switch now agree with what a new session really does when Prosper itself was started with
-  its own ANTHROPIC_BASE_URL. (#1892)
+  the switch. (#1890, #1891, #1892)
 - Agent Sessions: closing a layout's pane so that only one session is left now deletes that layout
   and shows the session on its own. (#1894)
 - Layouts no longer have an Edit mode: a session you pick that isn't in the layout opens on its own,
