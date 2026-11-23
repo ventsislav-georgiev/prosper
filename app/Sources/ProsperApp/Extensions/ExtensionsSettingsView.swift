@@ -162,9 +162,9 @@ struct ExtensionsPane: View {
 enum GitHubLinkInstall {
     /// The checked link: only ControlKits.source's GitHub form; a folder path or anything else is refused.
     static func url(_ raw: String) throws -> String {
-        guard case .github(let url) = try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw ControlError("not a GitHub repo URL: give https://github.com/<owner>/<repo>")
-        }
+        // n2: one text for every refusal, ControlKits.source's own error included (its "absolute folder path" text is not for this sheet)
+        let refusal = ControlError("not a GitHub repo link: give https://github.com/<owner>/<repo> or .../tree/<tag>")
+        guard case .github(let url)? = try? ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw refusal }
         return url
     }
 
@@ -172,9 +172,13 @@ enum GitHubLinkInstall {
     @discardableResult
     static func install(_ raw: String, into reg: ExtensionRegistry) async throws -> ExtensionRecord {
         try await reg.installRemote(url: try url(raw), maxBytes: RemoteInstaller.maxArtifactBytes, review: nil) { loaded in
+            // a Cancel after the last byte (extract, checkTree, the hop to main) is seen here: installLocal would copy anyway
+            try Task.checkCancellation()
             guard reg.record(id: loaded.id) == nil else {
                 throw ControlError("\(OutsideText.shown(loaded.id, max: 80)) is already installed: remove it first to install it from a link")
             }
+            // f1: no record does not mean no stored trust (Uninstall keeps it; a refused folder has none to show)
+            reg.forgetStoredTrust(id: loaded.id)
         }
     }
 
@@ -191,6 +195,7 @@ private struct GitHubLinkSheet: View {
     @State private var link = ""
     @State private var running = false
     @State private var error: String?
+    @State private var task: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: sz(14)) {
@@ -207,19 +212,27 @@ private struct GitHubLinkSheet: View {
             HStack {
                 if running { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Cancel") { close() }.buttonStyle(.neon)
+                Button("Cancel") { cancel() }.buttonStyle(.neon)
                 Button("Install") { install() }.buttonStyle(.neon)
                     .disabled(running || link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(sz(20))
         .background(SettingsBackground())
+        .onDisappear { task?.cancel() }
+    }
+
+    /// n1: Cancel and closing stop the fetch (it has no deadline of its own: a slow drip could run for ever); installLocal is
+    /// synchronous after the fetch, so a cancel either stops the fetch or comes after the install finished.
+    private func cancel() {
+        task?.cancel()
+        close()
     }
 
     private func install() {
         running = true
         error = nil
-        Task {
+        task = Task {
             do {
                 try await GitHubLinkInstall.install(link, into: registry)
                 close()

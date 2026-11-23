@@ -2033,6 +2033,18 @@ final class ExtensionRegistry: ObservableObject {
         onEnabledChanged?()
     }
 
+    /// #1911: drop the stored trust, privilege and phone approval of an id that has no record (after an Uninstall, which keeps
+    /// stored trust, or a refused folder), so a copy installed under a link never inherits the old trust. Touches no record:
+    /// with one (a system or built-in id included) it does nothing. If a later refusal of the install (case or id refusal,
+    /// failed copy) leaves the trust cleared, that is fine: no record held it.
+    func forgetStoredTrust(id: String) {
+        guard record(id: id) == nil else { return }
+        var ids = trustedIDs()
+        if ids.remove(id) != nil { persistTrusted(ids) }
+        clearPrivilege(id: id)
+        setPhoneApproved(false, id: id)
+    }
+
     // MARK: - Privilege (system tier) gate
 
     private func privilegedIDs() -> Set<String> {

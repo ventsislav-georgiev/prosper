@@ -36,6 +36,20 @@
       "old": "(error as? ControlError)?.message ?? MarketplaceRootView.installErrorText(error)",
       "new": "MarketplaceRootView.installErrorText(error)",
       "expect": "killed"
+    },
+    {
+      "name": "no-forget-stored-trust",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "            reg.forgetStoredTrust(id: loaded.id)\n",
+      "new": "",
+      "expect": "killed"
+    },
+    {
+      "name": "no-cancel-check",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "            try Task.checkCancellation()\n",
+      "new": "",
+      "expect": "killed"
     }
   ]
 }

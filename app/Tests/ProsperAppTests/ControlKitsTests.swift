@@ -476,6 +476,69 @@ final class ControlKitsTests: XCTestCase {
         XCTAssertTrue(fetched.isEmpty && notices.isEmpty, "no kits.install path, no notice")
     }
 
+    /// #1911 f1: a link install under an id whose trust is still stored (Uninstall keeps it; a refused folder has no record) never comes up trusted.
+    func testGitHubLinkInstallNeverInheritsStoredTrustOfAnIDWithNoRecord() async throws {
+        let e = try kitPaneEnv()
+        let id = "dev.example.plain"
+        let defaults = scratchDefaults("ctlkits-f1")
+        let reg = ExtensionRegistry(systemDir: nil, userDir: e.root.appendingPathComponent("user", isDirectory: true), hostVersion: "9.0.0", defaults: defaults)
+        reg.discover()
+        reg.reviewNewPermissions = { _, _ in true }
+        let src = try plainSource(e, id: id)
+        reg.remoteFetch = { _, _ in src }
+        func check(_ why: String) {
+            XCTAssertEqual(reg.record(id: id)?.trusted, false, why)
+            XCTAssertTrue(reg.record(id: id)?.isLive == false, "\(why): not live")
+            XCTAssertFalse(reg.isPrivileged(id: id), why)
+            XCTAssertFalse(reg.isPhoneApproved(id: id), why)
+            XCTAssertFalse((defaults.stringArray(forKey: "trustedExtensionIDs") ?? []).contains(id), "\(why): stored trust")
+            XCTAssertFalse((defaults.stringArray(forKey: "privilegedExtensionIDs") ?? []).contains(id), "\(why): stored privilege")
+        }
+        // case 1: trusted, uninstalled (stored trust stays, no record), link-installed
+        _ = try await GitHubLinkInstall.install("https://github.com/example/plain", into: reg)
+        try reg.trust(id: id)
+        try await reg.uninstall(id: id)
+        XCTAssertTrue(reg.record(id: id) == nil)
+        _ = try await GitHubLinkInstall.install("https://github.com/example/plain", into: reg)
+        check("after trust + uninstall")
+        // case 2: stored trust and privilege with no record at all (a refused folder), link-installed
+        try await reg.uninstall(id: id)
+        defaults.set([id], forKey: "trustedExtensionIDs")
+        defaults.set([id], forKey: "privilegedExtensionIDs")
+        XCTAssertTrue(reg.record(id: id) == nil)
+        _ = try await GitHubLinkInstall.install("https://github.com/example/plain", into: reg)
+        check("stored trust and privilege, no record")
+    }
+
+    /// #1911: a Cancel that lands after the fetch returned (here: the fake cancels its own task) installs nothing and keeps stored trust.
+    func testGitHubLinkCancelAfterTheFetchInstallsNothingAndKeepsStoredTrust() async throws {
+        let e = try kitPaneEnv()
+        let id = "dev.example.plain"
+        let defaults = scratchDefaults("ctlkits-cancel")
+        defaults.set([id], forKey: "trustedExtensionIDs")
+        let reg = ExtensionRegistry(systemDir: nil, userDir: e.root.appendingPathComponent("user", isDirectory: true), hostVersion: "9.0.0", defaults: defaults)
+        reg.discover()
+        reg.reviewNewPermissions = { _, _ in true }
+        let src = try plainSource(e, id: id)
+        reg.remoteFetch = { _, _ in withUnsafeCurrentTask { $0?.cancel() }; return src }
+        let task = Task { @MainActor in _ = try await GitHubLinkInstall.install("https://github.com/example/plain", into: reg) }
+        do { try await task.value; XCTFail("a cancelled install is refused") } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertTrue(reg.record(id: id) == nil, "nothing is installed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: e.root.appendingPathComponent("user/\(id)").path))
+        XCTAssertEqual(defaults.stringArray(forKey: "trustedExtensionIDs"), [id], "the stored trust is not cleared by a cancelled install")
+    }
+
+    func testGitHubLinkRefusalTextIsOneLineForEveryRefusal() throws {
+        for bad in ["https://gitlab.com/example/plain", "/Users/example/folder", "example/plain", ""] {
+            do { _ = try GitHubLinkInstall.url(bad); XCTFail("\(bad) is refused") } catch {
+                XCTAssertEqual(GitHubLinkInstall.errorText(error),
+                               "not a GitHub repo link: give https://github.com/<owner>/<repo> or .../tree/<tag>", bad)
+            }
+        }
+    }
+
     func testARefusedApplyKeepsTrustAsItWasLogsNothingAndOffersNoUndo() async throws {
         let e = try kitPaneEnv()
         let (reg, _) = installEnv(e)
