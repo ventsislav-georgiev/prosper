@@ -5,9 +5,10 @@
   {
    "name": "arrow-always",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
-   "old": "            if panel.mentionChapter(m, in: c) != nil {\n",
+   "old": "            if opens {\n",
    "new": "            if true {\n",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "re-anchored after #1905 computed opens once (QA R1905 f1)"
   },
   {
    "name": "no-turn-fallback",
