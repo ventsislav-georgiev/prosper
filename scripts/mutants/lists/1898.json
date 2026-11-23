@@ -1,0 +1,34 @@
+{
+ "entry": "1898",
+ "filter": "AgentIslandPlanLimitsTests|AgentIslandPlanUsageTests",
+ "mutants": [
+  {
+   "name": "sort-reversed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "accounts.sorted { ($1.urgency, $0.nextReset, $0.label) < ($0.urgency, $1.nextReset, $1.label) }",
+   "new": "accounts.sorted { ($0.urgency, $0.nextReset, $0.label) < ($1.urgency, $1.nextReset, $1.label) }",
+   "expect": "killed"
+  },
+  {
+   "name": "stale-week-kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "if let r = reset[claim] { return Double(r) > now ? (u, r) : nil }",
+   "new": "if let r = reset[claim] { return Double(r) > now || claim == \"seven_day\" ? (u, r) : nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "benched-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "benchedUntil = cooldown.values.filter { Double($0) > now }.min()",
+   "new": "benchedUntil = cooldown.values.min()",
+   "expect": "killed"
+  },
+  {
+   "name": "reread-every-tick",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        guard store.planUsage != u else { return }\n",
+   "new": "        if store.planLimits != nil, u != nil { readPlanLimits() }\n        guard store.planUsage != u else { return }\n",
+   "expect": "killed"
+  }
+ ]
+}
