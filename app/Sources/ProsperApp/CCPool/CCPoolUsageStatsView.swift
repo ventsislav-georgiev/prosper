@@ -345,23 +345,36 @@ struct CCPoolUsageStatsSection: View {
                         .accessibilityLabel(c.title)
                         .accessibilityValue(c.summary)
                         .accessibilityAddTraits(.isImage)
+                    // Outside the chart's ignored element: the legend is drawn here (wrapping), not by Swift Charts.
+                    if let key = Self.legendKey(i, s) { CCPoolChartLegend(key: key) }
                 }
             }
+        }
+    }
+
+    /// The names and colours of chart `i`'s series (nil for the table): the chart's scale and its legend both read this.
+    static func legendKey(_ i: Int, _ s: CCPoolUsageStatsModel.Shown) -> CCPoolLegendKey? {
+        switch i {
+        case 0: return CCPoolLegendKey(s.utilization.filter { !$0.points.isEmpty }.map(\.name))
+        case 1: return CCPoolLegendKey(CCPoolUsageStatsModel.kinds)
+        case 2: return CCPoolLegendKey(s.cache.filter { !$0.points.isEmpty }.map(\.name))
+        case 3: return nil
+        default: return CCPoolLegendKey(s.finish.flatMap { ["\($0.model) median", "\($0.model) 90th"] })
         }
     }
 
     @ViewBuilder
     private func chart(_ i: Int, _ s: CCPoolUsageStatsModel.Shown) -> some View {
         switch i {
-        case 0: lines(s.utilization, y: "Percent").frame(height: sz(160))
-        case 1: bars(s.tokens[model.grouping] ?? []).frame(height: sz(160))
-        case 2: lines(s.cache, y: "Percent").chartYScale(domain: 0...100).frame(height: sz(160))
+        case 0: lines(s.utilization, y: "Percent", key: Self.legendKey(i, s)).frame(height: sz(160))
+        case 1: bars(s.tokens[model.grouping] ?? [], key: Self.legendKey(i, s)).frame(height: sz(160))
+        case 2: lines(s.cache, y: "Percent", key: Self.legendKey(i, s)).chartYScale(domain: 0...100).frame(height: sz(160))
         case 3: table(s.top)
-        default: finish(s.finish).frame(height: sz(160))
+        default: finish(s.finish, key: Self.legendKey(i, s)).frame(height: sz(160))
         }
     }
 
-    private func lines(_ lines: [CCPoolUsageStatsModel.Line], y: String) -> some View {
+    private func lines(_ lines: [CCPoolUsageStatsModel.Line], y: String, key: CCPoolLegendKey?) -> some View {
         Chart {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
                 ForEach(Array(l.points.enumerated()), id: \.offset) { _, p in
@@ -375,9 +388,10 @@ struct CCPoolUsageStatsSection: View {
                 }
             }
         }
+        .legendScale(key)
     }
 
-    private func bars(_ bars: [CCPoolUsageStatsModel.Bar]) -> some View {
+    private func bars(_ bars: [CCPoolUsageStatsModel.Bar], key: CCPoolLegendKey?) -> some View {
         Chart {
             ForEach(Array(bars.enumerated()), id: \.offset) { _, b in
                 ForEach(Array(zip(CCPoolUsageStatsModel.kinds, b.kinds).enumerated()), id: \.offset) { _, k in
@@ -386,9 +400,10 @@ struct CCPoolUsageStatsSection: View {
                 }
             }
         }
+        .legendScale(key)
     }
 
-    private func finish(_ rows: [CCPoolUsageStatsModel.Finish]) -> some View {
+    private func finish(_ rows: [CCPoolUsageStatsModel.Finish], key: CCPoolLegendKey?) -> some View {
         Chart {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, f in
                 LineMark(x: .value("Day", f.day), y: .value("Seconds", f.median / 1000), series: .value("Series", "\(f.model) median"))
@@ -397,6 +412,7 @@ struct CCPoolUsageStatsSection: View {
                     .foregroundStyle(by: .value("Series", "\(f.model) 90th")).symbol(.circle)
             }
         }
+        .legendScale(key)
     }
 
     private func table(_ rows: [CCPoolUsageStatsModel.SessionRow]) -> some View {
@@ -437,6 +453,77 @@ struct CCPoolUsageStatsSection: View {
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: sz(8)) { c }
             VStack(alignment: .leading, spacing: sz(6)) { c }
+        }
+    }
+}
+
+/// A chart's series names and their colours, in the order of the marks' first appearance (what Swift Charts' own scale
+/// would use).
+/// shortcut: the palette repeats after 10 names (utilisation can reach seriesMax 24), so a colour then repeats; upgrade with a longer palette.
+struct CCPoolLegendKey: Equatable {
+    static let palette: [Color] = [.blue, .green, .orange, .purple, .red, .cyan, .yellow, .pink, .teal, .indigo]
+    let names: [String]
+    var colours: [Color] { names.indices.map { Self.palette[$0 % Self.palette.count] } }
+
+    init(_ names: [String]) {
+        var seen = Set<String>()
+        self.names = names.filter { seen.insert($0).inserted }
+    }
+}
+
+private extension View {
+    /// Swift Charts' own legend off; the colours fixed to the key's, which the card's legend draws too.
+    func legendScale(_ key: CCPoolLegendKey?) -> some View {
+        chartLegend(.hidden).chartForegroundStyleScale(domain: key?.names ?? [], range: key?.colours ?? [])
+    }
+}
+
+/// The legend under a chart: swatch and name, wrapping onto more lines at the card width.
+struct CCPoolChartLegend: View {
+    let key: CCPoolLegendKey
+
+    var body: some View {
+        CCPoolWrapLayout(spacing: sz(12), lineSpacing: sz(4)) {
+            ForEach(Array(zip(key.names, key.colours).enumerated()), id: \.offset) { _, nc in
+                HStack(spacing: sz(4)) {
+                    Circle().fill(nc.1).frame(width: sz(8), height: sz(8))
+                    Text(nc.0).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(nc.0)
+            }
+        }
+    }
+}
+
+/// Left to right; an item that would pass the proposed width starts a new line; an item wider than the width is proposed
+/// the width itself (its text truncates), so nothing is placed past it.
+struct CCPoolWrapLayout: Layout {
+    var spacing: CGFloat
+    var lineSpacing: CGFloat
+
+    private func place(_ subviews: Subviews, _ width: CGFloat) -> (frames: [CGRect], size: CGSize) {
+        var frames: [CGRect] = [], x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0, x + s.width > width { y += lineH + lineSpacing; x = 0; lineH = 0 }
+            frames.append(CGRect(x: x, y: y, width: s.width, height: s.height))
+            x += s.width + spacing
+            lineH = max(lineH, s.height)
+            widest = max(widest, x - spacing)
+        }
+        return (frames, CGSize(width: widest, height: frames.isEmpty ? 0 : y + lineH))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        place(subviews, proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let f = place(subviews, bounds.width).frames
+        for (v, r) in zip(subviews, f) {
+            v.place(at: CGPoint(x: bounds.minX + r.minX, y: bounds.minY + r.minY), proposal: ProposedViewSize(width: r.width, height: r.height))
         }
     }
 }

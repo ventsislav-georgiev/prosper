@@ -2450,6 +2450,7 @@ tag from the now-released section and put it on the new top draft.
   an empty pane (after Split or a new layout) takes the next session you pick, the pane's ⋯ menu has
   Swap Session… to put another session in that pane, and you can drag a pane by its header onto
   another pane's edge to move it. Every change is saved right away. (#1895)
+- Account pool usage charts: legends wrap inside the card instead of running past its edge. (#1896)
 
 ## v2.174.0
 

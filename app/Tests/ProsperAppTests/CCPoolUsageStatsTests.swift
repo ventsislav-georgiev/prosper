@@ -401,6 +401,54 @@ final class CCPoolUsageStatsTests: XCTestCase {
         }
     }
 
+    // #1896: chart legends wrap inside the card; Swift Charts' own legends are hidden.
+    private func longNames(_ n: Int) -> [String] { (0..<n).map { "Example Limited \($0) \u{B7} " + ($0 % 2 == 0 ? "5 h" : "7 d") } }
+
+    /// The legend hosted offscreen at `width`: the chart node (its frame is the card's inner width) and the legend items' nodes.
+    private func legendFrames(_ names: [String], width: CGFloat) -> (chart: CGRect, items: [CGRect]) {
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let view = VStack(alignment: .leading, spacing: 6) {
+            Rectangle().frame(height: 40).accessibilityElement(children: .ignore).accessibilityLabel("chart-probe")
+            CCPoolChartLegend(key: CCPoolLegendKey(names))
+        }.frame(width: width)
+        let (win, host) = AXTreeSupport.hosted(view, CGSize(width: width, height: 800))
+        defer { win.close() }
+        let tree = AXTreeSupport.poll(host) { t in t.contains { $0.label == "chart-probe" } && names.allSatisfy { n in t.contains { $0.label == n } } }
+        XCTAssertFalse(win.isVisible, "never shown")
+        let chart = tree.first { $0.label == "chart-probe" }?.frame ?? .zero
+        return (chart, names.compactMap { n in tree.first { $0.label == n }?.frame })
+    }
+
+    func testLegendWrapsInsideTheCardWithEightLongSeries() {
+        let names = longNames(8)
+        let (chart, items) = legendFrames(names, width: 360)
+        XCTAssertEqual(items.count, 8, "every legend item is in the tree")
+        XCTAssertGreaterThan(chart.width, 100)
+        for f in items { XCTAssertLessThanOrEqual(f.maxX, chart.maxX + 1, "an item past the card edge: \(f)"); XCTAssertGreaterThanOrEqual(f.minX, chart.minX - 1) }
+        XCTAssertGreaterThan(Set(items.map { ($0.minY * 2).rounded() }).count, 1, "more than one line")
+    }
+
+    func testOneVeryLongNameStaysInsideTheWidth() {
+        let name = String(repeating: "Example Org ", count: 25).prefix(300).description
+        let (chart, items) = legendFrames([name], width: 360)
+        XCTAssertEqual(items.count, 1)
+        XCTAssertTrue((items.last?.maxX ?? .infinity) <= chart.maxX + 1, "a 300-character name past the card: \(String(describing: items.last))")
+    }
+
+    func testLegendKeyIsTheChartScale() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let s = try XCTUnwrap(m.shown)
+        let util = try XCTUnwrap(CCPoolUsageStatsSection.legendKey(0, s))
+        XCTAssertEqual(util.names, s.utilization.filter { !$0.points.isEmpty }.map(\.name))
+        XCTAssertEqual(util.colours.count, util.names.count)
+        XCTAssertEqual(try XCTUnwrap(CCPoolUsageStatsSection.legendKey(1, s)).names, M.kinds)
+        XCTAssertTrue(CCPoolUsageStatsSection.legendKey(3, s) == nil, "the table has no legend")
+        XCTAssertEqual(try XCTUnwrap(CCPoolUsageStatsSection.legendKey(4, s)).names, s.finish.flatMap { ["\($0.model) median", "\($0.model) 90th"] })
+        XCTAssertEqual(CCPoolLegendKey(["a", "b", "a"]).names, ["a", "b"], "a repeated name is one entry")
+    }
+
     // The pane hosts the card on the pane model's record folder.
     func testPaneModelPointsTheCardAtItsRecordFolder() throws {
         let r = try ccpoolPaneRig()
