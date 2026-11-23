@@ -124,7 +124,7 @@ final class CCPoolRuntime {
                                    lifecycle: lifecycle)
         model = made
         // #1890: a background probe that lands redraws the pane line and the form's hint (both watch the model).
-        let processValue = ProcessInfo.processInfo.environment[CCPool.baseURLKey]
+        let processValue = CCPool.processBaseURL()
         let found = baseURLProbe.map { probe in
             CCPool.InheritedBaseURL(probe: probe, process: processValue) { [weak made] in
                 DispatchQueue.main.async { MainActor.assumeIsolated { made?.objectWillChange.send() } }

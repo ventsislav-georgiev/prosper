@@ -52,6 +52,13 @@ enum CCPool {
     /// --revive (#1499, AgentIslandController.resume), so an rc file's export wins over Prosper's env, and that shell
     /// inherits Prosper's env, so the login env's value covers both. Probed at most once when it works (one login shell,
     /// bounded by LoginPath.timeout). Isolation: none; the lock guards the two fields.
+    /// #1893: Prosper's own ANTHROPIC_BASE_URL; none under XCTest, like the login probe (a test process inherits the agent
+    /// shell's value, and any value is foreign to a pool on port 0).
+    static func processBaseURL(env: [String: String] = ProcessInfo.processInfo.environment,
+                               underXCTest: Bool = NSClassFromString("XCTestCase") != nil) -> String? {
+        underXCTest ? nil : env[baseURLKey]
+    }
+
     final class InheritedBaseURL: @unchecked Sendable {
         /// The login env's value: "" when unset there, nil when the probe failed.
         typealias Probe = @Sendable () -> String?

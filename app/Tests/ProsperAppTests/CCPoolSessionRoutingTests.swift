@@ -136,6 +136,16 @@ final class CCPoolSessionRoutingTests: XCTestCase {
                              logger: CCPoolCapturingLogger())
     }
 
+    /// #1893: the process env's URL is read only outside XCTest, and a runtime() built here never sees it.
+    func testProcessBaseURLIsNotReadUnderXCTest() {
+        let env = [CCPool.baseURLKey: "http://127.0.0.1:1234"]
+        XCTAssertTrue(CCPool.processBaseURL(env: env, underXCTest: true) == nil)
+        XCTAssertEqual(CCPool.processBaseURL(env: env, underXCTest: false), "http://127.0.0.1:1234")
+        XCTAssertTrue(CCPool.processBaseURL(env: [:], underXCTest: false) == nil)
+        XCTAssertTrue(CCPool.processBaseURL() == nil, "the default under this test process")
+        XCTAssertTrue(runtime().model.ownBaseURL() == nil, "runtime() takes the gated value")
+    }
+
     // MARK: - Applies
 
     /// The window form's spawn: claude gets the pool's base URL and loses the credentials; headroom is never routed (#1200).
