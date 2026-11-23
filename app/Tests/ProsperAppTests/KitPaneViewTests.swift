@@ -71,15 +71,19 @@ final class KitPaneViewTests: XCTestCase {
         XCTAssertGreaterThan(fit(m, width: room(1)).height, 200, "the pane laid out")
     }
 
-    /// #1887: each tool of a tools piece is drawn with its name (capped like outside text), not as a bare switch.
+    /// #1887 / #1888: each tool of a tools piece is DRAWN with its name as text (an AXStaticText whose value is exactly the
+    /// name; the switch's own label "Tool calm-note of piece tools on" never matches), not as a bare switch. Red with the NeonRow dropped.
     func testEachToolRowDrawsItsName() async throws {
         let e = try kitPaneEnv()
         let (m, _) = try await applied(e)
-        let tools = KitPaneView.pieceRows(m).first { $0.id == "tools" }?.tools ?? []
-        XCTAssertEqual(tools, ["calm-note", "calm-todo"])
-        XCTAssertEqual(tools.map(KitPaneView.toolName), tools)
-        XCTAssertEqual(KitPaneView.toolName(String(repeating: "x", count: 500)).count, OutsideText.shown(String(repeating: "x", count: 500), max: 120).count)
-        XCTAssertEqual(control(m, "tool:tools/calm-note")?.title, "calm-note")
+        let view = KitPaneView(model: m, opener: Opened().opener)
+        let names = ["calm-note", "calm-todo"]
+        let tree = AXTreeSupport.tree(view, CGSize(width: room(1), height: 1600)) { t in
+            names.allSatisfy { n in t.contains { $0.role == "AXStaticText" && $0.value == n } }
+        }
+        for n in names {
+            XCTAssertTrue(tree.contains { !$0.ignored && $0.role == "AXStaticText" && $0.value == n }, "\(n) drawn as text: \(tree.map { "\($0.role) \($0.value)" })")
+        }
     }
 
     /// Long outside text (a title and an author with stacked combining marks, a long hook matcher) is clipped and the

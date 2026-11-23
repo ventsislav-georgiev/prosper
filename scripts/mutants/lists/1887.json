@@ -1,0 +1,13 @@
+{
+ "entry": "1887",
+ "filter": "KitPaneViewTests/testEachToolRowDrawsItsName",
+ "mutants": [
+  {
+   "name": "tool-row-without-neonrow",
+   "file": "app/Sources/ProsperApp/Kit/KitPaneView.swift",
+   "old": "                        NeonRow(Self.toolName(t)) {\n                            toggle(plan, \"tool:\\(row.id)/\\(t)\", isOn: Binding(get: { model.facts?.offTools[row.id]?.contains(t) != true },\n                                                                             set: { _ = model.setTool(t, of: row.id, on: $0) }))\n                        }\n                        .padding(.leading, sz(16))",
+   "new": "                        toggle(plan, \"tool:\\(row.id)/\\(t)\", isOn: Binding(get: { model.facts?.offTools[row.id]?.contains(t) != true },\n                                                                             set: { _ = model.setTool(t, of: row.id, on: $0) }))\n                        .padding(.leading, sz(16))",
+   "expect": "killed"
+  }
+ ]
+}
