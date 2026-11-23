@@ -3,13 +3,6 @@
  "filter": "KitEnvPieceTests|KitRenderTests",
  "mutants": [
   {
-   "name": "m1-owner-ignored",
-   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-   "old": "(kit && isEnvSlot(path)), !(",
-   "new": "isEnvSlot(path), !(",
-   "expect": "killed"
-  },
-  {
    "name": "m2-bypass-open",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
    "old": "(kit && (path == bypassPath || isEnvSlot(path)))",
@@ -36,6 +29,12 @@
    "old": "return off ? nil : envWarnings[key]",
    "new": "return off ? nil : envWarnings.values.first",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "m1-owner-ignored",
+   "note": "#1908: equivalent since #1729 (f3ddbb7e) added both guards. Dropping `kit &&` from the refusedTopKeys guard lets a non-kit env slot past that guard only; .set then needs `kit && (... isEnvSlot(path))` and .append/.union need hooks/permissions, so jsonRule returns the same .refusedJSONPath for every input. m2-bypass-open and m3-owner-not-passed pin the .set clause."
   }
  ]
 }

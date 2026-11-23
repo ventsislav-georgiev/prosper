@@ -208,6 +208,27 @@ final class AgentTerminalTests: XCTestCase {
         c.detach()
     }
 
+    /// #1908 (1782 shared-writer): each attach gets its own writer, so a late write from the screen
+    /// before (a key, a terminal reply) never lands in the next session's client.
+    @MainActor
+    func testAnOldScreensWriteNeverReachesTheNextClient() {
+        let rig = Rig()
+        let c = rig.c
+        c.attach(Self.key)
+        rig.grid(100, 30)
+        c.attach(AgentSessionKey(dir: Self.key.dir, name: "beta"))
+        XCTAssertEqual(rig.children.count, 2)
+        XCTAssertEqual(c.phase, .live)
+        rig.screens.first?.events.write(Data("x".utf8))
+        c.writer.flush()
+        XCTAssertEqual(rig.children.last?.written, [], "alpha's screen never writes into beta's client")
+        XCTAssertEqual(rig.children.first?.written, [], "nor into alpha's ended one")
+        rig.screens.last?.events.write(Data("y".utf8))
+        c.writer.flush()
+        XCTAssertEqual(rig.children.last?.written, Array("y".utf8), "beta's own screen still reaches it")
+        c.detach()
+    }
+
     @MainActor
     func testOutputReachesTheScreenOnMainAndRevealsIt() {
         let rig = Rig()
