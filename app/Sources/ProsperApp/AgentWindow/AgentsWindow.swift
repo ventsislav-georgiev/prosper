@@ -2476,7 +2476,8 @@ struct AgentDetailView: View {
             titled(row.title) {
                 AgentHistoryDetail(row: row, record: r, store: model.store,
                                    refusal: model.refusalText(row.id) ?? model.remoteResumeText[r.id],
-                                   act: { model.act($0, r) })
+                                   act: { model.act($0, r) },
+                                   close: AgentPanePlaceholder.close(model, pane: model.layout.focused))   // #1906
                     // #829 G8: Remove asks, over the pane's top. #900 6b2d (fixed slots): one slot, the question wins it, so
                     // the strip never moves; the refusal line takes it once the question is gone.
                     .overlay(alignment: .top) { VStack(spacing: 0) { if model.confirming == nil { paneRefusalLine }; confirmStrip } }
@@ -3290,7 +3291,8 @@ struct AgentUnfocusedPane: View {
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if case .history(let r)? = runtime.content {
                     AgentHistoryDetail(row: model.row(.history(r.id)) ?? AgentSidebar.row(r, now: model.now()), record: r,
-                                       store: nil, act: { _ in })
+                                       store: nil, act: { _ in },
+                                       close: AgentPanePlaceholder.close(model, pane: runtime.pane))   // #1906
                 } else if let title {
                     AgentPanePlaceholder(title: title, close: { model.closePane(runtime.pane) },
                                          pick: { model.pickAnother(runtime.pane) })
@@ -3991,6 +3993,8 @@ struct AgentHistoryDetail: View {
     /// QA #665 INFO-6: a Remove the window refused at the answer, shown on the status line.
     var refusal: String?
     let act: (AgentWindowVerb) -> Void
+    /// #1906: Close Pane for the pane this card is drawn in (AgentPanePlaceholder.close: nil with one pane).
+    var close: (() -> Void)?
 
     var body: some View {
         VStack(spacing: sz(10)) {
@@ -4005,6 +4009,7 @@ struct AgentHistoryDetail: View {
             if let store, let host = row.host {
                 AgentRemoteResumeButton(store: store, record: record, host: host, status: refusal, act: act)
             } else if let store { AgentHistoryButtons(store: store, record: record, refusal: refusal, act: act) }
+            AgentPanePlaceholder.closePill(close)
         }
         .padding(sz(24))
         .frame(maxWidth: .infinity, maxHeight: .infinity)

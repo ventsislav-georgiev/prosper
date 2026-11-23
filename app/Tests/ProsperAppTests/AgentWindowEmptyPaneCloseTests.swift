@@ -200,4 +200,67 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m2.layout.order, [a], "the unfocused pane's pill closed b, not the focused a")
         }
     }
+
+    /// #1906: the Close Pane pills of the History card pane `id` draws (the card's own body; the buttons are not pills here).
+    @MainActor
+    func historyCardClosePills(_ m: AgentWindowModel, _ id: UUID) throws -> [AgentPillButton] {
+        let view = AgentPaneArea(model: m, scrolls: false).pane(id, compact: m.layout.panes.count > 1)
+        let root: Any = try paneRiderFind(view, AgentDetailView.self)?.body
+            ?? (XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "a pane view: \(type(of: view))")).body
+        let card = try XCTUnwrap(paneRiderFind(root, AgentHistoryDetail.self), "a History card")
+        return emptyPanePills(card.body).filter { $0.title == "Close Pane" }
+    }
+
+    /// #1906: a pane showing an ended session's History card has the Close Pane pill with more than one pane (the focused
+    /// card with full actions, the unfocused card with a nil store), none with one pane; each closes ITS pane (captured at
+    /// draw), never the focused one. Old line that makes it red: no `close:` at the call site (no pill) or
+    /// `pane: model.layout.focused` at the unfocused one (closes a, not b).
+    @MainActor
+    func testHistoryCardClosePillOnlyWithSeveralPanesAndClosesItsOwnPane() throws {
+        try withPaneMenu(true) {
+            // Two records: the unfocused pane holds "older", the pick fills the focused empty pane with "old".
+            @MainActor func model(_ layout: PaneLayout) -> AgentWindowModel {
+                let m = windowModel(store([session("api", .idle)], history: [record("old"), record("older")]), layouts: layoutSuite())
+                m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+                m.adopt(layout)
+                m.setVisible(true)
+                return m
+            }
+            let older = PaneTarget.history(dir: "/tmp/dch-test", id: "older", seen: nil)
+            let single = model(paneLayout([nil]))
+            defer { single.close() }
+            single.select(.history(record("old").id))
+            XCTAssertTrue(single.selectedRow?.record != nil, "the focused pane shows the History card")
+            XCTAssertTrue(try historyCardClosePills(single, single.layout.focused).isEmpty, "one pane: no Close Pane")
+
+            let two = paneLayout([nil, older])
+            let a = try XCTUnwrap(two.order.first), b = try XCTUnwrap(two.order.last)
+            let m = model(two)
+            defer { m.close() }
+            // The first show filled a with "api" (#828); a pick on a made layout with a filled focused pane parks it for the
+            // single-pane view (#1538 lockedShowing). Emptied first, the pick goes into a (#1895: an empty focused pane takes it).
+            m.select(nil)
+            m.select(.history(record("old").id))
+            XCTAssertEqual(m.layout.focused, a)
+            XCTAssertTrue(m.selectedRow?.record != nil, "the focused pane a shows the History card")
+            let focused = try historyCardClosePills(m, a)
+            XCTAssertEqual(focused.count, 1, "the focused History card")
+            let other = try historyCardClosePills(m, b)
+            XCTAssertEqual(other.count, 1, "the unfocused History card")
+            m.focusPane(b)
+            for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }
+            try XCTUnwrap(focused.first).action()
+            XCTAssertEqual(m.layout.order, [b], "the focused card's pill closed its own pane (a), not the focused one (b)")
+
+            let m2 = model(two)
+            defer { m2.close() }
+            m2.select(nil)
+            m2.select(.history(record("old").id))
+            let pill = try XCTUnwrap(try historyCardClosePills(m2, b).first)
+            XCTAssertEqual(m2.layout.focused, a)
+            for l in m2.layouts?.layouts ?? [] where l.id != m2.layout.id { m2.deleteLayout(l.id) }
+            pill.action()
+            XCTAssertEqual(m2.layout.order, [a], "the unfocused card's pill closed b, not the focused a")
+        }
+    }
 }

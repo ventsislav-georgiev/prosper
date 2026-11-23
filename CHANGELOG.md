@@ -44,6 +44,8 @@ tag from the now-released section and put it on the new top draft.
 - Publishing to the Marketplace no longer uploads a padded archive, and agents can publish an
   installed extension or kit with `ProsperApp ctl extensions.publish`. (#1903)
 - X-ray mentions: VoiceOver reads the speaker of a mention that has no chapter to open. (#1905)
+- Agent Sessions: a pane showing an ended session now has a Close Pane button, as an empty pane
+  does. (#1906)
 
 ## v2.175.0
 
