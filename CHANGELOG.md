@@ -40,6 +40,7 @@ tag from the now-released section and put it on the new top draft.
   X-ray card). (#1901)
 - Marketplace: publishing works again; the server accepts the zero padding macOS tar adds after the
   archive. (#1902)
+- Settings, Claude Account Pool: each account shows when each of its limits resets. (#1904)
 
 ## v2.175.0
 

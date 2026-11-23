@@ -217,7 +217,8 @@ final class CCPoolPaneModel: ObservableObject {
             let state = Self.rowState(label: label, account: acct, current: st.current, now: now,
                                       rejected: rejected, unverified: unverified)
             return Row(label: label, state: state, stateText: Self.stateText(state, timeZone: timeZone),
-                       usageText: Self.usageText(store.usageSample(label), now: now), sessions: sessions[label]?.count ?? 0)
+                       usageText: Self.usageText(store.usageSample(label), reset: acct.reset, now: now, timeZone: timeZone),
+                       sessions: sessions[label]?.count ?? 0)
         }
     }
 
@@ -265,12 +266,15 @@ final class CCPoolPaneModel: ObservableObject {
         return "\(s / 86400) d ago"
     }
 
-    /// "5h 42% · week 10% · 3 min ago"; from proxy traffic or the last Refresh, whichever was last.
-    nonisolated static func usageText(_ sample: CCPoolUsageSample?, now: Double) -> String {
+    /// "5h 42% (resets Tue 18:40) · week 10% · 3 min ago"; from proxy traffic or the last Refresh, whichever was last.
+    /// A claim's reset shows only while it is ahead of now (the island's stale rule); none known: the bare cell.
+    nonisolated static func usageText(_ sample: CCPoolUsageSample?, reset: [String: Int] = [:], now: Double,
+                                      timeZone: TimeZone = .current) -> String {
         guard let sample else { return "no usage seen yet" }
         let known = CCPoolCore.displayOrder.filter { sample.util[$0] != nil }
         let cells = (known + sample.util.keys.filter { !known.contains($0) }.sorted()).map { claim in
             "\(CCPoolCore.display[claim] ?? claim) \(Int(((sample.util[claim] ?? 0) * 100).rounded()))%"
+                + (reset[claim].flatMap { Double($0) > now ? " (resets \(timeText($0, timeZone: timeZone)))" : nil } ?? "")
         }
         return (cells + [ageText(now - sample.at)]).joined(separator: " · ")
     }

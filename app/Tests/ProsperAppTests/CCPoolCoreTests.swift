@@ -206,6 +206,17 @@ final class CCPoolCoreTests: XCTestCase {
         XCTAssertEqual(cells.map(\.free), [0.6])
     }
 
+    // #1904: each limit cell carries its reset while it is ahead of now; a past or missing reset leaves the bare cell; the age is last.
+    func testUsageTextShowsEachLimitsReset() {
+        let utc = TimeZone(identifier: "UTC")!
+        let sample = CCPoolUsageSample(util: ["five_hour": 0.36, "seven_day": 0.56, "seven_day_opus": 0.1], at: now)
+        let reset = ["five_hour": Int(now) + 3600, "seven_day": Int(now) - 1]
+        let t = CCPoolPaneModel.usageText(sample, reset: reset, now: now, timeZone: utc)
+        let at = CCPoolPaneModel.timeText(Int(now) + 3600, timeZone: utc)
+        XCTAssertEqual(t, "5h 36% (resets \(at)) · week 56% · \(CCPoolCore.display["seven_day_opus"] ?? "seven_day_opus") 10% · just now")
+        XCTAssertEqual(CCPoolPaneModel.usageText(sample, now: now, timeZone: utc), "5h 36% · week 56% · \(CCPoolCore.display["seven_day_opus"] ?? "seven_day_opus") 10% · just now")
+    }
+
     // B22 (test_ccpool.py:239-257): a hold on Fable leaves Opus usable.
     func testHoldOnFableLeavesOpusUsable() {
         var st = pool(["s-ok"])
