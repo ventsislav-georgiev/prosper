@@ -5,8 +5,8 @@
     {
       "name": "folder-accepted",
       "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
-      "old": "guard case .github(let url) = try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {\n            throw ControlError(\"not a GitHub repo URL: give https://github.com/<owner>/<repo>\")\n        }\n        return url",
-      "new": "switch try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {\n        case .github(let url): return url\n        case .folder(let dir): return dir.path\n        }",
+      "old": "        guard case .github(let url)? = try? ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw refusal }\n        return url\n",
+      "new": "        switch try? ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {\n        case .github(let url)?: return url\n        case .folder(let dir)?: return dir.path\n        case nil: throw refusal\n        }\n",
       "expect": "killed"
     },
     {
