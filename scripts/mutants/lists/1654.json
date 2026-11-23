@@ -17,32 +17,25 @@
    "expect": "killed"
   },
   {
-   "name": "edit-over-chip",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "HStack(spacing: sz(8)) { editButton; if show.shortcut { AgentSidebarRowView.digitColumn } }",
-   "new": "HStack(spacing: sz(8)) { editButton }",
-   "expect": "killed"
-  },
-  {
-   "name": "edit-room-dropped",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "                Self.editText(editLabel).hidden()\n                    .modifier(AgentSidebarRowProbe(kind: \"layoutEditRoom\"",
-   "new": "                Color.clear.frame(width: 0)\n                    .modifier(AgentSidebarRowProbe(kind: \"layoutEditRoom\"",
-   "expect": "killed"
-  },
-  {
-   "name": "edit-room-wider",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "                Self.editText(editLabel).hidden()\n",
-   "new": "                Self.editText(editLabel).padding(.trailing, sz(3)).hidden()\n",
-   "expect": "killed"
-  },
-  {
    "name": "slot-priority-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": ".frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)\n",
    "new": ".frame(maxWidth: .infinity, alignment: .leading)\n",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "edit-over-chip",
+   "note": "#1895: the Edit / Done overlay over the chip column removed"
+  },
+  {
+   "name": "edit-room-dropped",
+   "note": "#1895: the row's hidden Edit / Done room (layoutEditRoom) removed"
+  },
+  {
+   "name": "edit-room-wider",
+   "note": "#1895: the row's hidden Edit / Done room (layoutEditRoom) removed"
   }
  ]
 }

@@ -1,12 +1,12 @@
 {
  "entry": "1832",
- "filter": "AgentWindowLayoutEditTests/testAgentWindowLayoutEditOpenToTheSideOnTheShownSessionOfTheViewSavesNothing",
+ "filter": "AgentWindowLayoutEditTests/testAgentWindowLayoutEditOpenToTheSideOnTheShownSessionOfTheViewSavesNothing|AgentWindowLayoutEditTests/testAgentWindowLayoutEditLockedClickOutsideOpensTheSinglePaneViewBlobByteEqual",
  "mutants": [
   {
    "name": "drop-parked-nil",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if placement == .side, parked == nil { autosave(explicit: true) }",
-   "new": "if placement == .side { autosave(explicit: true) }",
+   "old": "if next == nil, parked != nil { return }",
+   "new": "if next == nil, parked != nil && false { return }",
    "expect": "killed"
   }
  ]

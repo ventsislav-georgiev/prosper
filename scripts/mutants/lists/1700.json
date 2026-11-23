@@ -19,22 +19,22 @@
   {
    "name": "drop-locked-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
-   "new": "        if layoutLocked { paneRefusal = .layoutLocked; return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
+   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }",
+   "new": "        if layoutMade { return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }",
    "expect": "killed"
   },
   {
    "name": "drop-no-unpark",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave(explicit: true) }   // #1700",
-   "new": "layout = l; autosave(explicit: true)   // #1700",
+   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave() }   // #1700",
+   "new": "layout = l; autosave()   // #1700",
    "expect": "killed"
   },
   {
    "name": "choose-locked-in-view",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if parked == nil { paneRefusal = .layoutLocked } else { select(id); focusSelection() }",
-   "new": "paneRefusal = .layoutLocked",
+   "old": "        if parked != nil { select(id); focusSelection(); return }   // #1700",
+   "new": "        if parked != nil { return }   // #1700",
    "expect": "killed"
   },
   {

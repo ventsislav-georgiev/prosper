@@ -1,20 +1,15 @@
 {
  "entry": 1648,
- "filter": "AgentWindowD1Tests/testAgentWindowLayoutSectionEditButtonOnTheActiveRowOnly|AgentWindowD1Tests/testAgentWindowLayoutSectionEditButtonPressToggles|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
- "mutants": [
+ "filter": "AgentWindowD1Tests/testAgentWindowLayoutSectionHasNoEditButton|AgentWindowD1Tests/testAgentWindowLayoutSectionHasNoEditButtonToPress|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "mutants": [],
+ "retired": [
   {
    "name": "edit-hidden-at-small-scale",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1).fixedSize()",
-   "new": "Text(s).font(Neon.font(11, weight: .medium)).lineLimit(1)",
-   "expect": "killed"
+   "note": "#1895: AgentLayoutRowView.editText (the Edit / Done words) removed"
   },
   {
    "name": "press-noop",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "Button { model.toggleLayoutEditing() } label: { AgentLayoutRowView.editText(editLabel) }",
-   "new": "Button { } label: { AgentLayoutRowView.editText(editLabel) }",
-   "expect": "killed"
+   "note": "#1895: the Edit / Done button (editButton, toggleLayoutEditing) removed"
   }
  ]
 }

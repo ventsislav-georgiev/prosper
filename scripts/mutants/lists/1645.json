@@ -26,8 +26,8 @@
   {
    "name": "header-pane-id",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },",
-   "new": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane),\n                                      pane: { AgentWindowControls.runPane($0, pane: model.layout.focused, in: model) },",
+   "old": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane)\n                                          + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895\n                                      pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },",
+   "new": "                                          + AgentWindowControls.paneMenu(model, pane: runtime.pane)\n                                          + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895\n                                      pane: { AgentWindowControls.runPane($0, pane: model.layout.focused, in: model) },",
    "expect": "killed"
   }
  ]

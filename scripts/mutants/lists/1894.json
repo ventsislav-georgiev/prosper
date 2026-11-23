@@ -24,25 +24,24 @@
    "expect": "killed"
   },
   {
-   "name": "editing-kept",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "let left = layout.panes.first?.target\n        layoutEditing = false\n",
-   "new": "let left = layout.panes.first?.target\n",
-   "expect": "killed"
-  },
-  {
    "name": "never-locked-show",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "= layoutLocked ? lockedShowing(id) : showing(id), l != layout",
+   "old": "= layoutMade ? lockedShowing(id) : showing(id), l != layout",
    "new": "= showing(id), l != layout",
    "expect": "killed"
   },
   {
    "name": "left-not-shown",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        if case let .success(l) = layoutLocked ? lockedShowing(id) : showing(id), l != layout { adopt(l) }\n",
+   "old": "        if case let .success(l) = layoutMade ? lockedShowing(id) : showing(id), l != layout { adopt(l); autosave() }   // #1895 (R1894 i2): saved at once\n",
    "new": "",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "editing-kept",
+   "note": "#1895: closedToOne's `layoutEditing = false` removed (no edit mode to end)"
   }
  ]
 }

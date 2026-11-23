@@ -5,15 +5,15 @@
   {
    "name": "split-locked-refused",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        countDryRun()\n        // #1826 (operator 2026-11-21): Split is explicit",
-   "new": "        countDryRun()\n        if layoutLocked, parked == nil { return .failure(.layoutLocked) }\n        // #1826 (operator 2026-11-21): Split is explicit",
+   "old": "        countDryRun()\n        // #1826 (operator 2026-11-21): Split is saved",
+   "new": "        countDryRun()\n        if layoutMade, parked == nil { return .failure(.cap) }\n        // #1826 (operator 2026-11-21): Split is saved",
    "expect": "killed"
   },
   {
    "name": "split-not-editing",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }",
-   "new": "",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, layoutMade { lockedShowing(id) }",
    "expect": "killed"
   },
   {
@@ -21,13 +21,6 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "        countDryRun()\n        return layout.show(target(id), placement: placement,",
    "new": "        countDryRun()\n        if placement == .side, layoutLocked, parked == nil { return .failure(.layoutLocked) }\n        return layout.show(target(id), placement: placement,",
-   "expect": "killed"
-  },
-  {
-   "name": "side-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "                if placement == .side, parked == nil { autosave(explicit: true) }",
-   "new": "",
    "expect": "killed"
   },
   {
@@ -40,37 +33,34 @@
   {
    "name": "drag-end-not-explicit",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        autosave(explicit: true)   // #1826: saved while locked too\n    }\n\n    /// 13: a divider's value",
-   "new": "        autosave()\n    }\n\n    /// 13: a divider's value",
-   "expect": "killed"
-  },
-  {
-   "name": "equalize-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "l != layout { adopt(l); autosave(explicit: true) }",
-   "new": "l != layout { adopt(l) }",
-   "expect": "killed"
-  },
-  {
-   "name": "nudge-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        adopt(l)\n        autosave(explicit: true)   // #1826: saved while locked too\n    }\n\n    private(set) var store",
-   "new": "        adopt(l)\n    }\n\n    private(set) var store",
+   "old": "        autosave()   // #1826: a drag saves once, at its end\n",
+   "new": "\n",
    "expect": "killed"
   },
   {
    "name": "sidebar-guard-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) }",
+   "old": "if let id, manual, placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
    "new": "if let id, manual, placement == .focused, false { lockedShowing(id) }",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "side-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
+  },
+  {
+   "name": "equalize-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
+  },
+  {
+   "name": "nudge-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
   },
   {
    "name": "choose-unlocked",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, !drop || parked != nil {",
-   "new": "if layoutLocked && false, !drop || parked != nil {",
-   "expect": "killed"
+   "note": "#1895: choose()'s lock gate (`if layoutLocked, !drop || parked != nil`) and PaneRefusal.layoutLocked removed; the title switcher pick acts"
   }
  ]
 }

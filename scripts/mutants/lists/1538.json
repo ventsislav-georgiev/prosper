@@ -5,15 +5,15 @@
   {
    "name": "lock-ignored-on-click",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "let next = if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) } else {",
-   "new": "let next = if let id, manual, placement == .focused, layoutLocked && false { lockedShowing(id) } else {",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, layoutMade && false, focusedTarget != nil { lockedShowing(id) }",
    "expect": "killed"
   },
   {
    "name": "blob-saved-while-locked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if next == nil, layoutLocked, !explicit { return }   // #1538",
-   "new": "if next == nil, layoutLocked && false, !explicit { return }   // #1538",
+   "old": "if next == nil, parked != nil { return }",
+   "new": "if next == nil, parked != nil && false { return }",
    "expect": "killed"
   },
   {
@@ -24,17 +24,10 @@
    "expect": "killed"
   },
   {
-   "name": "choose-unlocked",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if layoutLocked, !drop || parked != nil {",
-   "new": "if layoutLocked && false, !drop || parked != nil {",
-   "expect": "killed"
-  },
-  {
    "name": "new-layout-locked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "layoutEditing = true   // #1538: a new layout opens in Edit layout",
-   "new": "layoutEditing = layoutEditing   // #1538: a new layout opens in Edit layout",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, layoutMade { lockedShowing(id) }",
    "expect": "killed"
   },
   {
@@ -43,6 +36,12 @@
    "old": "shown && (m.paneTooSmall || showsBesidesTier(m))",
    "new": "shown",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "choose-unlocked",
+   "note": "#1895: choose()'s lock gate (`if layoutLocked, !drop || parked != nil`) and PaneRefusal.layoutLocked removed; the title switcher pick acts"
   }
  ]
 }

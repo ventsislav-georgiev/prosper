@@ -12,8 +12,8 @@
   {
    "name": "guard-removed",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave(explicit: true) }",
-   "new": "if parked != nil { unpark(l) } else { layout = l; autosave(explicit: true) }",
+   "old": "if parked != nil { guard unpark(l) else { return true } } else { layout = l; autosave() }",
+   "new": "if parked != nil { unpark(l) } else { layout = l; autosave() }",
    "expect": "killed"
   }
  ]

@@ -17,58 +17,30 @@
    "expect": "killed"
   },
   {
-   "name": "perform-close-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "            if closing != nil { autosave(explicit: true) }",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "close-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed",
-   "new": "keyFocus = .pane; adopt(l); cancelFormOfClosed",
-   "expect": "killed"
-  },
-  {
    "name": "drop-locked-refused",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
-   "new": "        if layoutLocked, parked == nil { paneRefusal = .layoutLocked; return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane, drop: true); return true }",
+   "old": "        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }",
+   "new": "        if layoutMade, parked == nil { return true }\n        guard AgentPaneLayout.splitsEnabled, case let .edge(side) = zone else { choose(id, into: pane); return true }",
    "expect": "killed"
   },
   {
    "name": "drop-centre-not-flagged",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "choose(id, into: pane, drop: true); return true }",
-   "new": "choose(id, into: pane); return true }",
-   "expect": "killed"
-  },
-  {
-   "name": "drop-centre-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        if drop { autosave(explicit: true) }\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "drop-edge-not-saved",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "} else { layout = l; autosave(explicit: true) }",
-   "new": "} else { layout = l }",
+   "old": "else { choose(id, into: pane); return true }",
+   "new": "else { if !layoutMade { choose(id, into: pane) }; return true }",
    "expect": "killed"
   },
   {
    "name": "explicit-ignored",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if next == nil, layoutLocked, !explicit { return }",
-   "new": "if next == nil, layoutLocked { return }",
+   "old": "if next == nil, parked != nil { return }",
+   "new": "if next == nil, parked != nil || layoutMade { return }",
    "expect": "killed"
   },
   {
    "name": "sidebar-guard-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if let id, manual, placement == .focused, layoutLocked { lockedShowing(id) }",
+   "old": "if let id, manual, placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
    "new": "if let id, manual, placement == .focused, false { lockedShowing(id) }",
    "expect": "killed"
   },
@@ -85,6 +57,24 @@
    "old": "static let closePaneLabel = \"Close Pane\"",
    "new": "static let closePaneLabel = \"Close Pane (the session keeps running)\"",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "perform-close-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
+  },
+  {
+   "name": "close-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
+  },
+  {
+   "name": "drop-centre-not-saved",
+   "note": "#1895: choose()'s `if drop { autosave(explicit: true) }` removed with the drop: parameter; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
+  },
+  {
+   "name": "drop-edge-not-saved",
+   "note": "#1895: autosave(explicit:) and the lock gate it bypassed removed; the layout's didSet saves every change of a made layout (no lock gate left in autosave), so the call left is redundant and removing it is an equivalent mutant; the save is pinned by 1895.json r5-autosave-gated"
   }
  ]
 }

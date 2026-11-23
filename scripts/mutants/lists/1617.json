@@ -5,16 +5,15 @@
   {
    "name": "split-no-edit",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }",
-   "new": "if false, case .split = a { layoutEditing = true }",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, layoutMade { lockedShowing(id) }",
    "expect": "killed"
-  },
+  }
+ ],
+ "retired": [
   {
    "name": "split-edit-after-adopt",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }\n            adopt(l)",
-   "new": "adopt(l)\n            if case .split = a, AgentPaneLayout.splitsEnabled, layouts != nil { layoutEditing = true }",
-   "expect": "killed"
+   "note": "#1895: a split no longer turns layoutEditing on, so there is no flag-before-adopt order left to break"
   }
  ]
 }

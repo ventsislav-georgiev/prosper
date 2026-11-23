@@ -53,20 +53,6 @@
    "expect": "killed"
   },
   {
-   "name": "layout_no_restore",
-   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "            m.setLayoutEditing(editing)\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "layout_restore_off",
-   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "            m.setLayoutEditing(editing)\n",
-   "new": "            m.setLayoutEditing(false)\n",
-   "expect": "killed"
-  },
-  {
    "name": "focus_form_guard",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
    "old": "        guard m.newSession == nil else { throw ControlError(formOpen) }\n        let s = try session(name, in: st)",
@@ -79,6 +65,16 @@
    "old": "        let (m, st) = try window()\n        guard m.newSession == nil else { throw ControlError(formOpen) }\n",
    "new": "        let (m, st) = try window()\n",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "layout_no_restore",
+   "note": "#1895: layout.set's Edit layout restore (setLayoutEditing(editing)) removed"
+  },
+  {
+   "name": "layout_restore_off",
+   "note": "#1895: layout.set's Edit layout restore (setLayoutEditing(editing)) removed"
   }
  ]
 }
