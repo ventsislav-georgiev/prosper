@@ -1,0 +1,22 @@
+{
+ "entry": "1901",
+ "filter": "XrayHoverTests",
+ "mutants": [
+  {
+   "name": "shiftSkipDropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "contains(.shift), !unfocused {",
+   "new": "contains(.capsLock), !unfocused {",
+   "expect": "killed",
+   "note": "re-anchored past GUARD (the word in the modifier-flags expression): Shift no longer skips the pin, as the worker's mutant"
+  },
+  {
+   "name": "cmdAlonePassesThrough",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "(.shift), !unfocused {",
+   "new": "(.shift) == false, !unfocused {",
+   "expect": "killed",
+   "note": "re-anchored past GUARD: the branch now needs Shift, so Cmd alone passes through, as the worker's mutant"
+  }
+ ]
+}
