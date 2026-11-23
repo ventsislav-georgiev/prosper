@@ -333,13 +333,18 @@ struct XrayRefPopover: View {
                         .accessibilityAddTraits(.isHeader)
                 }
                 let head = Self.turnHeader(t, chapters: panel.chapters, now: panel.now())
-                Button { panel.jumpTurn(t, in: c) } label: {
-                    Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textSecondary).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                let label = Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if panel.turnChapter(t) != nil {   // #1900: a header with no chapter is plain text, never a no-op button
+                    Button { panel.jumpTurn(t, in: c) } label: { label.contentShape(Rectangle()) }
+                        .buttonStyle(.plain)
+                        .help(Self.openChapter)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityLabel(head)
+                        .accessibilityHint(Self.openChapter)
+                } else {
+                    label.accessibilityAddTraits(.isHeader).accessibilityLabel(head)
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel(head)
                 ForEach(Self.keyed(t.mentions, part: 0, block: i), id: \.id) { mentionRow($0.e, c, q) }
             }
         } else {
@@ -348,8 +353,12 @@ struct XrayRefPopover: View {
         if hover == nil, q.isEmpty, let title = Self.othersTitle(panel) { others(title, c) }   // #1565: unpinned, no other project
     }
 
+    /// #1900: the arrow's and the turn header's help and spoken hint.
+    static let openChapter = "Open its chapter"
+
     /// #1760: a mention: the speaker as a small label, the snippet's runs at body size (selectable: drag, Command-C),
-    /// and a jump button (Return or a click: this session's mention jumps, jumpRef; another session's does nothing).
+    /// and (#1900) an arrow only when the mention has a chapter to open (XrayPanelModel.mentionChapter): this session's,
+    /// by its anchor or its turn. Another session's mention, or one with no chapter read yet, has no arrow.
     @ViewBuilder func mentionRow(_ m: XrayRefStream.Mention, _ c: XrayRefContext, _ q: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             if let s = Self.speaker(m) {
@@ -359,13 +368,16 @@ struct XrayRefPopover: View {
                     .accessibilityHidden(true)
             }
             snippet(m.rich.isEmpty ? [XrayRich.Run(text: m.line)] : m.rich, q)
-            Button { panel.jumpRef(m, in: c) } label: {
-                Image(systemName: "arrow.turn.down.right").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
-                    .contentShape(Rectangle())
+            if panel.mentionChapter(m, in: c) != nil {
+                Button { panel.jumpRef(m, in: c) } label: {
+                    Image(systemName: "arrow.turn.down.right").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(Self.openChapter)
+                .accessibilityLabel(Self.spokenRow(m))
+                .accessibilityHint(Self.openChapter)
             }
-            .buttonStyle(.plain)
-            .help("Show it in the transcript")
-            .accessibilityLabel(Self.spokenRow(m))
         }
         .modifier(AgentPaneProbe(kind: "xrayRefRow:" + m.line))   // tests only (#1816: which rows are realized)
     }

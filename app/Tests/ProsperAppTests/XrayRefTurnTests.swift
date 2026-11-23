@@ -129,4 +129,43 @@ final class XrayRefTurnTests: XCTestCase {
         if let three = turns.first { XCTAssertTrue(p.jumpTurn(three, in: c)) } else { XCTFail("no turn 3") }
         XCTAssertEqual(p.chapterCard?.ordinal, 3)
     }
+
+    static func chapter(_ n: Int, _ title: String) -> TranscriptOutline.Chapter {
+        TranscriptOutline.Chapter(id: n, ordinal: n, title: title, kind: .prompt, hasError: false)
+    }
+
+    /// #1900: a mention's arrow opens its chapter by its anchor, else its turn's; with neither held (or no chapters read
+    /// at all, the hover card's case before the fix) jumpRef is false and opens nothing. Another session's never opens.
+    /// Red with jump-true-on-nothing (and on the old jumpRef, which returned true having opened nothing) and with
+    /// no-turn-fallback (a mention whose anchor is not held opens nothing).
+    func testMentionOpensItsAnchorElseItsTurnsChapter() {
+        let c = Self.context([Self.mention(turn: 3, offset: 1), Self.mention(turn: 2, offset: 9), Self.mention(turn: 1, offset: 20),
+                              Self.mention("api-qa", turn: 2, offset: 7)])
+        let p = XrayPanelModel(target: XrayRefRunTests.local, tab: .search)
+        let mine = c.groups.first?.mentions ?? [], theirs = c.groups.last?.mentions ?? []
+        XCTAssertEqual(mine.map(\.offset), [1, 9, 20])
+        XCTAssertEqual(theirs.map(\.session), ["api-qa"])
+        for m in mine + theirs { XCTAssertFalse(p.jumpRef(m, in: c), "no chapters read: nothing to open") }
+        XCTAssertTrue(p.chapterCard == nil)
+        p.dchChapters = [Self.chapter(2, "Fix login"), Self.chapter(5, "Ship it")]
+        p.chapterAnchors = ["f12:1": 5, "f12:7": 5]
+        if let a = mine.first {   // its anchor's chapter, not its turn's
+            XCTAssertTrue(p.jumpRef(a, in: c))
+            XCTAssertEqual(p.chapterCard?.ordinal, 5)
+        }
+        if let b = mine.dropFirst().first {   // anchor f12:9 not held: turn 2's chapter
+            XCTAssertEqual(p.mentionChapter(b, in: c)?.ordinal, 2)
+            XCTAssertTrue(p.jumpRef(b, in: c))
+            XCTAssertEqual(p.chapterCard?.ordinal, 2)
+        }
+        if let d = mine.last {   // neither its anchor nor its turn 1 is held
+            XCTAssertTrue(p.mentionChapter(d, in: c) == nil)
+            XCTAssertFalse(p.jumpRef(d, in: c))
+        }
+        for m in theirs {
+            XCTAssertTrue(p.mentionChapter(m, in: c) == nil, "another session's mention, whatever its anchor or turn")
+            XCTAssertFalse(p.jumpRef(m, in: c))
+        }
+        XCTAssertEqual(p.chapterCard?.ordinal, 2, "nothing opened after the last card")
+    }
 }

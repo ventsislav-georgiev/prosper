@@ -53,12 +53,15 @@ enum XrayRefLink {
     }
 
     /// The panel whose card a click opens: the pane's open X-ray panel on this session, else a new one wired to the
-    /// window's presenter (anchored on the pane's XrayCardAnchor) that runs the card's --ref read.
-    static func panel(_ pane: UUID, _ target: XrayTarget, _ refs: XrayRefs) -> XrayPanelModel {
+    /// window's presenter (anchored on the pane's XrayCardAnchor) that runs the card's --ref read. #1900: the new one
+    /// takes the follow's chapters and anchors too (parsed off main by the follow), so a mention's arrow and a turn
+    /// header open their chapter card with no X-ray panel open.
+    static func panel(_ pane: UUID, _ target: XrayTarget, _ refs: XrayRefs, _ state: XrayFollow.State? = nil) -> XrayPanelModel {
         if let m = XrayPanels.shared.open[pane], m.target == target { return m }
         let m = XrayPanelModel(target: target, tab: .refs)
         // #1568: a remote target's --ref goes over the warm host:name connection (XrayRequests; cold when busy or failed)
         (m.dch, m.run, m.refs) = (XrayPanels.dch(), XrayPanels.shared.requests.run(for: target, cold: XrayPanels.run), refs)
+        if let state { (m.dchChapters, m.chapterAnchors) = (state.chapters, state.anchors) }
         XrayPanels.shared.wire(m, pane)
         return m
     }
@@ -67,10 +70,11 @@ enum XrayRefLink {
     /// focused pane: the window's first-click rule takes a focusing down), its target and that pane. #1559: from the
     /// follow that pane's focus attached (XrayFollows.focus), not the transcript, so a shell or Codex pane has them too.
     /// Nil: gate B off, no window, another session, or no snapshot yet. #1568: a remote row's follow is "host:name".
-    static func terminalRefs(_ w: AgentsNSWindow?, _ key: AgentSessionKey?) -> (refs: XrayRefs, target: XrayTarget, pane: UUID)? {
+    static func terminalRefs(_ w: AgentsNSWindow?, _ key: AgentSessionKey?)
+        -> (refs: XrayRefs, target: XrayTarget, pane: UUID, state: XrayFollow.State)? {
         guard decorate(), let w, let key, let m = w.model, let f = XrayPanels.shared.follows.focused(in: ObjectIdentifier(w)),
-              f.target == target(key), let refs = f.state?.refs else { return nil }
-        return (refs, f.target, m.layout.focused)
+              let state = f.state, f.target == target(key), let refs = state.refs else { return nil }
+        return (refs, f.target, m.layout.focused, state)
     }
 
     /// #1568 (X-R a): a terminal session's X-ray target: a remote row's "host:name" with no dir (dch dials the host), a
@@ -85,7 +89,7 @@ enum XrayRefLink {
     static func openOnGrid(_ w: AgentsNSWindow?, key: AgentSessionKey, line: String, column: Int) -> Bool {
         guard let r = terminalRefs(w, key), let k = XrayRefSpans.key(atColumn: column, in: line, refs: r.refs.entries),
               let e = r.refs.entries.first(where: { $0.key == k }) else { return false }
-        panel(r.pane, r.target, r.refs).openRef(e)
+        panel(r.pane, r.target, r.refs, r.state).openRef(e)
         return true
     }
 
@@ -93,14 +97,14 @@ enum XrayRefLink {
     /// focused pane, this session, gate B on). Nil: no card.
     static func hoverPanel(_ w: AgentsNSWindow?, key: AgentSessionKey?) -> (panel: XrayPanelModel, refs: XrayRefs)? {
         guard let r = terminalRefs(w, key) else { return nil }
-        return (panel(r.pane, r.target, r.refs), r.refs)
+        return (panel(r.pane, r.target, r.refs, r.state), r.refs)
     }
 
     /// #1357: a prosper-xray link a program printed (OSC 8) in a Terminal pane: the Transcript's allowlist and key check
     /// (open), so only a key in this session's refs opens a card; anything else is dropped.
     static func openTerminalLink(_ url: URL, _ w: AgentsNSWindow?, key: AgentSessionKey?) {
         guard let r = terminalRefs(w, key) else { return }
-        _ = open(url, refs: r.refs) { panel(r.pane, r.target, r.refs).openRef($0) }
+        _ = open(url, refs: r.refs) { panel(r.pane, r.target, r.refs, r.state).openRef($0) }
     }
 }
 

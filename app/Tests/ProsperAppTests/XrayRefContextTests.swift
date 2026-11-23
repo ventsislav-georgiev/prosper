@@ -95,7 +95,10 @@ final class XrayRefContextTests: XCTestCase {
         let p = XrayPanelModel(target: XrayRefRunTests.local, tab: .search)
         let other = c.groups.dropFirst().first?.mentions ?? []
         XCTAssertEqual(other.count, 2)
+        p.dchChapters = [XrayRefTurnTests.chapter(1, "Fix login")]
+        p.chapterAnchors = ["f12:100": 1, "f9:10": 1]
         for m in other { XCTAssertFalse(p.jumpRef(m, in: c)) }
         if let mine = c.groups.first?.mentions.first { XCTAssertTrue(p.jumpRef(mine, in: c)) } else { XCTFail("no own mention") }
+        XCTAssertEqual(p.chapterCard?.ordinal, 1)
     }
 }

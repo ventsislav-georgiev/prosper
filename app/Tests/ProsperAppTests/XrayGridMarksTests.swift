@@ -283,6 +283,34 @@ final class XrayGridMarksTests: XCTestCase {
         }
     }
 
+    /// #1900 (the cause): the hover card's panel on a pane with no X-ray panel open is a new one; it had the follow's refs
+    /// but no chapters or anchors, so this session's mention (anchor f3a41c:0, the snapshot's chapter 1) opened nothing
+    /// and its arrow did nothing. Red on the old XrayRefLink.panel (it set dch, run and refs only).
+    func testHoverPanelTakesTheFollowsChaptersSoAMentionOpensIt() throws {
+        try withSeams { fake in
+            let r = rig(shell)
+            let (w, m) = windowed(r)
+            try withExtendedLifetime((w, m)) {
+                defer { r.t.attach(nil) }
+                fake.send(fake.args.count, Self.snapshot())
+                XCTAssertTrue(XrayPanels.shared.open[m.layout.focused] == nil, "no X-ray panel open on the pane")
+                let p = try XCTUnwrap(XrayRefLink.hoverPanel(w, key: shell)).panel
+                XCTAssertEqual(p.chapterAnchors, ["f3a41c:0": 1])
+                XCTAssertEqual(p.chapters.map(\.ordinal), [1])
+                var shown = 0
+                (p.run, p.presentRef) = (nil, { _, _, _ in shown += 1 })   // no --chapter read, no real card window
+                let first = XrayRefStreamTests.first.replacingOccurrences(of: #""session":"api""#, with: #""session":"shell""#)
+                let lines = [first, XrayRefContextTests.mention("shell", at: 40, offset: 0, chapter: "f3a41c:0"), XrayRefStreamTests.done]
+                let c = XrayRefContext(XrayRefStreamTests.parse(lines), ref: "#12", tasks: nil, memory: nil)
+                let mine = try XCTUnwrap(c.groups.first?.mentions.first)
+                XCTAssertEqual(c.session, "shell")
+                XCTAssertTrue(p.jumpRef(mine, in: c))
+                XCTAssertEqual(p.chapterCard?.ordinal, 1)
+                XCTAssertEqual(shown, 1, "the chapter card is presented")
+            }
+        }
+    }
+
     /// Red if another pane's focus in the same window leaves the old pane's marks drawn (blur), or an unfocused pane's
     /// attach takes the window's follow.
     func testAnotherPaneFocusClearsTheOldPanesMarks() throws {

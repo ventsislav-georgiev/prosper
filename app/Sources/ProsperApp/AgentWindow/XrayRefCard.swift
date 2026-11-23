@@ -610,21 +610,33 @@ extension XrayPanelModel {
         return panels?.runRef(sent, shown: e.text, scope: "all", for: self) == true
     }
 
-    /// A mention's Return: this session's mention opens its chapter's card (#1471: no transcript to jump in); another
-    /// session's never does, whatever its chapter says. An anchor dch's chapters read does not hold opens nothing.
+    /// A mention's chapter (#1900): this session's mention's by its anchor, else its turn's (as turnChapter); another
+    /// session's never, whatever its chapter says. Nil: nothing to open, so the row draws no arrow.
+    func mentionChapter(_ m: XrayRefStream.Mention, in c: XrayRefContext) -> TranscriptOutline.Chapter? {
+        guard c.session != nil, m.session == c.session else { return nil }
+        if let i = m.chapter.flatMap({ chapterAnchors[$0] }), let ch = chapters.first(where: { $0.ordinal == i }) { return ch }
+        return m.turn.flatMap { n in chapters.last(where: { $0.ordinal == n }) }
+    }
+
+    /// #1528: a turn header's chapter; the Earlier block, a turn the chapters read does not hold, or (#1589) another
+    /// session's turn has none (a turn block is this session's only). Nil: the header is plain text.
+    func turnChapter(_ t: XrayRefContext.Turn) -> TranscriptOutline.Chapter? {
+        guard t.session == nil, let n = t.turn else { return nil }
+        return chapters.last(where: { $0.ordinal == n })
+    }
+
+    /// A mention's arrow: its chapter's card (#1471: no transcript to jump in). #1900: false whenever nothing opened.
     @discardableResult
     func jumpRef(_ m: XrayRefStream.Mention, in c: XrayRefContext) -> Bool {
-        guard let anchor = m.chapter, c.session != nil, m.session == c.session else { return false }
-        if let i = chapterAnchors[anchor], let ch = chapters.first(where: { $0.ordinal == i }) { openChapterCard(ch) }
+        guard let ch = mentionChapter(m, in: c) else { return false }
+        openChapterCard(ch)
         return true
     }
 
-    /// #1528: a turn header's Return or click: that turn's chapter card (the jumpRef and Read the prompt path). The
-    /// Earlier block, or a turn the chapters read does not hold, opens nothing (a turn block is this session's only).
+    /// #1528: a turn header's Return or click: that turn's chapter card (the jumpRef and Read the prompt path).
     @discardableResult
     func jumpTurn(_ t: XrayRefContext.Turn, in c: XrayRefContext) -> Bool {
-        // #1589: another session's turn is not in this session's chapters: it opens nothing
-        guard t.session == nil, let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n }) else { return false }
+        guard let ch = turnChapter(t) else { return false }
         openChapterCard(ch)
         return true
     }

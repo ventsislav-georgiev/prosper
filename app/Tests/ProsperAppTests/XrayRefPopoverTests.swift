@@ -272,6 +272,30 @@ final class XrayRefPopoverTests: XCTestCase {
         XCTAssertFalse(tree.contains { $0.names.contains { $0.hasPrefix("Open ") } }, "no Open for an issue")
     }
 
+    /// #1900: an arrow (a button helped "Open its chapter", spoken as the row) only on a mention with a chapter to open:
+    /// this session's by its anchor or its turn; none on another session's or one whose chapter is not read; a turn
+    /// header with no chapter is plain text. Red with arrow-always (the arrow drawn on every row, as before the fix).
+    func testArrowOnlyWhereAChapterOpens() throws {
+        let run = XrayRefRunTests.Run(), cards = Cards(), panels = XrayPanels(), p = panel(run, cards, panels)
+        typealias U = XrayRefTurnTests
+        p.refContext = U.context([U.mention(turn: 3, offset: 1, sentence: "Work on #12 anchor"),
+                                  U.mention(turn: 2, offset: 9, sentence: "Work on #12 turn"),
+                                  U.mention(turn: 9, offset: 20, sentence: "Work on #12 none"),
+                                  U.mention("api-qa", turn: 2, offset: 7, sentence: "Work on #12 theirs")])
+        p.dchChapters = [U.chapter(2, "Fix login"), U.chapter(5, "Ship it")]
+        p.chapterAnchors = ["f12:1": 5, "f12:7": 5]
+        let v = XrayRefPopover(panel: p, entry: try entry("#12"), complete: true)
+        let tree = AXTreeSupport.tree(v, XrayRefPopover.size) { t in t.contains { $0.reads("Filter this card") } }
+        let arrows = tree.filter { !$0.ignored && $0.role == "AXButton" && $0.label.hasPrefix("You: Work on #12") }
+        XCTAssertEqual(Set(arrows.map(\.label)), ["You: Work on #12 anchor", "You: Work on #12 turn"])
+        XCTAssertTrue(arrows.allSatisfy { $0.help == XrayRefPopover.openChapter }, "help says what it does")
+        let heads = tree.filter { !$0.ignored && $0.names.contains { $0.hasPrefix("p") && $0.contains(" \u{00B7} ") } }
+        XCTAssertTrue(heads.contains { $0.role == "AXButton" && $0.label.hasPrefix("p2 \u{00B7} Fix login") }, "p2 opens its chapter")
+        XCTAssertTrue(heads.contains { $0.names.contains { $0.hasPrefix("p9") } }, "p9's header is drawn")
+        XCTAssertFalse(heads.contains { $0.role == "AXButton" && $0.label.hasPrefix("p9") }, "p9 has no chapter: plain text")
+        XCTAssertFalse(heads.contains { $0.role == "AXButton" && $0.label.hasPrefix("p3") }, "p3 is not read either")
+    }
+
     /// R1416-s1: a partial stream with nothing found reads "No definition found so far", never "found found".
     func testEmptyPartialStreamHeading() {
         XCTAssertEqual(XrayRefContext(T.parse([T.first]), ref: "#12", tasks: nil, memory: nil).heading, "No definition found so far")

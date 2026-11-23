@@ -40,6 +40,8 @@ tag from the now-released section and put it on the new top draft.
 - Account pool usage charts: token counts on the axis read 50M / 1.5B instead of 5,0E7. (#1897)
 - Agent Island: click the plan usage line to see every pool account's limits and when each resets.
   (#1898)
+- X-ray: the arrow next to a mention opens the chapter where it was said; it no longer shows when
+  there is nothing to open. (#1900)
 
 ## v2.175.0
 
