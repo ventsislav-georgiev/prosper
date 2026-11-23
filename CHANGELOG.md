@@ -18,6 +18,29 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.176.0 *(unreleased)*
+
+- Settings, Claude Account Pool: "Start new Claude sessions through the pool" is now on by default
+  (a choice you already made is kept). A session whose environment or shell startup files already
+  set ANTHROPIC_BASE_URL to another address keeps it and is not routed, and the pane says so under
+  the switch. (#1890)
+- Settings, Claude Account Pool: the first new Claude session after Prosper starts no longer waits
+  up to 4 seconds while the pool reads your shell's ANTHROPIC_BASE_URL; Prosper reads it once at
+  launch, in the background. (#1891)
+- Settings, Claude Account Pool and the New session form: the "via ccpool" hint and the line under
+  the pool switch now agree with what a new session really does when Prosper itself was started with
+  its own ANTHROPIC_BASE_URL. (#1892)
+- Agent Sessions: closing a layout's pane so that only one session is left now deletes that layout
+  and shows the session on its own. (#1894)
+- Layouts no longer have an Edit mode: a session you pick that isn't in the layout opens on its own,
+  an empty pane (after Split or a new layout) takes the next session you pick, the pane's ⋯ menu has
+  Swap Session… to put another session in that pane, and you can drag a pane by its header onto
+  another pane's edge to move it. Every change is saved right away. (#1895)
+- Account pool usage charts: legends wrap inside the card instead of running past its edge. (#1896)
+- Account pool usage charts: token counts on the axis read 50M / 1.5B instead of 5,0E7. (#1897)
+- Agent Island: click the plan usage line to see every pool account's limits and when each resets.
+  (#1898)
+
 ## v2.175.0
 
 - Agent Sessions window: a live session's "⋯" header menu and its sidebar row's right-click menu
@@ -2434,26 +2457,6 @@ tag from the now-released section and put it on the new top draft.
   name next to it, instead of a bare switch on its own line. (#1887)
 - Agent Sessions: a session you switch back to, after closing and reopening the window or switching
   panes, takes typed keys again. Before, it showed its output but ignored the keyboard. (#1889)
-- Settings, Claude Account Pool: "Start new Claude sessions through the pool" is now on by default
-  (a choice you already made is kept). A session whose environment or shell startup files already
-  set ANTHROPIC_BASE_URL to another address keeps it and is not routed, and the pane says so under
-  the switch. (#1890)
-- Settings, Claude Account Pool: the first new Claude session after Prosper starts no longer waits
-  up to 4 seconds while the pool reads your shell's ANTHROPIC_BASE_URL; Prosper reads it once at
-  launch, in the background. (#1891)
-- Settings, Claude Account Pool and the New session form: the "via ccpool" hint and the line under
-  the pool switch now agree with what a new session really does when Prosper itself was started with
-  its own ANTHROPIC_BASE_URL. (#1892)
-- Agent Sessions: closing a layout's pane so that only one session is left now deletes that layout
-  and shows the session on its own, also while the layout is being edited. (#1894)
-- Layouts no longer have an Edit mode: a session you pick that isn't in the layout opens on its own,
-  an empty pane (after Split or a new layout) takes the next session you pick, the pane's ⋯ menu has
-  Swap Session… to put another session in that pane, and you can drag a pane by its header onto
-  another pane's edge to move it. Every change is saved right away. (#1895)
-- Account pool usage charts: legends wrap inside the card instead of running past its edge. (#1896)
-- Account pool usage charts: token counts on the axis read 50M / 1.5B instead of 5,0E7. (#1897)
-- Agent Island: click the plan usage line to see every pool account's limits and when each resets.
-  (#1898)
 
 ## v2.174.0
 
