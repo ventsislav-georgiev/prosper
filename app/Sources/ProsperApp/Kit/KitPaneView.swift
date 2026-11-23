@@ -136,6 +136,9 @@ struct KitPaneView: View {
         }
     }
 
+    /// The name a tool row draws (the same cap the piece rows use for outside text).
+    static func toolName(_ t: String) -> String { OutsideText.shown(t, max: 120) }
+
     private func pieces(_ plan: [KitPaneControl]) -> some View {
         NeonSection("Pieces") {
             VStack(alignment: .leading, spacing: sz(10)) {
@@ -149,9 +152,11 @@ struct KitPaneView: View {
                         }
                     }
                     ForEach(row.tools, id: \.self) { t in
-                        toggle(plan, "tool:\(row.id)/\(t)", isOn: Binding(get: { model.facts?.offTools[row.id]?.contains(t) != true },
-                                                                         set: { _ = model.setTool(t, of: row.id, on: $0) }))
-                            .padding(.leading, sz(16))
+                        NeonRow(Self.toolName(t)) {
+                            toggle(plan, "tool:\(row.id)/\(t)", isOn: Binding(get: { model.facts?.offTools[row.id]?.contains(t) != true },
+                                                                             set: { _ = model.setTool(t, of: row.id, on: $0) }))
+                        }
+                        .padding(.leading, sz(16))
                     }
                 }
                 if model.pendingOff != nil {

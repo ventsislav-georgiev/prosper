@@ -2430,6 +2430,8 @@ tag from the now-released section and put it on the new top draft.
   pool now answers at once instead of sending it to a second account, and it no longer sends new
   sessions to other accounts first because of that refusal. The pool log names the upstream error
   type. (#1878)
+- Settings, Prosper Agent Kit, Pieces: each tool switch under a tools piece now shows the tool's
+  name next to it, instead of a bare switch on its own line. (#1887)
 
 ## v2.174.0
 
