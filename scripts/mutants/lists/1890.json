@@ -1,0 +1,57 @@
+{
+ "entry": "1890",
+ "filter": "CCPoolPaneModelTests|CCPoolSessionEnvTests|CCPoolSessionRoutingTests",
+ "mutants": [
+  {
+   "name": "route-default-off",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "routeKey) == nil ||",
+   "new": "routeKey) != nil &&",
+   "expect": "killed",
+   "note": "absent reads off (object != nil && bool)"
+  },
+  {
+   "name": "route-always-on",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "routeKey) == nil ||",
+   "new": "routeKey) == nil || true ||",
+   "expect": "killed",
+   "note": "a stored false is ignored (always on)"
+  },
+  {
+   "name": "foreign-url-routed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "guard on, healthy, hasAccounts, foreignBaseURL(inherited, base: base) == nil, let first",
+   "new": "guard on, healthy, hasAccounts, let first",
+   "expect": "killed"
+  },
+  {
+   "name": "env-fallback-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "inherited: inherited(wait) ?? env?[baseURLKey])",
+   "new": "inherited: inherited(wait))",
+   "expect": "killed"
+  },
+  {
+   "name": "trailing-slash-foreign",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "return trim(inherited) == trim(base) ? nil : inherited",
+   "new": "return inherited == base ? nil : inherited",
+   "expect": "killed"
+  },
+  {
+   "name": "probe-per-read",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "defer { started = true }",
+   "new": "defer { started = false }",
+   "expect": "killed"
+  },
+  {
+   "name": "url-path-shown",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "return OutsideText.shown((c.scheme.map { \"\\($0)://\" } ?? \"\") + host + (c.port.map { \":\\($0)\" } ?? \"\"), max: 120)",
+   "new": "return OutsideText.shown(url, max: 120)",
+   "expect": "killed"
+  }
+ ]
+}
