@@ -445,7 +445,7 @@ final class CCPoolUsageStatsTests: XCTestCase {
         XCTAssertEqual(util.colours.count, util.names.count)
         XCTAssertEqual(try XCTUnwrap(CCPoolUsageStatsSection.legendKey(1, s)).names, M.kinds)
         XCTAssertTrue(CCPoolUsageStatsSection.legendKey(3, s) == nil, "the table has no legend")
-        XCTAssertEqual(try XCTUnwrap(CCPoolUsageStatsSection.legendKey(4, s)).names, s.finish.flatMap { ["\($0.model) median", "\($0.model) 90th"] })
+        XCTAssertEqual(try XCTUnwrap(CCPoolUsageStatsSection.legendKey(4, s)).names, Array(NSOrderedSet(array: s.finish.flatMap { ["\($0.model) median", "\($0.model) 90th"] })) as? [String], "one entry per series, in first-drawn order (finish has a row per model per day)")
         XCTAssertEqual(CCPoolLegendKey(["a", "b", "a"]).names, ["a", "b"], "a repeated name is one entry")
     }
 
