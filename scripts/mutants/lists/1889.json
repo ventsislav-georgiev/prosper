@@ -1,0 +1,13 @@
+{
+ "entry": "1889",
+ "filter": "AgentTerminalKeepTests/testKeysReachAKeptSessionAfterAKeepWithNoSessionAndAFreshAttach|AgentWindowD1Tests/testAgentWindowKeysReachAKeptSessionAfterTheWindowClosesAndReopensOnAnother",
+ "mutants": [
+  {
+   "name": "keep-no-fresh-writer",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        writer = AgentTerminalWriter()   // #1889: the kept entry owns the old one; a later detach() must never unwire it\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
