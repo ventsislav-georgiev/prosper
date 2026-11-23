@@ -1,0 +1,41 @@
+{
+ "entry": "1900",
+ "filter": "XrayGridMarksTests/testHoverPanelTakesTheFollowsChaptersSoAMentionOpensIt|XrayRefContextTests|XrayRefPopoverTests|XrayRefTurnTests",
+ "mutants": [
+  {
+   "name": "arrow-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "            if panel.mentionChapter(m, in: c) != nil {\n",
+   "new": "            if true {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-turn-fallback",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        return m.turn.flatMap { n in chapters.last(where: { $0.ordinal == n }) }\n",
+   "new": "        return nil\n",
+   "expect": "killed"
+  },
+  {
+   "name": "jump-true-on-nothing",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        guard let ch = mentionChapter(m, in: c) else { return false }\n",
+   "new": "        guard let ch = mentionChapter(m, in: c) else { return true }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "hover-no-chapters",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
+   "old": "        if let state { (m.dchChapters, m.chapterAnchors) = (state.chapters, state.anchors) }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "header-always-button",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "                if panel.turnChapter(t) != nil {",
+   "new": "                if true {",
+   "expect": "killed"
+  }
+ ]
+}
