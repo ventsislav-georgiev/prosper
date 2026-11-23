@@ -1,0 +1,48 @@
+{
+ "entry": 1903,
+ "filter": "ControlExtensionsPublishTests|MarketPackerTests",
+ "mutants": [
+  {
+   "name": "pack_stdout",
+   "file": "app/Sources/ProsperApp/Extensions/RemoteInstaller.swift",
+   "old": "        try runTarPack([\"-czf\", archive.path, \"--format\", \"paxr\", \"-n\", \"--no-mac-metadata\", \"--no-xattrs\",\n                        \"--uid\", \"0\", \"--gid\", \"0\", \"--uname\", \"\", \"--gname\", \"\", \"-C\", dir.path]\n                       + plan.members)\n        return try Data(contentsOf: archive).base64EncodedString()\n",
+   "new": "        return try runDraining([\"-czf\", \"-\", \"--format\", \"paxr\", \"-n\", \"--no-mac-metadata\", \"--no-xattrs\",\n                        \"--uid\", \"0\", \"--gid\", \"0\", \"--uname\", \"\", \"--gname\", \"\", \"-C\", dir.path]\n                       + plan.members, captureOut: true, packing: true).out.base64EncodedString()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_live_check",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "guard PublishActions.ahead(live, version) != false else {",
+   "new": "guard PublishActions.ahead(live, version) != false || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_trusted_check",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "        guard rec.trusted else {",
+   "new": "        guard rec.trusted || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_signed_in_check",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "        guard signedIn() else {",
+   "new": "        guard signedIn() || true else {",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_system_check",
+   "file": "app/Sources/ProsperApp/Control/ControlExtensions.swift",
+   "old": "        guard !rec.isSystem else { throw ControlError(\"\\(name) is built in: it ships",
+   "new": "        guard !rec.isSystem || true else { throw ControlError(\"\\(name) is built in: it ships",
+   "expect": "killed"
+  },
+  {
+   "name": "drop_published_post",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+   "old": "        await MainActor.run { NotificationCenter.default.post(name: published, object: nil, userInfo: [\"id\": id, \"version\": version]) }\n",
+   "new": "        _ = (id, version)\n",
+   "expect": "killed"
+  }
+ ]
+}
