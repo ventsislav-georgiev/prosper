@@ -99,7 +99,10 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         _ = try rt.store.addAccount(label: "gamma", token: "example-token-c", secrets: rt.secrets)
         rt.store.mutate {
             $0.current = "beta"
-            $0.accounts["beta"]?.reset = ["five_hour": Int(t) + 3600]
+            // #1898 CI: each sample's claims carry a reset, as a relayed reply records them (CCPoolConnection recordResets);
+            // the pool's headroom reads a used share with no reset as already rolled over (CCPoolCore.headroom).
+            $0.accounts["alpha"]?.reset = ["five_hour": Int(t) + 7200]
+            $0.accounts["beta"]?.reset = ["five_hour": Int(t) + 3600, "seven_day": Int(t) + 3 * 86400]
             $0.accounts["gamma"]?.cooldown = ["five_hour": Int(t) + 600]
         }
         rt.store.recordUsage(id: idA, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.9"]).limits)
@@ -114,7 +117,10 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         let gamma = try XCTUnwrap(l.accounts.last)
         XCTAssertTrue(gamma.limits.isEmpty && gamma.sampleAt == nil, "no sample: no recent data")
         XCTAssertEqual(gamma.benchedUntil, Int(t) + 600)
-        XCTAssertTrue(l.pool?.hasPrefix("5h 85%") == true, "alpha 10% free + beta 75% free; got \(l.pool ?? "nil")")
+        // The pane's words for the pane's cells: 5h alpha 10% + beta 75% free, more when beta's 5h resets; week beta 50%
+        // free, more when its week resets; gamma (no sample, benched) adds nothing.
+        let at = { CCPoolPaneModel.timeText($0, timeZone: rt.model.timeZone) }
+        XCTAssertEqual(l.pool, "5h 85% (more at \(at(Int(t) + 3600))) \u{00B7} week 50% (more at \(at(Int(t) + 3 * 86400)))")
     }
 
     // MARK: - The controller: read on open, then only on a change of the line
