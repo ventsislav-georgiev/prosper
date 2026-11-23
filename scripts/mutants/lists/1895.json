@@ -1,0 +1,62 @@
+{
+ "entry": "1895",
+ "filter": "AgentWindowLayoutEditTests",
+ "mutants": [
+  {
+   "name": "r1-inside-parks",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if home.pane(showing: t) != nil {\n            let out = home.show(",
+   "new": "        if false {\n            let out = home.show(",
+   "expect": "killed"
+  },
+  {
+   "name": "r1-outside-fills",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, false, focusedTarget != nil { lockedShowing(id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "r2-empty-parks",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "placement == .focused, layoutMade, focusedTarget != nil { lockedShowing(id) }",
+   "new": "placement == .focused, layoutMade { lockedShowing(id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "r3-no-swap-item",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "        return [.pane(swapLabel, enabled: true, verb: .swap)]\n",
+   "new": "        return []\n",
+   "expect": "killed"
+  },
+  {
+   "name": "r3-swap-no-request",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "            m.swapRequest = pane   //",
+   "new": "            m.swapRequest = nil   //",
+   "expect": "killed"
+  },
+  {
+   "name": "r3-choose-gated",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if parked != nil { select(id); focusSelection(); return }   // #1700",
+   "new": "        if parked != nil || layoutMade { if parked != nil { select(id); focusSelection() }; return }   // #1700",
+   "expect": "killed"
+  },
+  {
+   "name": "r4-no-pane-drag",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        return Self.rowID(layout.panes.first { $0.id == pane }?.target).flatMap(Self.dragToken)",
+   "new": "        return nil",
+   "expect": "killed"
+  },
+  {
+   "name": "r5-autosave-gated",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if next == nil, parked != nil { return }",
+   "new": "        if next == nil, parked != nil || layoutMade { return }",
+   "expect": "killed"
+  }
+ ]
+}
