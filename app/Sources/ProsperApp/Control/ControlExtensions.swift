@@ -86,6 +86,54 @@ enum ControlExtensions {
         return ControlChange(summary: summary, result: .object(["results": got]), verb: "updated extensions")
     }
 
+    /// #1903 seams for extensions.publish (rows: fakes; never the network, never the stored session).
+    static let liveVersion: @Sendable (String) async -> String? = { await MarketClient.publishedVersion(id: $0) }
+    static var fetchVersion = liveVersion
+    static let marketUpload: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.Preview?) async throws -> Void
+        = { try await MarketClient.publish(manifest: $0, blobBase64: $1, kind: $2, preview: $3) }
+    static var publishCall = marketUpload
+    /// What MarketClient.publish needs before it sends: the person's stored session.
+    static let storedSession: () -> Bool = { SupporterStore.load()?.session != nil }
+    static var signedIn = storedSession
+    /// Where a kit's packed blob is unpacked for its listing (the row's workRoot); rows pass a tempDir.
+    static var publishWorkRoot: URL = FileManager.default.temporaryDirectory
+
+    /// #1903: the row's Publish (ExtensionRow.offers, publishPlan, then the confirmation's ExtensionRow.upload) for a trusted
+    /// user extension or kit whose local version is not live yet, as the person's own signed-in account. No undo.
+    static func publish(_ args: [String: ControlJSON]) async throws -> ControlChange {
+        let id = try ControlSessions.required(args, "id")
+        let reg = try loaded(), name = OutsideText.shown(id, max: 80)
+        guard let rec = reg.record(id: id), let dir = reg.directory(id: id) else {
+            throw ControlError("unknown extension '\(name)' (extensions.list lists them)")
+        }
+        // ExtensionRow.offers, one refusal per reason
+        guard !rec.isSystem else { throw ControlError("\(name) is built in: it ships with Prosper and is not published") }
+        guard rec.trusted else {
+            throw ControlError("\(name) needs a trust approval: a person reviews it and clicks Trust in Settings > Extensions")
+        }
+        guard signedIn() else { throw ControlError(MarketClient.MarketError.notSignedIn.errorDescription ?? "not signed in") }
+        let version = rec.manifest.extension.version, shownVersion = OutsideText.shown(version, max: ExtensionRowText.versionMax)
+        let live = await fetchVersion(id)
+        guard PublishActions.ahead(live, version) != false else {
+            throw ControlError("\(name) \(shownVersion) is not newer than the live Marketplace version "
+                               + OutsideText.shown(live ?? "", max: ExtensionRowText.versionMax) + ": raise its version to publish")
+        }
+        let plan = await Task.detached { RemoteInstaller.publishPlan(dir) }.value
+        if let why = plan.refusal ?? plan.uploadRefusal(rec.manifest) { throw ControlError(OutsideText.shown(why, max: 600)) }
+        // the switch again after the awaits, before the upload (checked first in ControlRegistry.reply)
+        guard Preferences.agentControlEnabled else { throw ControlError(ControlChanges.offError) }
+        do {
+            try await ExtensionRow.upload(rec.manifest, dir: dir, plan: plan, workRoot: publishWorkRoot, publishCall: publishCall)
+        } catch {
+            throw ControlError("not published: " + OutsideText.shown((error as? LocalizedError)?.errorDescription ?? String(describing: error), max: 600))
+        }
+        let title = ExtensionRowText.title(rec.manifest.extension.title, id: id)
+        let members = plan.members.map { ControlJSON.string(OutsideText.shown(String($0.dropFirst(2)), max: 400)) }
+        return ControlChange(summary: "\(title) \(shownVersion), \(members.count) file\(members.count == 1 ? "" : "s") (no Undo: a published version stays live)",
+                             result: .object(["id": .string(id), "version": .string(shownVersion), "members": .array(members)]),
+                             verb: "published to the Marketplace")
+    }
+
     static func themes() -> ControlJSON {
         let store = ThemeStore.shared
         let reg = registry()
@@ -118,6 +166,9 @@ extension ControlRegistry {
                                       ["id": ControlArg(type: "string", summary: "only this extension (an id from extensions.list); all updatable ones when absent")]) {
             try await ControlExtensions.update($0)
         })
+        r.register(ControlKits.change("extensions.publish",
+                                      "Publish an installed, trusted user extension or agent kit to the Marketplace at its local version, as its Publish button does, with the person's signed-in account. Refused when not signed in, when that version is already live, or when the folder can't be published. Reply: id, version, members (the packed files). No Undo: a published version stays live.",
+                                      id) { try await ControlExtensions.publish($0) })
         r.register(ControlCommand(name: "themes.list",
                                   summary: "Every theme: id, title, appearance (dark/light), builtIn, extension, current.",
                                   args: [:], mutates: false) { _, _ in ControlExtensions.themes() })

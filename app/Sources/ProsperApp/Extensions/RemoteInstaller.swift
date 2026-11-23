@@ -508,9 +508,17 @@ enum RemoteInstaller {
         // Fixed owner fields: by default every header names the publisher's account.
         // paxr = bsdtar's default (restricted pax), named so a default change cannot bring
         // GNU @LongLink headers (they carry an owner name).
-        return try runTarData(["-czf", "-", "--format", "paxr", "-n", "--no-mac-metadata", "--no-xattrs",
-                               "--uid", "0", "--gid", "0", "--uname", "", "--gname", "", "-C", dir.path]
-                              + plan.members).base64EncodedString()
+        // #1903: to a regular file in a private work folder, never a pipe: bsdtar pads what it writes to a pipe with zeros
+        // up to its 10240-byte block, and those zeros went up after the gzip stream.
+        let work = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prosper-market-pack-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { removeWorkFolder(work) }
+        let archive = work.appendingPathComponent("publish.tgz")
+        try runTarPack(["-czf", archive.path, "--format", "paxr", "-n", "--no-mac-metadata", "--no-xattrs",
+                        "--uid", "0", "--gid", "0", "--uname", "", "--gname", "", "-C", dir.path]
+                       + plan.members)
+        return try Data(contentsOf: archive).base64EncodedString()
     }
 
     /// The files a publish packs, as "./<relative path>", sorted. The "./" prefix
@@ -662,11 +670,10 @@ enum RemoteInstaller {
         isHiddenMember(path) || path.hasSuffix(".test.lua") || path.split(separator: "/").contains("tests")
     }
 
-    /// Run `tar` and return its raw stdout bytes (binary-safe, for packaging).
-    private static func runTarData(_ args: [String]) throws -> Data {
-        let r = try runDraining(args, captureOut: true, packing: true)
+    /// Run the packing `tar` (it writes its archive to a file named in `args`); a failure reads as a publish's.
+    private static func runTarPack(_ args: [String]) throws {
+        let r = try runDraining(args, captureOut: false, packing: true)
         guard r.status == 0 else { throw tarFailed(args, r, packing: true) }
-        return r.out
     }
 
     /// Run `tar` and return its stdout (used for listing entries).

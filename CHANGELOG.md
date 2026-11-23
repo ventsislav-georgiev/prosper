@@ -41,6 +41,8 @@ tag from the now-released section and put it on the new top draft.
 - Marketplace: publishing works again; the server accepts the zero padding macOS tar adds after the
   archive. (#1902)
 - Settings, Claude Account Pool: each account shows when each of its limits resets. (#1904)
+- Publishing to the Marketplace no longer uploads a padded archive, and agents can publish an
+  installed extension or kit with `ProsperApp ctl extensions.publish`. (#1903)
 
 ## v2.175.0
 

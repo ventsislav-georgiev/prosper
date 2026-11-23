@@ -46,12 +46,47 @@ final class MarketPackerTests: XCTestCase {
         let blob = try RemoteInstaller.packageForPublish(ext)
         let tgz = tmp.appendingPathComponent("out.tgz")
         try XCTUnwrap(Data(base64Encoded: blob)).write(to: tgz)
-        // bsdtar zero-pads the gzip stream to its 10 KB block; gzip warns "trailing garbage" and exits 2.
-        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path], okStatus: [0, 2])
+        // #1903: the pack goes to a file, so no zero padding follows the gzip stream: gzip exits 0, not 2 ("trailing garbage").
+        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path])
 
         XCTAssertEqual(rawMembers(raw), ["./extension.toml", "./init.lua", "./lib/util.lua", "./lib/mytests.lua",
                                          "./themes/dark.json"])
         XCTAssertNil(raw.range(of: Data("com.example.test".utf8)), "an xattr record was packed")
+    }
+
+    /// #1903: the blob is exactly one gzip member: its trailer (CRC-32 and size of what inflates) is the blob's last 8
+    /// bytes, so nothing follows it (a pipe made bsdtar pad it with zeros to 10240 bytes), and its work folder is gone.
+    func testPackedBlobIsOneGzipStreamWithNothingAfterIt() throws {
+        let tmp = tempDir()
+        let ext = tmp.appendingPathComponent("ext")
+        for rel in ["extension.toml", "init.lua", "lib/util.lua"] { try write(ext, rel) }
+        let packs = { try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)
+            .filter { $0.hasPrefix("prosper-market-pack-") } }
+        let before = try packs()
+        let data = try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext)))
+        XCTAssertEqual(try packs(), before, "the pack's work folder was left behind")
+        let bytes = [UInt8](data)
+        XCTAssertTrue(bytes.count > 18 && bytes[0] == 0x1f && bytes[1] == 0x8b && bytes[2] == 8, "not a gzip stream")
+        XCTAssertEqual(bytes.count % 10240 == 0, false, "\(bytes.count) bytes: padded to bsdtar's block")
+        let tgz = tmp.appendingPathComponent("out.tgz")
+        try data.write(to: tgz)
+        let raw = [UInt8](try run("/usr/bin/gzip", ["-dc", tgz.path]))   // exit 2 when anything follows the stream
+        guard bytes.count > 8 else { return }
+        let trailer = bytes.suffix(8).map(UInt32.init)
+        let crc = trailer.prefix(4).enumerated().reduce(UInt32(0)) { $0 | $1.element << (8 * UInt32($1.offset)) }
+        let size = trailer.suffix(4).enumerated().reduce(UInt32(0)) { $0 | $1.element << (8 * UInt32($1.offset)) }
+        XCTAssertEqual(size, UInt32(truncatingIfNeeded: raw.count), "the last 4 bytes are not the inflated size: bytes follow the stream")
+        XCTAssertEqual(crc, Self.crc32(raw), "the 8 bytes before the end are not the stream's trailer")
+    }
+
+    /// CRC-32 as gzip's trailer holds it (reflected, polynomial 0xEDB88320). Bitwise: a test archive is a few KB.
+    private static func crc32(_ bytes: [UInt8]) -> UInt32 {
+        var c: UInt32 = 0xFFFF_FFFF
+        for b in bytes {
+            c ^= UInt32(b)
+            for _ in 0..<8 { c = c & 1 == 1 ? (c >> 1) ^ 0xEDB8_8320 : c >> 1 }
+        }
+        return ~c
     }
 
     /// Every header carries fixed owner fields, never the publisher's account or group.
@@ -61,7 +96,7 @@ final class MarketPackerTests: XCTestCase {
         for rel in ["extension.toml", "init.lua", "lib/util.lua"] { try write(ext, rel) }
         let tgz = tmp.appendingPathComponent("out.tgz")
         try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext))).write(to: tgz)
-        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path], okStatus: [0, 2])
+        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path])
 
         XCTAssertEqual(rawMembers(raw).count, 3)
         for h in rawHeaders(raw) {
@@ -88,7 +123,7 @@ final class MarketPackerTests: XCTestCase {
         for rel in ["extension.toml", long1, long2] { try write(ext, rel) }
         let tgz = tmp.appendingPathComponent("out.tgz")
         try XCTUnwrap(Data(base64Encoded: try RemoteInstaller.packageForPublish(ext))).write(to: tgz)
-        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path], okStatus: [0, 2])
+        let raw = try run("/usr/bin/gzip", ["-dc", tgz.path])
 
         let headers = rawHeaders(raw)
         XCTAssertFalse(headers.contains { $0.type == UInt8(ascii: "L") || $0.type == UInt8(ascii: "K") })

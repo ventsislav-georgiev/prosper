@@ -293,6 +293,9 @@ struct ExtensionRow: View {
         .padding(.vertical, sz(4))
         .closesPublishList(confirmation, offered: offered)
         .task(id: record.id) { await refreshPublishedVersion() }
+        .onReceive(NotificationCenter.default.publisher(for: Self.published)) { n in
+            if n.userInfo?["id"] as? String == record.id, let v = n.userInfo?["version"] as? String { publishedVersion = v }
+        }
     }
 
     private func refreshPublishedVersion() async {
@@ -306,7 +309,7 @@ struct ExtensionRow: View {
     /// flat color map straight off disk (declarative data, no VM).
     /// R1182-q3: only a theme file among `members` (the confirmed plan's), still a regular file reached through real
     /// folders, with no "." or ".." part, is read; any other gives no swatch (the publish goes on without it).
-    static func themePreview(themes: [ThemeContribution], dir: URL, members: [String])
+    nonisolated static func themePreview(themes: [ThemeContribution], dir: URL, members: [String])
         -> (kind: String, preview: MarketClient.ThemePreview?) {
         guard !themes.isEmpty else { return ("extension", nil) }
         var swatches: [MarketClient.ThemePreview.Swatch] = []
@@ -413,29 +416,10 @@ struct ExtensionRow: View {
         // R1182-e: the upload lists this record's fields; the folder's extension.toml (read by the plan) must still hold them.
         if let why = plan.uploadRefusal(record.manifest) { rowError = why; return }
         publishing = true
-        let m = meta
-        let themes = record.manifest.contributes?.allThemes ?? []
-        let isKit = record.manifest.contributes?.kit != nil
-        let root = workRoot
+        let m = meta, listed = record.manifest, root = workRoot, call = publishCall
         Task {
             do {
-                let blob = try await PublishActions.pack(dir, plan)
-                let manifest = MarketClient.PublishManifest(
-                    id: m.id, name: m.name, title: m.title, description: m.description,
-                    version: m.version, author: m.author, icon: m.icon, license: m.license)
-                let kind: String
-                let preview: MarketClient.Preview?
-                if isKit {
-                    // the listing is computed over the packed blob, unpacked as an install would; refused: nothing is uploaded
-                    kind = "kit"
-                    let listing = try await Task.detached { try Self.kitListing(blob: blob, id: m.id, tempRoot: root) }.value
-                    preview = MarketClient.Preview(kit: listing)
-                } else {
-                    let t = Self.themePreview(themes: themes, dir: dir, members: plan.members)
-                    kind = t.kind
-                    preview = t.preview.map { MarketClient.Preview(themes: $0.themes) }
-                }
-                try await publishCall(manifest, blob, kind, preview)
+                try await Self.upload(listed, dir: dir, plan: plan, workRoot: root, publishCall: call)
                 await MainActor.run { publishing = false; publishedVersion = m.version }
             } catch {
                 await MainActor.run {
@@ -444,6 +428,40 @@ struct ExtensionRow: View {
                 }
             }
         }
+    }
+}
+
+extension ExtensionRow {
+    /// #1903: a published id and version; every row over that id shows it live (ctl extensions.publish posts it too).
+    nonisolated static let published = Notification.Name("ExtensionRow.published")
+
+    /// #1903: a publish once its checks passed, shared by the row's confirmation and ctl extensions.publish: pack exactly
+    /// `plan`'s members, list `listed`'s fields with the kit listing or theme swatches, upload, then post `published`.
+    /// Throws a pack or listing refusal (nothing uploaded) or the upload's error.
+    nonisolated static func upload(_ listed: ExtensionManifest, dir: URL, plan: RemoteInstaller.PublishPlan, workRoot: URL,
+                                   publishCall: @Sendable (MarketClient.PublishManifest, String, String, MarketClient.Preview?) async throws -> Void,
+                                   packer: @escaping @Sendable (URL, RemoteInstaller.PublishPlan?) throws -> String
+                                       = { try RemoteInstaller.packageForPublish($0, plan: $1) }) async throws {
+        let m = listed.extension
+        let blob = try await PublishActions.pack(dir, plan, packer: packer)
+        let manifest = MarketClient.PublishManifest(
+            id: m.id, name: m.name, title: m.title, description: m.description,
+            version: m.version, author: m.author, icon: m.icon, license: m.license)
+        let kind: String
+        let preview: MarketClient.Preview?
+        if listed.contributes?.kit != nil {
+            // the listing is computed over the packed blob, unpacked as an install would; refused: nothing is uploaded
+            kind = "kit"
+            let listing = try await Task.detached { try kitListing(blob: blob, id: m.id, tempRoot: workRoot) }.value
+            preview = MarketClient.Preview(kit: listing)
+        } else {
+            let t = themePreview(themes: listed.contributes?.allThemes ?? [], dir: dir, members: plan.members)
+            kind = t.kind
+            preview = t.preview.map { MarketClient.Preview(themes: $0.themes) }
+        }
+        try await publishCall(manifest, blob, kind, preview)
+        let id = m.id, version = m.version
+        await MainActor.run { NotificationCenter.default.post(name: published, object: nil, userInfo: ["id": id, "version": version]) }
     }
 }
 

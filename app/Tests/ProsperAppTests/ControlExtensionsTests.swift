@@ -485,7 +485,7 @@ final class ControlExtensionsTests: XCTestCase {
 
     func testDescribeMarksTheWritesAsMutating() {
         let cmds = registry().commands
-        for name in ["extensions.enable", "extensions.disable", "extensions.update", "themes.set"] { XCTAssertEqual(cmds[name]?.mutates, true, name) }
+        for name in ["extensions.enable", "extensions.disable", "extensions.update", "extensions.publish", "themes.set"] { XCTAssertEqual(cmds[name]?.mutates, true, name) }
         for name in ["extensions.list", "themes.list"] { XCTAssertEqual(cmds[name]?.mutates, false, name) }
     }
 }
