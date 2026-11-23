@@ -174,7 +174,9 @@ async function publish(c: Ctx) {
   // (.DS_Store, AppleDouble "._x", tool state folders) and the account's user and
   // group name; refuse before any D1 or KV access. Bodies carry strings only: the
   // app decodes them as [String: String] and shows "error" as is.
-  const tar = await gunzipCapped(bytes, max * UNPACK_FACTOR);
+  const un = await gunzipPadded(bytes, max * UNPACK_FACTOR);
+  const tar = typeof un === "string" ? un : un.tar;
+  if (typeof un !== "string") bytes = un.gz; // stored, hashed and served: exactly the gzip stream
   if (tar === "too_large") {
     return c.json({ error: `The extension is too large to publish once unpacked (${Math.floor((max * UNPACK_FACTOR) / 1024)} KB max).` }, 413);
   }
@@ -463,6 +465,23 @@ async function gunzipCapped(bytes: Uint8Array, cap: number): Promise<Uint8Array 
   return out;
 }
 
+/** bsdtar pads its gzip output with zero bytes to a block, which DecompressionStream refuses as trailing junk.
+ *  Returns the tar and the gzip stream alone. The stream ends in [t, t+8] where t is the length without
+ *  trailing zeros (the CRC32 / ISIZE trailer can end in zeros itself): at most 9 inflates, only for input
+ *  ending in 0x00. Any other trailing byte is still "bad". */
+async function gunzipPadded(bytes: Uint8Array, cap: number): Promise<{ tar: Uint8Array; gz: Uint8Array } | "too_large" | "bad"> {
+  let t = bytes.length;
+  while (t > 0 && bytes[t - 1] === 0) t--;
+  const ends = [];
+  for (let n = t; n < bytes.length && n <= t + 8; n++) ends.push(n);
+  for (const n of [...ends, bytes.length]) {
+    const gz = bytes.subarray(0, n);
+    const tar = await gunzipCapped(gz, cap);
+    if (tar !== "bad") return tar === "too_large" ? tar : { tar, gz };
+  }
+  return "bad";
+}
+
 /** Read a request body as text, stopping once more than `cap` bytes have arrived (same loop as
  *  gunzipCapped): at most `cap` bytes plus one chunk are held. A missing body reads as "". */
 async function readCapped(stream: ReadableStream<Uint8Array> | null, cap: number): Promise<string | "too_large"> {
@@ -598,4 +617,4 @@ market.get("/download/:id/:version", download);
 market.post("/publish", requireSession, publish);
 market.delete("/packages/:id", requireSession, yank);
 
-export { market, claimMessage, publisherValue };
+export { market, claimMessage, publisherValue, gunzipPadded };

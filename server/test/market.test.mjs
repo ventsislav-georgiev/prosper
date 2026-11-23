@@ -17,7 +17,7 @@ registerHooks({
     return next(spec, ctx);
   },
 });
-const { market, claimMessage, publisherValue } = await import("../src/market.ts");
+const { market, claimMessage, publisherValue, gunzipPadded } = await import("../src/market.ts");
 
 const PUB = "publisher@example.com";
 const OTHER = PUB.replace("publisher@", "publisher2@"); // a second account, same reserved domain
@@ -922,4 +922,45 @@ test("a re-publish of an existing id spends the same D1 statements as before (th
   t.log.length = 0;
   assert.equal((await t.publish(PUB, "com.example.one", "1.1.0")).status, 200);
   assert.equal(t.log.length, 5);
+});
+
+// #1902: bsdtar pads its gzip output with zero bytes; the stream alone is stored, hashed and served.
+const zeroFilled = (n) => Buffer.concat([cleanTar("com.example.one", "1.0.0"), Buffer.alloc(n - cleanTar("com.example.one", "1.0.0").length)]);
+const storedIs = async (t, gz, what) => {
+  const r = await t.publish(PUB, "com.example.one", "1.0.0", Buffer.concat([gz, ...(what.pad ? [Buffer.alloc(what.pad)] : [])]));
+  assert.equal(r.status, 200, `${what.name}: ${r.text}`);
+  assert.deepEqual(Buffer.from(t.kv.get("pkg:com.example.one:1.0.0")), gz, `${what.name}: stored exactly the gzip stream`);
+  assert.equal(r.json.sha256, createHash("sha256").update(gz).digest("hex"), what.name);
+};
+
+test("a gzip stream followed by zero padding is accepted and stored trimmed", async () => {
+  const gz = gzipSync(cleanTar("com.example.one", "1.0.0"));
+  for (const pad of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 2821]) await storedIs(setup(), gz, { name: `pad ${pad}`, pad });
+});
+
+test("a gzip whose ISIZE ends in 0x00 is accepted with and without padding", async () => {
+  for (const size of [65536, 4096]) {
+    const gz = gzipSync(zeroFilled(size));
+    assert.equal(gz[gz.length - 1], 0, `ISIZE ${size} ends in a zero byte`);
+    for (const pad of [0, 1, 7, 2821]) await storedIs(setup(), gz, { name: `isize ${size} pad ${pad}`, pad });
+  }
+});
+
+test("a non-zero byte after the gzip stream is refused as not_gzip", async () => {
+  const gz = gzipSync(cleanTar("com.example.one", "1.0.0"));
+  for (const tail of [[1], [0, 1], [1, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]]) {
+    const t = setup();
+    const r = await t.publish(PUB, "com.example.one", "1.0.0", Buffer.concat([gz, Buffer.from(tail)]));
+    assert.equal(r.status, 400, tail.join());
+    assert.equal(r.json.error, "not_gzip", tail.join());
+    assert.equal(t.kv.size, 0);
+  }
+});
+
+test("gunzipPadded: an unpadded stream is returned as given, a bad one is bad", async () => {
+  const gz = gzipSync(cleanTar("com.example.one", "1.0.0"));
+  const r = await gunzipPadded(gz, 1 << 20);
+  assert.ok(typeof r !== "string" && r.gz.length === gz.length);
+  assert.equal(await gunzipPadded(Buffer.alloc(20), 1 << 20), "bad");
+  assert.equal(await gunzipPadded(gz, 100), "too_large");
 });
