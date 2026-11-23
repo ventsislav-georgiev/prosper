@@ -1,0 +1,20 @@
+{
+ "entry": "1897",
+ "filter": "CCPoolUsageStatsTests/testAxisTokensAreCompactEnglish",
+ "mutants": [
+  {
+   "name": "decimal-kept",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
+   "old": "return (r == r.rounded() ? String(Int(r)) : String(r)) + unit",
+   "new": "return String(r) + unit",
+   "expect": "killed"
+  },
+  {
+   "name": "m-threshold-1000x",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
+   "old": "v >= 1e6 ? (1e6, \"M\")",
+   "new": "v >= 1e9 ? (1e6, \"M\")",
+   "expect": "killed"
+  }
+ ]
+}
