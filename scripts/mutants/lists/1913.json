@@ -1,0 +1,20 @@
+{
+  "entry": 1913,
+  "filter": "AgentIslandTests/testRowDetailDefaultsAndKeysAreNotSynced|AgentIslandTests/testListDefaultsAndKeysAreNotSynced|AgentIslandTests/testActivitySortOrderUnchanged",
+  "mutants": [
+    {
+      "name": "merged-on",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+      "old": "    var merged = false\n",
+      "new": "    var merged = true\n",
+      "expect": "killed"
+    },
+    {
+      "name": "sort-activity",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+      "old": "?? .name }\n\n    var label",
+      "new": "?? .activity }\n\n    var label",
+      "expect": "killed"
+    }
+  ]
+}
