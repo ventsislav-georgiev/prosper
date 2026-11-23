@@ -1,0 +1,27 @@
+{
+ "entry": 1906,
+ "filter": "AgentWindowD1Tests/testHistoryCardClosePillOnlyWithSeveralPanesAndClosesItsOwnPane",
+ "mutants": [
+  {
+   "name": "focused-card-no-pill",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "close: AgentPanePlaceholder.close(model, pane: model.layout.focused))   // #1906",
+   "new": "close: nil)   // #1906",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused-closes-focused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "close: AgentPanePlaceholder.close(model, pane: runtime.pane))   // #1906",
+   "new": "close: AgentPanePlaceholder.close(model, pane: model.layout.focused))   // #1906",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused-card-no-pill",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "close: AgentPanePlaceholder.close(model, pane: runtime.pane))   // #1906",
+   "new": "close: nil)   // #1906",
+   "expect": "killed"
+  }
+ ]
+}
