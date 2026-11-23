@@ -29,6 +29,13 @@
    "old": "        guard store.planUsage != u else { return }\n",
    "new": "        if store.planLimits != nil, u != nil { readPlanLimits() }\n        guard store.planUsage != u else { return }\n",
    "expect": "killed"
+  },
+  {
+   "name": "pool-no-resets",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "reset: acct.reset, spent: acct.cooldown))",
+   "new": "reset: [:], spent: acct.cooldown))",
+   "expect": "killed"
   }
  ]
 }
