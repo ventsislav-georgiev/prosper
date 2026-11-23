@@ -2556,16 +2556,20 @@ final class AgentIslandTests: XCTestCase {
         Self.rowDetailKeys.forEach(Preferences.defaults.removeObject(forKey:))
     }
 
-    /// The defaults: Agents, Open PRs and Merged all on (#762: the only three).
+    /// The defaults: Agents and Open PRs on, Merged off (#1913; #762: the only three).
     /// Per Mac: no key syncs.
     func testRowDetailDefaultsAndKeysAreNotSynced() {
         clearRowDetailKeys()
         let d = Preferences.agentIslandRowDetails
         XCTAssertTrue(d.agents, "Agents on")
         XCTAssertTrue(d.openPRs, "Open PRs on")
-        XCTAssertTrue(d.merged, "Merged on")
+        XCTAssertFalse(d.merged, "#1913: Merged off")
         XCTAssertEqual(d, AgentIslandRowDetails())
-        XCTAssertEqual(d, .all)
+        XCTAssertEqual(d, AgentIslandRowDetails(agents: true, openPRs: true, merged: false))
+        XCTAssertNotEqual(d, .all, ".all stays all-on")
+        Preferences.defaults.set(true, forKey: "agentIslandShowMerged")
+        XCTAssertTrue(Preferences.agentIslandRowDetails.merged, "a stored true is kept")
+        Preferences.defaults.removeObject(forKey: "agentIslandShowMerged")
         for k in Self.rowDetailKeys { XCTAssertFalse(SyncedKeys.isSynced(k), "\(k): per Mac") }
         // A set writes only what changed, so the other two keep following the default.
         var off = d; off.openPRs = false
@@ -2688,7 +2692,7 @@ final class AgentIslandTests: XCTestCase {
         let both = DchSessionMeta(openPRs: [pr("o/r", 1)], merged: 4)
         let prsOnly = DchSessionMeta(openPRs: [pr("o/r", 1)])
         let mergedOnly = DchSessionMeta(merged: 4)
-        let noPRs = AgentIslandRowDetails(openPRs: false), noMerged = AgentIslandRowDetails(merged: false)
+        let noPRs = AgentIslandRowDetails(openPRs: false, merged: true), noMerged = AgentIslandRowDetails(merged: false)
         let neither = AgentIslandRowDetails(openPRs: false, merged: false)
         XCTAssertTrue(AgentIsland.hasPRLine(both, show: noPRs), "merged still draws the line")
         XCTAssertFalse(AgentIsland.hasPRLine(prsOnly, show: noPRs), "Open PRs off: no line")
@@ -2745,11 +2749,11 @@ final class AgentIslandTests: XCTestCase {
         s.meta = DchSessionMeta(openPRs: [pr("o/r", 12)], merged: 3)
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: .all),
                        "T, Working, 2 agents, 3 merged pull requests, open pull requests o/r#12", "#762: no tasks, no dch name")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false)),
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(openPRs: false, merged: true)),
                        "T, Working, 2 agents, 3 merged pull requests")
         XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(merged: false)),
                        "T, Working, 2 agents, open pull requests o/r#12")
-        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(agents: false)),
+        XCTAssertEqual(AgentIsland.rowAccessibilityLabel(s, now: 112, show: AgentIslandRowDetails(agents: false, merged: true)),
                        "T, Working, 3 merged pull requests, open pull requests o/r#12", "#1137: Agents off, not read")
     }
 
@@ -2826,7 +2830,7 @@ final class AgentIslandTests: XCTestCase {
         defer { ThemeRuntime.scale = saved }
         for scale: CGFloat in [0.7, 0.85, 1.0] {
             ThemeRuntime.scale = scale
-            for (name, d) in [("defaults", AgentIslandRowDetails()),
+            for (name, d) in [("defaults", AgentIslandRowDetails.all),
                               ("none", AgentIslandRowDetails(agents: false, openPRs: false, merged: false))] {
                 store.details = d
                 let r = ImageRenderer(content: AgentIslandView(store: store).padding(20).background(Color(white: 0.75)))
@@ -2850,7 +2854,7 @@ final class AgentIslandTests: XCTestCase {
             try write(try XCTUnwrap(rep.representation(using: .png, properties: [:])), "settings-row-details-\(scale)")
         }
         XCTAssertEqual(store.details, AgentIslandRowDetails(agents: false, openPRs: false, merged: false))
-        store.details = AgentIslandRowDetails()
+        store.details = .all
         // #571: drawn in the island's order (working, done, idle), whatever order the store was given.
         XCTAssertEqual(store.rowHeights, [AgentIslandGeometry.prRowHeight, AgentIslandGeometry.rowHeight, AgentIslandGeometry.rowHeight],
                        "#1371: the merged-only row has no third line")
@@ -2874,16 +2878,17 @@ final class AgentIslandTests: XCTestCase {
 
     private func names(_ l: [AgentSession]) -> [String] { l.map(\.name) }
 
-    /// Last activity is the default everywhere and is today's order.
+    /// Last activity is the order of `by: .activity` (and of a store built without a sort); the unset setting is Name (#1913).
     @MainActor
-    func testDefaultSortIsLastActivityUnchanged() {
+    func testActivitySortOrderUnchanged() {
         let rows = [session("i", .idle, activity: 50), session("w1", .working, activity: 10),
                     session("d", .done, activity: 90), session("b", .blocked, activity: 1),
                     session("w2", .working, activity: 20), session("i2", .idle, activity: 60)]
         XCTAssertEqual(names(AgentIsland.sorted(rows, by: .activity)), ["b", "w2", "w1", "d", "i2", "i"])
         XCTAssertEqual(names(AgentIsland.sorted(rows)), names(AgentIsland.sorted(rows, by: .activity)))
-        XCTAssertEqual(AgentIslandSort(raw: nil), .activity)
-        XCTAssertEqual(AgentIslandSort(raw: "bogus"), .activity)
+        XCTAssertEqual(AgentIslandSort(raw: nil), .name, "#1913")
+        XCTAssertEqual(AgentIslandSort(raw: "bogus"), .name)
+        XCTAssertEqual(AgentIslandSort(raw: "activity"), .activity, "a stored choice stays")
         XCTAssertEqual(AgentIslandSort(raw: "name"), .name)
         XCTAssertEqual(AgentIslandSort.allCases.map(\.label), ["Last activity", "Name"])
         let store = AgentIslandStore(geometry: notched)
@@ -3367,10 +3372,13 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertTrue(store.showsTabs)
     }
 
-    /// Unset keys: Last activity, tabs off, pattern "-qa". Per Mac: no key syncs.
+    /// Unset keys: Name (#1913), tabs off, pattern "-qa". Per Mac: no key syncs.
     func testListDefaultsAndKeysAreNotSynced() {
         clearListKeys()
-        XCTAssertEqual(Preferences.agentIslandSort, .activity)
+        XCTAssertEqual(Preferences.agentIslandSort, .name)
+        Preferences.defaults.set("activity", forKey: "agentIslandSort")
+        XCTAssertEqual(Preferences.agentIslandSort, .activity, "a stored activity is kept")
+        Preferences.defaults.removeObject(forKey: "agentIslandSort")
         XCTAssertFalse(Preferences.agentIslandSidekickTabs)
         XCTAssertEqual(Preferences.agentIslandSidekickPattern, "-qa")
         for k in Self.listKeys { XCTAssertFalse(SyncedKeys.isSynced(k), "\(k): per Mac") }
@@ -3413,11 +3421,12 @@ final class AgentIslandTests: XCTestCase {
         let c = AgentIslandController()
         c.showsPanel = false
         c.store = AgentIslandStore(geometry: notched)
+        Preferences.agentIslandSort = .activity   // #1913: unset is Name now
         c.store?.sessions = AgentIsland.sorted([session("b", .blocked, activity: 1), session("a-qa", .working, activity: 2),
                                                 session("c", .idle, activity: 3)])
         c.store?.expanded = true
         c.rowDetailsChanged()
-        XCTAssertEqual(c.store.map { names($0.visible) }, ["b", "a-qa", "c"], "unset: last activity, no tabs")
+        XCTAssertEqual(c.store.map { names($0.visible) }, ["b", "a-qa", "c"], "activity chosen, no tabs")
         Preferences.agentIslandSort = .name
         c.rowDetailsChanged()
         XCTAssertEqual(c.store.map { names($0.visible) }, ["a-qa", "b", "c"])
@@ -3514,7 +3523,7 @@ final class AgentIslandTests: XCTestCase {
     @MainActor
     func testRendersSidekickTabsOffscreen() throws {
         let now = Date().timeIntervalSince1970
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = AgentIsland.sorted([
             session("prosper-qa", .blocked, activity: now - 30, alias: "QA 571"),
             session("prosper-main", .working, activity: now - 5, agents: 2),

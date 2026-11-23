@@ -87,7 +87,7 @@ final class AgentIslandCountSymbolsTests: XCTestCase {
             (0, 0, .all, "api, Idle, 4m ago"),
             (-3, nil, .all, "api, Idle, 4m ago"),
             (Int.min, 5, .all, "api, Idle, 4m ago, 5 merged pull requests"),
-            (3, 192, D(agents: false), "api, Idle, 4m ago, 192 merged pull requests"),
+            (3, 192, D(agents: false, merged: true), "api, Idle, 4m ago, 192 merged pull requests"),
             (3, 192, D(merged: false), "api, Idle, 4m ago, 3 agents"),
         ]
         for (agents, merged, d, label) in table {

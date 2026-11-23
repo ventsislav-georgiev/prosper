@@ -1375,7 +1375,7 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testRendersHistoryTabOffscreen() throws {
         let now = Date().timeIntervalSince1970
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails(), sidekickPattern: "-qa")
+        let store = AgentIslandStore(geometry: notched, details: .all, sidekickPattern: "-qa")
         store.sessions = [session("live", version: "1.24.0"), session("prosper-qa")]   // #1364: not prosper-main (it would hide a)
         store.controlDch = Self.v124
         var a = record("prosper-main", ended: now - 120, end: "signal 9")
@@ -1434,7 +1434,7 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testTheViewPassesItsDetailsToSessionsRows() throws {
         let now = Date().timeIntervalSince1970
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.controlDch = Self.v124
         store.sessions = [AgentSession(key: AgentSessionKey(dir: "/d", name: "dobby-main"), alias: "A", activity: now - 7200,
                                        state: .idle, agents: 2)]
@@ -2954,7 +2954,7 @@ final class AgentIslandControlsTests: XCTestCase {
     /// row showing "Restarting…" with a dir summary line. Offscreen only.
     @MainActor
     func testRendersSessionControlsOffscreen() throws {
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = [session("prosper-main", version: "1.24.0"), session("ios"), session("dch-build")]
         store.controlDch = Self.v1241
         store.expanded = true
@@ -3209,7 +3209,7 @@ final class AgentIslandControlsTests: XCTestCase {
     /// running, failed and a Stop all tally. Offscreen only.
     @MainActor
     func testRendersStopControlsOffscreen() throws {
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = [session("prosper-main", version: "1.24.0"), session("ios", version: "1.24.0"),
                           session("dch-build", version: "1.23.0")]
         store.controlDch = Self.v1241
@@ -4090,7 +4090,7 @@ final class AgentIslandControlsTests: XCTestCase {
     /// killing and a Kill all tally. Offscreen only.
     @MainActor
     func testRendersKillControlsOffscreen() throws {
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = [session("prosper-main", version: "1.24.0"), session("ios", version: "1.23.0")]
         store.controlDch = Self.v1241
         store.expanded = true
@@ -4396,7 +4396,7 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testRendersHistoryPinsAndClearConfirmOffscreen() throws {
         let now = Date().timeIntervalSince1970
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = [session("live", version: "1.25.0")]   // #1364: a live prosper-main would hide its record
         store.controlDch = Self.v125
         var a = pinned("prosper-main", ended: now - 120)
@@ -4779,7 +4779,7 @@ final class AgentIslandControlsTests: XCTestCase {
     @MainActor
     func testRendersResumeNoMessageOffscreen() throws {
         let now = Date().timeIntervalSince1970
-        let store = AgentIslandStore(geometry: notched, details: AgentIslandRowDetails())
+        let store = AgentIslandStore(geometry: notched, details: .all)
         store.sessions = [session("live", version: "1.27.0")]   // #1364: a live prosper-main would hide its record
         store.controlDch = Self.v127
         var a = pinned("prosper-main", ended: now - 120)

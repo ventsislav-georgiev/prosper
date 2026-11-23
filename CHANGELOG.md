@@ -52,6 +52,8 @@ tag from the now-released section and put it on the new top draft.
   comes before the limit resets. (#1899)
 - Settings > Extensions has Install from GitHub Link…, for an extension or agent kit shared as a
   GitHub repo; it installs untrusted and the person trusts it. (#1911)
+- Agent Island row details now hide Merged by default, and sessions sort by Name by default; a saved
+  choice stays. (#1913)
 
 ## v2.175.0
 

@@ -143,14 +143,14 @@ enum AgentIslandSource: String, CaseIterable {
 
 /// #534: which of a row's details the island draws (Settings › Agent Island ›
 /// Row details). Per Mac, never synced. #762: Agents, Open PRs and Merged, all on
-/// by default (Tasks done, In progress, Queued and Session name were removed).
+/// by default (#1913: Merged is off by default) (Tasks done, In progress, Queued and Session name were removed).
 /// The pure functions below take it as a parameter and never read defaults.
 /// #1455: plus model, effort, state word, age and the Command 1-9 chip, all on by default; model and effort, when on, show
 /// only where they differ from `defaultModel` / `defaultEffort` (Preferences' Default model and effort; "" shows them all).
 struct AgentIslandRowDetails: Equatable {
     var agents = true
     var openPRs = true
-    var merged = true
+    var merged = false
     var model = true
     var effort = true
     var state = true
@@ -198,8 +198,8 @@ struct AgentIslandRowDetails: Equatable {
 enum AgentIslandSort: String, CaseIterable {
     case activity, name
 
-    /// Unset or unknown = last activity, the order before the setting existed.
-    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .activity }
+    /// Unset or unknown = name (#1913; last activity before).
+    init(raw: String?) { self = raw.flatMap(Self.init(rawValue:)) ?? .name }
 
     var label: String {
         switch self {

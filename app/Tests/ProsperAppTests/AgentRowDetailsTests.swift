@@ -22,7 +22,7 @@ final class AgentRowDetailsTests: XCTestCase {
     }
 
     func details(_ change: (inout AgentIslandRowDetails) -> Void) -> AgentIslandRowDetails {
-        var d = AgentIslandRowDetails()
+        var d = AgentIslandRowDetails.all   // #1913: .all, so rows that flip one part see Merged on
         change(&d)
         return d
     }
@@ -90,7 +90,7 @@ final class AgentRowDetailsTests: XCTestCase {
         Preferences.defaults.set(true, forKey: "agentIslandShowMerged")
         let d = Preferences.agentIslandRowDetails
         XCTAssertFalse(d.agents, "the old key still reads")
-        XCTAssertTrue(d.merged)
+        XCTAssertTrue(d.merged, "a stored true is kept")
         XCTAssertTrue(d.openPRs)
         XCTAssertTrue(d.model, "Model on (when not the default)")
         XCTAssertTrue(d.effort, "Effort on (when not the default)")
