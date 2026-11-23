@@ -1,0 +1,41 @@
+{
+  "entry": 1911,
+  "filter": "ControlKitsTests/testGitHubLink",
+  "mutants": [
+    {
+      "name": "folder-accepted",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "guard case .github(let url) = try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {\n            throw ControlError(\"not a GitHub repo URL: give https://github.com/<owner>/<repo>\")\n        }\n        return url",
+      "new": "switch try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) {\n        case .github(let url): return url\n        case .folder(let dir): return dir.path\n        }",
+      "expect": "killed"
+    },
+    {
+      "name": "no-url-check",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "try await reg.installRemote(url: try url(raw),",
+      "new": "try await reg.installRemote(url: raw,",
+      "expect": "killed"
+    },
+    {
+      "name": "no-cap",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "maxBytes: RemoteInstaller.maxArtifactBytes, review: nil) { loaded in",
+      "new": "maxBytes: nil, review: nil) { loaded in",
+      "expect": "killed"
+    },
+    {
+      "name": "no-installed-refusal",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "guard reg.record(id: loaded.id) == nil else {",
+      "new": "guard true else {",
+      "expect": "killed"
+    },
+    {
+      "name": "error-text-describing",
+      "file": "app/Sources/ProsperApp/Extensions/ExtensionsSettingsView.swift",
+      "old": "(error as? ControlError)?.message ?? MarketplaceRootView.installErrorText(error)",
+      "new": "MarketplaceRootView.installErrorText(error)",
+      "expect": "killed"
+    }
+  ]
+}
