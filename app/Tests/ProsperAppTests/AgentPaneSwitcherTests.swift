@@ -341,4 +341,121 @@ extension AgentWindowD1Tests {
                        "armed: the remote attach starts, not the card with Attach")
         XCTAssertTrue(m.terminal.held == nil, "nothing is held back")
     }
+
+    /// R1895 f1: pane `pane`'s session header (its title switcher) as a value; `detail`: built as AgentDetailView's header.
+    @MainActor
+    func paneSwapHeader(_ m: AgentWindowModel, _ pane: UUID, _ name: String, detail: Bool = false) throws -> AnyView {
+        let row = try XCTUnwrap(m.rows.first { $0.title == name }, name)
+        let s = try XCTUnwrap(row.session, name)
+        return AnyView(AgentSessionHeader(row: row, session: s, cwd: nil, open: {}, xrayPane: pane,
+                                          switcher: AgentPaneSwitch(model: m, pane: pane, detail: detail)))
+    }
+
+    /// Hosts `view` (never shown) once a button is laid out, runs `after`, pumps the run loop until `done` or 2 s, and
+    /// returns each switcher whose list a request opened (AgentPaneSwitch.opened: no popover) as (pane, detail).
+    @MainActor
+    func paneSwapHosted(_ view: AnyView, after: () -> Void = {},
+                        until done: @escaping ([(pane: UUID, detail: Bool)]) -> Bool) -> [(pane: UUID, detail: Bool)] {
+        var opened: [(pane: UUID, detail: Bool)] = []
+        AgentPaneSwitch.opened = { opened.append(($0.pane, $0.detail)) }
+        defer { AgentPaneSwitch.opened = nil }
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
+        let (win, host) = AXTreeSupport.hosted(view.frame(width: 700, height: 180, alignment: .top), CGSize(width: 700, height: 180))
+        defer { win.contentView = nil; win.close() }
+        _ = AXTreeSupport.poll(host) { t in t.contains { $0.role == "AXButton" && !$0.ignored } }
+        after()
+        let deadline = Date().addingTimeInterval(2)
+        repeat { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) } while !done(opened) && Date() < deadline
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))   // a second consumer, if any, would land here
+        XCTAssertFalse(win.isVisible, "never on screen")
+        return opened
+    }
+
+    /// R1895 f1: a Swap Session… request no switcher took is dropped by a focus move (layout's didSet), so a switcher
+    /// mounted later never opens its list unasked. Mutant swap-keep-on-focus.
+    @MainActor
+    func testPaneSwitcherStaleSwapRequestNeverOpensALaterList() throws {
+        try paneSwitcherModel(["api", "web"], targets: ["api", "web"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.last)
+            AgentWindowControls.runPane(.swap, pane: b, in: m)
+            XCTAssertTrue(m.swapRequest == b && m.layout.focused == b, "control: asked for b, b focused")
+            m.focusPane(a)
+            XCTAssertTrue(m.swapRequest == nil, "the focus moved: the request is dropped")
+            let opened = paneSwapHosted(try paneSwapHeader(m, b, "web")) { !$0.isEmpty }
+            XCTAssertEqual(opened.map(\.pane), [], "a switcher mounted later does not open its list unasked")
+        }
+    }
+
+    /// R1895 f1: no Swap Session… where no switcher could take it: the pane whose session is being renamed (its header
+    /// draws the rename field in place of the title switcher) and a pane zoomed away; the other pane keeps it.
+    /// Mutant swap-offered-while-renaming.
+    @MainActor
+    func testPaneSwitcherSwapMenuIsEmptyForARenamedOrUndrawnPane() throws {
+        try paneSwitcherModel(["api", "web"], targets: ["api", "web"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.last)
+            let item = [AgentWindowMenuEntry.pane(AgentWindowControls.swapLabel, enabled: true, verb: .swap)]
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: b), item, "control: offered")
+            let edit = AgentRenameEdit(key: AgentSessionKey(dir: "/tmp/dch-test", name: "web"), text: "")
+            m.openRenameField(edit)
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: b), [], "web is being renamed: its header shows the field")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: a), item, "api is not renamed")
+            m.endRename(edit, nil)   // Escape: the field closes, nothing runs
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: b), item, "the rename ended: offered again")
+            XCTAssertTrue(m.perform(.zoom), "control: a zooms")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: b), [], "b zoomed away: not drawn")
+            XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: a), item, "the zoomed pane keeps it")
+        }
+    }
+
+    /// R1895 f1 (review): Swap Session… on an unfocused pane with no shown terminal (drawn as AgentUnfocusedPane): the
+    /// focus change gives the pane another view, so its switcher mounts AFTER the request; that switcher takes it.
+    /// The model is made visible only after the swap, so before it no pane content is live (b: AgentUnfocusedPane).
+    @MainActor
+    func testPaneSwitcherSwapOpensInTheHeaderMountedAfterTheFocus() throws {
+        try withPaneMenu(true) {
+            let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: layoutSuite())
+            defer { m.close() }
+            m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            let b = try XCTUnwrap(m.layout.order.last)
+            XCTAssertNotEqual(m.layout.focused, b)
+            let before = AgentPaneArea(model: m, scrolls: false).pane(b, compact: false)
+            XCTAssertNotNil(paneRiderFind(before, AgentUnfocusedPane.self), "control: b is drawn as AgentUnfocusedPane")
+            AgentWindowControls.runPane(.swap, pane: b, in: m)
+            XCTAssertTrue(m.layout.focused == b && m.swapRequest == b, "b focused, its switcher asked")
+            // now shown (fake terminals, no dch): the rows load, as the window that draws b's new header has them
+            m.terminal.request = { AgentTerminalSpawn.local($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: [:]) }
+            m.terminal.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+            m.setVisible(true)
+            XCTAssertTrue(m.layout.focused == b && m.swapRequest == b, "still asked once shown")
+            let after = AgentPaneArea(model: m, scrolls: false).pane(b, compact: false)
+            XCTAssertNil(paneRiderFind(after, AgentUnfocusedPane.self), "focused, b has another view")
+            let header: AnyView = try {
+                if let c = paneRiderFind(after, AgentPaneTerminalColumn.self) { return AnyView(c.header) }
+                let d = try XCTUnwrap(paneRiderFind(after, AgentDetailView.self), "b's focused view")
+                let row = try XCTUnwrap(m.rows.first { $0.title == "web" }), s = try XCTUnwrap(row.session)
+                return AnyView(d.header(row, s))
+            }()
+            let opened = paneSwapHosted(header) { !$0.isEmpty }
+            XCTAssertEqual(opened.map(\.pane), [b], "the switcher mounted after the focus change opens b's list, once")
+            XCTAssertTrue(m.swapRequest == nil, "consumed")
+        }
+    }
+
+    /// R1895 f1: both panes' headers hosted, plus a detail-view header for b (as AgentDetailView builds it); Swap
+    /// Session… for b opens ONE list, on b's own pane header: not the other pane's, not the detail view's.
+    /// Mutant swap-detail-first.
+    @MainActor
+    func testPaneSwitcherSwapRequestOpensTheListOnItsOwnPane() throws {
+        try paneSwitcherModel(["api", "web"], targets: ["api", "web"]) { m, panes in
+            let a = try XCTUnwrap(panes.first), b = try XCTUnwrap(panes.last)
+            let hd = try paneSwapHeader(m, b, "web", detail: true)
+            let ha = try paneSwapHeader(m, a, "api"), hb = try paneSwapHeader(m, b, "web")
+            let all = AnyView(VStack(spacing: 0) { hd; ha; hb })
+            let opened = paneSwapHosted(all, after: { AgentWindowControls.runPane(.swap, pane: b, in: m) }) { !$0.isEmpty }
+            XCTAssertEqual(opened.map(\.pane), [b], "one list, on the asked pane")
+            XCTAssertEqual(opened.map(\.detail), [false], "the pane header's switcher, not the detail view's")
+            XCTAssertTrue(m.swapRequest == nil, "consumed")
+        }
+    }
 }

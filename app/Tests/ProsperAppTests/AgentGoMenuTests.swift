@@ -81,7 +81,7 @@ final class AgentGoMenuTests: XCTestCase {
                   "Jump to Session 8", "Jump to Session 9", "Jump to Session 10", "Jump to Session 11", "Jump to Session 12",
                   "Jump to Session 13", "Jump to Session 14", "Jump to Session 15", "Jump to Session 16", "Jump to Session 17",
                   "Jump to Session 18", "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Next Needs You"],
-            .layout: ["Split Right", "Split Down", "Next Pane", "Previous Pane", "Edit Layout"],
+            .layout: ["Split Right", "Split Down", "Next Pane", "Previous Pane"],   // #1895: no Edit Layout
         ][go.kind], "\(go.kind)")
         for (item, entry) in zip(items, go.shown) {
             XCTAssertTrue(item.target === go, item.title)
@@ -98,7 +98,7 @@ final class AgentGoMenuTests: XCTestCase {
             XCTAssertFalse(go.menuHasKeyEquivalent(menu, for: e, target: &target, action: &action), "\(c.route)")
         }
         }
-        XCTAssertEqual(all.count, 42, "#1379: the 31 keyed items (#1471; #1820: #1111's two out) and the three sidebar modes; #1477: the 7 pane items, splits on; #1538: Edit Layout")
+        XCTAssertEqual(all.count, 41, "#1379: the 31 keyed items (#1471; #1820: #1111's two out) and the three sidebar modes; #1477: the 7 pane items, splits on; #1895: no Edit Layout (#1538's)")
         // #1586: the list itself, literal (no model: one pane, so #1367's Command-W item reads Close Window); #1726: as a set
         XCTAssertEqual(all.count, Set(all).count, "no item in two menus")
         XCTAssertEqual(Set(all), Set([
@@ -109,7 +109,7 @@ final class AgentGoMenuTests: XCTestCase {
             "X-Ray\u{2026}", "Find\u{2026}", "Find Next", "Find Previous", "Bigger Text",
             "Smaller Text", "Actual Size", "New Session", "New Shell", "Stop or Remove", "Close Window",
             "Next Needs You", "Toggle Sidebar", "Split Right", "Split Down", "Next Pane", "Previous Pane", "Zoom Pane",
-            "Edit Layout", "Full Sidebar", "Mini Sidebar", "Slide-In Sidebar",
+            "Full Sidebar", "Mini Sidebar", "Slide-In Sidebar",
         ]))
     }
 

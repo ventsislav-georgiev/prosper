@@ -129,10 +129,12 @@ extension AgentWindowD1Tests {
 
         st.sessions = st.sessions + [session("lint-run", .blocked)]
         XCTAssertTrue(m.nextNeedsYou())
-        XCTAssertEqual(m.layout.id, b.id, "(c) no switch")
+        // #1895 rule 1: B is a made layout (four stored), so a session in none of its panes opens the single-pane view
+        XCTAssertEqual(m.parked?.id, b.id, "(c) no switch: B parked under the single-pane view")
         XCTAssertEqual(m.layout.panes.count, 1)
-        XCTAssertEqual(focusedName(m), "lint-run", "(c) into the focused pane")
-        XCTAssertEqual(m.layoutWrites, writes + 1)
+        XCTAssertEqual(focusedName(m), "lint-run", "(c) the single-pane view shows it")
+        XCTAssertEqual(m.layoutWrites, writes, "(c) the single-pane view is never saved")
+        XCTAssertEqual(savedLayouts(d).active, b.id)
         XCTAssertEqual(opened, 0, "nothing opened")
         XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb")
         XCTAssertTrue(m.newSession == nil)
@@ -275,12 +277,13 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(asked.first?.layout, b.id)
         XCTAssertEqual(asked.first?.pane, target)
         XCTAssertEqual(asked.first?.keys, .sidebar, "the keys do not move before the switch is made")
-        XCTAssertEqual(m.layout.id, a.id, "refused: nothing switched")
+        // #1895 rule 1: two stored layouts make A a made layout, so rule 2's pick opens the single-pane view, A parked
+        XCTAssertEqual(m.parked?.id, a.id, "refused: nothing switched, A parked")
         XCTAssertEqual(savedLayouts(d).active, a.id)
         XCTAssertEqual(m.layout.panes.count, 1)
-        XCTAssertEqual(focusedName(m), "api-qa", "fell through to rule 2: into the focused pane")
+        XCTAssertEqual(focusedName(m), "api-qa", "fell through to rule 2: the single-pane view shows it")
         XCTAssertEqual(m.keyFocus, .pane, "rule 2 is a row's click: the pane takes the keys")
-        XCTAssertEqual(m.layoutWrites, writes + 1, "rule 2's one write")
+        XCTAssertEqual(m.layoutWrites, writes, "rule 2 parks: the single-pane view is never saved")
         XCTAssertEqual(opened, 0, "nothing opened")
         XCTAssertTrue(calls.all.isEmpty && calls.records.isEmpty, "no session verb")
     }

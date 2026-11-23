@@ -176,15 +176,16 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(AgentsNSWindow.divider(dividerEvent(.leftMouseDragged), m, at: CGPoint(x: p.x + 120, y: p.y), in: size))
             XCTAssertTrue(AgentsNSWindow.divider(dividerEvent(.leftMouseUp), m, at: CGPoint(x: p.x + 120, y: p.y), in: size))
             XCTAssertEqual(m.layout, ended)
-            // A select mid-drag: the drag's save, then the pick's own.
+            // A select mid-drag: the drag's save. #1895 rule 1: docs is in no pane of the made layout, so the pick parks it
+            // (the single-pane view, never saved): the saved layout is the parked one with the drag's ratio.
             let q = CGPoint(x: a.minX + (try XCTUnwrap(m.dividers(in: a.size).first)).line.midX, y: p.y)
             XCTAssertTrue(AgentsNSWindow.divider(dividerEvent(.leftMouseDown), m, at: q, in: size))
             XCTAssertTrue(AgentsNSWindow.divider(dividerEvent(.leftMouseDragged), m, at: CGPoint(x: q.x - 40, y: q.y), in: size))
             m.select(.live(paneKey("docs")))
             XCTAssertTrue(m.dividerDrag == nil, "the select ended the drag")
             XCTAssertEqual(m.focusedTarget, paneTarget("docs"), "the pick's own change is there")
-            XCTAssertEqual(m.layoutWrites, writes + 3, "the drag's one save plus the pick's one")
-            XCTAssertEqual(savedLayouts(d).activeLayout, m.layout)
+            XCTAssertEqual(m.layoutWrites, writes + 2, "the drag's one save; the single-pane view's pick saves nothing")
+            XCTAssertTrue(m.parked != nil && savedLayouts(d).activeLayout == m.parked, "the drag's ratio saved before the park")
         }
     }
 

@@ -458,6 +458,8 @@ final class AgentWindowModel: ObservableObject {
             // draws the old one's as inert): forget the old box, so a focus asked for waits for the new one (pending).
             if AgentPaneLayout.splitsEnabled, layout.focused != oldValue.focused { interaction.composer = nil }
             if dividerDrag == nil { autosave() }   // #900 B2 step 5a (8.1): a divider drag saves once, at its end
+            // R1895 f1: a Swap Session… request no switcher took is dropped once the focus moves (a one-shot, never stale)
+            if swapRequest != nil, layout.focused != oldValue.focused { swapRequest = nil }
             // R901-s4b-q2: another active layout ends an open inline rename (nothing written).
             if layoutRenaming != nil, layout.id != oldValue.id { layoutRenaming = nil }
         }
@@ -875,6 +877,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// 7.6: the first click on an unfocused pane focuses it; the panes take the keys (7.2).
     /// #1895: Swap Session… chosen for this pane: its title switcher opens its list and clears it (AgentPaneSwitcherButton).
+    /// R1895 f1: a focus move drops it (layout's didSet); swapMenu offers none for a pane that draws no switcher.
     @Published var swapRequest: UUID?
 
     func focusPane(_ pane: UUID) {
@@ -1532,6 +1535,9 @@ final class AgentWindowModel: ObservableObject {
     /// gate off or the window closed; false, nothing changed: no other session needs you. Never a session verb: only the
     /// window's pane runtimes stop and start. Main actor (the window's key route).
     /// R901-s6-q1: a refused stored-layout switch moves no keys and falls through to the focused pane (rule 2).
+    /// #1895 (supervisor ruling, round 3): rule 2 is a pick like a sidebar click, so on a made layout (layoutMade) it follows
+    /// rule 1: a session in none of its panes opens the single-pane view (the layout parked, nothing saved); an empty
+    /// focused pane takes it (select's empty-pane rule).
     /// `switching` (tests): the switch, nil = switchLayout(_:focus:); no refusal is reachable through the model's own store.
     /// #1862 n180: under keepingKeys (an agent's jump) the fall-through into the focused pane is refused (false, nothing
     /// changed): its retarget swaps the pane's terminal view and AgentTerminalHostSlot.hold hands the new one the keys.
@@ -2215,6 +2221,7 @@ final class AgentWindowModel: ObservableObject {
             return out
         }
         if parked != nil { return layout.show(t, placement: .focused, minimum: paneMinimum, in: area, splitsEnabled: true) }
+        dragEnded()   // #1895 (R900-5a-1): the drag's save lands before the park (autosave never saves a parked layout)
         parked = layout
         return .success(.single(t))
     }

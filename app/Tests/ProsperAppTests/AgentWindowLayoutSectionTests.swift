@@ -144,7 +144,9 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.selection, plain.selection, "the walk lands on session rows only (\(code))")
         }
         XCTAssertEqual(m.layout.id, a.id, "a key never lands on a layout row")
-        XCTAssertEqual(m.layoutWrites, plain.layoutWrites)
+        // #1895 rule 1: two layouts make A a made layout, so a walk onto a session outside it parks A (the single-pane
+        // view, never saved) and back onto api returns to A; the lone layout (plain) takes each pick and saves it.
+        XCTAssertEqual(m.layoutWrites, 0, "the walk over a made layout writes nothing")
     }
 
     /// No flicker: 50 refreshes of the store with unchanged layouts publish nothing and leave the rows identical.

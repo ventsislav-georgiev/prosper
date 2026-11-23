@@ -245,6 +245,7 @@ extension AgentWindowD1Tests {
                     return try XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "pane \(i): a pane view").body
                 }()
                 let button = try XCTUnwrap(paneRiderFind(body, AgentSessionMenuButton.self), "pane \(i): a header \"⋯\"")
+                for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
                 button.pane(try paneMenuVerb(button.panes, AgentWindowControls.closePaneLabel))
                 XCTAssertFalse(m.layout.order.contains(id), "pane \(i): its own pane closed")
                 XCTAssertEqual(m.layout.order, two.order.filter { $0 != id }, "pane \(i): the other pane kept")

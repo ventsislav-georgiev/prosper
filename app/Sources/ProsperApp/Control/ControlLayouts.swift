@@ -3,8 +3,8 @@ import Foundation
 /// #1841: saved layouts over the control channel: layouts.list/switch/new/rename/delete. Every command goes through the
 /// window model's own ops (switchLayout, previousLayout, newLayout, renameLayout, deleteLayout), so the 9-layout cap, the
 /// split gate and the store's refusals are the window's. Pane changes only: no session is started, stopped or attached.
-/// The lock (#1817/#1826/#1832) only gates picks into the focused pane and structural pane edits, none of which these
-/// commands do. Deleting is final (no undo: the model cannot restore a layout's panes; operator 2026-11-21 over QA n148);
+/// #1895: no edit mode and no lock: every change of a made layout is saved at once, and only a pick of a session outside it
+/// opens the single-pane view (layoutMade); these commands make no such pick. Deleting is final (no undo: the model cannot restore a layout's panes; operator 2026-11-21 over QA n148);
 /// the undo of `layouts.new` removes only the layout it made. None of them closes an open New session form (adopt never clears it, unlike select(manual:)). On demand only: no observer, no poll.
 @MainActor
 enum ControlLayouts {

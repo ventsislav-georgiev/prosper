@@ -316,7 +316,12 @@ enum AgentWindowControls {
     /// on: the pane's title switcher list (the same rows), whose pick replaces the pane's session and is saved.
     @MainActor
     static func swapMenu(_ m: AgentWindowModel, pane: UUID) -> [AgentWindowMenuEntry] {
-        guard AgentPaneLayout.splitsEnabled, m.layout.panes.contains(where: { $0.id == pane && $0.target != nil }) else { return [] }
+        guard AgentPaneLayout.splitsEnabled, let t = m.layout.panes.first(where: { $0.id == pane })?.target else { return [] }
+        // R1895 f1: no request no switcher can take: a pane zoomed away is not drawn, and a pane whose session is being
+        // renamed draws the rename field in place of its title switcher (AgentSessionHeader).
+        // shortcut: the too-small fallback (the focused pane alone) is not checked; an undrawn pane has no ⋯ to choose from.
+        guard m.layout.zoomed.map({ $0 == pane }) ?? true,
+              m.renaming.map({ AgentWindowModel.rowID(t) != .live($0) }) ?? true else { return [] }
         return [.pane(swapLabel, enabled: true, verb: .swap)]
     }
 

@@ -185,6 +185,7 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(other.map(\.title), ["Close Pane"], "the unfocused empty pane")
             m.focusPane(b)
             XCTAssertEqual(m.layout.focused, b)
+            for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
             try XCTUnwrap(focused.first { $0.title == "Close Pane" }).action()
             XCTAssertEqual(m.layout.order, [b], "the pill closed its own pane (a), not the focused one (b)")
 
@@ -194,6 +195,7 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m2.layout.panes.allSatisfy { $0.target == nil }, "both panes empty")
             let pill = try XCTUnwrap(try emptyPanePills(m2, b).first { $0.title == "Close Pane" })
             XCTAssertEqual(m2.layout.focused, a)
+            for l in m2.layouts?.layouts ?? [] where l.id != m2.layout.id { m2.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
             pill.action()
             XCTAssertEqual(m2.layout.order, [a], "the unfocused pane's pill closed b, not the focused a")
         }

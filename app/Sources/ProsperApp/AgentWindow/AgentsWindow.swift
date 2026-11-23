@@ -2464,7 +2464,7 @@ struct AgentDetailView: View {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
             VStack(spacing: 0) {
                 AgentRemoteHeader(row: row, remote: r, pane: model.layout.focused,
-                                  switcher: AgentPaneSwitch(model: model, pane: model.layout.focused)).modifier(AgentPaneProbe(kind: "header"))
+                                  switcher: AgentPaneSwitch(model: model, pane: model.layout.focused, detail: true)).modifier(AgentPaneProbe(kind: "header"))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 AgentTerminalPane(controller: model.terminal, open: {})
                     .frame(minHeight: 0, maxHeight: .infinity)
@@ -2546,7 +2546,7 @@ struct AgentDetailView: View {
                 AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
                                       ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
                                       pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                      switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
+                                      switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
             } else {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                    todos: transcript.todos,
@@ -2555,7 +2555,7 @@ struct AgentDetailView: View {
                                    rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                    endRename: { model.endRename($0, $1) }, panes: panes,
                                    pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                   switcher: AgentPaneSwitch(model: model, pane: id))   // #1491
+                                   switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
             }
         }
         .modifier(AgentPaneProbe(kind: "header"))
@@ -3416,6 +3416,11 @@ struct AgentPaneSwitch {
     let pane: UUID
 
     static let hint = "Choose a session for this pane"
+    /// R1895 f1: built by AgentDetailView's header (its pane is the focused one, not the view's own), which yields a
+    /// Swap Session… request to the pane header's switcher when both are mounted.
+    var detail = false
+    /// R1895 f1 (tests): records the switcher whose list a Swap Session… request opens, instead of the popover.
+    @MainActor static var opened: ((AgentPaneSwitch) -> Void)?
 
     /// The chevron's room after the title (its spacing and its fixed width) at a title font of `size`.
     static func chevronRoom(_ size: CGFloat) -> CGFloat { sz(4) + chevronWidth(size) }
@@ -3454,13 +3459,19 @@ struct AgentPaneSwitcherButton<T: View>: View {
             if let list { AgentPaneSwitcherView(list: list) }
         }
         // #1895: the ⋯ menu's Swap Session… for this pane opens the same list; after this update (never inside it), once.
+        // A switcher mounted after the request (the pane's view changes with its focus) takes it on subscribe. R1895 f1: a
+        // stale one is prevented at its source (a focus move drops it, swapMenu offers none where no switcher is drawn).
         .onReceive(switcher.model.$swapRequest) { p in
             guard p == switcher.pane else { return }
-            DispatchQueue.main.async {
+            let take = {
                 guard switcher.model.swapRequest == switcher.pane else { return }
                 switcher.model.swapRequest = nil
+                if let opened = AgentPaneSwitch.opened { opened(switcher); return }   // tests: no popover
                 list = AgentPaneSwitcherList.of(switcher, dismiss: { list = nil })
             }
+            // R1895 f1: one consumer per pane: a detail-view header's switcher waits one more turn, so the pane's own
+            // header, when both are mounted, takes it first; alone (the focused full header) it still takes it.
+            DispatchQueue.main.async { if switcher.detail { DispatchQueue.main.async(execute: take) } else { take() } }
         }
     }
 }

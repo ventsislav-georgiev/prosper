@@ -91,7 +91,8 @@ extension AgentWindowD1Tests {
 
     /// 15.0: with the gate off a saved two-pane blob renders its focused pane alone (only its transcript runs), the tree
     /// is kept, and the blob is not rewritten: the bytes as stored (hand-written: unsorted keys, an unknown field, so any
-    /// rewrite shows). A later pick saves the whole tree with the focused pane retargeted. Control: gate on, both run.
+    /// rewrite shows). A later pick saves the whole tree with the focused pane retargeted. Control: gate on, both run;
+    /// #1895: there the pick of a session outside the layout parks it (rule 1) and writes nothing.
     @MainActor
     func testAgentWindowGateOffRestoreShowsTheFocusedPaneAloneAndNeverRewritesTheBlob() throws {
         let a = try transcriptFile("a"), b = try transcriptFile("b")
@@ -123,6 +124,16 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.layoutWrites, 0, "the reduction is never saved: \(row.why)")
             XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), Data(text.utf8), "the blob as stored: \(row.why)")
             m.select(.live(AgentSessionKey(dir: "/tmp/dch-test", name: "c")))
+            if row.gate {
+                // #1895 rule 1: gate on, the two-pane layout is a made one: a pick outside it parks it (the single-pane
+                // view), nothing written, the blob as stored
+                XCTAssertEqual(m.parked?.id, l, row.why)
+                XCTAssertEqual(m.layout.panes.map(\.target), [paneTarget("c")], row.why)
+                XCTAssertEqual(m.layoutWrites, 0, row.why)
+                XCTAssertEqual(d.data(forKey: "agentWindowLayouts"), Data(text.utf8), "parked, the blob as stored: \(row.why)")
+                m.close()
+                continue
+            }
             XCTAssertEqual(m.layoutWrites, 1, row.why)
             let saved = try XCTUnwrap(savedLayouts(d).activeLayout)
             XCTAssertEqual(saved.order, [pa, pb], "a pick saves the whole tree: \(row.why)")
