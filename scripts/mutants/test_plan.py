@@ -220,10 +220,25 @@ class Budget(unittest.TestCase):
 
     def test_plan_shard_count_follows_the_estimate(self):
         for i in range(4):
-            self.write_list(f"{i}.json", 10)  # 4 x (100 + 10 x 85) = 3800 s
-        self.assertEqual(len(run.plan("*.json", 8, self.tmp.name, None, 2000)["include"]), 2)
+            self.write_list(f"{i}.json", 6)  # 4 x (60 + 6 x 110) = 2880 s
+        self.assertEqual(len(run.plan("*.json", 8, self.tmp.name, None, 1500)["include"]), 2)
         self.assertEqual(len(run.plan("*.json", 8, self.tmp.name, None, 0)["include"]), 4)
         self.assertEqual(run.plan("*.json", 1, self.tmp.name, None, 100), {"include": []})  # all deferred, none planned
+
+    def test_observed_per_mutant_time_overrides_the_default(self):
+        # #1909: 1247 took ~190 s a mutant on the nightly; at the default 110 s both lists (2 x 1160 s) would fit 2400 s.
+        self.write_list("1247.json", 10)
+        self.write_list("5.json", 10)
+        self.assertEqual(run.plan("*.json", 1, self.tmp.name, None, 2400), {"include": [{"shard": 0, "lists": "scripts/mutants/lists/1247.json"}]})
+
+    def test_the_1123_nightly_shard_defers_what_it_could_not_run(self):
+        # #1909: that shard planned these 13 lists (mutants each) into 15000 s and ended with NOT RUN for 1840 (6), 1841, 1846.
+        for n, k in ((1544, 15), (1563, 15), (1565, 23), (1757, 9), (1786, 13), (1808, 10), (1809, 15), (1815, 6),
+                     (1822, 11), (1834, 12), (1840, 15), (1841, 5), (1846, 11)):
+            self.write_list(f"{n}.json", k)
+        lists = run.plan("*.json", 1, self.tmp.name, None, 15000)["include"][0]["lists"].split()
+        self.assertEqual([os.path.basename(f)[:4] for f in lists],
+                         ["1544", "1563", "1565", "1757", "1786", "1808", "1809", "1815", "1822", "1841"])  # 1834, 1840, 1846 deferred
 
     def test_tail_keeps_the_error_above_the_last_lines(self):
         out = run.tail("a.swift:1:2: error: no\n" + "\n".join(["warning"] * 50), 40)

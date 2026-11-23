@@ -5,7 +5,7 @@ run in `.github/workflows/mutants.yml`: every night at 03:30 UTC the lists whose
 changed in the last 25 h plus that day's rotation slice, in one wave of at most 3 shards
 (max 3 macOS jobs); by hand with a `ref` and a `lists` glob, every list it matches as far as one wave of at most 4
 shards (max 4 jobs) holds; the rest is deferred and listed. `--plan --budget S` makes only as many shards as the lists need at S
-seconds each, estimated from `EST_LIST` and `EST_MUTANT` in run.py.
+seconds each, estimated from `EST_LIST` and `EST_MUTANT` in run.py (`EST_MUTANT_OF` holds the per-list times observed slower than that).
 
 Rotation slice: a list belongs to the UTC weekday `entry % 7` of its file name
 (`1788.json`: 1788 % 7 = 3), with 0 = Monday, 1 = Tuesday, 2 = Wednesday, 3 = Thursday,

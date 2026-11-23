@@ -344,8 +344,11 @@ def changed_lists(files, root, since):
     return keep
 
 
-# Seconds per list (build + unmutated run) and per mutant, from the 2026-11-20..22 nightly logs (#1884).
-EST_LIST, EST_MUTANT = 100, 85
+# Seconds per list (build + unmutated run) and per mutant, from the shard logs of the 2026-11-23 nightly (#1909: 51 fully
+# run lists took 43701 s, 8% over the old 100 + 85 per mutant; each shard was filled to 15000 s by estimate, so the last
+# lists got NOT RUN). EST_MUTANT_OF: lists (by number) whose observed per-mutant time is over 10% above the default.
+EST_LIST, EST_MUTANT = 60, 110
+EST_MUTANT_OF = {1638: 125, 1645: 145, 1785: 145, 1544: 140, 896: 125, 1570: 140, 1247: 190}
 
 
 def plan(pattern, shards, root=REPO, since=None, budget=0, weekday=None):
@@ -358,7 +361,8 @@ def plan(pattern, shards, root=REPO, since=None, budget=0, weekday=None):
 
     def cost(f):
         with open(f, encoding="utf-8") as fh:
-            return EST_LIST + EST_MUTANT * len(json.load(fh).get("mutants", []))
+            n = os.path.basename(f)[:-5]
+            return EST_LIST + EST_MUTANT_OF.get(int(n) if n.isdigit() else 0, EST_MUTANT) * len(json.load(fh).get("mutants", []))
     if since:
         rank = changed_lists(files, root, since)
         if weekday is not None:
