@@ -1,0 +1,27 @@
+{
+ "entry": 1899,
+ "filter": "AgentIslandPlanLimitsTests",
+ "mutants": [
+  {
+   "name": "after-reset-shown",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard cross.isFinite, cross > now, cross < Double(reset) else { return nil }",
+   "new": "guard cross.isFinite, cross > now else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "old-window-kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "let cut = inHour.lastIndex { $0.r != Double(reset) }.map { $0 + 1 } ?? 0",
+   "new": "let cut = 0",
+   "expect": "killed"
+  },
+  {
+   "name": "slope-sign-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard slope > 0 else { return nil }",
+   "new": "guard slope != 0 else { return nil }",
+   "expect": "killed"
+  }
+ ]
+}

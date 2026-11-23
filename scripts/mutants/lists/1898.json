@@ -33,9 +33,10 @@
   {
    "name": "pool-no-resets",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
-   "old": "reset: acct.reset, spent: acct.cooldown))",
-   "new": "reset: [:], spent: acct.cooldown))",
-   "expect": "killed"
+   "old": "reset: acct.reset, spent: acct.cooldown, at:",
+   "new": "reset: [:], spent: acct.cooldown, at:",
+   "expect": "killed",
+   "note": "re-anchored after #1907 added at: to LiveAccount"
   }
  ]
 }

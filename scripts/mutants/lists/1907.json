@@ -1,0 +1,34 @@
+{
+ "entry": 1907,
+ "filter": "CCPoolCoreTests/testHeadroomNoResetSampleIsUsedWithinItsWindowThenRolledOver|AgentIslandPlanLimitsTests|CCPoolPaneModelTests/testCCPoolPaneAddRecordsTheProbesResets",
+ "mutants": [
+  {
+   "name": "no-reset-free",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "let used = AgentPlanUsage.fresh(claim, util: acct.util, at: acct.at, reset: acct.reset, now: at)?.value ?? 0",
+   "new": "let used = Double(acct.reset[claim] ?? 0) <= at ? 0 : u",
+   "expect": "killed"
+  },
+  {
+   "name": "window-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "let used = AgentPlanUsage.fresh(claim, util: acct.util, at: acct.at, reset: acct.reset, now: at)?.value ?? 0",
+   "new": "let used = acct.reset[claim].map { Double($0) <= at ? 0 : u } ?? u",
+   "expect": "killed"
+  },
+  {
+   "name": "probe-resets-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "store.mutate { st in if let owner = st.label(ofID: id) { st.recordResets(owner, limits: p.limits, now: now) } }",
+   "new": "_ = now",
+   "expect": "killed"
+  },
+  {
+   "name": "popover-filtered",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "live.append(.init(util: sample?.util ?? [:], reset: acct.reset",
+   "new": "live.append(.init(util: Dictionary(a.limits.map { ($0.claim, $0.util) }) { x, _ in x }, reset: acct.reset",
+   "expect": "killed"
+  }
+ ]
+}
