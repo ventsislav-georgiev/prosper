@@ -291,6 +291,20 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertEqual(r.secrets.count, 1)
     }
 
+    // #1907: the add-time probe records the reply's resets as a relayed reply does, by the new account's id. The rig's
+    // clock is the wall clock here: the fake upstream stamps its resets an hour and a day past the real time.
+    func testCCPoolPaneAddRecordsTheProbesResets() async throws {
+        let r = try ccpoolPaneRig(t0: Date().timeIntervalSince1970)
+        r.model.labelDraft = "x"
+        r.model.tokenDraft = "tok-x"
+        await r.model.addAccount().value
+        XCTAssertEqual(r.model.notice, "Added x.")
+        let reset = r.store.snapshot.accounts["x"]?.reset ?? [:]
+        XCTAssertEqual(reset.keys.sorted(), ["five_hour", "seven_day"], "\(reset)")
+        XCTAssertTrue(Double(reset["five_hour"] ?? 0) > r.clock.now, "a future rollover")
+        XCTAssertEqual(r.store.usageSample("x")?.util["five_hour"], 0.42)
+    }
+
     // A probe that cannot answer is "not verified", never healthy.
     func testCCPoolPaneUnknownProbeIsNotHealthy() async throws {
         let r = try ccpoolPaneRig(probeBase: URL(string: "http://127.0.0.1:9")!)

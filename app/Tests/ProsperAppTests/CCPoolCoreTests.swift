@@ -202,7 +202,7 @@ final class CCPoolCoreTests: XCTestCase {
         let sample = CCPoolUsageSample(util: CCPoolCore.utils(limits), at: now)
         XCTAssertTrue(CCPoolPaneModel.usageText(sample, now: now).contains("40%"))
         let cells = CCPoolCore.poolCells([.init(util: CCPoolCore.utils(limits), reset: ["seven_day_overage_included": Int(now) + 3600],
-                                                spent: [:])], now: now)
+                                                spent: [:], at: now)], now: now)
         XCTAssertEqual(cells.map(\.free), [0.6])
     }
 
@@ -248,9 +248,9 @@ final class CCPoolCoreTests: XCTestCase {
         let soon = Int(now) + 3600
         let full = CCPoolCore.LiveAccount(util: ["five_hour": 0.995, "seven_day": 0.12, "seven_day_overage_included": 0.34],
                                           reset: ["five_hour": soon, "seven_day": soon + 86400],
-                                          spent: ["five_hour": soon])
+                                          spent: ["five_hour": soon], at: now)
         var ok = CCPoolCore.LiveAccount(util: ["five_hour": 0.10, "seven_day": 0.12, "seven_day_overage_included": 0.34],
-                                        reset: ["five_hour": soon, "seven_day": soon + 86400], spent: [:])
+                                        reset: ["five_hour": soon, "seven_day": soon + 86400], spent: [:], at: now)
         var cells = CCPoolCore.poolCells([full, ok], now: now)
         XCTAssertEqual(cells.map(\.claim), ["five_hour", "seven_day", "seven_day_overage_included"])
         XCTAssertEqual(cells[0].free, 0.9, accuracy: 1e-9, "the benched account contributes nothing")
@@ -266,6 +266,25 @@ final class CCPoolCoreTests: XCTestCase {
         XCTAssertEqual(cells[2].free, 0, accuracy: 1e-9)
         XCTAssertTrue(CCPoolCore.blocked(["seven_day": Int(now) + 1], claim: "seven_day_opus", at: now), "shared claims block every model")
         XCTAssertFalse(CCPoolCore.blocked(["seven_day_overage_included": Int(now) + 1], claim: "seven_day_opus", at: now))
+    }
+
+    // #1907: a used share with no reset counts as used for its window after the sample (AgentPlanUsage.fresh), then as
+    // rolled over; a reset, when known, decides alone.
+    func testHeadroomNoResetSampleIsUsedWithinItsWindowThenRolledOver() {
+        let util = ["five_hour": 0.4, "seven_day": 0.3]
+        let fresh = CCPoolCore.LiveAccount(util: util, reset: [:], spent: [:], at: now - 3600)
+        var cells = CCPoolCore.poolCells([fresh], now: now)
+        XCTAssertEqual(cells.map(\.claim), ["five_hour", "seven_day"])
+        XCTAssertEqual(cells.first?.free ?? -1, 0.6, accuracy: 1e-9, "a fresh no-reset 5h share is used")
+        XCTAssertEqual(cells.last?.free ?? -1, 0.7, accuracy: 1e-9, "a fresh no-reset week share is used")
+        let stale = CCPoolCore.LiveAccount(util: util, reset: [:], spent: [:], at: now - AgentPlanUsage.sessionWindow - 1)
+        cells = CCPoolCore.poolCells([stale], now: now)
+        XCTAssertEqual(cells.first?.free ?? -1, 1, accuracy: 1e-9, "past its 5 h window the 5h share has rolled over")
+        XCTAssertEqual(cells.last?.free ?? -1, 0.7, accuracy: 1e-9, "the week's window is 7 days: still used")
+        let reset = CCPoolCore.LiveAccount(util: util, reset: ["five_hour": Int(now) - 1, "seven_day": Int(now) + 60], spent: [:], at: now - 60)
+        cells = CCPoolCore.poolCells([reset], now: now)
+        XCTAssertEqual(cells.first?.free ?? -1, 1, accuracy: 1e-9, "a passed reset: rolled over, however fresh the sample")
+        XCTAssertEqual(cells.last?.free ?? -1, 0.7, accuracy: 1e-9)
     }
 
     // B2: the Python state shape decodes (no order, no id), order is repaired.

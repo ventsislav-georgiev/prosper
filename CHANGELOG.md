@@ -46,6 +46,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray mentions: VoiceOver reads the speaker of a mention that has no chapter to open. (#1905)
 - Agent Sessions: a pane showing an ended session now has a Close Pane button, as an empty pane
   does. (#1906)
+- Claude Account Pool: a newly added account no longer counts as fully free in the pool's headroom
+  before its first reply. (#1907)
 
 ## v2.175.0
 

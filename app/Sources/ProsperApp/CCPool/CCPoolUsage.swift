@@ -123,7 +123,7 @@ enum CCPoolUsage {
             logger.note(owned.owner, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
             rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held))
             live.append(.init(util: CCPoolCore.utils(p.limits), reset: CCPoolCore.resets(p.limits),
-                              spent: spent.merging(held) { a, _ in a }))
+                              spent: spent.merging(held) { a, _ in a }, at: now))
         }
         return Report(rows: rows, pool: CCPoolCore.poolCells(live, now: store.now))
     }

@@ -400,7 +400,12 @@ final class CCPoolPaneModel: ObservableObject {
             return .failed("ccpool: the account could not be stored")
         }
         // #1219 (R1205-1): by the new account's id: a rename right after the add keeps the sample on it.
-        if let p = probe { store.recordUsage(id: id, limits: p.limits) }
+        if let p = probe {
+            // #1907: the probe's reply carries the reset headers a relayed reply does: recorded the same way, by id.
+            let now = store.now
+            store.mutate { st in if let owner = st.label(ofID: id) { st.recordResets(owner, limits: p.limits, now: now) } }
+            store.recordUsage(id: id, limits: p.limits)
+        }
         // A 3xx is never followed (QA #734 INFO-10) and says nothing about the token.
         return .added(verified: probe.map { $0.status < 300 || (400..<500).contains($0.status) } ?? false)
     }

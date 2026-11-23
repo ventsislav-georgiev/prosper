@@ -99,8 +99,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         _ = try rt.store.addAccount(label: "gamma", token: "example-token-c", secrets: rt.secrets)
         rt.store.mutate {
             $0.current = "beta"
-            // #1898 CI: each sample's claims carry a reset, as a relayed reply records them (CCPoolConnection recordResets);
-            // the pool's headroom reads a used share with no reset as already rolled over (CCPoolCore.headroom).
+            // #1898 CI: each sample's claims carry a reset, as a relayed reply records them (CCPoolConnection recordResets).
             $0.accounts["alpha"]?.reset = ["five_hour": Int(t) + 7200]
             $0.accounts["beta"]?.reset = ["five_hour": Int(t) + 3600, "seven_day": Int(t) + 3 * 86400]
             $0.accounts["gamma"]?.cooldown = ["five_hour": Int(t) + 600]
@@ -121,6 +120,27 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         // free, more when its week resets; gamma (no sample, benched) adds nothing.
         let at = { CCPoolPaneModel.timeText($0, timeZone: rt.model.timeZone) }
         XCTAssertEqual(l.pool, "5h 85% (more at \(at(Int(t) + 3600))) \u{00B7} week 50% (more at \(at(Int(t) + 3 * 86400)))")
+    }
+
+    // #1907: an account whose sample has no reset (a probe without reset headers): its share is used in the pool line for
+    // its window after the sample, then rolled over (free), the rows' own stale rule.
+    @MainActor func testRuntimePoolCountsANoResetSampleUsedWithinItsWindow() throws {
+        let dir = tempDir()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-limits-\(UUID().uuidString)")!
+        XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
+                               logger: CCPoolCapturingLogger())
+        let id = try rt.store.addAccount(label: "api", token: "example-token-a", secrets: rt.secrets)
+        rt.store.recordUsage(id: id, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.4"]).limits)
+        let at = try XCTUnwrap(rt.store.usageSample("api")?.at)
+        XCTAssertEqual(rt.planLimits(now: at + 60).pool, "5h 60%", "fresh: the share is used")
+        let stale = rt.planLimits(now: at + AgentPlanUsage.sessionWindow + 1)
+        XCTAssertTrue(stale.accounts.first?.limits.isEmpty ?? false, "the row drops the stale share")
+        XCTAssertEqual(stale.pool, "5h 100%", "the pool counts it rolled over")
     }
 
     // MARK: - The controller: read on open, then only on a change of the line

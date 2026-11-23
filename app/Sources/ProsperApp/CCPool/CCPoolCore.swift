@@ -398,6 +398,8 @@ enum CCPoolCore {
         var reset: [String: Int]
         /// Cooldowns in force (spent or held).
         var spent: [String: Int]
+        /// #1907: the epoch of the sample `util` came from; a claim with no reset is used for its window after it.
+        var at: Double
     }
 
     struct PoolCell: Equatable, Sendable {
@@ -416,7 +418,8 @@ enum CCPoolCore {
     static func headroom(_ live: [LiveAccount], claim: String, at: Double) -> Double {
         live.reduce(0) { total, acct in
             guard !blocked(acct.spent, claim: claim, at: at), let u = acct.util[claim] else { return total }
-            let used = Double(acct.reset[claim] ?? 0) <= at ? 0 : u
+            // #1907: the island's stale rule: used until its reset, or with no reset for its window after the sample.
+            let used = AgentPlanUsage.fresh(claim, util: acct.util, at: acct.at, reset: acct.reset, now: at)?.value ?? 0
             return total + max(0, 1 - used)
         }
     }

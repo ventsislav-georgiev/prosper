@@ -174,7 +174,8 @@ final class CCPoolRuntime {
             let a = AgentPlanLimits.Account(label: label, isCurrent: st.current == label, util: sample?.util ?? [:], at: sample?.at,
                                             reset: acct.reset, cooldown: acct.cooldown,
                                             claims: (CCPoolCore.displayOrder + extra).map { ($0, CCPoolCore.display[$0] ?? $0) }, now: now)
-            live.append(.init(util: Dictionary(a.limits.map { ($0.claim, $0.util) }) { x, _ in x }, reset: acct.reset, spent: acct.cooldown))
+            // #1907: the whole sample and its epoch; headroom applies the stale rule itself (a stale claim has rolled over).
+            live.append(.init(util: sample?.util ?? [:], reset: acct.reset, spent: acct.cooldown, at: sample?.at ?? now))
             return a
         }
         return AgentPlanLimits(pool: CCPoolPaneModel.poolText(CCPoolCore.poolCells(live, now: now), timeZone: model.timeZone),
