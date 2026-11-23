@@ -100,6 +100,13 @@
    "new": "delta(argv, wait: true, env: own().map { [baseURLKey: $0] }).reviveFlags",
    "expect": "killed",
    "note": "#1892: Resume flags must stay login-only"
+  },
+  {
+   "name": "process-url-gate-off",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "underXCTest ? nil : env[baseURLKey]",
+   "new": "env[baseURLKey]",
+   "expect": "killed"
   }
  ]
 }
