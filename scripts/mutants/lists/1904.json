@@ -1,0 +1,21 @@
+{
+ "entry": 1904,
+ "filter": "CCPoolCoreTests/testUsageTextShowsEachLimitsReset|CCPoolPaneModelTests",
+ "mutants": [
+  {
+   "name": "drop-reset-parenthesis",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "(reset[claim].flatMap { Double($0) > now ?",
+   "new": "(reset[claim].flatMap { Double($0) > Double.infinity ?",
+   "expect": "killed",
+   "note": "worker's `_ in false` would not compile ($0 in an explicit-arg closure); same effect: never shown"
+  },
+  {
+   "name": "show-past-reset",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": "Double($0) > now ? \" (resets",
+   "new": "Double($0) > 0 ? \" (resets",
+   "expect": "killed"
+  }
+ ]
+}

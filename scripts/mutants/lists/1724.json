@@ -5,16 +5,10 @@
   {
    "name": "no-take",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {",
+   "old": "if let link = capturedLink(at: q) {",
    "new": "if false, let link = capturedLink(at: q) {",
-   "expect": "killed"
-  },
-  {
-   "name": "shift-too",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {",
-   "new": "if let link = capturedLink(at: q) {",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "re-anchored after #1901 dropped the inner Shift check (QA f2)"
   },
   {
    "name": "no-capture-gate",
@@ -64,6 +58,12 @@
    "old": "        linkHover(down ? pointer : nil)\n    }",
    "new": "    }",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "shift-too",
+   "note": "#1901 removed the inner Shift check; Shift is now skipped before the capture, pinned by list 1901 shiftSkipDropped"
   }
  ]
 }

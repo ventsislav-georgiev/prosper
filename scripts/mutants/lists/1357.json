@@ -54,9 +54,10 @@
   {
    "name": "M9-plain-click",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "if event.modifierFlags.contains(.command), !unfocused {",
+   "old": "if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift), !unfocused {",
    "new": "if !unfocused {",
-   "expect": "killed"
+   "expect": "killed",
+   "note": "re-anchored after #1901 added the Shift skip (QA f2)"
   },
   {
    "name": "M10-link-remote",

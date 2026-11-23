@@ -82,9 +82,10 @@
   {
    "name": "jump-no-chapter",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "guard t.session == nil, let n = t.turn, let ch = chapters.last(where: { $0.ordinal == n })",
-   "new": "guard t.session == nil, let n = t.turn, let ch = chapters.last",
-   "expect": "killed"
+   "old": "        return chapters.last(where: { $0.ordinal == n })\n",
+   "new": "        return chapters.last\n",
+   "expect": "killed",
+   "note": "re-anchored onto turnChapter after #1900 moved the lookup (QA f2)"
   },
   {
    "name": "speaker-reply",
