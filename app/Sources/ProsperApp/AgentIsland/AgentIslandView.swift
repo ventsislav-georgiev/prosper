@@ -381,6 +381,8 @@ final class AgentIslandStore: ObservableObject {
     var showsTabs: Bool { !split.shownGroups.isEmpty || !history.isEmpty }
     /// #1537 (OQ-95): the Claude plan usage line (session and weekly limit); nil: none drawn.
     @Published var planUsage: AgentPlanUsage?
+    /// #1898: the line's popover: every pool account's limits while it is open; nil: closed.
+    @Published var planLimits: AgentPlanLimits?
     /// #1537: the tab row is drawn for the tabs or for the plan usage at its right end.
     var showsTabRow: Bool { showsTabs || planUsage != nil }
     /// #581: the collapsed island shows with a live session, or with none but
@@ -609,6 +611,9 @@ struct AgentIslandView: View {
     var onControls: () -> Void = {}
     /// #797: the header's Agents window button.
     var onAgentsWindow: () -> Void = {}
+    /// #1898: the plan usage line's popover opens (true) or closes; its one link opens Settings at the Account pool pane.
+    var onPlanLimits: (Bool) -> Void = { _ in }
+    var onPoolSettings: () -> Void = {}
     var onConfirmRestartAll: (Bool) -> Void = { _ in }
     /// #580: a row's Stop and the inline Stop all answer.
     var onStop: (AgentSession) -> Void = { _ in }
@@ -1034,18 +1039,32 @@ struct AgentIslandView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            if let u = store.planUsage {   // #1537 (OQ-95): the plan's session and weekly limit, dim like the header counts
-                let help = u.help()
-                Text(verbatim: u.text)
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(Neon.faded(.white, 0.7))
-                    .lineLimit(1)
-                    .fixedSize()
-                    .accessibilityLabel(Text(verbatim: help))
-                    .help(Text(verbatim: help))
-            }
+            if let u = store.planUsage { planUsageLine(u) }   // #1537 (OQ-95): the plan's session and weekly limit
         }
         .padding(.horizontal, AgentIslandGeometry.openRadii.top + 10)
+    }
+
+    /// #1898: the hint a click on the line gives, after its help.
+    static let planLimitsHint = "Show all accounts' limits"
+
+    /// #1537: dim like the header counts. #1898: a plain button that opens every pool account's limits in a popover (read only).
+    func planUsageLine(_ u: AgentPlanUsage) -> some View {
+        let help = u.help()
+        return Button { onPlanLimits(store.planLimits == nil) } label: {
+            Text(verbatim: u.text)
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(Neon.faded(.white, 0.7))
+                .lineLimit(1)
+                .fixedSize()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: help))
+        .help(Text(verbatim: help + "\n" + Self.planLimitsHint))
+        .popover(isPresented: Binding(get: { store.planLimits != nil }, set: { if !$0 { onPlanLimits(false) } }), arrowEdge: .bottom) {
+            AgentPlanLimitsView(limits: store.planLimits ?? AgentPlanLimits(pool: nil, accounts: []),
+                                now: Date().timeIntervalSince1970, onSettings: onPoolSettings)
+        }
     }
 
     private func tab(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
@@ -1823,4 +1842,72 @@ struct AgentIslandComposer: View {
     /// #1452: Follow theme on, #1375's themed field; off, TIP's white draft with no card (the placeholder in the system's ink).
     static var draftInk: Color { AgentIslandInk.follows ? Neon.textPrimary : Neon.faded(.white, 0.9) }
     static var fieldFill: Color { AgentIslandInk.follows ? AgentIslandRow.cardFill : .clear }
+}
+
+/// #1898: the plan usage line's popover: the pool's free share on top, then one row per account, most urgent first
+/// (AgentPlanLimits' order). Read only: the one control is the link to the Account pool settings. Pure over its value.
+struct AgentPlanLimitsView: View {
+    let limits: AgentPlanLimits
+    let now: Double
+    var timeZone: TimeZone = .current
+    var onSettings: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let pool = limits.pool {
+                Text(verbatim: "Free across all accounts: \(pool)")
+                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Color.white)
+            }
+            ForEach(limits.accounts, id: \.label) { row($0) }
+            Button(AgentPlanLimits.settingsLink, action: onSettings)
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(AgentIslandInk.selectedTab)
+        }
+        .padding(12)
+        .frame(width: 320, alignment: .leading)
+        .background(Color.black)
+    }
+
+    private func row(_ a: AgentPlanLimits.Account) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(verbatim: OutsideText.shown(a.label, max: 40))
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.white).lineLimit(1)
+                if a.isCurrent {
+                    Text(verbatim: "current").font(.system(size: 10, weight: .medium)).foregroundStyle(AgentIslandInk.selectedTab)
+                }
+            }
+            if a.limits.isEmpty { dim(AgentPlanLimits.noData) }
+            ForEach(a.limits, id: \.claim) { l in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        bar(l.util)
+                        Text(verbatim: "\(l.name) \(AgentPlanUsage.percent(l.util))")
+                            .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(Color.white)
+                    }
+                    if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r) }
+                }
+            }
+            if let b = a.benchedUntil { dim(AgentPlanLimits.benchedText(b, timeZone: timeZone)) }
+            if let at = a.sampleAt { dim(AgentPlanLimits.updatedText(at, now: now)) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
+    }
+
+    private func dim(_ s: String) -> some View {
+        Text(verbatim: s).font(.system(size: 10).monospacedDigit()).foregroundStyle(Neon.faded(.white, 0.6))
+    }
+
+    /// A thin bar, full at 100%; 90% and over in the danger colour.
+    private func bar(_ u: Double) -> some View {
+        let f = min(1, max(0, u))
+        return ZStack(alignment: .leading) {
+            Capsule().fill(Neon.faded(.white, 0.15))
+            Capsule().fill(f >= 0.9 ? Neon.magenta : Neon.blue).frame(width: 80 * f)
+        }
+        .frame(width: 80, height: 4)
+    }
 }

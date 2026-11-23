@@ -161,6 +161,26 @@ final class CCPoolRuntime {
         return AgentPlanUsage(util: sample.util, at: sample.at, reset: account.reset, now: now)
     }
 
+    /// #1898: the island's limits popover (read only): every account's limits under the line's stale rule, its earliest
+    /// cooldown in force and its sample's age, plus the pool's free share over those same fresh values in the pane's words.
+    /// Memory only (the snapshot and the samples): no file, no network.
+    func planLimits(now: Double) -> AgentPlanLimits {
+        let st = store.snapshot
+        var live: [CCPoolCore.LiveAccount] = []
+        let accounts = st.order.compactMap { label -> AgentPlanLimits.Account? in
+            guard let acct = st.accounts[label] else { return nil }
+            let sample = store.usageSample(label)
+            let extra = (sample?.util.keys).map { $0.filter { !CCPoolCore.displayOrder.contains($0) }.sorted() } ?? []
+            let a = AgentPlanLimits.Account(label: label, isCurrent: st.current == label, util: sample?.util ?? [:], at: sample?.at,
+                                            reset: acct.reset, cooldown: acct.cooldown,
+                                            claims: (CCPoolCore.displayOrder + extra).map { ($0, CCPoolCore.display[$0] ?? $0) }, now: now)
+            live.append(.init(util: Dictionary(a.limits.map { ($0.claim, $0.util) }) { x, _ in x }, reset: acct.reset, spent: acct.cooldown))
+            return a
+        }
+        return AgentPlanLimits(pool: CCPoolPaneModel.poolText(CCPoolCore.poolCells(live, now: now), timeZone: model.timeZone),
+                               accounts: accounts)
+    }
+
     /// The app quits: the stop runs on the life cycle's queue, after any start in flight (#1190
     /// INFO-1), and no queued start binds again. Waits at most `timeout` on main; past it the
     /// published listener is stopped here as before and the queued stop catches a late one.

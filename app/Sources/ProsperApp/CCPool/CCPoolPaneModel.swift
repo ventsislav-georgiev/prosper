@@ -283,11 +283,14 @@ final class CCPoolPaneModel: ObservableObject {
     }
 
     /// The pool headroom row of the last Refresh ("All" in the Python status).
-    var poolText: String? {
-        guard let cells = report?.pool, !cells.isEmpty else { return nil }
+    var poolText: String? { report.flatMap { Self.poolText($0.pool, timeZone: timeZone) } }
+
+    /// #1898: the words for pool cells, the pane's row and the Agent Island's limits popover alike.
+    nonisolated static func poolText(_ cells: [CCPoolCore.PoolCell], timeZone: TimeZone) -> String? {
+        guard !cells.isEmpty else { return nil }
         return cells.map { c in
             "\(CCPoolCore.display[c.claim] ?? c.claim) \(Int((c.free * 100).rounded()))%"
-                + (c.growsAt.map { " (more at \(Self.timeText($0, timeZone: timeZone)))" } ?? "")
+                + (c.growsAt.map { " (more at \(timeText($0, timeZone: timeZone)))" } ?? "")
         }.joined(separator: " · ")
     }
 

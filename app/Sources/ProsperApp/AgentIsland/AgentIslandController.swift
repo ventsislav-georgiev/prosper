@@ -258,6 +258,13 @@ final class AgentIslandController {
     /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
     /// (the ccpool extension off, or under XCTest): none.
     var planUsage: @MainActor (_ now: Double) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0) }
+    /// #1898: every pool account's limits for the line's popover, read on main when it opens and when the line's own value
+    /// changes while it is open. No runtime: none.
+    var planLimits: @MainActor (_ now: Double) -> AgentPlanLimits? = { CCPoolRuntime.shared?.planLimits(now: $0) }
+    /// #1898: the popover's link: Settings at the Account pool pane, through the host's opener (nil under XCTest: nothing).
+    var openPoolSettings: @MainActor () -> Void = { LiveExtensionHostServices.shared.settingsOpener?(AgentPlanLimits.settingsPane) }
+    /// #1898: how many times the popover's value was read (open, then one per change of the line while open).
+    private(set) var planLimitsReads = 0
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     /// #1096 3: `done.prompt` is the panel's button word, the caller's own.
@@ -1433,6 +1440,8 @@ final class AgentIslandController {
             onRestart: { [weak self] in self?.restart($0) },
             onControls: { [weak self] in self?.showControlsMenu() },
             onAgentsWindow: { [weak self] in self?.setExpanded(false); AgentsWindow.shared.show() },
+            onPlanLimits: { [weak self] in self?.showPlanLimits($0) },
+            onPoolSettings: { [weak self] in self?.setExpanded(false); self?.openPoolSettings() },
             onConfirmRestartAll: { [weak self] in self?.confirmRestartAll($0) },
             onStop: { [weak self] in self?.stop($0) },
 
@@ -1454,10 +1463,25 @@ final class AgentIslandController {
     }
 
     /// #1537: the plan usage line, re-read with the clock now (a value past its reset drops); assigned only on a change.
-    private func readPlanUsage() {
+    func readPlanUsage() {   // internal for #1898's rows
         guard let store else { return }
         let u = Preferences.agentIslandShowPlanUsage ? planUsage(Date().timeIntervalSince1970) : nil   // #1552: off, never read
-        if store.planUsage != u { store.planUsage = u }
+        guard store.planUsage != u else { return }
+        store.planUsage = u
+        // #1898: the line's value moved (the pool published a sample or a reset): an open popover re-reads; no line, no popover.
+        if store.planLimits != nil { if u == nil { store.planLimits = nil } else { readPlanLimits() } }
+    }
+
+    /// #1898: the plan usage line's popover opens (read now) or closes. Only while the line is drawn.
+    func showPlanLimits(_ on: Bool) {
+        guard let store else { return }
+        guard on, store.expanded, store.planUsage != nil else { store.planLimits = nil; return }
+        readPlanLimits()
+    }
+
+    private func readPlanLimits() {
+        planLimitsReads += 1
+        store?.planLimits = planLimits(Date().timeIntervalSince1970)
     }
 
     /// Only the panel's own view expands it, so a nil panel (tests) just skips the window work.
@@ -1472,6 +1496,7 @@ final class AgentIslandController {
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if on { readPlanUsage() }   // #1537: before layout(), the line's row counts in the size
         if !on {
+            store.planLimits = nil   // #1898: the popover goes with the island
             store.focusKey = nil   // #1536: the next open picks its own
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.dropQuestions()
@@ -1486,7 +1511,8 @@ final class AgentIslandController {
             panel?.makeKey()
             outsideClick = monitorClicks { [weak self] in
                 // macOS 27 reports clicks on our own windows here too: keep those.
-                guard let self, let f = self.panel?.frame, !f.contains(NSEvent.mouseLocation) else { return }
+                guard let self, let f = self.panel?.frame, !f.contains(NSEvent.mouseLocation),
+                      !(self.panel?.childWindows ?? []).contains(where: { $0.frame.contains(NSEvent.mouseLocation) }) else { return }   // #1898
                 self.setExpanded(false)
             }
             watchOwnWindows()
@@ -1553,7 +1579,8 @@ final class AgentIslandController {
     /// see-through corner of the island over the window below).
     func turnedAway(to window: NSWindow?, at p: NSPoint?) {
         // R995-1112c: menusTracking counts every NSMenu of the app (a Settings popup too); it can only keep the island open longer.
-        guard menusTracking == 0, let window, window !== panel else { return }
+        // #1898: the plan limits popover is a child window of the panel: a click or key there is the island's own.
+        guard menusTracking == 0, let window, window !== panel, panel == nil || window.parent !== panel else { return }
         if let p, panel?.frame.contains(p) == true { return }
         setExpanded(false)
     }

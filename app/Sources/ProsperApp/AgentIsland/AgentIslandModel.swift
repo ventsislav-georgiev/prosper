@@ -1297,16 +1297,23 @@ struct AgentPlanUsage: Equatable, Sendable {
 
     /// `util` and `at` are the sample (claim -> fraction, its epoch); `reset` claim -> epoch.
     init?(util: [String: Double], at: Double, reset: [String: Int], now: Double) {
-        func fresh(_ claim: String, window: Double) -> (value: Double, reset: Int?)? {
-            // Outside data: the pool keeps 0...100 (its core's utils); checked again before the percent's Int().
-            guard let u = util[claim], (0...100).contains(u), at.isFinite, now.isFinite else { return nil }
-            if let r = reset[claim] { return Double(r) > now ? (u, r) : nil }
-            return now - at < window ? (u, nil) : nil
-        }
-        let s = fresh("five_hour", window: Self.sessionWindow), w = fresh("seven_day", window: Self.weekWindow)
+        let s = Self.fresh("five_hour", util: util, at: at, reset: reset, now: now)
+        let w = Self.fresh("seven_day", util: util, at: at, reset: reset, now: now)
         guard s != nil || w != nil else { return nil }
         session = s?.value; sessionReset = s?.reset
         week = w?.value; weekReset = w?.reset
+    }
+
+    /// #1898: the 5 h claim's window; every other claim (the week and the model weeklies) is a 7-day one.
+    static func window(_ claim: String) -> Double { claim == "five_hour" ? sessionWindow : weekWindow }
+
+    /// One limit under the stale rule: its value and reset, or nil (unknown, out of range, or its window is over).
+    /// #1898: the island's popover runs every account's every claim through this same rule.
+    static func fresh(_ claim: String, util: [String: Double], at: Double, reset: [String: Int], now: Double) -> (value: Double, reset: Int?)? {
+        // Outside data: the pool keeps 0...100 (its core's utils); checked again before the percent's Int().
+        guard let u = util[claim], (0...100).contains(u), at.isFinite, now.isFinite else { return nil }
+        if let r = reset[claim] { return Double(r) > now ? (u, r) : nil }
+        return now - at < window(claim) ? (u, nil) : nil
     }
 
     static func percent(_ u: Double) -> String { "\(Int((u * 100).rounded()))%" }
@@ -1330,6 +1337,110 @@ struct AgentPlanUsage: Equatable, Sendable {
         return (["Claude plan usage (account pool, current account)"]
                 + [line("Session limit", session, sessionReset), line("Weekly limit", week, weekReset)].compactMap { $0 })
             .joined(separator: "\n")
+    }
+}
+
+/// #1898: every pool account's limits for the island's popover, read only. Pure: the pool runtime hands plain values
+/// (labels, claim names in its display order, its pool words); each claim goes through AgentPlanUsage.fresh, the line's
+/// own stale rule. Accounts most urgent first: the highest use of any of its limits, ties by the earliest reset.
+struct AgentPlanLimits: Equatable, Sendable {
+    struct Limit: Equatable, Sendable {
+        var claim: String
+        /// The pool's display name ("5h", "week", "opus", "sonnet", "fable").
+        var name: String
+        var util: Double
+        var reset: Int?
+    }
+
+    struct Account: Equatable, Sendable {
+        var label: String
+        var isCurrent: Bool
+        /// Fresh limits only, in the given claim order; empty: no recent data.
+        var limits: [Limit]
+        /// The earliest cooldown still in force (the pane's "limited until"); nil: not benched.
+        var benchedUntil: Int?
+        /// The usage sample's epoch; nil: none.
+        var sampleAt: Double?
+
+        /// `claims`: (claim, display name) in display order; a claim not listed is not drawn.
+        init(label: String, isCurrent: Bool, util: [String: Double], at: Double?, reset: [String: Int],
+             cooldown: [String: Int], claims: [(claim: String, name: String)], now: Double) {
+            self.label = label
+            self.isCurrent = isCurrent
+            sampleAt = at
+            limits = at.map { at in
+                claims.compactMap { c in
+                    AgentPlanUsage.fresh(c.claim, util: util, at: at, reset: reset, now: now).map { Limit(claim: c.claim, name: c.name, util: $0.value, reset: $0.reset) }
+                }
+            } ?? []
+            benchedUntil = cooldown.values.filter { Double($0) > now }.min()
+        }
+
+        var urgency: Double { limits.map(\.util).max() ?? -1 }
+        var nextReset: Int { limits.compactMap(\.reset).min() ?? Int.max }
+    }
+
+    /// The pool's free share, the Account pool pane's words ("5h 162% · week 40% (more at Tue 18:00)"); nil: none known.
+    var pool: String?
+    var accounts: [Account]
+
+    init(pool: String?, accounts: [Account]) {
+        self.pool = pool
+        self.accounts = Self.sorted(accounts)
+    }
+
+    /// Most urgent first; ties by the earliest reset, then by label (a stable order).
+    static func sorted(_ accounts: [Account]) -> [Account] {
+        accounts.sorted { ($1.urgency, $0.nextReset, $0.label) < ($0.urgency, $1.nextReset, $1.label) }
+    }
+
+    // MARK: Words
+
+    /// "0 min", "59 min", "2 h 14 min", "3 d"; spoken: "2 hours 14 minutes". Negative or not finite: 0.
+    static func duration(_ seconds: Double, spoken: Bool = false) -> String {
+        let s = seconds.isFinite ? Int(max(0, min(seconds, 1e9))) : 0
+        let m = s / 60, h = m / 60, d = h / 24
+        func unit(_ n: Int, _ short: String, _ long: String) -> String { spoken ? "\(n) \(long)\(n == 1 ? "" : "s")" : "\(n) \(short)" }
+        if h == 0 { return unit(m, "min", "minute") }
+        if d == 0 { return [unit(h, "h", "hour"), m % 60 > 0 ? unit(m % 60, "min", "minute") : nil].compactMap { $0 }.joined(separator: " ") }
+        return [unit(d, "d", "day"), h % 24 > 0 ? unit(h % 24, "h", "hour") : nil].compactMap { $0 }.joined(separator: " ")
+    }
+
+    static func clock(_ epoch: Int, format: String, timeZone: TimeZone) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = timeZone
+        f.dateFormat = format
+        return f.string(from: Date(timeIntervalSince1970: Double(epoch)))
+    }
+
+    /// "resets in 2 h 14 min (Tue 18:00)", the absolute in the line's help format; nil: no reset known.
+    static func resetText(_ l: Limit, now: Double, timeZone: TimeZone) -> String? {
+        l.reset.map { "resets in \(duration(Double($0) - now)) (\(clock($0, format: "EEE HH:mm", timeZone: timeZone)))" }
+    }
+
+    static func updatedText(_ at: Double, now: Double) -> String {
+        now - at < 60 ? "updated just now" : "updated \(duration(now - at)) ago"
+    }
+
+    static func benchedText(_ until: Int, timeZone: TimeZone) -> String { "benched until \(clock(until, format: "HH:mm", timeZone: timeZone))" }
+
+    static let noData = "no recent data"
+    static let settingsLink = "Account pool settings\u{2026}"
+    /// The Account pool pane's Settings id ("ext:<extension id>|<section id>", the sidebar's rule).
+    static let settingsPane = "ext:com.prosper.ccpool|ccpool"
+
+    /// The row as one spoken element: "alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Tuesday 18:00; week ...".
+    static func spoken(_ a: Account, now: Double, timeZone: TimeZone) -> String {
+        let limits = a.limits.map { l in
+            "\(l.name == "5h" ? "5 hour" : l.name) \(Int((l.util * 100).rounded())) percent"
+                + (l.reset.map { ", resets in \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
+        }
+        let head = [OutsideText.shown(a.label, max: 40)] + (a.isCurrent ? ["current"] : [])
+        let tail = (a.limits.isEmpty ? [noData] : [limits.joined(separator: "; ")])
+            + (a.benchedUntil.map { [benchedText($0, timeZone: timeZone)] } ?? [])
+            + (a.sampleAt.map { [updatedText($0, now: now)] } ?? [])
+        return (head + tail).joined(separator: ", ")
     }
 }
 
