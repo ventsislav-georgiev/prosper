@@ -1303,16 +1303,19 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// drag, so libghostty opens no link (it opens on the up) and the program gets no click. Elsewhere as before.
     /// #1724 (operator 2026-11-20): while the program reports the mouse (Claude Code) libghostty gives a Cmd click to the
     /// program and links only with Shift; a Cmd-down (no Shift) on a link Prosper sees (capturedLink) opens it here and
-    /// goes no further, the same as a pin. Cmd+Shift and every other click go on as before.
+    /// goes no further, the same as a pin. Every other click goes on as before.
+    /// #1901 (operator 2026-11-23): Cmd+Shift on a mark that is a link opens the link: with Shift held Prosper takes no part
+    /// (no pin, no refClick, no link read): the down and its up go to libghostty, which takes the click from a program that
+    /// reports the mouse (Shift) and opens an OSC 8 or URL link on the up through open_url (terminalDidRequestOpenURL, open).
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), !unfocused {
+        if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift), !unfocused {
             let p = convert(event.locationInWindow, from: nil)
             let q = CGPoint(x: p.x, y: isFlipped ? p.y : bounds.height - p.y)
             if let k = marks.mark(at: q)?.key, marks.hover.click(k) {
                 pinnedDown = true
                 return
             }
-            if !event.modifierFlags.contains(.shift), let link = capturedLink(at: q) {
+            if let link = capturedLink(at: q) {
                 pinnedDown = true
                 owner?.open(link.text)
                 return

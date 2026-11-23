@@ -42,6 +42,8 @@ tag from the now-released section and put it on the new top draft.
   (#1898)
 - X-ray: the arrow next to a mention opens the chapter where it was said; it no longer shows when
   there is nothing to open. (#1900)
+- Agent Sessions terminal: ⇧⌘-click opens a link that X-ray also marks (⌘-click still shows its
+  X-ray card). (#1901)
 
 ## v2.175.0
 

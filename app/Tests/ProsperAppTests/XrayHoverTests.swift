@@ -555,4 +555,38 @@ final class XrayHoverTests: XCTestCase {
             XCTAssertEqual(passed.count, 3, "the next up goes on")
         }
     }
+
+    // MARK: #1901 (operator 2026-11-23): Cmd+Shift hands the click to libghostty (it opens a link on the up)
+
+    /// Red at the parent: Cmd+Shift on a mark pinned its card and stopped the down and up (old line
+    /// `if let k = marks.mark(at: q)?.key, marks.hover.click(k)` ran with Shift too), so libghostty never opened the link.
+    /// Red too if Cmd alone stops pinning or passes the click on (#1701).
+    func testCommandShiftOnAMarkPassesBothClicksOnAndPinsNothing() async throws {
+        try await withSeams { fake in
+            let r = try rig(fake)
+            var passed: [NSEvent.EventType] = []
+            r.v.passedClick = { passed.append($0.type) }
+            var refs = 0
+            r.v.openRef = { _, _, _, _ in refs += 1; return true }
+            func click(_ type: NSEvent.EventType, _ f: NSEvent.ModifierFlags) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 4 + 8 * 4 + 2, y: 410 - (2 + 17 + 3)),
+                                                 modifierFlags: f, timestamp: 0, windowNumber: 0, context: nil,
+                                                 eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            for captured in [true, false] {
+                r.v.mouseCaptured = { captured }
+                passed = []
+                r.v.mouseDown(with: try click(.leftMouseDown, [.command, .shift]))
+                r.v.mouseUp(with: try click(.leftMouseUp, [.command, .shift]))
+                XCTAssertEqual(passed, [.leftMouseDown, .leftMouseUp], "captured \(captured)")
+                XCTAssertTrue(r.cards.shown == nil && r.v.marks.hover.card == nil, "captured \(captured): no card")
+                XCTAssertEqual(refs, 0)
+                XCTAssertFalse(r.v.pinnedDown)
+            }
+            passed = []
+            r.v.mouseDown(with: try click(.leftMouseDown, .command))
+            r.v.mouseUp(with: try click(.leftMouseUp, .command))
+            XCTAssertTrue(r.cards.shown != nil && passed.isEmpty, "Cmd alone: the card, nothing passed on")
+        }
+    }
 }
