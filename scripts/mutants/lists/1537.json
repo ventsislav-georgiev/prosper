@@ -19,7 +19,7 @@
   {
    "name": "M3-age-unchecked",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
-   "old": "return now - at < window ? (u, nil) : nil",
+   "old": "return now - at < window(claim) ? (u, nil) : nil",
    "new": "return (u, nil)",
    "expect": "killed"
   },

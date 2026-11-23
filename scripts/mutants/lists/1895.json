@@ -1,6 +1,6 @@
 {
  "entry": "1895",
- "filter": "AgentWindowLayoutEditTests",
+ "filter": "AgentWindowLayoutEditTests|AgentWindowD1Tests/testPaneSwitcher|AgentWindowD1Tests/testDividerEndsOnAKeyDownAndOnASelect",
  "mutants": [
   {
    "name": "r1-inside-parks",
@@ -56,6 +56,34 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "        if next == nil, parked != nil { return }",
    "new": "        if next == nil, parked != nil || layoutMade { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "swap-offered-while-renaming",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "              m.renaming.map({ AgentWindowModel.rowID(t) != .live($0) }) ?? true else { return [] }",
+   "new": "              true else { return [] }",
+   "expect": "killed"
+  },
+  {
+   "name": "swap-detail-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "DispatchQueue.main.async { if switcher.detail { DispatchQueue.main.async(execute: take) } else { take() } }",
+   "new": "DispatchQueue.main.async { take() }",
+   "expect": "killed"
+  },
+  {
+   "name": "swap-keep-on-focus",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if swapRequest != nil, layout.focused != oldValue.focused { swapRequest = nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drag-park-unsaved",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        dragEnded()   // #1895 (R900-5a-1): the drag's save lands before the park",
+   "new": "        // #1895 (R900-5a-1): the drag's save lands before the park",
    "expect": "killed"
   }
  ]
