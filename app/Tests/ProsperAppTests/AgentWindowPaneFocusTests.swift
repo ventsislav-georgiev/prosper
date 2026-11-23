@@ -174,6 +174,7 @@ extension AgentWindowD1Tests {
                 case "menu":
                     AgentWindowControls.runPane(.equalize, pane: second, in: m)
                 default:
+                    for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
                     m.closePane(first)
                 }
                 XCTAssertEqual(m.layout.focused, second, "\(action): the second pane is focused")

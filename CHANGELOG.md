@@ -2444,6 +2444,8 @@ tag from the now-released section and put it on the new top draft.
 - Settings, Claude Account Pool and the New session form: the "via ccpool" hint and the line under
   the pool switch now agree with what a new session really does when Prosper itself was started with
   its own ANTHROPIC_BASE_URL. (#1892)
+- Agent Sessions: closing a layout's pane so that only one session is left now deletes that layout
+  and shows the session on its own, also while the layout is being edited. (#1894)
 
 ## v2.174.0
 

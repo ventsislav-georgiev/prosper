@@ -128,6 +128,7 @@ extension AgentWindowD1Tests {
             let m = windowModel(store([session("api", .idle), session("web", .idle)]), layouts: d)
             defer { m.close() }
             m.adopt(paneLayout([paneTarget("api"), paneTarget("web")]))
+            for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
             let (p, a, size) = try dividerEndsSetup(m)
             let writes = m.layoutWrites
             XCTAssertTrue(AgentsNSWindow.divider(dividerEvent(.leftMouseDown), m, at: p, in: size))

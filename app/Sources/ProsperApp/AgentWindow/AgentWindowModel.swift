@@ -790,8 +790,20 @@ final class AgentWindowModel: ObservableObject {
     func closePane(_ pane: UUID) {
         let shown = layout.focused
         if case let .success(l) = layout.close(pane) {
-            keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed(pane, shown: shown)
+            keyFocus = .pane; adopt(l); autosave(explicit: true); cancelFormOfClosed(pane, shown: shown); closedToOne()
         }
+    }
+
+    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout, Edit layout on or off alike: Edit
+    /// layout ends and the session left is shown on its own (the pick rule over the layout deleteLayout handed over to:
+    /// a pane of it that shows the session is focused, else the single-pane view; unlocked, the one pane takes it). The
+    /// lone layout is never deleted (.lastLayout): it stays as the one-pane layout, the Layouts section hidden as before.
+    private func closedToOne() {
+        guard AgentPaneLayout.splitsEnabled, parked == nil, layout.panes.count == 1 else { return }
+        let left = layout.panes.first?.target
+        layoutEditing = false
+        guard deleteLayout(layout.id) == nil, let id = Self.rowID(left) else { return }
+        if case let .success(l) = layoutLocked ? lockedShowing(id) : showing(id), l != layout { adopt(l) }
     }
 
     /// #1659: the one rule for every close (⌘W, Close Pane, the pills, a VoiceOver press): the form is drawn in the focused
@@ -853,6 +865,7 @@ final class AgentWindowModel: ObservableObject {
             adopt(l)
             if closing != nil { autosave(explicit: true) }   // #1817: a close is saved while locked too
             closing.map { cancelFormOfClosed($0, shown: shown) }
+            if closing != nil { closedToOne() }   // #1894
             return true
         case let .failure(r):
             if base != layout { keyFocus = .pane; adopt(base) }   // the menu's pane is focused even when its action is refused

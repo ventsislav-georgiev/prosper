@@ -170,6 +170,7 @@ extension AgentWindowD1Tests {
             defer { r.m.close(); r.win.close() }
             let api = try XCTUnwrap(r.panes.first), web = try XCTUnwrap(r.panes.last)
             let apiTerminal = try XCTUnwrap(r.m.runtimes[api]?.terminal)
+            for l in r.m.layouts?.layouts ?? [] where l.id != r.m.layout.id { r.m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
             r.log.clear()
             r.m.closePane(api)
             XCTAssertEqual(r.m.layout.focused, web)

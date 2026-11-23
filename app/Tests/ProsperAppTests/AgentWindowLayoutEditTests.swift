@@ -341,6 +341,65 @@ final class AgentWindowLayoutEditTests: XCTestCase {
         }
     }
 
+    /// #1894 (operator 2026-11-23): a close that leaves one pane deletes the layout, Edit layout on or off alike, and the
+    /// session left is shown on its own (the single-pane view over the layout handed over to; a session that layout shows:
+    /// its pane focused). The lone layout stays (today's rule: closed to one pane, the Layouts section hides). A layout of
+    /// three panes closing one keeps the layout.
+    @MainActor
+    func testAgentWindowLayoutEditCloseToOnePaneDeletesTheLayoutEditingOrNot() throws {
+        try withGate(true) {
+            /// `two` (api | web) and `pair` saved, `pair` active; Edit layout as `editing`.
+            @MainActor func pairs(_ targets: [PaneTarget], editing: Bool) throws -> (AgentWindowModel, UserDefaults, PaneLayout, PaneLayout) {
+                let two = base.paneLayout([t("api"), t("web")]), pair = base.paneLayout(targets)
+                let d = base.layoutSuite()
+                d.set(try PaneLayoutStore(layouts: [two, pair], active: pair.id, mru: [pair.id, two.id]).encode(), forKey: Self.blobKey)
+                let m = base.windowModel(base.store([base.session("api", .idle), base.session("web", .idle),
+                                                     base.session("docs", .idle), base.session("ops", .idle)]), layouts: d)
+                m.setVisible(true)
+                m.setLayoutEditing(editing)
+                return (m, d, two, pair)
+            }
+            // Edit layout on, the header's Close Pane: deleted, Edit layout ends, docs on its own.
+            let (e, d, two, pair) = try pairs([t("docs"), t("ops")], editing: true)
+            defer { e.close() }
+            XCTAssertTrue(e.layoutEditing && e.layout.id == pair.id, "set up: the pair active, editing")
+            e.closePane(try XCTUnwrap(pair.order.last))
+            XCTAssertEqual(e.layouts?.layouts.map(\.id), [two.id], "the layout closed to one pane is deleted")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).layouts.map(\.id), [two.id], "and saved deleted")
+            XCTAssertFalse(e.layoutEditing, "Edit layout ends with it")
+            XCTAssertEqual(e.layout.panes.map(\.target), [t("docs")], "the session left is shown on its own")
+            XCTAssertTrue(e.parked?.id == two.id, "the single-pane view over the layout handed over to")
+            XCTAssertTrue(e.layoutRows?.count == 1, "one Layouts row left")
+            // Edit layout off, Command-W (perform) on the focused pane: deleted the same way.
+            let (r, _, two2, _) = try pairs([t("docs"), t("ops")], editing: false)
+            defer { r.close() }
+            XCTAssertTrue(r.perform(.closePane))
+            XCTAssertEqual(r.layouts?.layouts.map(\.id), [two2.id], "locked: deleted too")
+            XCTAssertEqual(r.layout.panes.map(\.target), [t("ops")])
+            XCTAssertTrue(r.parked?.id == two2.id && !r.layoutEditing)
+            // The session left is in the layout handed over to: that layout, its pane focused.
+            let (s, _, two3, pair3) = try pairs([t("web"), t("ops")], editing: true)
+            defer { s.close() }
+            s.closePane(try XCTUnwrap(pair3.order.last))
+            XCTAssertTrue(s.parked == nil && s.layout.id == two3.id, "the layout that shows web")
+            XCTAssertTrue(s.layout.panes.first { $0.id == s.layout.focused }?.target == t("web"), "web's pane focused")
+            // The lone layout, Edit layout on: kept (the store refuses the last), Edit layout ends.
+            let (lone, _, one, _) = try locked(editing: true)
+            defer { lone.close() }
+            lone.closePane(try XCTUnwrap(one.order.last))
+            XCTAssertEqual(lone.layouts?.layouts.map(\.id), [one.id], "the lone layout is kept")
+            XCTAssertTrue(lone.layout.panes.count == 1 && lone.layouts?.activeLayout == lone.layout && lone.layoutRows == nil)
+            XCTAssertFalse(lone.layoutEditing)
+            // Three panes, one closed: the layout stays, Edit layout stays on.
+            let (three, _, _, trio) = try pairs([t("docs"), t("ops"), t("web")], editing: true)
+            defer { three.close() }
+            three.closePane(try XCTUnwrap(trio.order.last))
+            XCTAssertEqual(three.layouts?.layouts.count, 2, "three panes closed to two: kept")
+            XCTAssertTrue(three.layout.id == trio.id && three.layout.panes.count == 2 && three.parked == nil)
+            XCTAssertTrue(three.layoutEditing, "still editing")
+        }
+    }
+
     /// "+" opens the new layout in Edit layout: a click fills its pane, no single-pane view.
     @MainActor
     func testAgentWindowLayoutEditNewLayoutOpensInEditMode() throws {
