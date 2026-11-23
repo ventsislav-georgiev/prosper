@@ -469,15 +469,23 @@ async function gunzipCapped(bytes: Uint8Array, cap: number): Promise<Uint8Array 
  *  Returns the tar and the gzip stream alone. The stream ends in [t, t+8] where t is the length without
  *  trailing zeros (the CRC32 / ISIZE trailer can end in zeros itself): at most 9 inflates, only for input
  *  ending in 0x00. Any other trailing byte is still "bad". */
-async function gunzipPadded(bytes: Uint8Array, cap: number): Promise<{ tar: Uint8Array; gz: Uint8Array } | "too_large" | "bad"> {
+async function gunzipPadded(
+  bytes: Uint8Array,
+  cap: number,
+  inflate: typeof gunzipCapped = gunzipCapped,
+): Promise<{ tar: Uint8Array; gz: Uint8Array } | "too_large" | "bad"> {
   let t = bytes.length;
   while (t > 0 && bytes[t - 1] === 0) t--;
   const ends = [];
   for (let n = t; n < bytes.length && n <= t + 8; n++) ends.push(n);
   for (const n of [...ends, bytes.length]) {
     const gz = bytes.subarray(0, n);
-    const tar = await gunzipCapped(gz, cap);
-    if (tar !== "bad") return tar === "too_large" ? tar : { tar, gz };
+    const tar = await inflate(gz, cap);
+    if (tar === "too_large") return tar;
+    // The trailer's ISIZE must match the inflated length: a cut inside the trailer is not the stream's end,
+    // whatever the runtime's inflater says (ISIZE ends in 0x00 for any tar under 16 MiB, so t is often too short).
+    if (tar !== "bad" && n >= 18 && ((gz[n - 4] | (gz[n - 3] << 8) | (gz[n - 2] << 16) | (gz[n - 1] << 24)) >>> 0) === tar.length % 2 ** 32)
+      return { tar, gz };
   }
   return "bad";
 }

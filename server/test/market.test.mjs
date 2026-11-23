@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gzipSync, inflateRawSync } from "node:zlib";
 
 // The Worker's sources import siblings without an extension (the bundler resolves them).
 registerHooks({
@@ -963,4 +963,18 @@ test("gunzipPadded: an unpadded stream is returned as given, a bad one is bad", 
   assert.ok(typeof r !== "string" && r.gz.length === gz.length);
   assert.equal(await gunzipPadded(Buffer.alloc(20), 1 << 20), "bad");
   assert.equal(await gunzipPadded(gz, 100), "too_large");
+});
+
+// QA f1: the pick must not trust the inflater to refuse a gzip cut inside its trailer (workerd may accept it).
+test("gunzipPadded: a lenient inflater cannot make it accept a stream cut inside the trailer", async () => {
+  const lenient = async (gz) => {
+    try { return new Uint8Array(inflateRawSync(gz.subarray(10))); } catch { return "bad"; }
+  };
+  const gz = gzipSync(zeroFilled(65536));
+  assert.equal(gz[gz.length - 1], 0);
+  for (const pad of [0, 7]) {
+    const r = await gunzipPadded(Buffer.concat([gz, Buffer.alloc(pad)]), 1 << 20, lenient);
+    assert.ok(typeof r !== "string", `pad ${pad}`);
+    assert.equal(r.gz.length, gz.length, `pad ${pad}: the full stream, trailer included`);
+  }
 });
