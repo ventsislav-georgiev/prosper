@@ -47,6 +47,9 @@ One file per ledger entry, `lists/<entry>.json`:
   `refused` array (never run), with a `note` naming the row that pins the same check.
   A mutant may be rewritten past `GUARD` only when the rewrite reduces side effects (a read, less deletion, an
   in-model id); the harmful direction goes to `refused` with its covering row. Each rewrite carries a `note` saying which.
+- A mutant whose code was removed (or became equivalent) moves to a list-level `retired` array, `{name, note}`, the
+  note naming the entry that removed it (never run). A list left with no mutants is deleted, its retired names in the
+  commit message (`run.py` refuses an empty `mutants` array).
 
 ## What run.py does
 
