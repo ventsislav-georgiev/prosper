@@ -18,7 +18,7 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.175.0 *(unreleased)*
+## v2.175.0
 
 - Agent Sessions window: a live session's "⋯" header menu and its sidebar row's right-click menu
   offer Restart agent, Stop and Kill, with the island's rules and reasons; the window asks first in
