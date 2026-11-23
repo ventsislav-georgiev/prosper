@@ -453,6 +453,7 @@ final class AgentTerminalController: ObservableObject {
         setPassive(true, key: key, child: child, version: version)
         Self.keptTick += 1
         Self.keepers.add(self)
+        writer = AgentTerminalWriter()   // #1889: the kept entry owns the old one; a later detach() must never unwire it
         self.child = nil
         self.inbox = nil
         self.screen = nil
@@ -472,6 +473,9 @@ final class AgentTerminalController: ObservableObject {
 
     /// A kept session shown again: its screen, client and surface as they were, then what arrived meanwhile.
     private func restore(_ k: Kept) {
+        if k.writer.child !== k.child {   // #1889: the screen's keys go to this writer only; unwired they vanish
+            Self.log.notice("restore \(k.key.name, privacy: .public) pid \(k.child.clientPid ?? -1, privacy: .public): its writer has no client, keys are dropped")
+        }
         setPassive(false, key: k.key, child: k.child, version: k.version)   // #1793/#1803/#1806: focus-in once --active exits 0
         generation += 1   // the timers of the attach before end
         screenGeneration = k.screenGeneration

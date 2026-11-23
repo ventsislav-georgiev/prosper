@@ -578,4 +578,28 @@ final class AgentTerminalKeepTests: XCTestCase {
         XCTAssertEqual(v.surfaceResigns, 0, "surfaceStarted: no NSView resign on the first responder")
         XCTAssertTrue(win.firstResponder === v, "the keys stay where they were")
     }
+
+    /// #1889: a keep with no session after it (the window closed: attach(nil, .keep)), then a session that was not kept
+    /// (the window back on another one): that attach's detach must not unwire the kept session's writer. Back on the kept
+    /// one, a key typed on its surface (the screen's write) reaches its own client, as before the close.
+    @MainActor
+    func testKeysReachAKeptSessionAfterAKeepWithNoSessionAndAFreshAttach() {
+        let rig = AgentTerminalTests.Rig(keep: AgentTerminalController.keptSessions)
+        let c = rig.c, a = Self.key("api"), b = Self.key("api-qa")
+        c.attach(a)
+        rig.grid(100, 30)
+        XCTAssertEqual(c.phase, .live)
+        c.attach(nil, leave: .keep)   // the window closed
+        XCTAssertEqual(c.keptKeys, [a])
+        c.attach(b)   // shown again on b, never kept
+        XCTAssertEqual(c.phase, .live)
+        c.attach(a)
+        XCTAssertEqual(rig.requests.count, 2, "a came back kept: no new client")
+        XCTAssertEqual(rig.children.first?.terminated, 0)
+        rig.screens.first?.events.write(Data("x".utf8))   // the key path: libghostty -> the screen -> its writer
+        c.writer.flush()
+        XCTAssertEqual(rig.children.first?.written, Array("x".utf8), "the key reaches a's client")
+        XCTAssertEqual(rig.children.last?.written, [], "never b's")
+        c.attach(nil)
+    }
 }

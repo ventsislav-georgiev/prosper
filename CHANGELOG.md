@@ -2432,6 +2432,8 @@ tag from the now-released section and put it on the new top draft.
   type. (#1878)
 - Settings, Prosper Agent Kit, Pieces: each tool switch under a tools piece now shows the tool's
   name next to it, instead of a bare switch on its own line. (#1887)
+- Agent Sessions: a session you switch back to, after closing and reopening the window or switching
+  panes, takes typed keys again. Before, it showed its output but ignored the keyboard. (#1889)
 
 ## v2.174.0
 

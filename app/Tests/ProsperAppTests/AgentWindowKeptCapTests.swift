@@ -149,6 +149,43 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1889: the window closes on a (kept), a session is picked while it is hidden (the island's show-in-Sessions before
+    /// the occlusion turns visible), the window shows again on c (a new client), then a is picked: a comes back kept and
+    /// a key typed on its surface reaches its client. The bug: c's attach detached the idle terminal, whose writer was
+    /// still a's, so a showed output and dropped every key until a fifth session evicted it.
+    @MainActor
+    func testAgentWindowKeysReachAKeptSessionAfterTheWindowClosesAndReopensOnAnother() throws {
+        splitsOn()
+        try withModePref {
+            let ss = ["a", "b", "c"].map { session($0, .idle) }
+            let m = windowModel(store(ss))
+            defer { m.close() }
+            let (log, rec) = keptRecorders(m)
+            m.paneArea = Self.wideArea
+            m.adopt(paneLayout([paneTarget("a"), paneTarget("b")]))
+            m.setVisible(true)
+            Self.drainMain()
+            endRests(log)
+            XCTAssertEqual(log.spawned, ["a", "b"])
+            m.setVisible(false)   // the close (AgentsWindow.hide)
+            m.select(.live(ss[2].key))   // picked while hidden
+            Self.drainMain()
+            m.setVisible(true)   // the reopen
+            Self.drainMain()
+            endRests(log)
+            XCTAssertEqual(m.terminal.key?.name, "c")
+            m.select(.live(ss[0].key))
+            Self.drainMain()
+            XCTAssertEqual(m.terminal.key?.name, "a")
+            XCTAssertEqual(log.spawned.filter { $0 == "a" }.count, 1, "a came back kept: no new client")
+            XCTAssertEqual(log.children["a"]?.terminated, 0)
+            rec.screens["a"]?.events.write(Data("x".utf8))   // the key path: libghostty -> a's screen -> its writer
+            m.terminal.writer.flush()
+            XCTAssertEqual(log.children["a"]?.written, Array("x".utf8), "the key reaches a's client")
+            XCTAssertEqual(log.children["c"]?.written, [], "never c's")
+        }
+    }
+
     /// #1796: the New session form over a pane with kept clients: only the shown client detaches; the kept ones stay.
     @MainActor
     func testAgentWindowNewSessionFormLeavesTheKeptClientsAlone() throws {
