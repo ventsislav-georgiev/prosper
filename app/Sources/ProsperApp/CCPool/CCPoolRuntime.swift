@@ -106,6 +106,8 @@ final class CCPoolRuntime {
     private let routeOn: @Sendable () -> Bool
     /// #1890: the session's inherited ANTHROPIC_BASE_URL (CCPool.InheritedBaseURL); always nil without a probe (XCTest).
     private let inherited: @Sendable (_ wait: Bool) -> String?
+    /// #1892: Prosper's own ANTHROPIC_BASE_URL, read once at init (the spawn env's source).
+    private let own: @Sendable () -> String?
     private var relaunchObserver: NSObjectProtocol?
 
     init(directory: URL, secrets: CCPoolSecrets, config: CCPoolServiceConfig, vaultURL: URL,
@@ -122,8 +124,9 @@ final class CCPoolRuntime {
                                    lifecycle: lifecycle)
         model = made
         // #1890: a background probe that lands redraws the pane line and the form's hint (both watch the model).
+        let processValue = ProcessInfo.processInfo.environment[CCPool.baseURLKey]
         let found = baseURLProbe.map { probe in
-            CCPool.InheritedBaseURL(probe: probe, process: ProcessInfo.processInfo.environment[CCPool.baseURLKey]) { [weak made] in
+            CCPool.InheritedBaseURL(probe: probe, process: processValue) { [weak made] in
                 DispatchQueue.main.async { MainActor.assumeIsolated { made?.objectWillChange.send() } }
             }
         }
@@ -131,6 +134,9 @@ final class CCPoolRuntime {
         let read: @Sendable (_ wait: Bool) -> String? = { found?.read(wait: $0) }
         inherited = read
         made.inheritedBaseURL = read
+        let ownRead: @Sendable () -> String? = { processValue }
+        own = ownRead
+        made.ownBaseURL = ownRead
         // UserDefaults is thread-safe; held the way Preferences.defaults is.
         nonisolated(unsafe) let routeDefaults = defaults
         routeOn = { CCPoolPaneModel.routeValue(in: routeDefaults) }
@@ -145,7 +151,7 @@ final class CCPoolRuntime {
 
     /// P2b-2: what new Agent Sessions route on (AgentIslandController.sessionEnvContributors, the New session
     /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
-    var routing: CCPool.Routing { service.routing(on: routeOn, inherited: inherited) }
+    var routing: CCPool.Routing { service.routing(on: routeOn, inherited: inherited, own: own) }
 
     /// #1537: the Agent Island's plan usage line: the current account's last usage sample (relayed replies or a
     /// Refresh) and its reset stamps, as a plain island value. nil without a current account or a sample.

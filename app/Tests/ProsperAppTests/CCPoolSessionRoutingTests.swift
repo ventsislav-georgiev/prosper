@@ -567,9 +567,15 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(routing.reviveFlags(claude), [], "a Resume carries no flags either")
         login.lock.withLock { login.value = "" }
         c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 } }
+        routing.own = { "http://127.0.0.1:8787" }
+        XCTAssertTrue(AgentNewSession.poolHint(claude, routing: routing) == nil, "#1892: login unset, Prosper's own value foreign: not routed, no hint")
+        routing.own = { nil }
         XCTAssertEqual(AgentNewSession.poolHint(claude, routing: routing), AgentNewSession.viaPoolHint)
         let foreignEnv = today.merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 }
         XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-2"), foreignEnv, "#1891: login unset but the spawn env is foreign: not routed")
+        routing.own = { "http://127.0.0.1:8787" }
+        XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags, "#1892: a Resume stays login-only, Prosper's own value is not read")
+        routing.own = { nil }
         XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags, "a Resume has no spawn env: the login env alone decides")
         c.controlEnv = { Self.controlEnv($0) }
         XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-3"), routedClaude, "the login env says unset, the spawn env none: routed")

@@ -135,10 +135,14 @@ enum CCPool {
         /// #1890: the session's inherited ANTHROPIC_BASE_URL (InheritedBaseURL.read; `wait` only off main); nil: not known.
         var inherited: @Sendable (_ wait: Bool) -> String? = { _ in nil }
 
+        /// #1892: Prosper's own ANTHROPIC_BASE_URL (the source of the spawn env); none by default.
+        var own: @Sendable () -> String? = { nil }
+
         /// The toggle is read first: off, neither the status nor the store is read, so turning it off holds
         /// for the next spawn whatever they would say. Only `.running` routes (stopped, held, failed: no).
         /// Main's form hint: never waits for the login shell.
-        func delta(_ argv: [String]) -> EnvDelta { delta(argv, wait: false, env: nil) }
+        /// #1892: checks Prosper's own value too, as the spawn does, so the hint never disagrees with it.
+        func delta(_ argv: [String]) -> EnvDelta { delta(argv, wait: false, env: own().map { [baseURLKey: $0] }) }
 
         /// #1890: `env` is the spawn's own env; #1891: a foreign value in it keeps the session unrouted whatever the login env says.
         func delta(_ argv: [String], wait: Bool, env: [String: String]?) -> EnvDelta {

@@ -76,6 +76,30 @@
    "new": "",
    "expect": "killed",
    "note": "#1891: no probe at init, the first spawn waits for the login shell"
+  },
+  {
+   "name": "hint-own-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "delta(argv, wait: false, env: own().map { [baseURLKey: $0] })",
+   "new": "delta(argv, wait: false, env: nil)",
+   "expect": "killed",
+   "note": "#1892: the form hint ignores Prosper's own value"
+  },
+  {
+   "name": "pane-own-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "old": " ?? CCPool.foreignBaseURL(ownBaseURL(), base: base)",
+   "new": "",
+   "expect": "killed",
+   "note": "#1892: the pane line ignores Prosper's own value"
+  },
+  {
+   "name": "revive-reads-own",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "delta(argv, wait: true, env: nil).reviveFlags",
+   "new": "delta(argv, wait: true, env: own().map { [baseURLKey: $0] }).reviveFlags",
+   "expect": "killed",
+   "note": "#1892: Resume flags must stay login-only"
   }
  ]
 }

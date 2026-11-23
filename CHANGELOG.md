@@ -2441,6 +2441,9 @@ tag from the now-released section and put it on the new top draft.
 - Settings, Claude Account Pool: the first new Claude session after Prosper starts no longer waits
   up to 4 seconds while the pool reads your shell's ANTHROPIC_BASE_URL; Prosper reads it once at
   launch, in the background. (#1891)
+- Settings, Claude Account Pool and the New session form: the "via ccpool" hint and the line under
+  the pool switch now agree with what a new session really does when Prosper itself was started with
+  its own ANTHROPIC_BASE_URL. (#1892)
 
 ## v2.174.0
 

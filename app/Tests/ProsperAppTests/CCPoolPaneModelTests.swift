@@ -478,6 +478,10 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertTrue(m.foreignBaseURL == nil, "this pool's own URL: routed, no line")
         m.inheritedBaseURL = { _ in "" }
         XCTAssertTrue(m.foreignBaseURL == nil, "unset: no line")
+        m.ownBaseURL = { "http://127.0.0.1:8787" }
+        XCTAssertEqual(m.foreignBaseURL, "http://127.0.0.1:8787", "#1892: login unset, Prosper's own value foreign: the line shows")
+        m.ownBaseURL = { own }
+        XCTAssertTrue(m.foreignBaseURL == nil, "#1892: Prosper's own value is this pool's: no line")
     }
 
     /// O2: with no account, on is refused and the shown value stays off (S35); off is still written.

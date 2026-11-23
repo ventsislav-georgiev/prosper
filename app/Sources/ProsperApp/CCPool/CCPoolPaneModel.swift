@@ -329,7 +329,13 @@ final class CCPoolPaneModel: ObservableObject {
 
     /// #1890: the foreign ANTHROPIC_BASE_URL new sessions would keep (so they are not routed); nil when there is none or
     /// it is this pool's own. Read on main at each redraw: a lock read, the login shell never runs here.
-    var foreignBaseURL: String? { CCPool.foreignBaseURL(inheritedBaseURL(false), base: CCPool.baseURL(port: port)) }
+    /// #1892: Prosper's own ANTHROPIC_BASE_URL, checked too (the spawn env's source); none by default.
+    var ownBaseURL: @Sendable () -> String? = { nil }
+
+    var foreignBaseURL: String? {
+        let base = CCPool.baseURL(port: port)
+        return CCPool.foreignBaseURL(inheritedBaseURL(false), base: base) ?? CCPool.foreignBaseURL(ownBaseURL(), base: base)
+    }
 
     var routeDisabledReason: String? {
         if !store.hasAccounts { return "Add an account first." }
