@@ -10,15 +10,16 @@ final class CCPoolSessionRoutingTests: XCTestCase {
     private static let folder = "/Users/example/api"
 
     /// What `controlEnv` hands the spawn path here: a PATH, the socket dir, a Claude Code identity (spawnEnv
-    /// strips it today), two credentials and a base URL of the person's own.
+    /// strips it today) and two credentials. #1890: no base URL of the person's own (one keeps the session unrouted:
+    /// the foreign-URL rows below add it).
     nonisolated private static func controlEnv(_ dir: String) -> [String: String] {
         ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": dir, "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
-         "ANTHROPIC_API_KEY": "example-key", "ANTHROPIC_AUTH_TOKEN": "example-auth", "ANTHROPIC_BASE_URL": "http://example.invalid"]
+         "ANTHROPIC_API_KEY": "example-key", "ANTHROPIC_AUTH_TOKEN": "example-auth"]
     }
 
     /// The env every --spawn got before P2b-2 (spawnEnv over controlEnv), literally: the env when routing does not apply.
     private let today = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d", "ANTHROPIC_API_KEY": "example-key",
-                         "ANTHROPIC_AUTH_TOKEN": "example-auth", "ANTHROPIC_BASE_URL": "http://example.invalid"]
+                         "ANTHROPIC_AUTH_TOKEN": "example-auth"]
     /// claude routed (OQ-132): `today` with the pool's base URL; the credentials kept.
     private let routedClaude = ["PATH": "/Users/example/bin:/usr/bin", "DCH_SOCKET_DIR": "/d", "ANTHROPIC_API_KEY": "example-key",
                                 "ANTHROPIC_AUTH_TOKEN": "example-auth", "ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"]
@@ -207,8 +208,10 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         let routing = CCPool.Routing(on: rt.routing.on, status: pool.routing.status, hasAccounts: pool.routing.hasAccounts)
         let rec = Recorder()
         let c = controller(rec, routing: routing)
-        XCTAssertFalse(rt.model.routeAgentSessions, "off by default")
-        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api"), today, "default off")
+        XCTAssertTrue(rt.model.routeAgentSessions, "#1890: on by default")
+        XCTAssertTrue(rt.routing.on(), "#1890: the spawn's own reader agrees")
+        rt.model.routeAgentSessions = false
+        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api"), today, "stored off")
         XCTAssertEqual(pool.statusReads, 0, "off: the status is never read")
         rt.model.routeAgentSessions = true
         XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api-2"), routedClaude, "on: routed")
@@ -294,7 +297,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
             dropped = watch
             let count = Count()
             redraws = watch.objectWillChange.sink { count.n += 1 }   // main: every publish here is on main
-            XCTAssertTrue(watch.hint(claude) == nil, "off, proxy stopped")
+            XCTAssertTrue(watch.hint(claude) == nil, "on by default (#1890), proxy stopped")
 
             var before = count.n
             rt.model.routeAgentSessions = true
@@ -483,7 +486,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(pool.mainReads, 0, "the Resume reads the pool on the runner's queue, never main")
     }
 
-    /// Routing off: the Resume carries no routing variable (a spawn's unrouted env, the person's own base URL and keys).
+    /// Routing off: the Resume carries no routing variable (a spawn's unrouted env, the person's keys).
     func testCCPoolSingleResumeWithRoutingOffIsNotRouted() {
         let rec = Recorder(), pool = Pool()
         pool.set(on: false)
@@ -492,8 +495,8 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         c.store?.history = [r]
         let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
         XCTAssertEqual(rec.args.last?.first, "--revive")
-        XCTAssertEqual(resumed, today, "no routing variable: the person's base URL and credentials stay")
-        XCTAssertEqual(resumed?["ANTHROPIC_BASE_URL"], "http://example.invalid")
+        XCTAssertEqual(resumed, today, "no routing variable: the person's credentials stay")
+        XCTAssertTrue(resumed?["ANTHROPIC_BASE_URL"] == nil)
     }
 
     /// Resume interrupted (one --revive --all per folder) stays unrouted with routing on: the control env, untouched.
@@ -517,6 +520,56 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         let resumed = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
         XCTAssertEqual(rec.args.last?.first, "--revive")
         XCTAssertEqual(resumed, Self.controlEnv("@example-host"), "the control env as before #1219: no strip, no routing")
+    }
+
+    // MARK: - A session's own ANTHROPIC_BASE_URL (#1890)
+
+    /// #1890 (mutant foreign-url-routed): the spawn env already pointing ANTHROPIC_BASE_URL elsewhere (the env dch is
+    /// handed; no login probe here) is left byte for byte, and the form's hint says nothing: they agree.
+    func testCCPoolForeignBaseURLInTheSpawnEnvIsNotRoutedAndTheHintAgrees() {
+        let rec = Recorder(), pool = Pool()
+        let c = controller(rec, routing: pool.routing)
+        c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 } }
+        let mine = today.merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 }
+        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api"), mine, "a foreign base URL: the env as it is")
+        c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234/"]) { $1 } }
+        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api-2"), routedClaude, "this pool's own URL: routed (a no-op set)")
+        c.controlEnv = { Self.controlEnv($0) }
+        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api-3"), routedClaude, "no base URL: routed")
+        XCTAssertEqual(pool.mainReads, 0)
+    }
+
+    /// #1890: the login env's value (dch's login shell, the env the session really gets) decides, on the spawn path, the
+    /// Resume flags and the form's hint alike; a known "" (unset there) routes whatever the handed env says.
+    func testCCPoolForeignBaseURLFromTheLoginEnvIsNotRoutedAnywhere() {
+        final class Login: @unchecked Sendable {
+            let lock = NSLock()
+            var value: String? = "http://127.0.0.1:8787"
+            var waits = 0, mainReads = 0
+            func read(_ wait: Bool) -> String? {
+                lock.withLock {
+                    if wait { waits += 1 }
+                    if Thread.isMainThread { mainReads += 1 }
+                    return value
+                }
+            }
+        }
+        let login = Login(), pool = Pool()
+        var routing = pool.routing
+        routing.inherited = { login.read($0) }
+        let claude = AgentNewSession.argv("claude", shell: "/bin/zsh")
+        let rec = Recorder()
+        let c = controller(rec, routing: routing)
+        XCTAssertTrue(AgentNewSession.poolHint(claude, routing: routing) == nil, "foreign: no hint")
+        XCTAssertEqual(login.waits, 0, "the hint never waits for the login shell")
+        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api"), today, "foreign: not routed")
+        XCTAssertEqual(login.waits, 1, "the spawn asked on the runner's queue")
+        XCTAssertEqual(routing.reviveFlags(claude), [], "a Resume carries no flags either")
+        login.lock.withLock { login.value = "" }
+        c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 } }
+        XCTAssertEqual(AgentNewSession.poolHint(claude, routing: routing), AgentNewSession.viaPoolHint)
+        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-2"), routedClaude, "the login env says unset: routed")
+        XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags)
     }
 
     // MARK: - Resume past the login shell's env (#1499, dch 1.94.0 --revive --env/--unset)

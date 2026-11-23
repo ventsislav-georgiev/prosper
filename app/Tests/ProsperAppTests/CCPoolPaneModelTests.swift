@@ -331,7 +331,7 @@ final class CCPoolPaneModelTests: XCTestCase {
     func testCCPoolPaneProxyRowToggleAndTerminal() async throws {
         let r = try ccpoolPaneRig()
         let m = r.model
-        XCTAssertFalse(m.routeAgentSessions, "default off")
+        XCTAssertTrue(m.routeAgentSessions, "#1890: on by default")
         XCTAssertNil(r.defaults.object(forKey: "ccpoolRouteAgentSessions"))
         XCTAssertEqual(CCPoolPaneModel.routeKey, "ccpoolRouteAgentSessions")
         XCTAssertEqual(m.proxyText, "Stopped")
@@ -448,6 +448,36 @@ final class CCPoolPaneModelTests: XCTestCase {
         XCTAssertTrue(r.defaults.bool(forKey: CCPoolPaneModel.routeKey), "on is written while running")
         XCTAssertTrue(m.routeToggleShown)
         r.service.stop()
+    }
+
+    /// #1890 (mutant route-default-off): never set reads on; a stored false or true stands; removing it reads on again.
+    func testCCPoolRouteIsOnByDefaultAndAStoredChoiceStands() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertTrue(r.defaults.object(forKey: CCPoolPaneModel.routeKey) == nil, "nothing stored")
+        XCTAssertTrue(CCPoolPaneModel.routeValue(in: r.defaults))
+        XCTAssertTrue(m.routeAgentSessions)
+        r.defaults.set(false, forKey: CCPoolPaneModel.routeKey)
+        XCTAssertFalse(CCPoolPaneModel.routeValue(in: r.defaults), "a stored false stays off")
+        XCTAssertFalse(m.routeAgentSessions)
+        r.defaults.set(true, forKey: CCPoolPaneModel.routeKey)
+        XCTAssertTrue(m.routeAgentSessions, "a stored true stays on")
+        r.defaults.removeObject(forKey: CCPoolPaneModel.routeKey)
+        XCTAssertTrue(m.routeAgentSessions)
+    }
+
+    /// #1890: the line under the toggle shows only while new sessions would keep a foreign ANTHROPIC_BASE_URL.
+    func testCCPoolForeignBaseURLLineShowsAndHides() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertTrue(m.foreignBaseURL == nil, "no probe: no line")
+        m.inheritedBaseURL = { _ in "http://127.0.0.1:8787" }
+        XCTAssertEqual(m.foreignBaseURL, "http://127.0.0.1:8787")
+        let own = CCPool.baseURL(port: m.port)
+        m.inheritedBaseURL = { _ in own }
+        XCTAssertTrue(m.foreignBaseURL == nil, "this pool's own URL: routed, no line")
+        m.inheritedBaseURL = { _ in "" }
+        XCTAssertTrue(m.foreignBaseURL == nil, "unset: no line")
     }
 
     /// O2: with no account, on is refused and the shown value stays off (S35); off is still written.

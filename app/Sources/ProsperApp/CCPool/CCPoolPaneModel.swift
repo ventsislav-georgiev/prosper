@@ -14,6 +14,10 @@ import Foundation
 @MainActor
 final class CCPoolPaneModel: ObservableObject {
     nonisolated static let routeKey = "ccpoolRouteAgentSessions"
+    /// #1890 (operator 2026-11-23): on by default. Never set: on; a stored choice (true or false) stands.
+    nonisolated static func routeValue(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: routeKey) == nil || defaults.bool(forKey: routeKey)
+    }
     /// #1670: "Move off an account at", a Double 0.5...1.0 (1.0 = only when the account is spent).
     nonisolated static let exhaustedKey = "ccpoolExhaustedThreshold"
     nonisolated static let exhaustedRange = 0.5...1.0
@@ -302,7 +306,7 @@ final class CCPoolPaneModel: ObservableObject {
     // MARK: Agent Sessions toggle
 
     var routeAgentSessions: Bool {
-        get { defaults.bool(forKey: Self.routeKey) }
+        get { Self.routeValue(in: defaults) }
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Self.routeKey)
@@ -319,6 +323,13 @@ final class CCPoolPaneModel: ObservableObject {
         guard !on || routeDisabledReason == nil else { objectWillChange.send(); return }
         routeAgentSessions = on
     }
+
+    /// #1890: the session's inherited ANTHROPIC_BASE_URL as CCPoolRuntime reads it (never waits here); none by default.
+    var inheritedBaseURL: @Sendable (_ wait: Bool) -> String? = { _ in nil }
+
+    /// #1890: the foreign ANTHROPIC_BASE_URL new sessions would keep (so they are not routed); nil when there is none or
+    /// it is this pool's own. Read on main at each redraw: a lock read, the login shell never runs here.
+    var foreignBaseURL: String? { CCPool.foreignBaseURL(inheritedBaseURL(false), base: CCPool.baseURL(port: port)) }
 
     var routeDisabledReason: String? {
         if !store.hasAccounts { return "Add an account first." }

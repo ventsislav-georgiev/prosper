@@ -19,6 +19,10 @@ struct CCPoolPane: View {
     /// #1499: below dch 1.94.0 a resumed session takes dch's login-shell env, rc files' ANTHROPIC_* included; from it
     /// Resume passes the routing with --env, which wins. Keys and tokens are kept (OQ-132), so only the base URL matters.
     static let shellLimit = " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL."
+    /// #1890: under the toggle while new sessions would keep a foreign ANTHROPIC_BASE_URL; host and port only.
+    nonisolated static func foreignLine(_ url: String) -> String {
+        "Sessions keep their own ANTHROPIC_BASE_URL" + (CCPool.shownBaseURL(url).map { " (\($0))" } ?? "") + ": not routed"
+    }
     static func routeScope(dch: [Int]?) -> String {
         dch.map { DchCommand.isAtLeast($0, AgentIsland.reviveEnvMinimum) } == true ? routeScope : routeScope + shellLimit
     }
@@ -190,6 +194,7 @@ struct CCPoolPane: View {
                         .labelsHidden()
                         .accessibilityLabel(Self.routeTitle)
                 }
+                if let url = model.foreignBaseURL { caption(Self.foreignLine(url)) }
                 caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))
             }
         }

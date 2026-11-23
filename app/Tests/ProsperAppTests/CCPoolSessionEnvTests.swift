@@ -102,4 +102,72 @@ final class CCPoolSessionEnvTests: XCTestCase {
             XCTAssertEqual(r.delta(["headroom"]), CCPool.EnvDelta(), name)
         }
     }
+
+    // MARK: - #1890: a session's own ANTHROPIC_BASE_URL
+
+    /// Mutant foreign-url-routed: a foreign inherited base URL empties the delta for claude; this pool's own URL (with or
+    /// without a trailing "/"), none and "" route.
+    func testCCPoolForeignBaseURLEmptiesTheDelta() {
+        let claude = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
+        func delta(_ inherited: String?) -> CCPool.EnvDelta {
+            CCPool.sessionEnv(command: ["claude"], base: base, on: true, healthy: true, hasAccounts: true, inherited: inherited)
+        }
+        XCTAssertEqual(delta("http://127.0.0.1:8787"), CCPool.EnvDelta(), "headroom's port: foreign")
+        XCTAssertEqual(delta("https://gateway.example.invalid/v1"), CCPool.EnvDelta(), "a remote gateway: foreign")
+        XCTAssertEqual(delta("http://127.0.0.1:41235"), CCPool.EnvDelta(), "another port: foreign")
+        XCTAssertEqual(delta(base), claude, "this pool's own URL: routed (a no-op set)")
+        XCTAssertEqual(delta(base + "/"), claude, "a trailing slash is the same URL")
+        XCTAssertEqual(delta(nil), claude, "none: routed")
+        XCTAssertEqual(delta(""), claude, "empty: routed")
+        XCTAssertTrue(CCPool.foreignBaseURL("http://127.0.0.1:8787", base: base) == "http://127.0.0.1:8787")
+        XCTAssertTrue(CCPool.foreignBaseURL(base, base: base) == nil)
+
+        let foreign = CCPool.Routing(on: { true }, status: { .running(port: 41234) }, hasAccounts: { true })
+        let parent = ["PATH": "/usr/bin", "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787", "ANTHROPIC_API_KEY": "dummy-key"]
+        XCTAssertEqual(foreign.contributor(["claude"], parent), parent, "the spawn env's own URL: unchanged, byte for byte")
+        XCTAssertEqual(foreign.contributor(["claude"], ["PATH": "/usr/bin"])["ANTHROPIC_BASE_URL"], base)
+    }
+
+    /// The pane line names the foreign URL by scheme, host and port only: no user info, path or query (a token's places).
+    func testCCPoolForeignBaseURLLineShowsHostAndPortOnly() {
+        XCTAssertEqual(CCPoolPane.foreignLine("http://127.0.0.1:8787"),
+                       "Sessions keep their own ANTHROPIC_BASE_URL (http://127.0.0.1:8787): not routed")
+        XCTAssertEqual(CCPoolPane.foreignLine("https://user:secret-token@gateway.example.invalid:8443/v1/key-abc?token=xyz#frag"),
+                       "Sessions keep their own ANTHROPIC_BASE_URL (https://gateway.example.invalid:8443): not routed")
+        XCTAssertEqual(CCPoolPane.foreignLine("not a url"), "Sessions keep their own ANTHROPIC_BASE_URL: not routed")
+    }
+
+    /// The login probe runs once when it works, never on a main read's own thread, and a main read never retries a failed
+    /// background probe (no login shell per keystroke); only a spawn's waiting read does. Counts calls, not time.
+    func testCCPoolInheritedBaseURLProbesOnceAndNeverPerRead() {
+        final class Probe: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0, answer: String?
+            let ran = DispatchSemaphore(value: 0)
+            func run() -> String? {
+                defer { ran.signal() }
+                return lock.withLock { calls += 1; return answer }
+            }
+            var count: Int { lock.withLock { calls } }
+        }
+        let failing = Probe()
+        let landed = DispatchSemaphore(value: 0)
+        let f = CCPool.InheritedBaseURL(probe: { failing.run() }, process: "http://process.example.invalid") { landed.signal() }
+        XCTAssertEqual(f.read(wait: false), "http://process.example.invalid", "before the probe: Prosper's own value")
+        XCTAssertEqual(failing.ran.wait(timeout: .now() + 5), .success)
+        for _ in 0..<50 { XCTAssertEqual(f.read(wait: false), "http://process.example.invalid") }
+        XCTAssertEqual(failing.count, 1, "a failed background probe is not retried by main reads")
+        XCTAssertEqual(landed.wait(timeout: .now() + 0.2), .timedOut, "a failed probe redraws nothing")
+        XCTAssertEqual(f.read(wait: true), "http://process.example.invalid")
+        XCTAssertEqual(failing.count, 2, "a spawn's read retries")
+
+        let working = Probe()
+        working.answer = ""
+        let w = CCPool.InheritedBaseURL(probe: { working.run() }, process: "http://process.example.invalid") { landed.signal() }
+        _ = w.read(wait: false)
+        XCTAssertEqual(landed.wait(timeout: .now() + 5), .success, "a probe that worked redraws")
+        for _ in 0..<50 { XCTAssertEqual(w.read(wait: false), "", "the login env says unset") }
+        XCTAssertEqual(w.read(wait: true), "")
+        XCTAssertEqual(working.count, 1, "probed once")
+    }
 }

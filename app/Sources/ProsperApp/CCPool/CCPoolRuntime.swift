@@ -104,23 +104,35 @@ final class CCPoolRuntime {
     let model: CCPoolPaneModel
     /// P2b-2: the person's toggle as the pane writes it (the model's defaults), readable off main.
     private let routeOn: @Sendable () -> Bool
+    /// #1890: the session's inherited ANTHROPIC_BASE_URL (CCPool.InheritedBaseURL); always nil without a probe (XCTest).
+    private let inherited: @Sendable (_ wait: Bool) -> String?
     private var relaunchObserver: NSObjectProtocol?
 
     init(directory: URL, secrets: CCPoolSecrets, config: CCPoolServiceConfig, vaultURL: URL,
          defaults: UserDefaults = Preferences.defaults, probeBase: URL = CCPoolService.productionUpstream,
          logger: CCPoolLogger = CCPoolOSLog(), trash: @escaping CCPoolMigration.Trash = CCPoolMigration.moveToTrash,
-         launcherPath: String? = nil) {
+         launcherPath: String? = nil, baseURLProbe: CCPool.InheritedBaseURL.Probe? = CCPool.InheritedBaseURL.live) {
         store = CCPoolStore(directory: directory, logger: logger)
         self.secrets = secrets
         config.exhaustedThreshold = CCPoolPaneModel.exhaustedValue(in: defaults)
         service = CCPoolService(config: config, store: store, secrets: secrets, logger: logger)
         lifecycle = CCPoolLifecycle(service: service)
-        model = CCPoolPaneModel(store: store, secrets: secrets, service: service, logger: logger, defaults: defaults,
-                                probeBase: probeBase, vaultURL: vaultURL, trash: trash, launcherPath: launcherPath,
-                                lifecycle: lifecycle)
+        let made = CCPoolPaneModel(store: store, secrets: secrets, service: service, logger: logger, defaults: defaults,
+                                   probeBase: probeBase, vaultURL: vaultURL, trash: trash, launcherPath: launcherPath,
+                                   lifecycle: lifecycle)
+        model = made
+        // #1890: a background probe that lands redraws the pane line and the form's hint (both watch the model).
+        let found = baseURLProbe.map { probe in
+            CCPool.InheritedBaseURL(probe: probe, process: ProcessInfo.processInfo.environment[CCPool.baseURLKey]) { [weak made] in
+                DispatchQueue.main.async { MainActor.assumeIsolated { made?.objectWillChange.send() } }
+            }
+        }
+        let read: @Sendable (_ wait: Bool) -> String? = { found?.read(wait: $0) }
+        inherited = read
+        made.inheritedBaseURL = read
         // UserDefaults is thread-safe; held the way Preferences.defaults is.
         nonisolated(unsafe) let routeDefaults = defaults
-        routeOn = { routeDefaults.bool(forKey: CCPoolPaneModel.routeKey) }
+        routeOn = { CCPoolPaneModel.routeValue(in: routeDefaults) }
     }
 
     /// Launch, enable and disable: the proxy follows the extension (and the account list).
@@ -132,7 +144,7 @@ final class CCPoolRuntime {
 
     /// P2b-2: what new Agent Sessions route on (AgentIslandController.sessionEnvContributors, the New session
     /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
-    var routing: CCPool.Routing { service.routing(on: routeOn) }
+    var routing: CCPool.Routing { service.routing(on: routeOn, inherited: inherited) }
 
     /// #1537: the Agent Island's plan usage line: the current account's last usage sample (relayed replies or a
     /// Refresh) and its reset stamps, as a plain island value. nil without a current account or a sample.

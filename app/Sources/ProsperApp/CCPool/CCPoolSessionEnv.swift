@@ -29,6 +29,70 @@ enum CCPool {
 
     static func baseURL(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
 
+    /// #1890: the variable a session's own upstream lives in.
+    static let baseURLKey = "ANTHROPIC_BASE_URL"
+
+    /// #1890 (operator 2026-11-23): a session whose env already points ANTHROPIC_BASE_URL anywhere other than this pool
+    /// is left alone. `inherited` is that value (nil or "": none). Returns it when it is foreign, nil when the pool may
+    /// route (none, or this pool's own URL; a trailing "/" is the same URL).
+    static func foreignBaseURL(_ inherited: String?, base: String) -> String? {
+        guard let inherited, !inherited.isEmpty else { return nil }
+        let trim = { (s: String) in String(s.reversed().drop(while: { $0 == "/" }).reversed()) }
+        return trim(inherited) == trim(base) ? nil : inherited
+    }
+
+    /// #1890: a foreign URL as the pane may draw it: scheme, host and port only, through OutsideText, so a path, query or
+    /// user info that could carry a token is never shown. nil when it has no host.
+    static func shownBaseURL(_ url: String) -> String? {
+        guard let c = URLComponents(string: url), let host = c.host, !host.isEmpty else { return nil }
+        return OutsideText.shown((c.scheme.map { "\($0)://" } ?? "") + host + (c.port.map { ":\($0)" } ?? ""), max: 120)
+    }
+
+    /// #1890: the ANTHROPIC_BASE_URL a new session really starts with. dch runs the person's login shell for --spawn and
+    /// --revive (#1499, AgentIslandController.resume), so an rc file's export wins over Prosper's env, and that shell
+    /// inherits Prosper's env, so the login env's value covers both. Probed at most once when it works (one login shell,
+    /// bounded by LoginPath.timeout). Isolation: none; the lock guards the two fields.
+    final class InheritedBaseURL: @unchecked Sendable {
+        /// The login env's value: "" when unset there, nil when the probe failed.
+        typealias Probe = @Sendable () -> String?
+        /// The production probe; none under XCTest (tests never run a login shell).
+        static var live: Probe? {
+            let login: Probe = { LoginPath.value(of: CCPool.baseURLKey) }
+            return NSClassFromString("XCTestCase") == nil ? login : nil
+        }
+        private let lock = NSLock()
+        private var known: String?
+        private var started = false
+        private let probe: Probe, process: String?, landed: @Sendable () -> Void
+
+        /// `process`: Prosper's own value, the answer until the probe lands. `landed`: after a background probe that worked.
+        init(probe: @escaping Probe, process: String?, landed: @escaping @Sendable () -> Void = {}) {
+            self.probe = probe
+            self.process = process
+            self.landed = landed
+        }
+
+        /// `wait` true (the runner's queue only): runs the probe now when nothing is known. false (main: the pane line,
+        /// the form's hint) never blocks: the first such read starts one background probe; a failed one is not retried
+        /// from here (no login shell per keystroke), only by the next spawn's read.
+        func read(wait: Bool) -> String? {
+            if let v = lock.withLock({ known }) { return v }
+            if wait { return run() ?? process }
+            let first = lock.withLock { () -> Bool in
+                defer { started = true }
+                return !started
+            }
+            if first { DispatchQueue.global(qos: .utility).async { [self] in if run() != nil { landed() } } }
+            return process
+        }
+
+        private func run() -> String? {
+            guard let v = probe() else { return nil }
+            lock.withLock { known = v }
+            return v
+        }
+    }
+
     /// The program name of a command word the way dch reads it: the text after the last "/", or
     /// the whole word. Not NSString.lastPathComponent, which drops a trailing "/" (QA #726 F1):
     /// "claude/" names no program here.
@@ -42,9 +106,11 @@ enum CCPool {
     /// only: OQ-132 keeps the person's API key and tokens in the env (the proxy replaces the client's auth header, S10).
     /// `headroom` is not routed in v1 (#1200): it reads its upstream address in its own proxy process, shared by every
     /// headroom session, so it cannot be set per session; the environment stays as it is, credentials kept. Anything else
-    /// (a shell, `direnv exec . claude`, a custom wrapper): no change.
-    static func sessionEnv(command: [String], base: String, on: Bool, healthy: Bool, hasAccounts: Bool) -> EnvDelta {
-        guard on, healthy, hasAccounts, let first = command.first else { return EnvDelta() }
+    /// (a shell, `direnv exec . claude`, a custom wrapper): no change. #1890: `inherited` is the ANTHROPIC_BASE_URL the
+    /// session would start with; a foreign one (`foreignBaseURL`) is kept: no change.
+    static func sessionEnv(command: [String], base: String, on: Bool, healthy: Bool, hasAccounts: Bool,
+                           inherited: String? = nil) -> EnvDelta {
+        guard on, healthy, hasAccounts, foreignBaseURL(inherited, base: base) == nil, let first = command.first else { return EnvDelta() }
         switch programName(first) {
         case "claude": return EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
         case "headroom": return EnvDelta()
@@ -60,19 +126,26 @@ enum CCPool {
         var on: @Sendable () -> Bool
         var status: @Sendable () -> CCPoolService.Status
         var hasAccounts: @Sendable () -> Bool
+        /// #1890: the session's inherited ANTHROPIC_BASE_URL (InheritedBaseURL.read; `wait` only off main); nil: not known.
+        var inherited: @Sendable (_ wait: Bool) -> String? = { _ in nil }
 
         /// The toggle is read first: off, neither the status nor the store is read, so turning it off holds
         /// for the next spawn whatever they would say. Only `.running` routes (stopped, held, failed: no).
-        func delta(_ argv: [String]) -> EnvDelta {
+        /// Main's form hint: never waits for the login shell.
+        func delta(_ argv: [String]) -> EnvDelta { delta(argv, wait: false, env: nil) }
+
+        /// #1890: `env` is the spawn's own env, the answer when the login env is not known (no probe, or it failed).
+        func delta(_ argv: [String], wait: Bool, env: [String: String]?) -> EnvDelta {
             guard on(), case .running(let port) = status() else { return EnvDelta() }
-            return sessionEnv(command: argv, base: baseURL(port: port), on: true, healthy: true, hasAccounts: hasAccounts())
+            return sessionEnv(command: argv, base: baseURL(port: port), on: true, healthy: true, hasAccounts: hasAccounts(),
+                              inherited: inherited(wait) ?? env?[baseURLKey])
         }
 
         /// spec 6.1's ccpool member. Called on the runner's queue, never main. An empty delta returns `env`
         /// unchanged, byte for byte.
-        var contributor: SessionEnvContributor { { [self] argv, env in delta(argv).applied(to: env) } }
+        var contributor: SessionEnvContributor { { [self] argv, env in delta(argv, wait: true, env: env).applied(to: env) } }
 
         /// #1499: the same delta as --revive flags (AgentIslandController.resume, dch 1.94.0); read on the runner's queue too.
-        var reviveFlags: ReviveEnvFlags { { [self] argv in delta(argv).reviveFlags } }
+        var reviveFlags: ReviveEnvFlags { { [self] argv in delta(argv, wait: true, env: nil).reviveFlags } }
     }
 }

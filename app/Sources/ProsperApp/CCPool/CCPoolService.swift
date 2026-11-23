@@ -153,8 +153,10 @@ final class CCPoolService: @unchecked Sendable {
     }
 
     /// P2b-2: this service's status and accounts, read at each call, behind the person's toggle `on`.
-    func routing(on: @escaping @Sendable () -> Bool) -> CCPool.Routing {
-        CCPool.Routing(on: on, status: { [self] in status }, hasAccounts: { [self] in store.hasAccounts })
+    /// #1890: `inherited` is the session's own ANTHROPIC_BASE_URL (CCPool.InheritedBaseURL; none by default).
+    func routing(on: @escaping @Sendable () -> Bool,
+                 inherited: @escaping @Sendable (_ wait: Bool) -> String? = { _ in nil }) -> CCPool.Routing {
+        CCPool.Routing(on: on, status: { [self] in status }, hasAccounts: { [self] in store.hasAccounts }, inherited: inherited)
     }
 
     /// Under XCTest the proxy never binds the production port and never dials the production

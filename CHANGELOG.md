@@ -2434,6 +2434,10 @@ tag from the now-released section and put it on the new top draft.
   name next to it, instead of a bare switch on its own line. (#1887)
 - Agent Sessions: a session you switch back to, after closing and reopening the window or switching
   panes, takes typed keys again. Before, it showed its output but ignored the keyboard. (#1889)
+- Settings, Claude Account Pool: "Start new Claude sessions through the pool" is now on by default
+  (a choice you already made is kept). A session whose environment or shell startup files already
+  set ANTHROPIC_BASE_URL to another address keeps it and is not routed, and the pane says so under
+  the switch. (#1890)
 
 ## v2.174.0
 
