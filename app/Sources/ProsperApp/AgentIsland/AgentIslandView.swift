@@ -1888,6 +1888,7 @@ struct AgentPlanLimitsView: View {
                             .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(Color.white)
                     }
                     if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r) }
+                    if let o = AgentPlanLimits.runsOutText(l, timeZone: timeZone) { dim(o) }
                 }
             }
             if let b = a.benchedUntil { dim(AgentPlanLimits.benchedText(b, timeZone: timeZone)) }

@@ -40,9 +40,10 @@ enum CCPoolUsageSkip: String, CaseIterable, Sendable {
 }
 
 enum CCPoolUsageRange: Sendable {
-    case day, week, fortnight
+    case hour, day, week, fortnight
     var seconds: Double {
         switch self {
+        case .hour: return 3600   // #1899: the limits popover's pace
         case .day: return 86_400
         case .week: return 7 * 86_400
         case .fortnight: return 14 * 86_400

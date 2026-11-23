@@ -265,6 +265,15 @@ final class AgentIslandController {
     var openPoolSettings: @MainActor () -> Void = { LiveExtensionHostServices.shared.settingsOpener?(AgentPlanLimits.settingsPane) }
     /// #1898: how many times the popover's value was read (open, then one per change of the line while open).
     private(set) var planLimitsReads = 0
+    /// #1899: the last hour's usage record samples per account and claim for the popover's pace; the runtime reads the files
+    /// off main. Read once per open of the popover; no runtime: none.
+    var planPace: @MainActor (_ now: Double) async -> [String: [String: [AgentPlanLimits.PaceSample]]] = {
+        await CCPoolRuntime.shared?.planPace(now: $0) ?? [:]
+    }
+    /// #1899: how many times the pace samples were read (once per open of the popover).
+    private(set) var planPaceReads = 0
+    private var paceSamples: [String: [String: [AgentPlanLimits.PaceSample]]]?
+    private var paceTask: Task<Void, Never>?
     /// #579 seam: the folder chooser for New session (NSOpenPanel, directories
     /// only); `done` gets the path, nil when cancelled. Tests never show a real one.
     /// #1096 3: `done.prompt` is the panel's button word, the caller's own.
@@ -1469,19 +1478,38 @@ final class AgentIslandController {
         guard store.planUsage != u else { return }
         store.planUsage = u
         // #1898: the line's value moved (the pool published a sample or a reset): an open popover re-reads; no line, no popover.
-        if store.planLimits != nil { if u == nil { store.planLimits = nil } else { readPlanLimits() } }
+        if store.planLimits != nil { if u == nil { closePlanLimits() } else { readPlanLimits() } }
     }
 
     /// #1898: the plan usage line's popover opens (read now) or closes. Only while the line is drawn.
     func showPlanLimits(_ on: Bool) {
         guard let store else { return }
-        guard on, store.expanded, store.planUsage != nil else { store.planLimits = nil; return }
+        guard on, store.expanded, store.planUsage != nil else { closePlanLimits(); return }
         readPlanLimits()
     }
 
     private func readPlanLimits() {
         planLimitsReads += 1
-        store?.planLimits = planLimits(Date().timeIntervalSince1970)
+        let now = Date().timeIntervalSince1970
+        let l = planLimits(now)
+        if let s = paceSamples { store?.planLimits = l?.withPace(s, now: now) } else { store?.planLimits = l }
+        // #1899: the pace's samples are read once per open, off main; a re-read while open reuses them.
+        guard l != nil, paceSamples == nil, paceTask == nil else { return }
+        planPaceReads += 1
+        paceTask = Task { @MainActor [weak self] in
+            guard let s = await self?.planPace(now), !Task.isCancelled, let self else { return }
+            self.paceTask = nil
+            self.paceSamples = s
+            if let cur = self.store?.planLimits { self.store?.planLimits = cur.withPace(s, now: Date().timeIntervalSince1970) }
+        }
+    }
+
+    /// #1898/#1899: the popover closes; its pace read in flight is dropped and the next open reads afresh.
+    private func closePlanLimits() {
+        store?.planLimits = nil
+        paceTask?.cancel()
+        paceTask = nil
+        paceSamples = nil
     }
 
     /// Only the panel's own view expands it, so a nil panel (tests) just skips the window work.
@@ -1496,7 +1524,7 @@ final class AgentIslandController {
         if on, store.sessions.isEmpty, !store.history.isEmpty { store.historyTab = true }
         if on { readPlanUsage() }   // #1537: before layout(), the line's row counts in the size
         if !on {
-            store.planLimits = nil   // #1898: the popover goes with the island
+            closePlanLimits()   // #1898: the popover goes with the island
             store.focusKey = nil   // #1536: the next open picks its own
             store.notices = [:]; store.cards = [:]; readAt = [:]
             store.dropQuestions()

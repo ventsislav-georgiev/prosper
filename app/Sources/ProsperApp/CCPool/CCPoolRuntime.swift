@@ -182,6 +182,27 @@ final class CCPoolRuntime {
                                accounts: accounts)
     }
 
+    /// #1899: the last hour's usage record samples per account label and claim, for the popover's pace. The day files are read
+    /// and decoded off main (the reader's own caps); only the directory and the id -> label map are read here.
+    func planPace(now: Double) async -> [String: [String: [AgentPlanLimits.PaceSample]]] {
+        let dir = store.usageDirectory
+        let labels = CCPoolUsageStatsModel.labels(store.snapshot)
+        return await Task.detached { Self.paceSamples(CCPoolUsageReader.readNow(directory: dir, range: .hour, now: now).rows, labels: labels) }.value
+    }
+
+    /// Pure: rows of accounts still in the pool, every claim with both a use and a reset.
+    nonisolated static func paceSamples(_ rows: [CCPoolUsageEntry], labels: [String: String]) -> [String: [String: [AgentPlanLimits.PaceSample]]] {
+        var out: [String: [String: [AgentPlanLimits.PaceSample]]] = [:]
+        for row in rows {
+            guard let label = labels[row.acct] else { continue }
+            for (claim, c) in row.lim {
+                guard let u = c.u, let r = c.r else { continue }
+                out[label, default: [:]][claim, default: []].append(.init(t: row.t, u: u, r: r))
+            }
+        }
+        return out
+    }
+
     /// The app quits: the stop runs on the life cycle's queue, after any start in flight (#1190
     /// INFO-1), and no queued start binds again. Waits at most `timeout` on main; past it the
     /// published listener is stopped here as before and the queued stop catches a late one.

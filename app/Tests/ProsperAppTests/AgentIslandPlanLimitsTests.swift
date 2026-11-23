@@ -80,6 +80,85 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
                        + "week 99 percent, resets in 3 days, Monday 08:00, updated 3 min ago")
     }
 
+    // MARK: - #1899: the pace, "at this pace runs out ~HH:mm" before the reset
+
+    private func pace(_ points: [(dt: Double, u: Double)], r: Int? = nil) -> [AgentPlanLimits.PaceSample] {
+        let reset = Double(r ?? Int(now) + 7200)
+        return points.map { AgentPlanLimits.PaceSample(t: now + $0.dt, u: $0.u, r: reset) }
+    }
+
+    /// 0.5 at -50 min rising 0.05 every 10 min to 0.75 now: 100% at now + 50 min.
+    private let rising: [(dt: Double, u: Double)] = [(-3000, 0.5), (-2400, 0.55), (-1800, 0.6), (-1200, 0.65), (-600, 0.7), (0, 0.75)]
+
+    func testPaceRisingCrossesBeforeTheReset() {
+        XCTAssertEqual(AgentPlanLimits.runsOut(pace(rising), reset: Int(now) + 7200, now: now), Int(now) + 3000)
+        XCTAssertEqual(AgentPlanLimits.runsOut(pace(rising).reversed(), reset: Int(now) + 7200, now: now), Int(now) + 3000,
+                       "any order")
+    }
+
+    func testPaceCrossingAtOrAfterTheResetShowsNothing() {
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace(rising, r: Int(now) + 2000), reset: Int(now) + 2000, now: now) == nil,
+                      "the limit resets before it would run out")
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace(rising, r: Int(now) + 3000), reset: Int(now) + 3000, now: now) == nil,
+                      "at the reset itself: nothing")
+    }
+
+    func testPaceFlatOrFallingShowsNothing() {
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace(rising.map { (dt: $0.dt, u: 0.6) }), reset: Int(now) + 7200, now: now) == nil, "flat")
+        // Over 100% and falling toward it: a line that ignores the sign would cross 100% in the future.
+        let falling: [(dt: Double, u: Double)] = [(-3000, 1.3), (-2400, 1.26), (-1800, 1.22), (-1200, 1.18), (-600, 1.14), (0, 1.1)]
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace(falling), reset: Int(now) + 7200, now: now) == nil, "falling")
+    }
+
+    func testPaceNeedsTwoSamplesTenMinutesApart() {
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace([(0, 0.9)]), reset: Int(now) + 7200, now: now) == nil, "one sample")
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace([(-540, 0.5), (0, 0.9)]), reset: Int(now) + 7200, now: now) == nil, "9 min of data")
+        XCTAssertEqual(AgentPlanLimits.runsOut(pace([(-600, 0.5), (0, 0.9)]), reset: Int(now) + 7200, now: now), Int(now) + 150,
+                       "10 min of data: shown")
+        XCTAssertTrue(AgentPlanLimits.runsOut(pace([(-4000, 0.1), (0, 0.9)]), reset: Int(now) + 7200, now: now) == nil,
+                      "a sample older than an hour is not read")
+    }
+
+    func testPaceIgnoresSamplesFromBeforeTheLastReset() {
+        let old = pace([(-3000, 0.9), (-2400, 0.95)], r: Int(now) - 1800)
+        let cur = pace([(-1800, 0.1), (-1200, 0.3), (-600, 0.5), (0, 0.7)])
+        XCTAssertEqual(AgentPlanLimits.runsOut(old + cur, reset: Int(now) + 7200, now: now), Int(now) + 900,
+                       "only the window since the reset changed; with the old window the line would fall")
+        XCTAssertTrue(AgentPlanLimits.runsOut(old, reset: Int(now) + 7200, now: now) == nil, "no sample under this reset")
+    }
+
+    @MainActor func testPaceWordsInTheRowAndItsSpokenLabel() throws {
+        let a = account("alpha", current: true, util: ["five_hour": 0.75, "seven_day": 0.2], at: now - 60,
+                        reset: ["five_hour": Int(now) + 7200, "seven_day": Int(now) + 3 * 86400])
+        let flat = pace(rising.map { (dt: $0.dt, u: 0.2) }, r: Int(now) + 3 * 86400)
+        let limits = AgentPlanLimits(pool: nil, accounts: [a]).withPace(["alpha": ["five_hour": pace(rising), "seven_day": flat],
+                                                                         "other": ["five_hour": pace(rising)]], now: now)
+        let row = try XCTUnwrap(limits.accounts.first)
+        XCTAssertEqual(row.limits.map(\.runsOut), [Int(now) + 3000, nil])
+        XCTAssertEqual(row.limits.first.flatMap { AgentPlanLimits.runsOutText($0, timeZone: utc) }, "at this pace runs out ~08:50")
+        let spoken = AgentPlanLimits.spoken(row, now: now, timeZone: utc)
+        XCTAssertEqual(spoken, "alpha, current, 5 hour 75 percent, resets in 2 hours, Friday 10:00, at this pace runs out around 08:50; "
+                       + "week 20 percent, resets in 3 days, Monday 08:00, updated 1 min ago")
+        let tree = AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 320, height: 300)) { t in
+            t.contains { $0.reads(spoken) }
+        }
+        XCTAssertTrue(tree.contains { $0.reads(spoken) }, "the popover row speaks the pace")
+        XCTAssertTrue(AgentPlanLimits(pool: nil, accounts: [a]).withPace([:], now: now).accounts.first?.limits.allSatisfy { $0.runsOut == nil } == true,
+                      "no samples: no words")
+    }
+
+    func testPaceSamplesMapIdsToLabelsAndNeedUseAndReset() {
+        func row(_ acct: String, _ lim: [String: CCPoolUsageEntry.Claim]) -> CCPoolUsageEntry {
+            CCPoolUsageEntry(t: now, acct: acct, model: "m", sess: nil, agent: nil, path: "messages", st: 200, ms: 1, done: true, qc: false,
+                             att: 1, thr: 0, mv: false, routed: "r", tokens: nil, lim: lim)
+        }
+        let s = CCPoolRuntime.paceSamples([row("id-a", ["five_hour": .init(u: 0.4, r: now + 60), "seven_day": .init(u: 0.2, r: nil)]),
+                                           row("id-gone", ["five_hour": .init(u: 0.9, r: now + 60)])],
+                                          labels: ["id-a": "alpha"])
+        XCTAssertEqual(s, ["alpha": ["five_hour": [.init(t: now, u: 0.4, r: now + 60)]]],
+                       "a removed account and a claim without a reset are left out")
+    }
+
     // MARK: - The pool's accessor
 
     @MainActor func testRuntimeReadsEveryAccountWithTheCurrentMarked() throws {
@@ -209,6 +288,38 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         c.showPlanLimits(true)
         c.setExpanded(false)
         XCTAssertTrue(store.planLimits == nil, "collapsing closes it")
+    }
+
+    @MainActor func testPaceIsReadOncePerOpenOffTheSeamAndApplied() async throws {
+        let saved = Preferences.defaults.object(forKey: "agentIslandShowPlanUsage")
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: "agentIslandShowPlanUsage") } else { Preferences.defaults.removeObject(forKey: "agentIslandShowPlanUsage") } }
+        Preferences.agentIslandShowPlanUsage = true
+        let t = Date().timeIntervalSince1970
+        var usage = AgentPlanUsage(util: ["five_hour": 0.75], at: t, reset: [:], now: t)
+        let reset = Int(t) + 7200
+        let value = AgentPlanLimits(pool: nil, accounts: [AgentPlanLimits.Account(
+            label: "api", isCurrent: true, util: ["five_hour": 0.75], at: t, reset: ["five_hour": reset], cooldown: [:], claims: claims, now: t)])
+        let c = controller({ usage }, limits: { value })
+        c.planPace = { n in
+            ["api": ["five_hour": (0...5).map { (i: Int) -> AgentPlanLimits.PaceSample in
+                AgentPlanLimits.PaceSample(t: n - Double(5 - i) * 600, u: 0.5 + Double(i) * 0.05, r: Double(reset))
+            }]]
+        }
+        let store = try XCTUnwrap(c.store)
+        c.setExpanded(true)
+        c.showPlanLimits(true)
+        XCTAssertEqual(c.planPaceReads, 1)
+        for _ in 0..<200 where store.planLimits?.accounts.first?.limits.first?.runsOut == nil { await Task.yield() }
+        let out = try XCTUnwrap(store.planLimits?.accounts.first?.limits.first?.runsOut)
+        XCTAssertTrue(abs(Double(out) - (t + 3000)) <= 2, "the seam's samples projected: \(out)")
+        usage = AgentPlanUsage(util: ["five_hour": 0.8], at: t, reset: [:], now: t)
+        c.readPlanUsage()
+        XCTAssertEqual(c.planLimitsReads, 2)
+        XCTAssertEqual(c.planPaceReads, 1, "a re-read while open reuses the samples")
+        XCTAssertTrue(store.planLimits?.accounts.first?.limits.first?.runsOut != nil, "and keeps the words at once")
+        c.showPlanLimits(false)
+        c.showPlanLimits(true)
+        XCTAssertEqual(c.planPaceReads, 2, "a new open reads afresh")
     }
 
     @MainActor func testPoolOffNeverOpens() throws {

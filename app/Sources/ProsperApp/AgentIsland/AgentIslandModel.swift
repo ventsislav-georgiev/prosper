@@ -1350,6 +1350,15 @@ struct AgentPlanLimits: Equatable, Sendable {
         var name: String
         var util: Double
         var reset: Int?
+        /// #1899: when this limit reaches 100% at the last hour's pace, before its reset; nil: not before the reset or unknown.
+        var runsOut: Int? = nil
+    }
+
+    /// #1899: one usage record sample of one claim: its time, use (1 = 100%) and the reset it was under.
+    struct PaceSample: Equatable, Sendable {
+        var t: Double
+        var u: Double
+        var r: Double
     }
 
     struct Account: Equatable, Sendable {
@@ -1387,6 +1396,49 @@ struct AgentPlanLimits: Equatable, Sendable {
     init(pool: String?, accounts: [Account]) {
         self.pool = pool
         self.accounts = Self.sorted(accounts)
+    }
+
+    /// #1899: each limit's runsOut from the last hour's samples, `samples[label][claim]` (any order).
+    func withPace(_ samples: [String: [String: [PaceSample]]], now: Double) -> AgentPlanLimits {
+        var out = self
+        for i in out.accounts.indices {
+            let label = out.accounts[i].label
+            for j in out.accounts[i].limits.indices {
+                let l = out.accounts[i].limits[j]
+                out.accounts[i].limits[j].runsOut = l.reset.flatMap { Self.runsOut(samples[label]?[l.claim] ?? [], reset: $0, now: now) }
+            }
+        }
+        return out
+    }
+
+    static let paceWindow = 3600.0
+    static let paceMinSpan = 600.0
+
+    /// #1899: when the use reaches 100% on a straight line (least squares) through the last hour's samples of the current reset
+    /// window (after the last sample under another reset), if that falls after `now` and before `reset`. nil: under 2 samples,
+    /// under 10 min between the first and last, a flat or falling pace, a crossing at or before now, or at or past the reset.
+    static func runsOut(_ samples: [PaceSample], reset: Int, now: Double) -> Int? {
+        guard now.isFinite else { return nil }
+        let inHour = samples.filter { $0.t.isFinite && $0.u.isFinite && $0.t > now - paceWindow && $0.t <= now }.sorted { $0.t < $1.t }
+        let cut = inHour.lastIndex { $0.r != Double(reset) }.map { $0 + 1 } ?? 0
+        let s = inHour[cut...]
+        guard s.count >= 2, let first = s.first, let last = s.last, last.t - first.t >= paceMinSpan else { return nil }
+        let n = Double(s.count)
+        let mt = s.reduce(0) { $0 + $1.t - first.t } / n, mu = s.reduce(0) { $0 + $1.u } / n
+        let num = s.reduce(0) { $0 + ($1.t - first.t - mt) * ($1.u - mu) }
+        let den = s.reduce(0) { $0 + ($1.t - first.t - mt) * ($1.t - first.t - mt) }
+        guard den > 0 else { return nil }
+        let slope = num / den
+        guard slope > 0 else { return nil }
+        // From the line's mean point forward to 1.
+        let cross = first.t + mt + (1 - mu) / slope
+        guard cross.isFinite, cross > now, cross < Double(reset) else { return nil }
+        return Int(cross.rounded())
+    }
+
+    /// "at this pace runs out ~14:30"; nil: no crossing before the reset.
+    static func runsOutText(_ l: Limit, timeZone: TimeZone) -> String? {
+        l.runsOut.map { "at this pace runs out ~\(clock($0, format: "HH:mm", timeZone: timeZone))" }
     }
 
     /// Most urgent first; ties by the earliest reset, then by label (a stable order).
@@ -1435,6 +1487,7 @@ struct AgentPlanLimits: Equatable, Sendable {
         let limits = a.limits.map { l in
             "\(l.name == "5h" ? "5 hour" : l.name) \(Int((l.util * 100).rounded())) percent"
                 + (l.reset.map { ", resets in \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
+                + (l.runsOut.map { ", at this pace runs out around \(clock($0, format: "HH:mm", timeZone: timeZone))" } ?? "")
         }
         let head = [OutsideText.shown(a.label, max: 40)] + (a.isCurrent ? ["current"] : [])
         let tail = (a.limits.isEmpty ? [noData] : [limits.joined(separator: "; ")])

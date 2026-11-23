@@ -48,6 +48,8 @@ tag from the now-released section and put it on the new top draft.
   does. (#1906)
 - Claude Account Pool: a newly added account no longer counts as fully free in the pool's headroom
   before its first reply. (#1907)
+- Agent Island: the limits popover says when an account will run out at its current pace, if that
+  comes before the limit resets. (#1899)
 
 ## v2.175.0
 
