@@ -28,8 +28,8 @@
   {
    "name": "env-fallback-dropped",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
-   "old": "inherited: inherited(wait) ?? env?[baseURLKey])",
-   "new": "inherited: inherited(wait))",
+   "old": "?? foreignBaseURL(env?[baseURLKey], base: base)",
+   "new": "",
    "expect": "killed"
   },
   {
@@ -52,6 +52,30 @@
    "old": "return OutsideText.shown((c.scheme.map { \"\\($0)://\" } ?? \"\") + host + (c.port.map { \":\\($0)\" } ?? \"\"), max: 120)",
    "new": "return OutsideText.shown(url, max: 120)",
    "expect": "killed"
+  },
+  {
+   "name": "login-hides-foreign-env",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "let foreign = foreignBaseURL(inherited(wait), base: base) ?? foreignBaseURL(env?[baseURLKey], base: base)",
+   "new": "let foreign = foreignBaseURL(inherited(wait) ?? env?[baseURLKey], base: base)",
+   "expect": "killed",
+   "note": "#1891: a known login value (even unset) hides a foreign spawn env"
+  },
+  {
+   "name": "start-runs-inline",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "if first { DispatchQueue.global(qos: .utility).async { [self] in if run() != nil { landed() } } }",
+   "new": "if first { if run() != nil { landed() } }",
+   "expect": "killed",
+   "note": "#1891: start() probes on the caller's thread"
+  },
+  {
+   "name": "init-start-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "found?.start() // #1891: probe now, off main, so no spawn waits for the login shell",
+   "new": "",
+   "expect": "killed",
+   "note": "#1891: no probe at init, the first spawn waits for the login shell"
   }
  ]
 }

@@ -78,12 +78,18 @@ enum CCPool {
         func read(wait: Bool) -> String? {
             if let v = lock.withLock({ known }) { return v }
             if wait { return run() ?? process }
+            start()
+            return process
+        }
+
+        /// #1891: the background probe, once (off the caller's thread; a no-op after the first call). CCPoolRuntime.init
+        /// calls it so a spawn finds the login env known; read(wait: false) calls it too.
+        func start() {
             let first = lock.withLock { () -> Bool in
                 defer { started = true }
                 return !started
             }
             if first { DispatchQueue.global(qos: .utility).async { [self] in if run() != nil { landed() } } }
-            return process
         }
 
         private func run() -> String? {
@@ -134,11 +140,13 @@ enum CCPool {
         /// Main's form hint: never waits for the login shell.
         func delta(_ argv: [String]) -> EnvDelta { delta(argv, wait: false, env: nil) }
 
-        /// #1890: `env` is the spawn's own env, the answer when the login env is not known (no probe, or it failed).
+        /// #1890: `env` is the spawn's own env; #1891: a foreign value in it keeps the session unrouted whatever the login env says.
         func delta(_ argv: [String], wait: Bool, env: [String: String]?) -> EnvDelta {
             guard on(), case .running(let port) = status() else { return EnvDelta() }
-            return sessionEnv(command: argv, base: baseURL(port: port), on: true, healthy: true, hasAccounts: hasAccounts(),
-                              inherited: inherited(wait) ?? env?[baseURLKey])
+            // #1891: foreign if either the login env's value or the spawn env's is foreign (a known login "" never hides one).
+            let base = baseURL(port: port)
+            let foreign = foreignBaseURL(inherited(wait), base: base) ?? foreignBaseURL(env?[baseURLKey], base: base)
+            return sessionEnv(command: argv, base: base, on: true, healthy: true, hasAccounts: hasAccounts(), inherited: foreign)
         }
 
         /// spec 6.1's ccpool member. Called on the runner's queue, never main. An empty delta returns `env`

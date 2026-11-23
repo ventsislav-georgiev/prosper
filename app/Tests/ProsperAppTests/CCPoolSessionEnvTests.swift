@@ -170,4 +170,48 @@ final class CCPoolSessionEnvTests: XCTestCase {
         XCTAssertEqual(w.read(wait: true), "")
         XCTAssertEqual(working.count, 1, "probed once")
     }
+
+    /// #1891 (mutants start-runs-inline, start-not-once): start() runs the probe in the background, once however often it is
+    /// called, never on the caller's thread; the spawn's waiting read then finds the value known and runs no probe of its own.
+    func testCCPoolInheritedBaseURLStartProbesOnceOffTheCallersThread() {
+        final class Probe: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0, onCaller = 0
+            let caller: Thread
+            init(caller: Thread) { self.caller = caller }
+            func run() -> String? {
+                lock.withLock { calls += 1; if Thread.current == caller { onCaller += 1 } }
+                return "http://login.example.invalid"
+            }
+        }
+        let probe = Probe(caller: Thread.current)
+        let landed = DispatchSemaphore(value: 0)
+        let f = CCPool.InheritedBaseURL(probe: { probe.run() }, process: nil) { landed.signal() }
+        for _ in 0..<20 { f.start() }
+        XCTAssertEqual(landed.wait(timeout: .now() + 5), .success, "the background probe landed")
+        XCTAssertEqual(f.read(wait: true), "http://login.example.invalid", "known: the spawn waits for nothing")
+        XCTAssertEqual(f.read(wait: false), "http://login.example.invalid")
+        XCTAssertEqual(probe.lock.withLock { probe.calls }, 1, "one probe run for 20 starts and two reads")
+        XCTAssertEqual(probe.lock.withLock { probe.onCaller }, 0, "never on the caller's thread")
+    }
+
+    /// #1891 (mutant login-hides-foreign-env): Routing.delta leaves a session alone when either the login value or the spawn
+    /// env value is foreign; only when neither is does it route.
+    func testCCPoolDeltaIsForeignIfEitherTheLoginOrTheSpawnEnvIs() {
+        let foreign = "http://127.0.0.1:8787"
+        func delta(login: String?, env: String?) -> CCPool.EnvDelta {
+            var r = CCPool.Routing(on: { true }, status: { .running(port: 41234) }, hasAccounts: { true })
+            r.inherited = { _ in login }
+            return r.delta(["claude"], wait: true, env: env.map { ["ANTHROPIC_BASE_URL": $0] })
+        }
+        let routed = CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
+        XCTAssertEqual(delta(login: "", env: foreign), CCPool.EnvDelta(), "login unset, env foreign")
+        XCTAssertEqual(delta(login: base, env: foreign), CCPool.EnvDelta(), "login this pool's, env foreign")
+        XCTAssertEqual(delta(login: foreign, env: nil), CCPool.EnvDelta(), "login foreign, no env")
+        XCTAssertEqual(delta(login: foreign, env: base), CCPool.EnvDelta(), "login foreign, env this pool's")
+        XCTAssertEqual(delta(login: nil, env: foreign), CCPool.EnvDelta(), "login unknown, env foreign")
+        XCTAssertEqual(delta(login: "", env: nil), routed)
+        XCTAssertEqual(delta(login: nil, env: base), routed)
+        XCTAssertEqual(delta(login: base, env: ""), routed)
+    }
 }

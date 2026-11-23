@@ -568,8 +568,63 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         login.lock.withLock { login.value = "" }
         c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 } }
         XCTAssertEqual(AgentNewSession.poolHint(claude, routing: routing), AgentNewSession.viaPoolHint)
-        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-2"), routedClaude, "the login env says unset: routed")
-        XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags)
+        let foreignEnv = today.merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 }
+        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-2"), foreignEnv, "#1891: login unset but the spawn env is foreign: not routed")
+        XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags, "a Resume has no spawn env: the login env alone decides")
+        c.controlEnv = { Self.controlEnv($0) }
+        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-3"), routedClaude, "the login env says unset, the spawn env none: routed")
+        login.lock.withLock { login.value = "http://127.0.0.1:41234" }
+        c.controlEnv = { Self.controlEnv($0).merging(["ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"]) { $1 } }
+        XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api-4"), foreignEnv, "#1891: the login env is this pool's own, the spawn env foreign: not routed")
+    }
+
+    /// #1891 (mutant init-start-dropped): CCPoolRuntime.init starts the login probe in the background at once, off main, with no
+    /// read at all; the first spawn's waiting read then runs no probe of its own (counts runs).
+    func testCCPoolRuntimeInitStartsTheLoginProbeOnce() {
+        final class Probe: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0, onMain = 0
+            let ran = DispatchSemaphore(value: 0)
+            func run() -> String? {
+                lock.withLock { calls += 1; if Thread.isMainThread { onMain += 1 } }
+                ran.signal()
+                return ""
+            }
+        }
+        let probe = Probe(), dir = tempDir()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: XCTestDefaults(suiteName: "prosper-ccpool-routing-\(UUID().uuidString)")!,
+                               probeBase: cfg.upstream, logger: CCPoolCapturingLogger(), baseURLProbe: { probe.run() })
+        XCTAssertEqual(probe.ran.wait(timeout: .now() + 5), .success, "the probe ran with no read")
+        let end = Date().addingTimeInterval(5) // run() answers after it signals: wait until the value is known (a non-waiting read)
+        while rt.routing.inherited(false) != "", Date() < end { Thread.sleep(forTimeInterval: 0.01) }
+        XCTAssertEqual(rt.routing.inherited(true), "")
+        XCTAssertEqual(rt.routing.inherited(true), "")
+        XCTAssertEqual(probe.lock.withLock { probe.calls }, 1, "one login shell at init, none per read")
+        XCTAssertEqual(probe.lock.withLock { probe.onMain }, 0, "never on main")
+    }
+
+    /// #1891: a Resume's flags read the login env on the runner's queue through the real reader: one probe run in all, however many
+    /// Resumes follow (counts runs, not time); the init-time start() and the first Resume share that one run.
+    func testCCPoolReviveFlagsProbeTheLoginShellOnce() {
+        final class Count: @unchecked Sendable {
+            let lock = NSLock()
+            var n = 0
+            func bump() -> String? { lock.withLock { n += 1; return "" } }
+            var value: Int { lock.withLock { n } }
+        }
+        let count = Count(), pool = Pool()
+        let found = CCPool.InheritedBaseURL(probe: { count.bump() }, process: nil)
+        var routing = pool.routing
+        routing.inherited = { found.read(wait: $0) }
+        let claude = AgentNewSession.argv("claude", shell: "/bin/zsh")
+        for _ in 0..<5 { XCTAssertEqual(routing.reviveFlags(claude), Self.poolFlags) }
+        XCTAssertEqual(count.value, 1, "one login shell for five Resumes")
+        XCTAssertEqual(routing.delta(claude, wait: true, env: nil), CCPool.EnvDelta(set: ["ANTHROPIC_BASE_URL": "http://127.0.0.1:41234"]))
+        XCTAssertEqual(count.value, 1, "a spawn after them reads the known value")
     }
 
     // MARK: - Resume past the login shell's env (#1499, dch 1.94.0 --revive --env/--unset)

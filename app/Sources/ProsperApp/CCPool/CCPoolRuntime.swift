@@ -127,6 +127,7 @@ final class CCPoolRuntime {
                 DispatchQueue.main.async { MainActor.assumeIsolated { made?.objectWillChange.send() } }
             }
         }
+        found?.start() // #1891: probe now, off main, so no spawn waits for the login shell
         let read: @Sendable (_ wait: Bool) -> String? = { found?.read(wait: $0) }
         inherited = read
         made.inheritedBaseURL = read
