@@ -50,6 +50,8 @@ tag from the now-released section and put it on the new top draft.
   before its first reply. (#1907)
 - Agent Island: the limits popover says when an account will run out at its current pace, if that
   comes before the limit resets. (#1899)
+- Settings > Extensions has Install from GitHub Link…, for an extension or agent kit shared as a
+  GitHub repo; it installs untrusted and the person trusts it. (#1911)
 
 ## v2.175.0
 

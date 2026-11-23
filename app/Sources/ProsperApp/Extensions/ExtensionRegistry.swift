@@ -1542,7 +1542,8 @@ final class ExtensionRegistry: ObservableObject {
 
     /// Fetch + install an extension from a GitHub URL (repo or repo subdir).
     /// #1866 n186/n188: `maxBytes` caps the download (RemoteInstaller.fetch), `review` and `admit` go to installLocal;
-    /// its one caller is kits.install (capped); the defaults (no cap, the person's alert) serve no caller today.
+    /// its callers are kits.install (capped, quiet) and #1911 Settings > Extensions' Install from GitHub Link (capped, the
+    /// person's alert: review nil); the no-cap default serves no caller today.
     @discardableResult
     func installRemote(url: String, maxBytes: Int? = nil, review: PermissionReview? = nil, admit: Admit? = nil) async throws -> ExtensionRecord {
         let extDir = try await remoteFetch(url, maxBytes)

@@ -22,6 +22,7 @@ struct ExtensionsPane: View {
     @ObservedObject private var theme = ThemeStore.shared
 
     @State private var checkingUpdates = false
+    @State private var showGitHubLink = false
 
     // Per-section collapse state, persisted across opens (user > system > themes).
     // Themes start expanded: they are the section users browse, not manage.
@@ -76,6 +77,9 @@ struct ExtensionsPane: View {
                         Text(status).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
                     }
                     Spacer()
+                    Button("Install from GitHub Link…") { showGitHubLink = true }
+                        .rowAction()
+                        .help("Install an extension or agent kit from a https://github.com/<owner>/<repo> link; it installs untrusted")
                     if checkingUpdates {
                         ProgressView().controlSize(.small)
                     } else {
@@ -120,6 +124,9 @@ struct ExtensionsPane: View {
                 installedList(themeRecords, emptyText: "No theme extensions found.")
             }
         }
+        .sheet(isPresented: $showGitHubLink) {
+            GitHubLinkSheet(registry: registry, close: { showGitHubLink = false })
+        }
     }
 
     /// #984: one refused folder's line in the list: its name as shown and why it was not loaded.
@@ -144,6 +151,82 @@ struct ExtensionsPane: View {
         Task {
             await registry.checkForUpdates(force: true)
             await MainActor.run { checkingUpdates = false }
+        }
+    }
+}
+
+/// #1911: Settings > Extensions' Install from GitHub Link… (the kits.install GitHub install without ctl). The link is
+/// checked by kits.install's own parser before any network; the install is the registry's, capped as the market's, with
+/// the person's own alert (review nil). No trust and no apply: the new row is untrusted like any other install.
+@MainActor
+enum GitHubLinkInstall {
+    /// The checked link: only ControlKits.source's GitHub form; a folder path or anything else is refused.
+    static func url(_ raw: String) throws -> String {
+        guard case .github(let url) = try ControlKits.source(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw ControlError("not a GitHub repo URL: give https://github.com/<owner>/<repo>")
+        }
+        return url
+    }
+
+    /// An id already installed is refused before the copy (installLocal alone would replace it and keep its trust).
+    @discardableResult
+    static func install(_ raw: String, into reg: ExtensionRegistry) async throws -> ExtensionRecord {
+        try await reg.installRemote(url: try url(raw), maxBytes: RemoteInstaller.maxArtifactBytes, review: nil) { loaded in
+            guard reg.record(id: loaded.id) == nil else {
+                throw ControlError("\(OutsideText.shown(loaded.id, max: 80)) is already installed: remove it first to install it from a link")
+            }
+        }
+    }
+
+    /// The sheet's inline line: a ControlError's message as is, else the market install's text.
+    nonisolated static func errorText(_ error: Error) -> String {
+        (error as? ControlError)?.message ?? MarketplaceRootView.installErrorText(error)
+    }
+}
+
+/// #1911: one link field, Install (off while empty or running) and Cancel; a refusal or failure shows inline.
+private struct GitHubLinkSheet: View {
+    let registry: ExtensionRegistry
+    let close: () -> Void
+    @State private var link = ""
+    @State private var running = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: sz(14)) {
+            Text("Install from GitHub Link").font(Neon.font(.headline)).foregroundStyle(Neon.textPrimary)
+            TextField("https://github.com/owner/repo", text: $link)
+                .frame(width: sz(380))
+                .accessibilityLabel("GitHub link")
+            Text("It installs untrusted: review it, then click Trust in the list.")
+                .font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+            if let error {
+                Text(verbatim: error).font(Neon.font(.caption)).foregroundStyle(Neon.magenta)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                if running { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel") { close() }.buttonStyle(.neon)
+                Button("Install") { install() }.buttonStyle(.neon)
+                    .disabled(running || link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(sz(20))
+        .background(SettingsBackground())
+    }
+
+    private func install() {
+        running = true
+        error = nil
+        Task {
+            do {
+                try await GitHubLinkInstall.install(link, into: registry)
+                close()
+            } catch {
+                self.error = GitHubLinkInstall.errorText(error)
+            }
+            running = false
         }
     }
 }

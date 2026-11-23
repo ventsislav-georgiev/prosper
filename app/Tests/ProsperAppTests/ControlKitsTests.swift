@@ -420,6 +420,62 @@ final class ControlKitsTests: XCTestCase {
         XCTAssertEqual(asked, 1, "without a review (Settings) the alert's seam is asked as before")
     }
 
+    // MARK: #1911 Settings > Extensions' Install from GitHub Link (GitHubLinkInstall), over the remoteFetch seam
+
+    func testGitHubLinkRefusesNonGitHubAndMalformedLinksBeforeAnyFetch() async throws {
+        let e = try kitPaneEnv()
+        let (reg, _) = installEnv(e)
+        let asked = OSAllocatedUnfairLock(initialState: [String]())
+        reg.remoteFetch = { url, _ in asked.withLock { $0.append(url) }; throw ControlError("fake: no network") }
+        let folder = try plainSource(e).path
+        for bad in ["http://github.com/example/plain", "https://gitlab.com/example/plain", "https://github.com/example",
+                    "https://github.com/example/plain?ref=main", "https://github.com/example/plain#readme",
+                    "https://github.com/example/plain/blob/main/README.md", folder, "example/plain"] {
+            do {
+                try await GitHubLinkInstall.install(bad, into: reg)
+                XCTFail("\(bad) is refused")
+            } catch {
+                let text = GitHubLinkInstall.errorText(error)
+                XCTAssertTrue(text.contains("https://github.com/<owner>/<repo>") && !text.hasPrefix("ControlError"), "\(bad): \(text)")
+            }
+        }
+        XCTAssertEqual(asked.withLock { $0 }, [], "every refusal comes before any fetch")
+        XCTAssertTrue(reg.record(id: Self.ext) == nil, "the folder path is not installed either")
+        XCTAssertEqual(try GitHubLinkInstall.url(" https://github.com/example/plain\n"), "https://github.com/example/plain")
+        XCTAssertEqual(try GitHubLinkInstall.url("https://github.com/example/kits/tree/v1/plain"), "https://github.com/example/kits/tree/v1/plain")
+    }
+
+    func testGitHubLinkInstallIsCappedLandsUntrustedAndNeverReplacesAnInstalledID() async throws {
+        let e = try kitPaneEnv()
+        let (reg, _) = installEnv(e)
+        var alerts = 0
+        reg.reviewNewPermissions = { _, _ in alerts += 1; return true }
+        let seen = OSAllocatedUnfairLock(initialState: [String]())
+        let first = try plainSource(e, id: "dev.example.plain")
+        reg.remoteFetch = { url, cap in seen.withLock { $0.append("\(url) \(cap.map { String($0) } ?? "nil")") }; return first }
+        let rec = try await GitHubLinkInstall.install("https://github.com/example/plain", into: reg)
+        XCTAssertEqual(rec.id, "dev.example.plain")
+        XCTAssertEqual(seen.withLock { $0 }, ["https://github.com/example/plain \(RemoteInstaller.maxArtifactBytes)"], "capped at the market's cap")
+        XCTAssertEqual(reg.record(id: "dev.example.plain")?.trusted, false, "no auto-trust: the person clicks Trust")
+        // installed and trusted: a second link with that id is refused before the copy; its folder and trust stay
+        try reg.trust(id: "dev.example.plain")
+        let second = try plainSource(e, id: "dev.example.plain", version: "2.0.0", permissions: ["full-disk-access"], marker: "replacement")
+        reg.remoteFetch = { _, _ in second }
+        do {
+            try await GitHubLinkInstall.install("https://github.com/example/other", into: reg)
+            XCTFail("an installed id is never replaced")
+        } catch {
+            XCTAssertEqual(GitHubLinkInstall.errorText(error),
+                           "dev.example.plain is already installed: remove it first to install it from a link")
+        }
+        let installed = e.root.appendingPathComponent("user/dev.example.plain/init.lua")
+        XCTAssertEqual(try String(contentsOf: installed, encoding: .utf8), "-- plain", "the installed folder is untouched")
+        XCTAssertEqual(reg.record(id: "dev.example.plain")?.manifest.extension.version, "1.0.0")
+        XCTAssertEqual(reg.record(id: "dev.example.plain")?.trusted, true, "and its trust")
+        XCTAssertEqual(alerts, 0, "refused before the permission review")
+        XCTAssertTrue(fetched.isEmpty && notices.isEmpty, "no kits.install path, no notice")
+    }
+
     func testARefusedApplyKeepsTrustAsItWasLogsNothingAndOffersNoUndo() async throws {
         let e = try kitPaneEnv()
         let (reg, _) = installEnv(e)
