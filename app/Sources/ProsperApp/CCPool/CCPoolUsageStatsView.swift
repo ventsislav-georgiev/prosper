@@ -400,7 +400,24 @@ struct CCPoolUsageStatsSection: View {
                 }
             }
         }
+        .chartYAxis {
+            AxisMarks { v in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel {
+                    if let d = v.as(Int.self).map(Double.init) ?? v.as(Double.self) { Text(Self.axisTokens(d)) }
+                }
+            }
+        }
         .legendScale(key)
+    }
+
+    /// Compact English token count for the axis, the same in every locale (built by hand, no Locale).
+    static func axisTokens(_ v: Double) -> String {
+        guard v.isFinite, v >= 1 else { return "0" }
+        let (div, unit): (Double, String) = v >= 1e9 ? (1e9, "B") : v >= 1e6 ? (1e6, "M") : v >= 1e3 ? (1e3, "K") : (1, "")
+        let r = (v / div * 10).rounded() / 10
+        return (r == r.rounded() ? String(Int(r)) : String(r)) + unit
     }
 
     private func finish(_ rows: [CCPoolUsageStatsModel.Finish], key: CCPoolLegendKey?) -> some View {

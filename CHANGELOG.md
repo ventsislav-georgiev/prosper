@@ -2451,6 +2451,7 @@ tag from the now-released section and put it on the new top draft.
   Swap Session… to put another session in that pane, and you can drag a pane by its header onto
   another pane's edge to move it. Every change is saved right away. (#1895)
 - Account pool usage charts: legends wrap inside the card instead of running past its edge. (#1896)
+- Account pool usage charts: token counts on the axis read 50M / 1.5B instead of 5,0E7. (#1897)
 
 ## v2.174.0
 

@@ -458,4 +458,30 @@ final class CCPoolUsageStatsTests: XCTestCase {
         let id = try XCTUnwrap(r.store.snapshot.accounts["Example Org A"]?.id)
         XCTAssertEqual(r.model.usageStats.labels(), [id: "Example Org A"])
     }
+
+    // #1897: the Tokens by kind axis reads K / M / B in every locale.
+    func testAxisTokensAreCompactEnglish() {
+        let f = CCPoolUsageStatsSection.axisTokens
+        let want: [(Double, String)] = [(0, "0"), (999, "999"), (1_000, "1K"), (900_000, "900K"), (50_000_000, "50M"), (150_000_000, "150M"),
+                                        (1_500_000_000, "1.5B"), (-5, "0"), (.nan, "0"), (.infinity, "0")]
+        for (v, s) in want { XCTAssertEqual(f(v), s, "\(v)") }
+    }
+
+    func testTokenChartAxisHasNoENotationUnderACommaLocale() async throws {
+        let (m, _) = try fortnight()
+        await m.select(.fortnight)?.value
+        let restore = AXTreeSupport.axOn()
+        defer { restore() }
+        let (win, host) = AXTreeSupport.hosted(CCPoolUsageStatsSection(model: m).content.frame(width: 600).environment(\.locale, Locale(identifier: "bg_BG")), CGSize(width: 600, height: 2400))
+        defer { win.close() }
+        _ = AXTreeSupport.poll(host) { t in t.contains { $0.label == "Tokens by kind" } }
+        var nodes: [(label: String, texts: [String])] = []
+        axTexts(host, &nodes)
+        let all = nodes.flatMap(\.texts)
+        XCTAssertFalse(all.contains { $0.range(of: "[0-9][,.]?[0-9]*E[0-9]", options: .regularExpression) != nil }, "\(all)")
+        // Axis labels may not be reachable in the AX tree; the M check only applies when any K/M/B label is.
+        if all.contains(where: { $0.range(of: "^[0-9.]+[KB]$", options: .regularExpression) != nil }) || all.contains(where: { $0.hasSuffix("M") }) {
+            XCTAssertTrue(all.contains { $0.range(of: "^[0-9.]+M$", options: .regularExpression) != nil }, "\(all)")
+        }
+    }
 }
