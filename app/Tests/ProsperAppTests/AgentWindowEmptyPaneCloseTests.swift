@@ -403,6 +403,57 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1936 (QA R1929 t1): two panes (h1, h2); Remove from History on h2's pane closes it from inside the publish, which
+    /// leaves one pane, so closedToOne (#1894) runs deleteLayout and adopt there. (a) With another saved layout: the pair
+    /// is deleted (store and saved blob), h1 shows on its own over the layout handed over to, focused, removing nil, nothing
+    /// left to close. (b) The lone layout: kept as the one-pane layout showing h1. Old line that makes it red: `closePane(p.id)`
+    /// at the publish gone (the pane stays), or `closedToOne()` without `deleteLayout(layout.id)` (the pair stays).
+    @MainActor
+    func testAgentWindowRemovalWithTwoPanesClosesToOneAndDeletesTheLayoutUnlessLone() throws {
+        try withTreeGate(true) {
+            let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300), h4 = record("h4", ago: 400)
+            func tg(_ r: DchHistoryRecord) -> PaneTarget { PaneTarget.history(dir: r.id.dir, id: r.id.name, seen: nil) }
+            /// `others` saved beside the pair [h1, h2] (h2's pane focused, as act leaves it), the pair active.
+            @MainActor func removing(others: [PaneLayout]) throws -> (AgentWindowModel, UserDefaults, PaneLayout, AgentIslandStore) {
+                let st = store([], history: [h1, h2, h3, h4])
+                st.controlDch = bin([1, 38, 0])
+                let pair = paneLayout([tg(h1), tg(h2)])
+                let d = layoutSuite()
+                d.set(try PaneLayoutStore(layouts: others + [pair], active: pair.id, mru: [pair.id] + others.map(\.id)).encode(),
+                      forKey: AgentWindowLayoutEditTests.blobKey)
+                let m = windowModel(st, layouts: d)
+                m.paneArea = Self.wideArea
+                Calls().wire(m)
+                m.setVisible(true)
+                m.adopt(try pair.focus(try XCTUnwrap(pair.panes.last).id).get())
+                m.act(.remove, h2)
+                m.confirm(true)
+                st.history = [h1, h3, h4]
+                return (m, d, pair, st)
+            }
+            // (a) another layout saved: the pair is deleted, h1 on its own.
+            let other = paneLayout([tg(h3), tg(h4)])
+            let (m, d, pair, _) = try removing(others: [other])
+            defer { m.close() }
+            XCTAssertEqual(m.layouts?.layouts.map(\.id), [other.id], "the layout closed to one pane is deleted")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: d).layouts.map(\.id), [other.id], "and saved deleted")
+            XCTAssertTrue(m.layout.id != pair.id && m.layout.panes.compactMap { AgentWindowModel.rowID($0.target) } == [.history(h1.id)],
+                          "the record's pane closed; h1 shown on its own")
+            XCTAssertEqual(m.layout.focused, m.layout.panes.first?.id, "h1's pane is focused")
+            XCTAssertEqual(m.selection, .history(h1.id))
+            XCTAssertTrue(m.removing == nil)
+            // (b) the lone layout: kept as the one-pane layout.
+            let (n, nd, only, _) = try removing(others: [])
+            defer { n.close() }
+            XCTAssertEqual(n.layouts?.layouts.map(\.id), [only.id], "the lone layout is kept")
+            XCTAssertEqual(Preferences.agentWindowLayouts(in: nd).layouts.map(\.id), [only.id])
+            XCTAssertEqual(n.layout.panes.compactMap { AgentWindowModel.rowID($0.target) }, [.history(h1.id)], "closed to h1")
+            XCTAssertEqual(n.layout.focused, n.layout.panes.first?.id)
+            XCTAssertEqual(n.selection, .history(h1.id))
+            XCTAssertTrue(n.removing == nil && n.parked == nil)
+        }
+    }
+
     /// #1929: a refused Remove (the edit gate closed since the question) keeps every pane: nothing runs, nothing closes,
     /// even when the record later leaves the list by other means (today's rule: the pane shows it went).
     @MainActor
