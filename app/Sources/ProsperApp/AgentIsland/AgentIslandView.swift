@@ -1855,8 +1855,8 @@ struct AgentPlanLimitsView: View {
     var onSettings: () -> Void = {}
 
     /// The grid's columns: the window's name, its bar, its percent (right-aligned).
-    static let nameWidth: CGFloat = 34
-    static let barWidth: CGFloat = 104
+    static let nameWidth: CGFloat = 42
+    static let barWidth: CGFloat = 96
     static let percentWidth: CGFloat = 38
 
     /// #1915: the cards (accounts with limits) and the compact rows (with their status), each in AgentPlanLimits' order.
@@ -1947,8 +1947,8 @@ struct AgentPlanLimitsView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // A plain opacity: Neon.faded draws white opaque under Increase Contrast, which would hide the card's white ink.
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+        // The History row's own card (white 0.05, a plain opacity): Neon.faded draws white opaque under Increase Contrast; the popover keeps white ink on black whatever the theme.
+        .background(RoundedRectangle(cornerRadius: 8).fill(AgentIslandHistoryRow.ownCardFill(selected: false)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(AgentIslandInk.selectedTab, lineWidth: Self.strokeWidth(a)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))

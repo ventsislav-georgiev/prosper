@@ -209,7 +209,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         let spoken = AgentPlanLimits.spoken(row, now: now, timeZone: utc)
         XCTAssertEqual(spoken, "alpha, current, 5 hour 75 percent, resets in 2 hours, Friday 10:00, at this pace runs out around 08:50; "
                        + "week 20 percent, resets in 3 days, Monday 08:00, updated 1 min ago")
-        let tree = AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 320, height: 300)) { t in
+        let tree = AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 340, height: 300)) { t in
             t.contains { $0.reads(spoken) }
         }
         XCTAssertTrue(tree.contains { $0.reads(spoken) }, "the popover row speaks the pace")
@@ -443,7 +443,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertTrue(spoken.contains { $0.contains("resets in 2 hours 14 minutes") })
         var opened = 0
         let view = AgentPlanLimitsView(limits: limits, now: now, timeZone: utc, onSettings: { opened += 1 })
-        let tree = AXTreeSupport.tree(view, CGSize(width: 320, height: 400)) { t in spoken.allSatisfy { s in t.contains { $0.reads(s) } } }
+        let tree = AXTreeSupport.tree(view, CGSize(width: 340, height: 400)) { t in spoken.allSatisfy { s in t.contains { $0.reads(s) } } }
         for s in spoken { XCTAssertTrue(tree.contains { $0.reads(s) }, "one element per account: \(s)") }
         XCTAssertTrue(tree.contains { $0.reads("Free across all accounts: 5h 62% \u{00B7} week 18%") }, "the pool on top")
         let buttons = tree.filter { $0.role == "AXButton" }

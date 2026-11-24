@@ -104,7 +104,8 @@ final class IncreaseContrastIslandTests: XCTestCase {
         // #1452 b: 29, the live session row's own white inks for Follow theme off (title, quiet words, a glyph with no state).
         // #1537: 30, the plan usage line's ink, dim like the header counts (Neon.faded(.white, 0.7)).
         // #1898: 32, the limits popover (black like the island): its dim words (0.6) and its bars' track (0.15).
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 32, "the ear count, the text sites on the black shape and the shown tab's fallback")
+        // #1915: 34, the pool caption and the compact row.
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 34, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
