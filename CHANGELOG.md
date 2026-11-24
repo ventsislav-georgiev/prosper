@@ -30,6 +30,8 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Resume and Resume (no message) on a pane's History card now follow the session:
   once it starts, that pane shows it and you can type in its terminal right away. Resume from a
   sidebar row's right-click menu still leaves your focus where it is. (#1924)
+- Settings, Chat and text viewer windows can no longer be dragged smaller than their minimum size
+  once their content has loaded. (#1933)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

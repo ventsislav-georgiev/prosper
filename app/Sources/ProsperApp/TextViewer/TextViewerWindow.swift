@@ -596,6 +596,7 @@ final class TextViewerWindows {
     /// written to the defaults).
     static func makeWindow(_ model: TextViewerModel, autosave: String? = autosaveName) -> TextViewerNSWindow {
         let hosting = NSHostingController(rootView: Themed { TextViewerRootView(model: model) })
+        hosting.sizingOptions = []   // #1933: the window's size and minimum are set below, not by SwiftUI
         let win = TextViewerNSWindow(contentViewController: hosting)
         win.model = model
         win.title = model.shownName   // the Window list; the header shows the name
@@ -650,7 +651,7 @@ final class TextViewerWindows {
 /// D9 keys, routed by the window itself (#1726: its menus only show them): ⌘W closes;
 /// ⌘F, ⌘G, ⇧⌘G drive the find bar; ⌘E puts the selection on the find pasteboard seam (R1).
 /// #1109: ⌘T switches Read and Edit. #1544: ⌘S saves the built-in editor's buffer.
-final class TextViewerNSWindow: NSWindow {
+final class TextViewerNSWindow: MinimumKeepingWindow {
     weak var model: TextViewerModel?
 
     enum KeyRoute: Equatable { case close, find(NSTextFinder.Action), useSelectionForFind, toggleMode, save, pass }

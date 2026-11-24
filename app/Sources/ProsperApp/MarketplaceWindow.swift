@@ -24,6 +24,7 @@ final class MarketplaceWindow {
 
         let installer = MarketInstaller(seams: .live(registry))
         let hosting = NSHostingController(rootView: Themed { MarketplaceRootView(registry: registry, installer: installer) })
+        hosting.sizingOptions = []   // #1933: the window's size and minimum are set below, not by SwiftUI
         let win = MarketplaceClosableWindow(contentViewController: hosting)
         win.title = "Extension Marketplace"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -58,7 +59,7 @@ final class MarketplaceWindow {
     }
 }
 
-private final class MarketplaceClosableWindow: NSWindow {
+private final class MarketplaceClosableWindow: MinimumKeepingWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command),
            event.keyCode == 13 || event.charactersIgnoringModifiers?.lowercased() == "w" {

@@ -93,7 +93,7 @@ final class SettingsWindow {
         present(win)
     }
 
-    private static func makeWindow() -> NSWindow {
+    static func makeWindow(autosave: String? = "ProsperSettingsWindow") -> NSWindow {
         let root = SettingsRootView()
         // rebuildOnSizeChangeOnly: true — every Settings surface that needs live
         // Neon.* colors already self-observes ThemeStore (SettingsBackground,
@@ -136,8 +136,8 @@ final class SettingsWindow {
         win.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                     height: CGFloat.greatestFiniteMagnitude)
         win.isReleasedWhenClosed = false
-        win.setFrameAutosaveName("ProsperSettingsWindow")
-        if !win.setFrameUsingName("ProsperSettingsWindow") {
+        if let autosave { win.setFrameAutosaveName(autosave) }   // tests pass nil: no defaults
+        if !(autosave.map { win.setFrameUsingName($0) } ?? false) {
             win.centerOnScreen()
         }
         win.clampToContentMinSize()
@@ -173,7 +173,16 @@ extension NSWindow {
 /// standard File ▸ Close menu item, so the system ⌘W never reaches this window —
 /// we handle the key equivalent ourselves. `performClose` honors the close button;
 /// the willClose observer then drops the window so it deallocates.
-private final class CommandWClosableWindow: NSWindow {
+/// #1933: an NSHostingController writes zero over the window's contentMinSize on its update pass (probed offscreen for
+/// Settings, Chat and TextViewer), so a window hosting SwiftUI ignores a zero write: its minimum is its owner's alone.
+class MinimumKeepingWindow: NSWindow {
+    override var contentMinSize: NSSize {
+        get { super.contentMinSize }
+        set { if newValue != .zero { super.contentMinSize = newValue } }
+    }
+}
+
+private final class CommandWClosableWindow: MinimumKeepingWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Match ⌘W by virtual keycode (kVK_ANSI_W), not character: under a non-Latin
         // layout charactersIgnoringModifiers is the layout glyph ("в" on Bulgarian), so

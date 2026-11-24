@@ -64,8 +64,9 @@ final class ChatWindow {
         present(win)
     }
 
-    private static func makeWindow() -> NSWindow {
+    static func makeWindow(autosave: String? = "ProsperChatWindow") -> NSWindow {
         let hosting = NSHostingController(rootView: Themed { ChatRootView() })
+        hosting.sizingOptions = []   // #1933: the window's size and minimum are set below, not by SwiftUI
         let win = ChatClosableWindow(contentViewController: hosting)
         win.title = "Prosper Coding Agent"
         win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -85,8 +86,8 @@ final class ChatWindow {
         // hardcoded opaque bgTop; identical at opacity 1.0).
         SettingsWindow.applyWindowOpacity(win)
         win.isReleasedWhenClosed = false
-        win.setFrameAutosaveName("ProsperChatWindow")
-        if !win.setFrameUsingName("ProsperChatWindow") { win.centerOnScreen() }
+        if let autosave { win.setFrameAutosaveName(autosave) }   // tests pass nil: no defaults
+        if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         // Grow a restored frame back to the min so the 8-row suggestion popup always
         // has room above the field.
         win.clampToContentMinSize()
@@ -94,7 +95,7 @@ final class ChatWindow {
     }
 }
 
-private final class ChatClosableWindow: NSWindow {
+private final class ChatClosableWindow: MinimumKeepingWindow {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Match ⌘W by keycode (kVK_ANSI_W = 13), layout-independent: under a non-Latin
         // layout charactersIgnoringModifiers is the layout glyph, not "w".
