@@ -70,7 +70,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "act: { model.actInPane($0, r) },",
    "new": "act: { model.act($0, r) },",
-   "expect": "survives"
+   "expect": "killed"
   }
  ]
 }

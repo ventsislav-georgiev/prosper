@@ -1311,6 +1311,28 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertNil(c.store?.actions[x.key], "never on the live row a")
     }
 
+    /// #1935: `failed` runs once when the resume ends in failure, never on success. Old line: no `failed?()` in resume's done.
+    @MainActor
+    func testResumeFailedHookRunsOnlyOnAFailure() {
+        for ok in [false, true] {
+            let f = FakeProc(), reads = Reads()
+            reads.records = [record("a")]
+            f.status = ok ? 0 : 1
+            f.output = ok ? #"{"name":"a","as":"a","result":"ok","reason":"","detail":"","session_id":""}"# + "\n"
+                : #"{"name":"a","as":"a","result":"failed","reason":"no_history","detail":"no history","session_id":""}"# + "\n"
+            let c = controller(f, reads)
+            c.store?.sessions = [session("b")]
+            c.setExpanded(true)
+            settle(c) { c.store?.history.count == 1 }
+            final class Count: @unchecked Sendable { var n = 0 }
+            let failed = Count()
+            XCTAssertTrue(c.resume(record("a"), failed: { failed.n += 1 }))
+            f.release.signal()
+            settle(c) { c.store?.historyActions[record("a").key] != AgentIsland.resumingText }
+            XCTAssertEqual(failed.n, ok ? 0 : 1, "ok: \(ok)")
+        }
+    }
+
     @MainActor
     func testFailedResumeShowsTheLastLine() {
         let f = FakeProc(), reads = Reads()

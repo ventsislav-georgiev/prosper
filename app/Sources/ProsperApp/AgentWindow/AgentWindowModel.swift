@@ -1152,9 +1152,20 @@ final class AgentWindowModel: ObservableObject {
     /// The island controller the History verbs go to (tests: one with a fake runner).
     var island: () -> AgentIslandController = { .shared }
     /// A History row's Resume: the island's.
-    lazy var resume: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0) }
+    lazy var resume: (DchHistoryRecord) -> Void = { [weak self] r in
+        guard let self else { return }
+        resumeStarted = island().resume(r, failed: { [weak self] in self?.resumeFailed(r) })
+    }
+    /// #1935: whether the last Resume verb started a job (false: a busy row or a closed gate); act() sets it true first, the
+    /// default seams below set it from the island. A test's seam that runs nothing sets it false.
+    var resumeStarted = true
+    /// #1935: the resume of record `r` ended in failure: its pending follow goes (only that record's; a later resume's stays).
+    func resumeFailed(_ r: DchHistoryRecord) { if pendingResume?.record == r.id { pendingResume = nil } }
     /// #829 G6-G8: Resume (no message), Pin/Unpin and Remove from History: the island's.
-    lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] in self?.island().resume($0, noMessage: true) }
+    lazy var resumeNoMessage: (DchHistoryRecord) -> Void = { [weak self] r in
+        guard let self else { return }
+        resumeStarted = island().resume(r, noMessage: true, failed: { [weak self] in self?.resumeFailed(r) })
+    }
     lazy var pinRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().pin($0) }
     lazy var removeRecord: (DchHistoryRecord) -> Void = { [weak self] in self?.island().remove($0) }
     /// #897 (G9): "Agent Island Settings...": Settings on Agent Island's pane, through the extension host's one opener.
@@ -1289,7 +1300,7 @@ final class AgentWindowModel: ObservableObject {
     /// #829 (R5): the question the confirm strip shows; dropped by a selection change.
     @Published private(set) var confirming: AgentWindowConfirm?
     /// QA #665 INFO-6: an answer a gate refused since the question; dropped by a selection change or the next ask.
-    @Published private(set) var refusal: AgentWindowRefusal?
+    @Published var refusal: AgentWindowRefusal?   // #1935: internal set (a test seam leaves one)
     /// #831 B1 (4.4 M1, replaces #829 G2's hold): the focused pane's session ended while its transcript ran: the pane
     /// keeps that session's last live row and its blocks (the transcript suspended), display only, until resolve
     /// first gives its own record (one swap), a new session takes the name, or the pane is retargeted or closed.
@@ -3107,6 +3118,7 @@ final class AgentWindowModel: ObservableObject {
     func act(_ verb: AgentWindowVerb, _ r: DchHistoryRecord) {
         select(.history(r.id))
         refusal = nil
+        resumeStarted = true
         switch verb {
         // #1324 (b): a remote record has Resume only (no pin, remove or no-message there: they would run here).
         case .resume where Self.isRemote(r): resumeRemote(r)
@@ -3126,18 +3138,19 @@ final class AgentWindowModel: ObservableObject {
         act(verb, r)
         guard verb == .resume || verb == .resumeNoMessage, !Self.isRemote(r), let store,
               (verb == .resume ? store.resumeGate : store.reviveNoMessageGate).isOK else { return }
+        guard resumeStarted, refusalText(.history(r.id)) == nil else { return }   // #1935: refused or busy: nothing to follow
         // The island's name for it: a live name revives under the first free <name>-N.
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
         let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
         let name = AgentIsland.reviveAs(r, live: live, records: records) ?? r.name
-        pendingResume = (AgentSessionKey(dir: r.key.dir, name: name), layout.focused, focusedTarget)
+        pendingResume = (AgentSessionKey(dir: r.key.dir, name: name), layout.focused, focusedTarget, r.id)
     }
 
     /// #1924: the card's resume waiting for its session to list; the pane and the target (the record) it was asked from.
     /// Dropped when the person moves on: a manual pick, a sidebar mouse-down (dropPendingFocus), a key typed, the window
     /// no longer key (dropPendingResume), a hidden or closed window; at the landing, another target in the focused pane
     /// (another pane focused, another layout, any pick: a layout never shows one target in two panes).
-    private(set) var pendingResume: (key: AgentSessionKey, pane: UUID, target: PaneTarget?)?
+    private(set) var pendingResume: (key: AgentSessionKey, pane: UUID, target: PaneTarget?, record: AgentSessionKey)?
 
     func dropPendingResume() { pendingResume = nil }
 

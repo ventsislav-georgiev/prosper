@@ -150,4 +150,71 @@ extension AgentWindowD1Tests {
         m.actInPane(.resumeNoMessage, far)
         XCTAssertTrue(m.pendingResume?.key == nil, "another machine's record")
     }
+
+    /// #1935: a resume that did not start (the island's false: a busy row or a closed gate) arms nothing; a start that fails
+    /// later drops what it armed (only its own record's); and a sidebar-menu resume of the record afterwards moves no focus
+    /// when it lists. Old lines that make it red: no `resumeStarted` in actInPane's guard (busy armed), no `resumeFailed`
+    /// (the failure kept it), `pendingResume?.record == r.id` dropped (a stranger's failure took it).
+    @MainActor
+    func testAgentWindowCardResumeBusyOrFailedResumeLeavesNothingArmed() throws {
+        let h = record("api"), g = record("other", ago: 7200)
+        let (m, st, _) = cardResumeModel([h, g])
+        m.setVisible(true)
+        defer { m.close() }
+        // Busy: the island started nothing.
+        m.resume = { [unowned m] _ in m.resumeStarted = false }
+        m.actInPane(.resume, h)
+        XCTAssertTrue(m.pendingResume?.key == nil, "busy: nothing armed")
+        // Started, then another record's failure: kept; its own failure: dropped.
+        m.resume = { _ in }
+        m.actInPane(.resume, h)
+        XCTAssertEqual(m.pendingResume?.key, h.key)
+        m.resumeFailed(g)
+        XCTAssertEqual(m.pendingResume?.key, h.key, "another record's failure leaves it")
+        m.resumeFailed(h)
+        XCTAssertTrue(m.pendingResume?.key == nil, "its own failure: dropped")
+        // A later sidebar-menu resume of the same record, and api listing: no focus moves.
+        m.act(.resume, h)
+        st.sessions = [mapped("api")]
+        XCTAssertNotEqual(m.selection, .live(h.key), "the menu never follows")
+        XCTAssertFalse(m.terminal.focusPending, "no focus asked")
+    }
+
+    /// #1935: a refusal the window left for the record's row (nothing ran) arms nothing. Old line: no
+    /// `refusalText(.history(r.id)) == nil` in actInPane's guard.
+    @MainActor
+    func testAgentWindowCardResumeARefusedResumeArmsNothing() throws {
+        let h = record("api")
+        let (m, _, _) = cardResumeModel([h])
+        m.setVisible(true)
+        defer { m.close() }
+        m.resume = { [unowned m] _ in m.refusal = AgentWindowRefusal(id: .history(h.id), text: "refused") }
+        m.actInPane(.resume, h)
+        XCTAssertEqual(m.refusalText(.history(h.id)), "refused")
+        XCTAssertTrue(m.pendingResume?.key == nil, "refused: nothing armed")
+    }
+
+    /// #1935 (t1): the History card's own Resume and Resume (no message) pills go through actInPane: the island's verb ran
+    /// once and the follow is armed. Offscreen: the pills are read from the built view values and their actions called.
+    /// Old line: `act: { model.actInPane($0, r) }` as `model.act($0, r)` (the verb ran, nothing armed).
+    @MainActor
+    func testAgentWindowCardResumePillsArmTheFollow() throws {
+        for (title, verb) in [(AgentIsland.resumeLabel, AgentWindowVerb.resume),
+                              (AgentIsland.resumeNoMessageLabel, .resumeNoMessage)] {
+            let h = record("api")
+            let (m, _, ran) = cardResumeModel([h])
+            m.setVisible(true)
+            defer { m.close() }
+            m.select(.history(h.id))
+            let view = AgentPaneArea(model: m, scrolls: false).pane(m.layout.focused, compact: false)
+            let root: Any = try XCTUnwrap(paneRiderFind(view, AgentDetailView.self), "a detail view").body
+            let card = try XCTUnwrap(paneRiderFind(root, AgentHistoryDetail.self), "a History card")
+            let buttons = try XCTUnwrap(paneRiderFind(card.body, AgentHistoryButtons.self), "its buttons")
+            let pill = try XCTUnwrap(emptyPanePills(buttons.body).first { $0.title == title }, title)
+            XCTAssertTrue(pill.enabled)
+            pill.action()
+            XCTAssertEqual(ran(), [verb], "\(verb): the island's verb, once")
+            XCTAssertEqual(m.pendingResume?.key, h.key, "\(verb): the card's pill armed the follow")
+        }
+    }
 }
