@@ -25,12 +25,13 @@ final class XrayCardPanel: NSPanel {
 /// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
 /// corners) in its own panel, replacing the dropdown-like NSPopover. Placed by `frame` (below the anchor; beside the
 /// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it.
-/// #1940: the Command-click card's path, one .info line per step, so a live build says where a card went missing:
-/// `log stream --level info --predicate 'subsystem == "eu.illegible.prosper" AND category == "xray-card"'`.
+/// #1940: the Command-click card's path, one .notice line per step (kept: `log show` finds it later), so a live
+/// build says where a card went missing:
+/// `/usr/bin/log show --last 1h --predicate 'subsystem == "eu.illegible.prosper" AND category == "xray-card"'`.
 /// Reasons and flags only: never a ref's text, a path or a session name.
 enum XrayCardLog {
     static let log = Logger(subsystem: "eu.illegible.prosper", category: "xray-card")
-    static func note(_ s: String) { log.info("\(s, privacy: .public)") }
+    static func note(_ s: String) { log.notice("\(s, privacy: .public)") }
 }
 
 @MainActor
