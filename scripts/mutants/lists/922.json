@@ -12,14 +12,14 @@
   {
    "name": "shellrc_kind",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
-   "old": "guard kind == .block, shellRCFiles.contains(rel) else",
-   "new": "guard shellRCFiles.contains(rel) else",
+   "old": "guard kind == .block, shellRCFiles.contains(rel) || rel == fishRC(owner) else",
+   "new": "guard shellRCFiles.contains(rel) || rel == fishRC(owner) else",
    "expect": "killed"
   },
   {
    "name": "shellrc_files",
    "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
-   "old": "guard kind == .block, shellRCFiles.contains(rel) else",
+   "old": "guard kind == .block, shellRCFiles.contains(rel) || rel == fishRC(owner) else",
    "new": "guard kind == .block else",
    "expect": "killed"
   },
