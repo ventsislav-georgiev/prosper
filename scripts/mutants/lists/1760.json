@@ -92,6 +92,13 @@
    "old": "m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, scope: scope,",
    "new": "m.takeRef((0, hit.out), parsed: nil, text: shown ?? text, scope: scope,",
    "expect": "killed"
+  },
+  {
+   "name": "card-not-key",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "override var canBecomeKey: Bool { true }",
+   "new": "override var canBecomeKey: Bool { false }",
+   "expect": "killed"
   }
  ]
 }

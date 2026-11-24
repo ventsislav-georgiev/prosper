@@ -29,6 +29,17 @@ final class XrayCardPresenterTests: XCTestCase {
         p.close()
     }
 
+    /// Red with canBecomeKey false (#1934): a borderless panel must be key for the filter field, Esc and the resign-key close.
+    func testTheCardPanelCanBecomeKeyButNotMain() throws {
+        let (p, shows) = presenter()
+        show(p) {}
+        let panel = try XCTUnwrap(p.panel)
+        XCTAssertTrue(panel.canBecomeKey)
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertEqual(shows(), [.showKey], "the seam that targets this key-capable panel")
+        p.close()
+    }
+
     /// Red with the NSPopover presenter: the card is a borderless clear panel with the system shadow, shown by the seam.
     func testPresentShowsAProsperCardPanelThroughTheSeam() throws {
         let (p, shows) = presenter()
