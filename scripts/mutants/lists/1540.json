@@ -33,8 +33,8 @@
   {
    "name": "header_no_switches",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
-   "old": "                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [])\n",
-   "new": "                 switches: [])\n",
+   "old": "                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [],\n",
+   "new": "                 switches: [],\n",
    "expect": "killed"
   },
   {
