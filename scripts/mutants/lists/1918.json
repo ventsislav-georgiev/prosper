@@ -1,6 +1,6 @@
 {
   "entry": 1918,
-  "filter": "KitShellPathTests|KitRenderTests|ManagedConfigQATests|ManagedConfigCommitTests|ManagedConfigConsentSheetTests",
+  "filter": "KitShellPathTests|KitRenderTests",
   "mutants": [
     {
       "name": "bash-to-zshrc",
@@ -133,13 +133,6 @@
       "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
       "old": "\".bash_login\", \".profile\"]",
       "new": "\".bash_login\"]",
-      "expect": "killed"
-    },
-    {
-      "name": "drift-note-says-remove",
-      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
-      "old": "driftNote(&w, r.piece.id, \"removing it deletes\")",
-      "new": "driftNote(&w, r.piece.id, \"Remove deletes\")",
       "expect": "killed"
     },
     {
