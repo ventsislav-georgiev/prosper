@@ -5,8 +5,8 @@
   {
    "name": "start-allows-empty-name",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "return !newSessionName.isEmpty && e.folder == nil",
-   "new": "return e.folder == nil",
+   "old": "var canStartNewSession: Bool { !newSessionName.isEmpty && canStartNewShell }",
+   "new": "var canStartNewSession: Bool { canStartNewShell }",
    "expect": "killed"
   },
   {
@@ -19,7 +19,7 @@
   {
    "name": "name-placeholder-back",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "TextField(\"\", text: Binding(get: { form.nameFieldText }",
+   "old": "TextField(\"Optional for a shell: the folder's name\", text: Binding(get: { form.nameFieldText }",
    "new": "TextField(\"x\", text: Binding(get: { form.nameFieldText }",
    "expect": "killed"
   },
