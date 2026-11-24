@@ -1,0 +1,41 @@
+{
+ "entry": 1933,
+ "filter": "HostedWindowMinimumTests",
+ "mutants": [
+  {
+   "name": "zero-write-honoured",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "set { if newValue != .zero { super.contentMinSize = newValue } }",
+   "new": "set { super.contentMinSize = newValue }",
+   "expect": "killed"
+  },
+  {
+   "name": "owner-writes-blocked",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "set { if newValue != .zero { super.contentMinSize = newValue } }",
+   "new": "set { if false { super.contentMinSize = newValue } }",
+   "expect": "killed"
+  },
+  {
+   "name": "settings-base-reverted",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "private final class CommandWClosableWindow: MinimumKeepingWindow {",
+   "new": "private final class CommandWClosableWindow: NSWindow {",
+   "expect": "killed"
+  },
+  {
+   "name": "chat-base-reverted",
+   "file": "app/Sources/ProsperApp/ChatWindow.swift",
+   "old": "private final class ChatClosableWindow: MinimumKeepingWindow {",
+   "new": "private final class ChatClosableWindow: NSWindow {",
+   "expect": "killed"
+  },
+  {
+   "name": "textviewer-base-reverted",
+   "file": "app/Sources/ProsperApp/TextViewer/TextViewerWindow.swift",
+   "old": "final class TextViewerNSWindow: MinimumKeepingWindow {",
+   "new": "final class TextViewerNSWindow: NSWindow {",
+   "expect": "killed"
+  }
+ ]
+}
