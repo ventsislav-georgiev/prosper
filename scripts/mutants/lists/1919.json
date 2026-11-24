@@ -1,7 +1,14 @@
 {
   "entry": 1919,
-  "filter": "AgentWindowD1Tests/testAgentWindowNewSessionEmptyName|AgentWindowD1Tests/testAgentWindowNewSessionNameFieldIsEmptyOnAFreshForm",
+  "filter": "AgentWindowD1Tests/testAgentWindowNewSessionEmptyName|AgentWindowD1Tests/testAgentWindowNewSessionNameFieldIsEmptyOnAFreshForm|AgentWindowRemoteSpawnTests/testAnEmptyNameShellOnAnotherMacTakesTheFoldersName",
   "mutants": [
+    {
+      "name": "remote-taken-ignored",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "remoteTaken(host), dir: dir) : typed",
+      "new": "[], dir: dir) : typed",
+      "expect": "killed"
+    },
     {
       "name": "shell-needs-name",
       "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",

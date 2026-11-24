@@ -123,6 +123,14 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
             XCTAssertTrue(m.startShell())
             XCTAssertEqual(calls.verbs.last?.args.prefix(4).map { $0 }, ["--host", "host-a", "--spawn", "zzz"])
             XCTAssertEqual(calls.local.count, 0)
+            // #1922: "docs" is live on host-a, so the folder's name there is skipped to "docs-2".
+            let (n, _, c2) = model()
+            defer { n.close() }
+            n.setNewSessionHost("host-a")
+            n.setNewSessionFolder("/Users/example/docs")
+            n.setNewSessionName("")
+            XCTAssertTrue(n.startShell())
+            XCTAssertEqual(c2.verbs.last?.args.prefix(4).map { $0 }, ["--host", "host-a", "--spawn", "docs-2"])
         }
     }
 
