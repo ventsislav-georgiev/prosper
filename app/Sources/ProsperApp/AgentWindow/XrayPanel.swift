@@ -100,7 +100,10 @@ final class XrayPanels: ObservableObject {
         let target = m.target
         // #1417: `closed` runs once when the card goes, whoever closed it (the ref card cancels its --ref read there)
         func show(_ view: AnyView, _ size: CGSize, _ closed: @escaping @MainActor () -> Void) {
-            guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return closed() }
+            guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else {
+                XrayCardLog.note("show: no window: pane anchor \(XrayCardAnchor.state(pane)), shared anchor \(XrayCardAnchor.state(nil))")
+                return closed()
+            }
             w.cards.present(view, size: size, anchor: anchor, closed: closed)
         }
         m.present = { show($0, $1) {} }

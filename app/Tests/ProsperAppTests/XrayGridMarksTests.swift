@@ -262,6 +262,32 @@ final class XrayGridMarksTests: XCTestCase {
         }
     }
 
+    /// #1940: red if the card log names the wrong terminalRefs rule for a Command-click with no refs, says one is
+    /// missing when the refs are there, or names a pane anchor that was never drawn as anything but none.
+    func testTheCardLogNamesWhyACommandClickHasNoRefs() throws {
+        XCTAssertEqual(XrayCardAnchor.state(UUID()), "none")
+        let bare = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
+        bare.isReleasedWhenClosed = false
+        try withSeams { fake in
+            XCTAssertEqual(XrayRefLink.missing(nil, shell), "not an Agent Sessions window")
+            XCTAssertEqual(XrayRefLink.missing(bare, shell), "no window model")
+            let r = rig(shell)
+            let (w, m) = windowed(r)
+            withExtendedLifetime(m) {
+                XCTAssertEqual(XrayRefLink.missing(w, nil), "no session")
+                XCTAssertEqual(XrayRefLink.missing(w, shell), "the follow has no snapshot")
+                fake.send(fake.args.count, Self.snapshot())
+                XCTAssertTrue(XrayRefLink.missing(w, shell) == nil, "refs are there")
+                XCTAssertEqual(XrayRefLink.missing(w, local), "the window's follow is another session's")
+                XrayRefLink.decorate = { false }
+                XCTAssertEqual(XrayRefLink.missing(w, shell), "gate B off")
+                XrayRefLink.decorate = { true }
+                r.t.attach(nil)   // the window hides: the focused pane lets the follow go
+                XCTAssertEqual(XrayRefLink.missing(w, shell), "the window holds no follow")
+            }
+        }
+    }
+
     /// Red if a Cmd-click on a shell pane's underlined ref does not open its card (the pane's open panel shows it).
     func testCmdClickOnAShellPaneOpensTheCard() throws {
         try withSeams { fake in
