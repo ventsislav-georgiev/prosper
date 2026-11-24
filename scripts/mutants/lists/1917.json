@@ -1,0 +1,20 @@
+{
+  "entry": 1917,
+  "filter": "XrayGridMarksTests/testCmdClickOpensTheCardAfterTheFocusedPaneSwitchesSession",
+  "mutants": [
+    {
+      "name": "mount-owner-after-hold",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+      "old": "        let v = controller.hostView()\n        v.owner = controller\n        controller.view = v\n        slot.hold(v)\n        return v\n",
+      "new": "        let v = controller.hostView()\n        slot.hold(v)\n        v.owner = controller\n        controller.view = v\n        return v\n",
+      "expect": "killed"
+    },
+    {
+      "name": "mount-view-after-hold",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+      "old": "        let v = controller.hostView()\n        v.owner = controller\n        controller.view = v\n        slot.hold(v)\n        return v\n",
+      "new": "        let v = controller.hostView()\n        v.owner = controller\n        slot.hold(v)\n        controller.view = v\n        return v\n",
+      "expect": "killed"
+    }
+  ]
+}
