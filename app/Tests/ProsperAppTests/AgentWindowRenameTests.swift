@@ -722,7 +722,7 @@ extension AgentWindowD1Tests {
                     // #1470 a2: "min" is the window's least content (wider by the sidebar's growth, so the panes keep
                     // TIP's least width). #1488: the old literal 640 rendered the panes 11 pt under it at 1.0, where the
                     // controls' walk read one more ink run than the box holds.
-                    for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)),
+                    for (label, size) in [("min", Self.oldMin(scale)),
                                           ("default", CGSize(width: 1000 * scale, height: 680 * scale))] {
                         for (mode, band) in [("terminal", true), ("terminal", false)] {   // #1471: Terminal is the only pane mode
                             guard (heavy && band) || (scale == 1.0 && label == "default") else { continue }

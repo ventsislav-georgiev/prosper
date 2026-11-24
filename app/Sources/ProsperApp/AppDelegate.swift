@@ -791,7 +791,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 win.contentMinSize = NSSize(width: 560 * scale, height: 520 * scale)
             case AgentsWindow.themedIdentifier:   // #860: same chrome as Settings, live
                 SettingsWindow.applyWindowOpacity(win)
-                win.contentMinSize = AgentsWindow.contentMinSize(scale: scale)
+                if let win = win as? AgentsNSWindow { win.minimum = AgentsWindow.contentMinSize(win.model, scale: scale) }
             case TextViewerWindows.themedIdentifier:   // #1106
                 SettingsWindow.applyWindowOpacity(win)
                 win.contentMinSize = TextViewerWindows.contentMinSize(scale: scale)

@@ -57,7 +57,7 @@ final class AgentSidebarWidthTests: XCTestCase {
                 ThemeRuntime.scale = scale
                 let least = AgentWindowModel.fullSidebarWidth
                 XCTAssertEqual(AgentSidebarWidth.width(stored: 1e9, content: 2000 * scale), 800 * scale, accuracy: 0.001, "40% at \(scale)")
-                let narrow = AgentsWindow.contentMinSize(scale: scale).width
+                let narrow = 640 * scale + AgentWindowModel.digitColumnExtra(at: scale)   // the window's minimum before #1925
                 XCTAssertLessThan(narrow * 0.4, least, "the window's minimum: 40% is under the sidebar's minimum at \(scale)")
                 XCTAssertEqual(AgentSidebarWidth.width(stored: 1e9, content: narrow), least, accuracy: 0.001, "the minimum wins at \(scale)")
                 let m = model()
@@ -165,23 +165,59 @@ final class AgentSidebarWidthTests: XCTestCase {
         }
     }
 
-    /// Red when the 40% line or the sliver goes: at every width from the window's minimum up, at every scale, with the
-    /// widest stored width, the panes keep their minimum (300·s); a window under its minimum still leaves the panes a sliver.
+    /// Red when the 40% line or the strip goes: at every width from the window's minimum up, at every scale, with the
+    /// widest stored width, the panes keep their minimum (300·s); a window under its minimum still leaves the panes the strip.
     func testSidebarWidthLeavesThePanesTheirMinimum() {
         withClearedWidth {
             for scale in Self.scales {
                 ThemeRuntime.scale = scale
-                let least = AgentsWindow.contentMinSize(scale: scale).width
+                let least = 640 * scale + AgentWindowModel.digitColumnExtra(at: scale)   // the window's minimum before #1925
                 for content in stride(from: least, through: 3000 * scale, by: 37) {
                     let side = AgentSidebarWidth.width(stored: 1e9, content: content)
                     XCTAssertGreaterThanOrEqual(content - side - 1, sz(PaneLayout.minimumPane.width) - 0.001, "\(content) at \(scale)")
                 }
                 for content in stride(from: 50 * scale, to: least, by: 23) {
                     let side = AgentSidebarWidth.width(stored: 1e9, content: content)
-                    XCTAssertGreaterThanOrEqual(content - side - 1, min(content - 1, sz(AgentSidebarWidth.sliver)) - 0.001, "under the minimum: \(content) at \(scale)")
+                    XCTAssertGreaterThanOrEqual(content - side - 1, min(content - 1, sz(AgentSidebarWidth.strip)) - 0.001, "under the minimum: \(content) at \(scale)")
                     XCTAssertGreaterThanOrEqual(side, 0)
                 }
             }
+        }
+    }
+
+    /// R1923 i1: red when a drag whose handle leaves the tree mid-drag (Mini, or Control-Command-S hiding the sidebar: the
+    /// gesture is cancelled, no mouse-up) stays live: the start sticks and the terminals keep liveResizing (their grids stop
+    /// following); and red when a new gesture's start does not restart a stale drag from the drawn width.
+    func testSidebarDragEndsWhenItsHandleGoesAndANewGestureRestarts() {
+        withClearedWidth {
+            for leave in ["mini", "hide"] {
+                let m = model()
+                defer { m.close() }
+                m.sidebarWidth.content = 2000
+                m.sidebarDragged(by: 40, from: 10)
+                XCTAssertTrue(m.sidebarWidth.dragging, leave)
+                XCTAssertTrue(m.windowTerminal.liveResizing, leave)
+                if leave == "mini" {
+                    m.setSidebarMode(.mini)
+                } else {
+                    AgentPaneLayout.splitsEnabled = true
+                    m.toggleSidebar()
+                    XCTAssertFalse(m.sidebarShown)
+                    AgentPaneLayout.splitsEnabled = false
+                }
+                XCTAssertFalse(m.sidebarWidth.dragging, "the drag ended (\(leave))")
+                XCTAssertFalse(m.windowTerminal.liveResizing, "no terminal is left live-resizing (\(leave))")
+            }
+            let m = model()
+            defer { m.close() }
+            m.sidebarWidth.content = 2000
+            m.sidebarDragged(by: 100, from: 10)   // its end never comes
+            let drawn = m.sidebarWidth.drawn
+            m.sidebarDragged(by: 20, from: 500)   // a new gesture
+            XCTAssertEqual(m.sidebarWidth.drawn, drawn + 20, accuracy: 0.001, "restarted from the drawn width")
+            m.sidebarDragEnded()
+            XCTAssertFalse(m.sidebarWidth.dragging)
+            XCTAssertFalse(m.windowTerminal.liveResizing)
         }
     }
 }

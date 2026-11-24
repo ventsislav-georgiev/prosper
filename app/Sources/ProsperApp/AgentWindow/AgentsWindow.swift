@@ -27,10 +27,23 @@ final class AgentsWindow {
     var isOpen: Bool { window != nil && grace == nil }
     static let title = "Agent Sessions"
     static let themedIdentifier = NSUserInterfaceItemIdentifier("prosper.agentsWindow")
-    /// #1470 a2: wider by the full sidebar's growth at `scale` (AgentWindowModel.digitColumnExtra), so the panes' least
-    /// width is TIP's.
-    static func contentMinSize(scale: CGFloat) -> NSSize {
-        NSSize(width: 640 * scale + AgentWindowModel.digitColumnExtra(at: scale), height: 420 * scale)
+    /// #1925 (operator 2026-11-24, "just a smidge"): as narrow as the sidebar column and its 1 pt line (none in Slide,
+    /// hidden or without a store) plus the panes' `AgentSidebarWidth.strip`, at `scale`. Full's column is its least width
+    /// whatever the drag: at this window width the 40% line draws it so (AgentSidebarWidth.width). The height is as before.
+    static func contentMinSize(_ model: AgentWindowModel?, scale: CGFloat) -> NSSize {
+        var column: CGFloat = 0
+        if let model, model.hasStore, model.sidebarShown, model.sidebarMode != .slide {
+            column = (model.sidebarMode == .mini ? AgentWindowModel.miniSidebarWidth(at: scale)
+                                                 : AgentWindowModel.fullSidebarWidth(at: scale)) + 1
+        }
+        return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)
+    }
+
+    /// #1925: the open window's minimum re-read (a mode switch, the sidebar hidden or shown, a store); a window now under
+    /// it grows to it.
+    static func applyMinSize(_ win: AgentsNSWindow) {
+        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)
+        win.clampToContentMinSize()
     }
 
     // Seams (QA #626 INFO-7: show and teardown run in tests with a window never put on screen).
@@ -111,8 +124,12 @@ final class AgentsWindow {
         // #1378: no title bar safe area for SwiftUI. Under No title bar's .fullSizeContentView it would pad the content
         // by the hidden bar, and a list touching that band grows under the title row (Standard has no such band).
         hosting.safeAreaRegions = []
+        // #1925: by default the hosting controller writes SwiftUI's own minimum (the panes' is 0) over contentMinSize on
+        // each layout, so the window's edge could hide the panes; the minimum is set here alone.
+        hosting.sizingOptions = []
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
+        model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
         model.focusSidebar = { [weak win] in   // the model set keyFocus = .sidebar already
             win?.makeFirstResponder(nil)
@@ -127,7 +144,7 @@ final class AgentsWindow {
         win.identifier = themedIdentifier
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
-        win.contentMinSize = contentMinSize(scale: s)
+        win.minimum = contentMinSize(model, scale: s)
         SettingsWindow.applyWindowOpacity(win)
         if Preferences.agentWindowStyle != .standard { applyStyle(win) }   // #1378: Standard is built as before
         win.isReleasedWhenClosed = false
@@ -213,6 +230,14 @@ final class AgentsWindow {
 /// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
+    /// #1925: the window's minimum content size, AgentsWindow's alone. On its update pass the hosting controller writes
+    /// contentMinSize (SwiftUI's own minimum by default, zero with no sizing options; probed offscreen), so any other
+    /// write puts this back.
+    var minimum = NSSize.zero { didSet { super.contentMinSize = minimum } }
+    override var contentMinSize: NSSize {
+        get { super.contentMinSize }
+        set { super.contentMinSize = minimum }
+    }
     /// #1378: set by AgentsWindow.applyStyle; Standard and rounded until then.
     var style = AgentWindowStyle.standard
     var roundedCorners = true
@@ -883,11 +908,12 @@ struct AgentSidebarColumn: View {
                 if case .active = phase { NSCursor.resizeLeftRight.set() } else if !width.dragging { NSCursor.arrow.set() }
             }
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { model.sidebarDragged(by: $0.translation.width) }
+                .onChanged { model.sidebarDragged(by: $0.translation.width, from: $0.startLocation.x) }
                 .onEnded { _ in
                     model.sidebarDragEnded()
                     NSCursor.arrow.set()   // a drag can end off the handle: no later hover end to restore it
                 })
+            .onDisappear { model.sidebarDragEnded() }   // R1923 i1: gone mid-drag, its gesture never ends
             .accessibilityElement()
             .accessibilityLabel("Sidebar width")
             // the drawn width (clamped to the window), never the stored value: that is outside data and Int( could trap

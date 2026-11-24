@@ -496,7 +496,7 @@ final class AgentWindowModel: ObservableObject {
     }
     let lastLiveHome: AgentLastLiveHome
     /// False while the island is off (no store): the window says so.
-    @Published private(set) var hasStore = false
+    @Published private(set) var hasStore = false { didSet { sidebarColumnMoved() } }
     /// #831 B1 step 2 (11.2): one runtime per pane of the active layout, keyed by pane id; freed by a close.
     private(set) var runtimes: [UUID: AgentPaneRuntime] = [:]
     var focusedRuntime: AgentPaneRuntime? { runtimes[layout.focused] }
@@ -560,6 +560,14 @@ final class AgentWindowModel: ObservableObject {
     private(set) var paneAreaChanges = 0
     /// 4.2 "Pick Another": the window gives the sidebar the keys (AgentsWindow wires it; tests count it).
     var focusSidebar: () -> Void = {}
+    /// #1925: the sidebar column came, went or changed mode: the window re-reads its minimum (AgentsWindow wires it).
+    var sidebarColumnChanged: () -> Void = {}
+    /// #1925: the column's mode, shown state or store changed. R1923 i1: the drag handle may have left the tree mid-drag
+    /// (its gesture is cancelled, no mouse-up comes), so a live sidebar drag ends here, as dragBegan ends a divider's.
+    private func sidebarColumnMoved() {
+        sidebarDragEnded()
+        sidebarColumnChanged()
+    }
 
     /// #831 7.2 (R6.1): which side takes plain arrows and Return; replaces the window's own Bool (`sidebarFocused` now
     /// reads and writes this). Set by a click (`mouseDown`), Tab, Pick Another and the pane focus actions; a publish, an
@@ -568,7 +576,7 @@ final class AgentWindowModel: ObservableObject {
 
     /// #900 B2 step 4 (7.2, R900-2): the sidebar hidden by ⌃⌘S; read from `Preferences.agentWindowSidebarHidden` (a
     /// Bool, nothing else) when the model is made and written on every toggle. Drawn only through `sidebarShown`.
-    @Published private(set) var sidebarHidden = Preferences.agentWindowSidebarHidden
+    @Published private(set) var sidebarHidden = Preferences.agentWindowSidebarHidden { didSet { sidebarColumnMoved() } }
     /// The sidebar is drawn: always with the split gate off (15.0: the parent's window), else unless hidden. The root
     /// view, `sidebarFrame` and `paneAreaFrame` all read this one value.
     /// #1379: Slide draws no column; its sidebar is shown only while it is slid in (an overlay over the panes).
@@ -577,7 +585,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// #1379: Settings' and the Go menu's sidebar mode (Preferences.agentSidebarMode), read when the model is made.
-    @Published private(set) var sidebarMode = Preferences.agentSidebarMode
+    @Published private(set) var sidebarMode = Preferences.agentSidebarMode { didSet { sidebarColumnMoved() } }
     /// #1379 Slide: slid in by the pointer at the window's left edge (#1458: its hover area; out again a while after it
     /// leaves the area and the sidebar), or pinned by Control-Command-S.
     @Published private(set) var slideRevealed = false
@@ -591,7 +599,8 @@ final class AgentWindowModel: ObservableObject {
     /// #1379: the full sidebar's width and Mini's rail. #1470 a2 (operator 2026-11-17, "Widen the sidebar"): TIP's sz(290)
     /// plus how much wider the full row's chip column (all 18 chips) is than the nine Command chips' (Mini's column), so a
     /// row's title and badges keep TIP's room; the panes are that much narrower.
-    static var fullSidebarWidth: CGFloat { sz(290) + digitColumnExtra }
+    static var fullSidebarWidth: CGFloat { fullSidebarWidth(at: ThemeRuntime.scale) }
+    static func fullSidebarWidth(at scale: CGFloat) -> CGFloat { 290 * scale + digitColumnExtra(at: scale) }
     /// #1470 a2: that difference at the current UI scale, from the chip views' exact ideal widths (once per scale).
     static var digitColumnExtra: CGFloat { digitColumnExtra(at: ThemeRuntime.scale) }
     static func digitColumnExtra(at scale: CGFloat) -> CGFloat {
@@ -626,14 +635,20 @@ final class AgentWindowModel: ObservableObject {
     let miniTip = AgentMiniTip()
     /// #1923: Full's (and Slide's overlay's) dragged width; fullSidebarWidth stays its minimum.
     let sidebarWidth = AgentSidebarWidth()
+    /// R1923 i1: the live drag's gesture start (nil between drags and for the keyboard's steps).
+    private var sidebarDragOrigin: CGFloat?
     /// #1923: a drag on the Full sidebar's line moved `dx` since it began: the terminals re-grid at its end only (as 7.5's
-    /// divider drag), so a tick is the layout alone.
-    func sidebarDragged(by dx: CGFloat) {
+    /// divider drag), so a tick is the layout alone. R1923 i1: `from` is the gesture's start (nil: the keyboard's step);
+    /// a new start while a drag is live is a new drag whose last one never ended: that one ends first, and this restarts
+    /// from the drawn width.
+    func sidebarDragged(by dx: CGFloat, from x: CGFloat? = nil) {
+        if let x, x != sidebarDragOrigin { sidebarDragEnded(); sidebarDragOrigin = x }
         if !sidebarWidth.dragging { for t in allTerminals { t.liveResizeStarted() } }
         sidebarWidth.dragged(by: dx)
     }
     /// #1923: the drag's mouse-up: the width is written once and each terminal pushes its grid once.
     func sidebarDragEnded() {
+        sidebarDragOrigin = nil
         guard sidebarWidth.dragging else { return }
         sidebarWidth.ended()
         for t in allTerminals { t.liveResizeEnded() }
@@ -3421,13 +3436,14 @@ final class AgentWindowModel: ObservableObject {
 /// #1923 (operator 2026-11-24): the Full sidebar's width (Slide's overlay too), dragged at its 1 pt line. Remembered per Mac
 /// (Preferences.agentSidebarWidth) in points at UI scale 1.0 and drawn times the scale: never under TIP's width
 /// (AgentWindowModel.fullSidebarWidth), never over `share` of the window's content (the minimum wins), and in a window
-/// below its minimum never so wide that the panes lose their last `sliver`. Observed by the sidebar column alone, so a
+/// below its minimum never so wide that the panes lose their last `strip`. Observed by the sidebar column alone, so a
 /// drag redraws that column and the layout, not the model's other views.
 @MainActor
 final class AgentSidebarWidth: ObservableObject {
     static let share: CGFloat = 0.4
-    /// The panes' least visible width (·s units) when the window is narrower than its contentMinSize.
-    static let sliver: CGFloat = 24
+    /// The panes' least visible width (·s units): #1925 the window's minimum keeps it beside the sidebar column
+    /// (AgentsWindow.contentMinSize), and a window still under that (an old frame) never loses it to the sidebar.
+    static let strip: CGFloat = 40
     @Published private(set) var points: CGFloat? = Preferences.agentSidebarWidth.map { CGFloat($0) }
     /// The root view's content width (AgentWindowRootView writes it on a change; 0: not measured, the minimum is drawn).
     /// Publishes only when the drawn width moves, so a window resize while under the 40% line redraws nothing here.
@@ -3444,7 +3460,7 @@ final class AgentSidebarWidth: ObservableObject {
         let least = AgentWindowModel.fullSidebarWidth
         guard content > 0 else { return least }
         let w = max(least, min((stored ?? 0) * ThemeRuntime.scale, content * share))
-        return max(0, min(w, content - 1 - sz(sliver)))
+        return max(0, min(w, content - 1 - sz(strip)))
     }
 
     /// The line moved `dx` points since the drag began (right is positive: wider). Kept clamped; published only on a change.

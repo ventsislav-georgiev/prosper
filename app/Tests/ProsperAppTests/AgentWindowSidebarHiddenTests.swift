@@ -168,7 +168,7 @@ extension AgentWindowD1Tests {
             defer { AgentWindowBand.probe = nil }
             for scale: CGFloat in [0.7, 0.85, 1.0] {
                 ThemeRuntime.scale = scale
-                for (label, size) in [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))] {
+                for (label, size) in [("min", Self.oldMin(scale)), ("wide", CGSize(width: 1600, height: 900))] {
                     let tag = "\(label) \(scale)"
                     let m = windowModel(store([session("api", .idle)]))
                     m.setVisible(true)

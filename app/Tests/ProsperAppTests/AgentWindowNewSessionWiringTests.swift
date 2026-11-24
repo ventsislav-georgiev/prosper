@@ -416,7 +416,7 @@ extension AgentWindowD1Tests {
                 ThemeRuntime.scale = scale
                 let spawns = SpawnCalls(), m = wiringModel(store([mapped("a")]), spawns)
                 defer { m.close() }
-                let size = AgentsWindow.contentMinSize(scale: scale)
+                let size = Self.oldMin(scale)
                 let win = AgentsNSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
                 win.isReleasedWhenClosed = false
                 defer { win.close() }

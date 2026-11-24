@@ -24,6 +24,9 @@ tag from the now-released section and put it on the new top draft.
 - Terminal X-ray: holding Command over a reference no longer pops up its card (it was inconsistent
   when moving the pointer off the text). Command-click still opens the card and Command-Shift-click
   still opens the link. (#1926)
+- Agent Sessions: the window can no longer be dragged so narrow that the sessions disappear behind
+  the sidebar; it now stops at the sidebar plus a small strip of the terminal, so it can also be
+  narrower than before (with a hidden or slide-in sidebar, down to just that strip). (#1925)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

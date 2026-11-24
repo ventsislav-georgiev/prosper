@@ -8,6 +8,8 @@ import XCTest
 /// AgentWindowBand.shown): every row saves the gate, sets it and puts it back in a defer.
 extension AgentWindowD1Tests {
     final class BandProbeBox { var seen: [String: CGRect] = [:] }
+    /// The window's minimum before #1925 (640 x 420 at 1.0, plus #1470's chip growth): the band rows' narrowest layout.
+    @MainActor static func oldMin(_ s: CGFloat) -> CGSize { CGSize(width: 640 * s + AgentWindowModel.digitColumnExtra(at: s), height: 420 * s) }
 
     /// Every band part's frame by kind ("band", "layout", "chip", "all"; "picker" never since #1471), from a fresh never-shown window at
     /// `size`, on the pixel grid of `backing` (nil: the screen's). The probe closure runs on the main actor (SwiftUI layout).
@@ -61,7 +63,7 @@ extension AgentWindowD1Tests {
             empty.setVisible(true)
             defer { empty.close() }
             bandTwoPanes(empty)
-            let sizes = [("min", AgentsWindow.contentMinSize(scale: scale)), ("wide", CGSize(width: 1600, height: 900))]
+            let sizes = [("min", Self.oldMin(scale)), ("wide", CGSize(width: 1600, height: 900))]
             // #1253: on the 1x pixel grid of CI's runner and the 2x of a Retina Mac, whatever this machine's screen.
             for (label, size, px) in sizes.flatMap({ s in [CGFloat(1), 2].map { (s.0, s.1, $0) } }) {
                 let tag = "\(label) \(scale) \(Int(px))x"
@@ -124,7 +126,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             m.select(.live(paneKey("api")))
             bandTwoPanes(m)   // #1538: the band shows only with something to show; two panes (the chip slot) keep it
-            let least = AgentsWindow.contentMinSize(scale: scale)
+            let least = Self.oldMin(scale)
             var hadChip = true, hadLayout = true, layoutAlone = 0
             var steps: [String] = []
             for w in stride(from: CGFloat(1600), through: least.width, by: -24) {

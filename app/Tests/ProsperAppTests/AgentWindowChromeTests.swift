@@ -356,13 +356,12 @@ extension AgentWindowD1Tests {
                 assertClose(win.backgroundColor.usingColorSpace(.sRGB),
                             NSColor(Neon.bgTop).withAlphaComponent(win.isOpaque ? 1 : ThemeRuntime.backdropFillOpacity)
                                 .usingColorSpace(.sRGB), "strip is the backdrop's top colour \(tag)", tolerance: 0.001)
-                // #881 (QA #735 INFO-5): literal sizes, not the helper under test (640 x 420 pt at 1.0).
+                // #881 (QA #735 INFO-5): literal heights, not the helper under test (420 pt at 1.0); #1925: the width is the
+                // sidebar's + line + strip (AgentWindowMinWidthTests checks it in literals per mode).
                 let want = [1.0: NSSize(width: 640, height: 420), 0.85: NSSize(width: 544, height: 357),
                             0.7: NSSize(width: 448, height: 294)][scale]!
-                // #1470 a2: plus the full sidebar's growth at that scale (its own row checks it against the chips).
-                XCTAssertEqual(win.contentMinSize.width, want.width + AgentWindowModel.digitColumnExtra(at: scale), accuracy: 0.001, tag)
                 XCTAssertEqual(win.contentMinSize.height, want.height, accuracy: 0.001, tag)
-                XCTAssertEqual(win.contentMinSize, AgentsWindow.contentMinSize(scale: scale), tag)
+                XCTAssertEqual(win.contentMinSize, AgentsWindow.contentMinSize(m, scale: scale), tag)
                 let content = win.contentRect(forFrameRect: win.frame).size
                 XCTAssertGreaterThanOrEqual(content.width, win.contentMinSize.width, tag)
                 XCTAssertGreaterThanOrEqual(content.height, win.contentMinSize.height, tag)
