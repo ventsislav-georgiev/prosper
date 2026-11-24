@@ -12,28 +12,21 @@
   {
    "name": "focused_pane_at_unfocused_site",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)",
-   "new": "AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)",
+   "old": "AgentPanePlaceholder.emptyCard(model, pane: runtime.pane)",
+   "new": "AgentPanePlaceholder.emptyCard(model, pane: model.layout.focused)",
    "expect": "killed"
   },
   {
    "name": "gate_ignored",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane)",
-   "new": "enabled: true) { model.focusPane(pane)",
+   "old": "enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane); model.startShell() }",
+   "new": "enabled: true) { model.focusPane(pane); model.startShell() }",
    "expect": "killed"
   },
   {
-   "name": "no_pill_unfocused",
+   "name": "no_pill",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "                            AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)   // #1920\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "no_pill_focused",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "                    AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)   // #1920\n",
+   "old": "                newShellPill(model, pane: pane)   // #1920\n",
    "new": "",
    "expect": "killed"
   }

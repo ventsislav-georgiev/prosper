@@ -1,0 +1,27 @@
+{
+ "entry": 1928,
+ "filter": "AgentWindowD1Tests/testEmptyPaneCardIsTheSameFocusedOrNotAndNewSessionFocusesItsPane|AgentWindowD1Tests/testEmptyPaneClosePillOnlyWithSeveralPanesAndClosesItsOwnPane",
+ "mutants": [
+  {
+   "name": "detail-differs",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "static let emptyDetail = \"Pick a session from the list, or start one here.\"",
+   "new": "static let emptyDetail = \"Up and down move through the list; Return or a click moves into it.\"",
+   "expect": "killed"
+  },
+  {
+   "name": "new-session-no-focus",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "{ model.focusPane(pane); model.openNewSession() }",
+   "new": "{ model.openNewSession() }",
+   "expect": "killed"
+  },
+  {
+   "name": "unfocused-own-card",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "AgentPanePlaceholder.emptyCard(model, pane: runtime.pane)   // #1928",
+   "new": "AgentEmptyState(icon: \"sidebar.left\", title: \"Select a session\", detail: AgentPanePlaceholder.detail)   // #1928",
+   "expect": "killed"
+  }
+ ]
+}
