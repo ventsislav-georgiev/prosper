@@ -1,0 +1,20 @@
+{
+ "entry": "1926",
+ "filter": "XrayHoverTests/testCommandHoldOverAMarkOpensNothing|AgentTerminalFileLinkTests/testTheCommandHoverUnderlinesALinkByShapeOnly",
+ "mutants": [
+  {
+   "name": "hold-hovers-again",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "    func command(_ down: Bool) {\n        linkHover(down ? pointer : nil)",
+   "new": "    func command(_ down: Bool) {\n        hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)\n        linkHover(down ? pointer : nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "underline-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "    func command(_ down: Bool) {\n        linkHover(down ? pointer : nil)",
+   "new": "    func command(_ down: Bool) {\n        linkHover(nil)",
+   "expect": "killed"
+  }
+ ]
+}

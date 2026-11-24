@@ -1,19 +1,12 @@
 {
  "entry": 1701,
- "filter": "XrayHoverTests|XrayTerminalRefTests|XrayGridMarksTests",
+ "filter": "XrayHoverTests|XrayTerminalRefTests|XrayGridMarksTests|AgentTerminalFileLinkTests",
  "mutants": [
   {
    "name": "cmd_gate",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
    "old": "        command(event.modifierFlags.contains(.command))\n",
    "new": "        command(true)\n",
-   "expect": "killed"
-  },
-  {
-   "name": "cmd_release",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)",
-   "new": "if down { hover.point(pointer.flatMap { mark(at: $0) }?.key) }",
    "expect": "killed"
   },
   {
