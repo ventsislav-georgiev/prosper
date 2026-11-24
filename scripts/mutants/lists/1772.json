@@ -3,34 +3,6 @@
  "filter": "Xray",
  "mutants": [
   {
-   "name": "M-nopromote",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        guard card != nil else { return }\n        promoted = true",
-   "new": "        guard card != nil else { return }\n        return",
-   "expect": "killed"
-  },
-  {
-   "name": "M-linger",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "card != nil, !promoted, linger == nil {\n            linger = arm",
-   "new": "card != nil, linger == nil {\n            linger = arm",
-   "expect": "killed"
-  },
-  {
-   "name": "M-outputclose",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        if promoted, !all { return }",
-   "new": "        if false, !all { return }",
-   "expect": "killed"
-  },
-  {
-   "name": "M-nopromotedcall",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
-   "old": "; self.promoted?() }",
-   "new": " }",
-   "expect": "killed"
-  },
-  {
    "name": "M-parsed",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefResults.swift",
    "old": "out.count + (parsed.map(Self.estimate) ?? 0)",

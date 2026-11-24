@@ -1,0 +1,55 @@
+{
+ "entry": "1931",
+ "filter": "XrayRemoteMarksTests/testEscClosesACardElseReachesThePty|XrayHoverTests/testEveryRefKindOpensItsCardOnCommandClick|XrayHoverTests/testExtensionCardArgHasNoTranscriptAndSpawnsNoDch|XrayHoverTests/testEscHideAndBlurCloseAnyCard|XrayHoverTests/testACachedLightAnswerMakesTheClickACacheHit|XrayRefStagedOpenTests/testACachedLightAnswerOpensTheCardWithNoWait|XrayRefResultsTests/testALightAnswerNeverServesAFullAskAFullOneServesTheNext|AgentTerminalFileLinkTests/testTheCommandHoverUnderlinesALinkByShapeOnly",
+ "mutants": [
+  {
+   "name": "escNoShownCheck",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard hover.model != nil && cardShown(window) else { return false }",
+   "new": "guard hover.model != nil else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "listNumberDropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "                ?? XrayRefSpans.listed(key, in: p.refs.entries) else { return false }   // #1701: a list number's",
+   "new": "                else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "extAsDch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if let x { p.panel.extRef(e, x, calls: calls()) } else { p.panel.openRef(e) }",
+   "new": "_ = x; p.panel.openRef(e)",
+   "expect": "killed"
+  },
+  {
+   "name": "modelNotKept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        model = p.panel\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "earlyOff",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        let early = staged && scope == \"project\"\n",
+   "new": "        let early = false\n",
+   "expect": "killed"
+  },
+  {
+   "name": "lightServesFull",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: false, scope: scope)",
+   "new": "key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: true, scope: scope)",
+   "expect": "killed"
+  },
+  {
+   "name": "flagsUnwired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        marks.command(event.modifierFlags.contains(.command))\n        super.flagsChanged(with: event)",
+   "new": "        super.flagsChanged(with: event)",
+   "expect": "killed"
+  }
+ ]
+}

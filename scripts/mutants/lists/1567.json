@@ -155,13 +155,6 @@
    "old": "let ge = c.partial ? \"\\u{2265}\" : \"\"",
    "new": "let ge = \"\"",
    "expect": "killed"
-  },
-  {
-   "name": "M-onscreen",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "self?.marks.filter { $0.key == k }.count ?? 0",
-   "new": "self?.marks.count ?? 0",
-   "expect": "killed"
   }
  ]
 }

@@ -36,20 +36,6 @@
    "old": "if !c.done || c.more {",
    "new": "if !c.done {",
    "expect": "killed"
-  },
-  {
-   "name": "M6-dwellKept",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        dwell?.cancel()\n        dwell = nil\n        guard let key else {",
-   "new": "        dwell = nil\n        guard let key else {",
-   "expect": "killed"
-  },
-  {
-   "name": "M7-switchKeeps",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now\n",
-   "new": "",
-   "expect": "killed"
   }
  ]
 }

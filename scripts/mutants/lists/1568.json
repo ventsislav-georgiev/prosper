@@ -45,27 +45,6 @@
    "expect": "killed"
   },
   {
-   "name": "hover_remote_reads",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
-   "old": "        if target.dir == nil {\n            if let hit",
-   "new": "        if false {\n            if let hit",
-   "expect": "killed"
-  },
-  {
-   "name": "hover_no_cache",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
-   "old": "            if let hit = refResults()?.get(",
-   "new": "            if false, let hit = refResults()?.get(",
-   "expect": "killed"
-  },
-  {
-   "name": "hover_no_note",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
-   "old": "            refNote = Self.pinForPassages\n",
-   "new": "\n",
-   "expect": "killed"
-  },
-  {
    "name": "panel_cold_run",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
    "old": "(XrayPanels.dch(), XrayPanels.shared.requests.run(for: target, cold: XrayPanels.run), refs)",
@@ -138,15 +117,8 @@
   {
    "name": "escape_always",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }",
+   "old": "guard hover.model != nil && cardShown(window) else { return false }",
    "new": "guard true else { return false }",
-   "expect": "killed"
-  },
-  {
-   "name": "escape_pinned_missed",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }",
-   "new": "guard hover.card != nil else { return false }",
    "expect": "killed"
   }
  ]

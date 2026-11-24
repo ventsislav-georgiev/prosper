@@ -101,13 +101,6 @@
    "expect": "killed"
   },
   {
-   "name": "m15_ext_card_runs_dch",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "if extCard == nil { read = model?.hoverRead(e) }",
-   "new": "if true { read = model?.hoverRead(e) }",
-   "expect": "killed"
-  },
-  {
    "name": "m16_six_actions",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayExtensionRefs.swift",
    "old": ".compactMap(action).prefix(maxActions)",

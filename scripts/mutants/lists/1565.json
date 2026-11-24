@@ -3,21 +3,6 @@
  "filter": "XrayHoverTests|XrayGridMarksTests|XrayRefPopoverTests|XrayRefRunTests|XrayRefStreamTests|XrayRefContextTests|XrayOtherProjectsTests|XrayRefLinkTests",
  "mutants": [
   {
-   "name": "dwell-no-over-guard",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard let self, self.over == key, self.card == nil else { return }",
-   "new": "guard let self, self.card == nil else { return }",
-   "expect": "survives",
-   "note": "#1881 equivalent: `over` is private(set) and set only in point() (XrayGridMarks.swift:437), which cancels the dwell item on the next line on main; asyncAfter never runs a cancelled DispatchWorkItem, so a dwell that fires always has over == key"
-  },
-  {
-   "name": "full-not-light",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefLink.swift",
-   "old": "budget: XrayPanels.budget(), for: self) == true else {",
-   "new": "budget: nil, for: self) == true else {",
-   "expect": "killed"
-  },
-  {
    "name": "budget-none-300",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
    "old": "guard !s.isEmpty else { return 250 }",
@@ -32,129 +17,24 @@
    "expect": "killed"
   },
   {
-   "name": "switch-no-kill",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "switch-no-settle",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "settle = arm(Self.settleDelay) {",
-   "new": "settle = arm(0) {",
-   "expect": "killed"
-  },
-  {
-   "name": "dwell-300",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "static let dwellDelay: TimeInterval = 0.5",
-   "new": "static let dwellDelay: TimeInterval = 0.3",
-   "expect": "killed"
-  },
-  {
-   "name": "linger-500",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "static let lingerDelay: TimeInterval = 0.25",
-   "new": "static let lingerDelay: TimeInterval = 0.5",
-   "expect": "killed"
-  },
-  {
-   "name": "card-hover-ignored",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        onCard = inside\n        if inside {",
-   "new": "        onCard = inside\n        if false {",
-   "expect": "killed"
-  },
-  {
-   "name": "output-closes-pinned",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "    func output(resized: Bool = false) {\n        hover.close(all: false)",
-   "new": "    func output(resized: Bool = false) {\n        hover.close(all: true)",
-   "expect": "killed"
-  },
-  {
-   "name": "output-keeps-unpinned",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "    func output(resized: Bool = false) {\n        hover.close(all: false)\n",
-   "new": "    func output(resized: Bool = false) {\n",
-   "expect": "killed"
-  },
-  {
    "name": "pin-not-full",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        m.openRef(e)\n",
-   "new": "        _ = m.hoverRead(e)\n",
-   "expect": "killed"
-  },
-  {
-   "name": "guard-keeps-others",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "func mine(_ m: XrayRefStream.Mention) -> Bool { !shell && m.session == own }",
-   "new": "func mine(_ m: XrayRefStream.Mention) -> Bool { !shell }",
-   "expect": "killed"
-  },
-  {
-   "name": "guard-shell-lines",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "func mine(_ m: XrayRefStream.Mention) -> Bool { !shell && m.session == own }",
-   "new": "func mine(_ m: XrayRefStream.Mention) -> Bool { m.session == own }",
-   "expect": "killed"
-  },
-  {
-   "name": "guard-others-passage",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
-   "old": "if shell || d.session != own { d.passage = \"\" }",
-   "new": "if shell { d.passage = \"\" }",
-   "expect": "killed"
-  },
-  {
-   "name": "popover-unguarded",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
-   "old": "hover.map { c.guarded(pinned: false, shell: $0.shell) } ?? c",
-   "new": "c",
-   "expect": "killed"
-  },
-  {
-   "name": "ready-no-focus",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "shown() && windowKey(host?.window) && buttons() == 0",
-   "new": "windowKey(host?.window) && buttons() == 0",
-   "expect": "killed"
-  },
-  {
-   "name": "ready-no-buttons",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "&& buttons() == 0 &&",
-   "new": "&&",
-   "expect": "killed"
-  },
-  {
-   "name": "ready-no-key",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "shown() && windowKey(host?.window) && buttons() == 0",
-   "new": "shown() && buttons() == 0",
+   "old": "if let x { p.panel.extRef(e, x, calls: calls()) } else { p.panel.openRef(e) }",
+   "new": "if let x { p.panel.extRef(e, x, calls: calls()) }",
    "expect": "killed"
   },
   {
    "name": "blur-keeps-card",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "if follow == nil { take(nil); hover.close(all: true) }",
+   "old": "if follow == nil { take(nil); hover.close() }",
    "new": "if follow == nil { take(nil) }",
    "expect": "killed"
   },
   {
    "name": "hide-keeps-card",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        super.viewDidHide()\n        hover.close(all: true)\n",
+   "old": "        super.viewDidHide()\n        hover.close()\n",
    "new": "        super.viewDidHide()\n",
-   "expect": "killed"
-  },
-  {
-   "name": "stale-close-is-news",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "    private func closed(_ g: Int) {\n        guard g == gen else { return }\n",
-   "new": "    private func closed(_ g: Int) {\n",
    "expect": "killed"
   },
   {

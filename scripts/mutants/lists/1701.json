@@ -31,13 +31,6 @@
    "expect": "killed"
   },
   {
-   "name": "click_no_pin",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        guard card != nil else { return false }\n        pin()\n",
-   "new": "        guard card != nil else { return false }\n",
-   "expect": "killed"
-  },
-  {
    "name": "list_off",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
    "old": "(found + XrayRefSpans.continued(line, after: found))",
