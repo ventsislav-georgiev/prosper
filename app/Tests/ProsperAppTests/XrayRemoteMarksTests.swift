@@ -4,7 +4,7 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1568 (X-R a, plan 905 phase G): grid marks, hover and Cmd-click on a remote row, keyed "host:name". A fake follow
+/// #1568 (X-R a, plan 905 phase G): grid marks and Cmd-click on a remote row, keyed "host:name". A fake follow
 /// (XrayFollowTests.Fake) gives the marks, a fake dch runner (XrayRefRunTests.Run) records each argv, a fake `--requests`
 /// child (XrayRequestsTests.Spawns) stands in for the warm connection, a fake presenter (XrayRefPopoverTests.Cards)
 /// records the cards. The windows are never ordered in or made key; the Esc is a built NSEvent handed to the view's own
@@ -58,7 +58,7 @@ final class XrayRemoteMarksTests: XCTestCase {
     }
 
     /// A live remote terminal (never in a window unless the row puts it in one), the items kept, the overlay's seams on
-    /// (shown, key window, no button; a card is up while the fake presenter shows one).
+    /// (shown; a card is up while the fake presenter shows one).
     func rig() -> Rig {
         let t = AgentTerminalController()
         let v = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
@@ -72,8 +72,6 @@ final class XrayRemoteMarksTests: XCTestCase {
         v.viewportText = { text }
         v.passedKey = { [weak r] in r?.passed.append($0) }
         v.marks.windowShown = { _ in true }
-        v.marks.windowKey = { _ in true }
-        v.marks.buttons = { 0 }
         v.marks.cardShown = { [weak r] _ in r?.cards.shown != nil }
         v.marks.after = { [weak r] d, item in r?.items.append((d, item)) }
         v.marks.hop = XrayGridMarksTests.inline   // #1655: the compute and its apply at once, on main
@@ -84,7 +82,7 @@ final class XrayRemoteMarksTests: XCTestCase {
         return r
     }
 
-    /// `rig` with the remote follow's snapshot in and a hover panel on "example-host:api" wired to the fake presenter:
+    /// `rig` with the remote follow's snapshot in and a card panel on "example-host:api" wired to the fake presenter:
     /// `linked`, the panel a grid click makes (XrayRefLink.panel: its run is the warm connection's); else one on the
     /// cold fake runner.
     func hoverRig(_ fake: XrayFollowTests.Fake, linked: Bool = false) throws -> Rig {
@@ -154,34 +152,37 @@ final class XrayRemoteMarksTests: XCTestCase {
         }
     }
 
-    /// Red if a remote hover spawns (the light read: K4.1 says none), or its card lacks the window's cached answer or the
-    /// "Pin for passages" note; a ref with nothing cached shows the note alone, still with no spawn.
-    func testRemoteHoverSpawnsNothingAndShowsTheCachedCard() async throws {
+    /// #1931 (was the remote hover row): red if a remote Command-click with the window's cached answer spawns or lacks
+    /// that answer, or one with nothing cached runs a light read beside its full one (K4.1: a remote runs none).
+    func testRemoteClickServesTheCachedCardAndRunsNoLightRead() async throws {
+        let saved = XrayPanels.lightFirst
+        defer { XrayPanels.lightFirst = saved }
+        XrayPanels.lightFirst = { true }
         try await withSeams { fake in
             let r = try hoverRig(fake)
             let p = try XCTUnwrap(r.panel)
             let cache = XrayRefResults()
             cache.put(.init(target: target, ref: "#12", light: false, scope: "project"), Data(XrayHoverTests.stream.utf8))
             p.refResults = { cache }
-            r.v.marks.hover.point("issue:#12")
-            r.item(0.5)?.perform()
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
             XCTAssertTrue(r.cards.shown != nil, "the card")
-            XCTAssertEqual(r.v.marks.hover.card?.key, "issue:#12")
+            XCTAssertEqual(p.refCard?.key, "issue:#12")
             XCTAssertEqual(p.refContext?.definitions.isEmpty, false, "the cached answer")
-            XCTAssertEqual(p.refNote, XrayPanelModel.pinForPassages)
-            r.v.marks.hover.point("issue:#1")   // a switch: nothing cached for #1
-            r.item(0.15)?.perform()
-            XCTAssertEqual(r.v.marks.hover.card?.key, "issue:#1")
-            XCTAssertTrue(p.refContext == nil)
-            XCTAssertEqual(p.refNote, XrayPanelModel.pinForPassages)
-            XCTAssertTrue(r.v.marks.hover.read == nil)
-            XCTAssertEqual(r.run.calls.count, 0, "a remote hover runs nothing")
+            XCTAssertTrue(r.panels.refReading == nil)
+            XCTAssertEqual(r.run.calls.count, 0, "a hit runs nothing")
+            XCTAssertTrue(r.v.marks.hover.click("issue:#1"))   // nothing cached for #1: its read runs until cancelled
+            await until { r.run.calls.count >= 1 }
+            r.v.marks.hover.close()
+            await r.panels.refReading?.value
+            XCTAssertEqual(r.run.calls.count, 1, "one read")
+            XCTAssertEqual(r.run.calls.last?.contains("--full"), true)
+            XCTAssertFalse(r.run.calls.contains { $0.contains("--budget-ms") }, "no light one")
         }
     }
 
-    /// Red if Pin on a remote hover card runs anything but one full --ref read, or that read goes cold while the warm
-    /// host:name connection answers (XrayRefLink.panel's run).
-    func testPinGivesOneFullReadOverTheWarmConnection() async throws {
+    /// Red if a Command-click on a remote mark runs anything but one full --ref read, or that read goes cold while the
+    /// warm host:name connection answers (XrayRefLink.panel's run).
+    func testCommandClickGivesOneFullReadOverTheWarmConnection() async throws {
         let panels = XrayPanels.shared
         let spawns = XrayRequestsTests.Spawns { XrayRequestsTests.Child(reply: XrayRequestsTests.echo) }
         let (old, oldRun, cold) = (panels.requests.spawn, XrayPanels.run, XrayRefRunTests.Run())
@@ -189,11 +190,8 @@ final class XrayRemoteMarksTests: XCTestCase {
         (panels.requests.spawn, XrayPanels.run) = (spawns.spawn, cold.run)   // the cold path is a recorder too
         try await withSeams { fake in
             let r = try hoverRig(fake, linked: true)
-            r.v.marks.hover.point("issue:#12")
-            r.item(0.5)?.perform()
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
             XCTAssertTrue(r.cards.shown != nil)
-            XCTAssertEqual(spawns.calls.count, 0, "the hover ran nothing")
-            r.v.marks.hover.pin()
             await until { spawns.children.last?.writes.isEmpty == false }
             await panels.refReading?.value
             XCTAssertEqual(spawns.calls, [["--xray", "example-host:api", "--requests", "--json"]])
@@ -282,23 +280,18 @@ final class XrayRemoteMarksTests: XCTestCase {
             let r = try hoverRig(fake)
             r.v.keyDown(with: try Self.esc())
             XCTAssertEqual(r.passed.count, 1, "no card: the pty's")
-            r.v.marks.hover.point("issue:#12")
-            r.item(0.5)?.perform()
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
             XCTAssertTrue(r.cards.shown != nil)
             r.v.keyDown(with: try Self.esc(.shift))
             XCTAssertTrue(r.cards.shown != nil, "Shift-Esc is the program's")
             XCTAssertEqual(r.passed.count, 2)
             r.v.keyDown(with: try Self.esc())
             XCTAssertTrue(r.cards.shown == nil, "Esc closed the card")
-            XCTAssertTrue(r.v.marks.hover.card == nil)
             XCTAssertEqual(r.passed.count, 2, "the closing Esc never reaches the pty")
-            r.v.marks.hover.point(nil)
-            r.v.marks.hover.point("issue:#12")
-            r.item(0.5)?.perform()
-            r.v.marks.hover.pin()
-            XCTAssertTrue(r.cards.shown != nil, "pinned")
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
+            XCTAssertTrue(r.cards.shown != nil, "again")
             r.v.keyDown(with: try Self.esc())
-            XCTAssertTrue(r.cards.shown == nil, "Esc closes a pinned card too")
+            XCTAssertTrue(r.cards.shown == nil, "Esc closes it again")
             XCTAssertEqual(r.passed.count, 2)
             r.v.keyDown(with: try Self.esc())
             XCTAssertEqual(r.passed.count, 3, "no card again: the pty's")
@@ -330,8 +323,7 @@ final class XrayRemoteMarksTests: XCTestCase {
             let recaps = XrayRecaps.shared, t = XrayTarget(name: "api", dir: "/Users/example/.dch")
             recaps.focus(t)
             defer { recaps.leave(t) }
-            r.v.marks.hover.point("issue:#12")
-            r.item(0.5)?.perform()
+            XCTAssertTrue(r.v.marks.hover.click("issue:#12"))
             XCTAssertTrue(r.cards.shown != nil)
             recaps.take((0, Data(#"{"schema":1,"chapters":[{"chapter":"a:1","turn_title":"Fix the login test"}],"refs":[]}"#.utf8)), for: t)
             XCTAssertEqual(recaps.shown?.target, t)

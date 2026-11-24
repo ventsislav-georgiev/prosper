@@ -12,10 +12,10 @@ import SwiftUI
 // Output takes off at once only the marks whose cells no longer hold their text (#1628: a spinner or status-line redraw
 // elsewhere used to flip every mark off and on); a one-shot settle item, re-armed by each output, places them again.
 // A resize takes them all off. Never a timer.
-// #1565 (X-T b, plan 905 phase B, spec 6.2): the overlay's own tracking area (no hitTest needed: AppKit sends a tracking
-// area's moves to its owner) feeds XrayHover, the hover card's dwell, settle and close items. Moves, entries and exits
-// stop here (never passed on: the terminal's own tracking area already has them).
-// #1568 (X-R a, plan 905 phase G): a remote pane too, its follow keyed "host:name"; its hover runs nothing (K4.1).
+// #1565 (X-T b, plan 905 phase B): the overlay's own tracking area (no hitTest needed: AppKit sends a tracking area's
+// moves to its owner) keeps the pointer for #1724's link underline. Moves, entries and exits stop here (never passed on:
+// the terminal's own tracking area already has them). #1926/#1931: no hover card; a mark's card opens on a Command-click.
+// #1568 (X-R a, plan 905 phase G): a remote pane too, its follow keyed "host:name".
 // #1569 (X7 c, 5.1 exception): a live extension rule with a handler marks its spans too when one key has 2 or more on the
 // grid; its card calls the handler on the extension's lane (XrayExtensionCalls), never dch.
 // #1655: place() only snapshots on main (lines, refs, rules); marks() and extMarks() run on a serial utility queue
@@ -50,7 +50,7 @@ final class XrayGridMarksView: NSView {
         didSet {
             guard follow !== oldValue else { return }
             sink = follow?.$state.sink { [weak self] s in self?.take(s?.refs) }   // @Published: the new value, now
-            if follow == nil { take(nil); hover.close(all: true) }   // #1565: blur (another pane's focus) closes any card
+            if follow == nil { take(nil); hover.close() }   // #1565: blur (another pane's focus) closes any card
         }
     }
     private(set) var refs: XrayRefs?
@@ -79,13 +79,9 @@ final class XrayGridMarksView: NSView {
         }
     }
 
-    /// #1565: the hover card's state; its items run through `after`, its gate is hoverReady, its panel hoverPanel.
+    /// #1565: the marks' card (a Command-click's); its panel hoverPanel.
     let hover = XrayHover()
-    /// #1565: the window is key (rows answer for a window they never make key).
-    var windowKey: @MainActor (NSWindow?) -> Bool = { $0?.isKeyWindow == true }
-    /// #1565: the mouse buttons down now (NSEvent.pressedMouseButtons; rows answer).
-    var buttons: @MainActor () -> Int = { NSEvent.pressedMouseButtons }
-    /// #1565: the window shows a card already (a pinned one, a Refs row's): no hover card over it.
+    /// #1565: the window shows a card (Esc closes it only then).
     var cardShown: @MainActor (NSWindow?) -> Bool = { ($0 as? AgentsNSWindow)?.cards.isShown == true }
     private var observers: [NSObjectProtocol] = []
 
@@ -96,9 +92,6 @@ final class XrayGridMarksView: NSView {
         // #1565: active in the app, not the key window only: a shown popover may take key and the pointer still moves here
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                                        owner: self, userInfo: nil))
-        hover.after = { [weak self] in self?.after($0, $1) }
-        hover.onScreen = { [weak self] k in self?.marks.filter { $0.key == k }.count ?? 0 }   // #1567: the card's footer
-        hover.ready = { [weak self] in self?.hoverReady() == true }
         hover.ext = { [weak self] k in self?.extMatches[k] }   // #1569
         hover.calls = { [weak self] in XrayExtensionCalls.of(self?.window) }
         hover.panel = { [weak self] in
@@ -116,9 +109,7 @@ final class XrayGridMarksView: NSView {
 
     /// The pty wrote: a mark whose cells changed (or moved: a scroll) goes now, the rest stay; all are placed again once
     /// output rests. `resized`: the grid's cells changed, every mark goes.
-    /// #1565: output closes an unpinned hover card (a pinned one stays).
     func output(resized: Bool = false) {
-        hover.close(all: false)
         // #1724: the text under a Command hover may have changed: one re-read per drain, only while one is on the grid
         if link != nil || linkCell != nil { linkCell = nil; linkHover(pointer) }
         // #1628: one viewport read per drain, only while marks are drawn (drains are coalesced, one per main-loop turn)
@@ -226,12 +217,6 @@ final class XrayGridMarksView: NSView {
         return marks.first { $0.row == c.row && c.col >= $0.col && c.col < $0.col + $0.cells }
     }
 
-    /// #1565 (6.2): a dwell opens a card only on the window's focused pane (shown), its window key, no button down and
-    /// no other card up.
-    func hoverReady() -> Bool {
-        shown() && windowKey(host?.window) && buttons() == 0 && !cardShown(host?.window)
-    }
-
     // #1565: the pointer, from this view's tracking area only; never passed on (a plain click is never taken: hitTest nil)
     // #1926 (operator 2026-11-24): no hover card: a mark's card opens on a Command-click only (AgentTerminalHostView.mouseDown);
     // the pointer is kept for #1724's link underline, drawn only while Command is held
@@ -268,19 +253,19 @@ final class XrayGridMarksView: NSView {
         if now != link { link = now; needsDisplay = true }
     }
 
-    /// #1565: Esc in the terminal closes any card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
-    /// (no hover card, and no card of the hover's panel up) leaves the Esc to the pty.
+    /// #1565: Esc in the terminal closes the card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
+    /// (no card of the marks' panel up) leaves the Esc to the pty.
     @discardableResult
     func escape() -> Bool {
-        guard hover.card != nil || hover.model != nil && cardShown(window) else { return false }
-        hover.close(all: true)
+        guard hover.model != nil && cardShown(window) else { return false }
+        hover.close()
         return true
     }
 
     /// #1565: pane hide closes any card.
     override func viewDidHide() {
         super.viewDidHide()
-        hover.close(all: true)
+        hover.close()
     }
 
     /// #1565: window hide (miniaturize, close, ordered out) and focus loss (the window resigns main) close any card.
@@ -288,7 +273,7 @@ final class XrayGridMarksView: NSView {
         super.viewDidMoveToWindow()
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers = []
-        guard let w = window else { return hover.close(all: true) }
+        guard let w = window else { return hover.close() }
         let gone: [Notification.Name] = [NSWindow.didResignMainNotification, NSWindow.didMiniaturizeNotification,
                                          NSWindow.willCloseNotification, NSWindow.didChangeOcclusionStateNotification]
         observers = gone.map { name in
@@ -296,7 +281,7 @@ final class XrayGridMarksView: NSView {
             return NotificationCenter.default.addObserver(forName: name, object: w, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, !occlusion || !self.windowShown(self.window) else { return }
-                    self.hover.close(all: true)
+                    self.hover.close()
                 }
             }
         }
@@ -381,172 +366,30 @@ final class XrayMarksMemo: @unchecked Sendable {
     }
 }
 
-/// #1565 (X-T b, spec 6.2, 6.3): the hover card over the grid's marks. A 500 ms dwell on a mark opens an unpinned card
-/// with the cached ref at once and one light read; a move to another mark switches at once (the old read killed, the
-/// new light read after a one-shot 150 ms settle); 250 ms after the pointer left both the mark and the card it closes.
-/// Pin kills the light read and opens today's full card (openRef). One-shot DispatchWorkItems through `after`, never a
-/// timer; a card's close that comes after a newer card (generation `gen`) is not news.
+/// #1565, #1701: the card over the grid's marks. #1926/#1931 (operator 2026-11-24: "leave only the clicks"): no hover,
+/// dwell or unpinned card; a Command-click on a mark opens today's full card (openRef, an extension's extRef) at once.
 @MainActor
 final class XrayHover {
-    static let dwellDelay: TimeInterval = 0.5
-    static let settleDelay: TimeInterval = 0.15
-    static let lingerDelay: TimeInterval = 0.25
-
-    var after: (TimeInterval, DispatchWorkItem) -> Void = { DispatchQueue.main.asyncAfter(deadline: .now() + $0, execute: $1) }
-    /// The focused pane, its key window, no button down, no other card (XrayGridMarksView.hoverReady).
-    var ready: @MainActor () -> Bool = { false }
     /// The panel the card shows in and the pane's refs (XrayRefLink.hoverPanel); nil: no card.
     var panel: @MainActor () -> (panel: XrayPanelModel, refs: XrayRefs)? = { nil }
-    /// #1567: the grid's marks of a ref key now (XrayGridMarksView.marks): the card's "N on screen".
-    var onScreen: @MainActor (String) -> Int = { _ in 0 }
     /// #1569: an extension mark's match (XrayGridMarksView.extMatches); nil: a dch ref.
     var ext: @MainActor (String) -> XrayExtensionRefs.Match? = { _ in nil }
     /// #1569: the window's handler calls (XrayExtensionCalls.of); nil: the card says unavailable.
     var calls: @MainActor () -> XrayExtensionCalls? = { nil }
 
-    /// The mark under the pointer.
-    private(set) var over: String?
-    /// The unpinned card's ref; nil: no hover card.
-    private(set) var card: XrayRefs.Entry?
-    /// #1569: the card's extension match; nil for a dch ref's card.
-    private(set) var extCard: XrayExtensionRefs.Match?
-    /// The card's session is a live shell (XrayRefContext.shell): titles and counts only.
-    private(set) var shell = false
-    /// The card's light read, once started (killed by a switch, Pin, a close).
-    private(set) var read: Task<Void, Never>?
-    private(set) var dwell: DispatchWorkItem?
-    private(set) var settle: DispatchWorkItem?
-    private(set) var linger: DispatchWorkItem?
-    /// The panel of the last card, pinned or not (Esc, blur and hide close its card too).
+    /// The panel of the last card (Esc, blur and hide close its card).
     private(set) weak var model: XrayPanelModel?
-    private var onCard = false
-    /// #1772: a click promoted the card (it is key, its filter takes typing): pinned in place, no linger, output or switch closes it.
-    private(set) var promoted = false
-    private var gen = 0
 
-    private func arm(_ d: TimeInterval, _ body: @escaping @MainActor @Sendable () -> Void) -> DispatchWorkItem {
-        let item = DispatchWorkItem { MainActor.assumeIsolated { body() } }
-        after(d, item)
-        return item
-    }
-
-    /// The pointer is over mark `key` now (nil: no mark).
-    func point(_ key: String?) {
-        guard key != over else { return }
-        over = key
-        dwell?.cancel()
-        dwell = nil
-        guard let key else {
-            if card != nil, !onCard, !promoted, linger == nil { linger = arm(Self.lingerDelay) { [weak self] in self?.close(all: false) } }
-            return
-        }
-        linger?.cancel()
-        linger = nil
-        if card != nil {
-            guard key != card?.key, !promoted else { return }
-            show(key)   // a switch: the new card at once, its read after the settle
-            settle = arm(Self.settleDelay) { [weak self] in
-                guard let self, let e = self.card, e.key == key else { return }
-                self.settle = nil
-                self.startRead(e)
-            }
-        } else {
-            dwell = arm(Self.dwellDelay) { [weak self] in
-                guard let self, self.over == key, self.card == nil else { return }
-                self.dwell = nil
-                guard self.ready() else { return }
-                self.show(key)
-                if let e = self.card { self.startRead(e) }
-            }
-        }
-    }
-
-    /// #1701: a Command-click on mark `key`: its card (the one up, or a new one) pinned, no dwell. False: no card for it.
+    /// #1701: a Command-click on mark `key`: its card, pinned. False: no card for it.
     func click(_ key: String) -> Bool {
-        dwell?.cancel()
-        dwell = nil
-        if card?.key != key { show(key) }
-        guard card != nil else { return false }
-        pin()
+        let x = ext(key)   // #1569
+        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key })
+                ?? XrayRefSpans.listed(key, in: p.refs.entries) else { return false }   // #1701: a list number's
+        model = p.panel
+        if let x { p.panel.extRef(e, x, calls: calls()) } else { p.panel.openRef(e) }
         return true
     }
 
-    /// The card's light read; #1569: none for an extension card (its card asked the handler when it was made).
-    private func startRead(_ e: XrayRefs.Entry) {
-        if extCard == nil { read = model?.hoverRead(e) }
-    }
-
-    /// The pointer entered (true) or left the card.
-    func onCard(_ inside: Bool) {
-        onCard = inside
-        if inside {
-            linger?.cancel()
-            linger = nil
-        } else if over == nil, card != nil, !promoted, linger == nil {
-            linger = arm(Self.lingerDelay) { [weak self] in self?.close(all: false) }
-        }
-    }
-
-    /// #1772: a click on the hover card made it key: it stays as it is (its light read goes on) until Escape, a click
-    /// outside, Pin or a Pin-less close; the linger no longer closes it. Not Pin: that would replace the panel mid-click.
-    func promote() {
-        guard card != nil else { return }
-        promoted = true
-        linger?.cancel()
-        linger = nil
-    }
-
-    /// Pin: the light read is killed (SIGTERM through the runner's cancel) and today's full card opens in its place.
-    func pin() {
-        guard let e = card, let m = model else { return }
-        gen += 1   // the unpinned card's close, when openRef's present retires it, is not news
-        m.panels?.closeRef(started: read)
-        let x = extCard
-        reset()
-        if let x { return m.extRef(e, x, calls: calls(), hover: nil) }   // #1569: the kept or joined answer
-        m.openRef(e)
-    }
-
-    /// Closes the unpinned card and kills its read; `all`: any card of the panel (a pinned one too). Output: not all.
-    func close(all: Bool) {
-        dwell?.cancel()
-        dwell = nil
-        guard card != nil else {
-            if all { model?.dismiss() }
-            return
-        }
-        if promoted, !all { return }   // #1772: output and the linger leave a promoted card be
-        gen += 1
-        model?.panels?.closeRef(started: read)
-        reset()
-        model?.dismiss()
-    }
-
-    private func show(_ key: String) {
-        let x = ext(key)   // #1569
-        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key })
-                ?? XrayRefSpans.listed(key, in: p.refs.entries) else {   // #1701: a list number's
-            return close(all: false)
-        }
-        model?.panels?.closeRef(started: read)   // a switch: the old card's read is killed now
-        settle?.cancel()
-        (settle, read, promoted) = (nil, nil, false)   // a new card is a quiet one
-        gen += 1
-        let g = gen
-        (card, model, shell, extCard) = (e, p.panel, XrayRefContext.shell(p.refs.sessionID), x)
-        if let x { return p.panel.extRef(e, x, calls: calls(), hover: self) { [weak self] in self?.closed(g) } }
-        p.panel.hoverRef(e, hover: self) { [weak self] in self?.closed(g) }
-    }
-
-    /// The presenter closed card `g` (a click outside, its Esc, another card): its read goes with it.
-    private func closed(_ g: Int) {
-        guard g == gen else { return }
-        model?.panels?.closeRef(started: read)
-        reset()
-    }
-
-    private func reset() {
-        for item in [settle, linger] { item?.cancel() }
-        (card, read, settle, linger, onCard, extCard, promoted) = (nil, nil, nil, nil, false, nil, false)
-    }
+    /// Closes the card of the panel (its close kills its read).
+    func close() { model?.dismiss() }
 }

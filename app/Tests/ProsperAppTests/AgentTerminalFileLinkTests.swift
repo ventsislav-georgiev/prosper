@@ -351,7 +351,10 @@ final class AgentTerminalFileLinkTests: XCTestCase {
         v.marks.output()
         XCTAssertEqual(v.linkReads, reads + 1, "output under a Command hover: one re-read per drain")
         XCTAssertEqual(v.marks.link?.key, "CHANGELOG.md")
-        v.marks.command(false)
+        // R1926 t1: through the host's flagsChanged (a built event, never posted), so an unwired host goes red
+        v.flagsChanged(with: try XCTUnwrap(NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: [], timestamp: 0,
+                                                            windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                                                            isARepeat: false, keyCode: 55)))
         XCTAssertTrue(v.marks.link == nil, "Command up drops it")
         v.mouseCaptured = { false }
         try move(v, col: 13, row: 0)

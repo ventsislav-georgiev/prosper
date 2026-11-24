@@ -15,7 +15,7 @@ struct XrayExtensionRule: Equatable, Sendable {
     /// The card's source line, as shown (OutsideText).
     let label: String
     let inCode: InCode
-    /// A Lua global, run only on hover or pin (X7 c); nil = no card.
+    /// A Lua global, run only when its card opens (X7 c); nil = no card.
     let handler: String?
     let timeout: Int
     let pieces: [Piece]
@@ -303,7 +303,7 @@ extension XrayExtensionRefs {
         return String(decoding: d, as: UTF8.self)
     }
 
-    /// The card's row (the hover and the popover take an XrayRefs.Entry): the rule's label as its title, no count.
+    /// The card's row (the popover takes an XrayRefs.Entry): the rule's label as its title, no count.
     static func entry(_ m: Match) -> XrayRefs.Entry {
         XrayRefs.Entry(key: key(m), shape: nil, text: OutsideText.shown(m.text, max: XrayRefs.maxRefBytes), full: nil, count: 0,
                        lastOffset: nil, defined: false, definitions: 0, title: m.rule.label, underline: true, index: 0)
@@ -504,14 +504,11 @@ final class XrayExtensionCard: ObservableObject {
 }
 
 extension XrayPanelModel {
-    /// #1569 (5.6): an extension ref's card, unpinned (`hover`) or pinned: its header and the handler block; no dch runs.
-    func extRef(_ e: XrayRefs.Entry, _ m: XrayExtensionRefs.Match, calls: XrayExtensionCalls?, hover: XrayHover?,
+    /// #1569 (5.6): an extension ref's card: its header and the handler block; no dch runs.
+    func extRef(_ e: XrayRefs.Entry, _ m: XrayExtensionRefs.Match, calls: XrayExtensionCalls?,
                 closed: @escaping @MainActor () -> Void = {}) {
         (refContext, refNote) = (nil, nil)
         let card = XrayExtensionCard(m, calls: calls, dir: cwd(), session: target.name)
-        hovering = hover != nil   // #1760: an unpinned card is shown without key
-        hoverPromote = { [weak hover] in hover?.promote() }
-        defer { (hovering, hoverPromote) = (false, nil) }
-        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: true, hover: hover, ext: card)), XrayRefPopover.size, closed)
+        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: true, ext: card)), XrayRefPopover.size, closed)
     }
 }

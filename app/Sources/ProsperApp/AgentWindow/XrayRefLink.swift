@@ -93,7 +93,7 @@ enum XrayRefLink {
         return true
     }
 
-    /// #1565 (X-T b): the panel a hover card shows in and the focused pane's refs (terminalRefs' rules: the window's
+    /// #1565 (X-T b): the panel a mark's Command-click card shows in and the focused pane's refs (terminalRefs' rules: the window's
     /// focused pane, this session, gate B on). Nil: no card.
     static func hoverPanel(_ w: AgentsNSWindow?, key: AgentSessionKey?) -> (panel: XrayPanelModel, refs: XrayRefs)? {
         guard let r = terminalRefs(w, key) else { return nil }
@@ -105,39 +105,6 @@ enum XrayRefLink {
     static func openTerminalLink(_ url: URL, _ w: AgentsNSWindow?, key: AgentSessionKey?) {
         guard let r = terminalRefs(w, key) else { return }
         _ = open(url, refs: r.refs) { panel(r.pane, r.target, r.refs, r.state).openRef($0) }
-    }
-}
-
-extension XrayPanelModel {
-    /// #1565 (X-T b, 6.2): the hover card, unpinned: the ref's header at once from the cached row (kind, text, title,
-    /// count), no read yet (XrayHover starts the light one). `closed` runs once when it goes, whoever closed it.
-    func hoverRef(_ e: XrayRefs.Entry, hover: XrayHover, closed: @escaping @MainActor () -> Void) {
-        (refContext, refNote) = (nil, nil)
-        (hovering, hoverPromote) = (true, { [weak hover] in hover?.promote() })
-        defer { (hovering, hoverPromote) = (false, nil) }
-        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true, hover: hover)),
-                   XrayRefPopover.size, closed)
-    }
-
-    /// #1565 (6.2, 6.3): the hover card's one light read (XrayPanels.budget()); a refused text says why as openRef's
-    /// does. The read in flight, nil when none ran.
-    /// #1568 (K4.1): a remote target's hover runs nothing: the window's cached answer (XrayRefResults, a full one first)
-    /// when there is one, and "Pin for passages" (Pin runs the full read).
-    @discardableResult
-    func hoverRead(_ e: XrayRefs.Entry) -> Task<Void, Never>? {
-        if target.dir == nil {
-            if let hit = refResults()?.get(XrayRefResults.Key(target: target, ref: e.text, light: true, scope: "project")) {
-                takeRef((0, hit.out), parsed: hit.parsed, text: e.text, light: hit.light, cached: true)
-            }
-            refNote = Self.pinForPassages
-            return nil
-        }
-        let sent = e.shape == .term ? (e.text.contains("`") ? "" : "`" + e.text + "`") : e.text   // as openRef sends it
-        guard panels?.runRef(sent, shown: e.text, budget: XrayPanels.budget(), for: self) == true else {
-            refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef
-            return nil
-        }
-        return panels?.refReading
     }
 }
 

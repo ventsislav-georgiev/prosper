@@ -101,16 +101,6 @@ final class XrayRefSessionGroupsTests: XCTestCase {
         XCTAssertEqual(p.chapterCard?.ordinal, 3)
     }
 
-    /// An unpinned (hover) card shows no other session's block (guarded keeps this session's lines alone); pinned
-    /// keeps every block whole.
-    func testUnpinnedCardDropsTheBlocks() {
-        let c = R.context([R.mention(turn: 3, offset: 1), Self.other("api-qa", id: "q1", turn: 2, title: "Login", offset: 2)])
-        XCTAssertEqual(c.turns?.map(\.turn), [3, 2])
-        XCTAssertEqual(c.guarded(pinned: false, shell: false).turns?.map(\.turn), [3])
-        XCTAssertEqual(c.guarded(pinned: true, shell: false).turns, c.turns)
-        XCTAssertEqual(c.guarded(pinned: false, shell: true).turns?.count, 0)
-    }
-
     /// Another project's lines (a `--scope all` read: no turn_title, no last_active) stay in Other projects' flat
     /// groups; the card's turns are untouched by them.
     func testOtherProjectsUnchanged() {

@@ -22,19 +22,11 @@ struct XrayRefPopover: View {
     @FocusState var filterFocused: Bool
     /// #1560: the Mentions tab's Other projects row, collapsed until clicked.
     @State var othersOpen = false
-    /// #1565 (X-T b): the grid's hover that opened this card unpinned (Pin, the pointer on the card); nil: today's card.
-    var hover: XrayHover? = nil
     /// #1569 (X7 c): an extension ref's card: the handler block in place of the tabs; nil: a dch ref's card.
     var ext: XrayExtensionCard? = nil
 
-    /// #1565: the context as this card may show it: unpinned, XrayRefContext.guarded's (no other session's line; a shell's
-    /// titles and counts alone); today's card all of it.
-    var context: XrayRefContext? {
-        panel.refContext.map { c in hover.map { c.guarded(pinned: false, shell: $0.shell) } ?? c }
-    }
-
-    /// #1565: Pin: the light read is killed and today's full card opens (XrayHover.pin).
-    func pin() { hover?.pin() }
+    /// The context the card shows (#1931: always all of it; the unpinned guard went with the hover card).
+    var context: XrayRefContext? { panel.refContext }
 
     /// #1760: 460x520, scaled (was 380x360): more rows at once; the presenter clamps it to the screen (XrayCardPanelPresenter.frame).
     static var size: CGSize { CGSize(width: sz(460), height: sz(520)) }
@@ -139,7 +131,7 @@ struct XrayRefPopover: View {
 
     var body: some View {
         if let ext {
-            XrayExtensionBlock(card: ext, panel: panel, entry: entry, hover: hover, pasteboard: pasteboard)
+            XrayExtensionBlock(card: ext, panel: panel, entry: entry, pasteboard: pasteboard)
         } else {
             refBody
         }
@@ -172,15 +164,13 @@ struct XrayRefPopover: View {
                 if Self.openURL(entry) != nil {
                     Button("Open", action: openLink).buttonStyle(.neon).accessibilityLabel("Open \(entry.text)")
                 }
-                if hover != nil { Button("Pin", action: pin).buttonStyle(.neon).accessibilityLabel("Pin the card for \(entry.text)") }
             }
             if let n = panel.refNote { faint(n) }
         }
         .padding(sz(14))
         .frame(maxWidth: Self.size.width, maxHeight: Self.size.height, alignment: .topLeading)
         .onExitCommand(perform: escape)
-        .onHover { inside in hover?.onCard(inside) }   // #1565: the pointer on the card keeps it open
-        .onAppear { if hover == nil { filterFocused = true } }   // #1760: opened by a click or Return: type to filter
+        .onAppear { filterFocused = true }   // #1760: opened by a click or Return: type to filter
     }
 
     /// #1760: the inline filter; typing narrows the shown tab and never closes the card; Esc clears it first.
@@ -203,13 +193,12 @@ struct XrayRefPopover: View {
     static let searching = "searching more\u{2026}"
     static let clickForAll = "click for all"
 
-    /// #1567 (spec 5.6, dch README v1.99.0:1678-1683, :1744-1747): the footer slots. "N on screen" (the grid's marks of
-    /// this ref: a hover card's, XrayHover.onScreen), the session's count, the other sessions' ("9 in 3 others": dch's
+    /// #1567 (spec 5.6, dch README v1.99.0:1678-1683, :1744-1747): the footer slots. The session's count, the other sessions' ("9 in 3 others": dch's
     /// project count, its project_sessions; none at 0 sessions, README :1683), "searching more…" while no done line
     /// came, and a light read that ended partial "≥N · click for all" (N: this session's and the others'). "≥" while partial.
-    static func footer(_ c: XrayRefContext, onScreen: Int) -> [String] {
+    static func footer(_ c: XrayRefContext) -> [String] {
         let ge = c.partial ? "\u{2265}" : ""
-        var out = onScreen > 0 ? ["\(onScreen) on screen"] : []
+        var out: [String] = []
         if let n = c.rawCounts {
             out.append("This session \(ge)\(n.session)")   // #1641: a label, not "≥9 session"
             if n.projectSessions > 0 { out.append("\(ge)\(n.project) in \(n.projectSessions) others") }
@@ -222,19 +211,10 @@ struct XrayRefPopover: View {
         return out
     }
 
-    /// #1567: the footer in one faint line; a hover card's "click for all" pins it (today's full card).
+    /// #1567: the footer in one faint line.
     @ViewBuilder func footerRow(_ c: XrayRefContext) -> some View {
-        let slots = Self.footer(c, onScreen: hover.map { $0.onScreen(entry.key) } ?? 0)
         HStack(spacing: sz(8)) {
-            ForEach(slots, id: \.self) { s in
-                if hover != nil, s.hasSuffix(Self.clickForAll) {
-                    Button(action: pin) { Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.blue) }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Pin the card for \(entry.text): \(s)")
-                } else {
-                    faint(s)
-                }
-            }
+            ForEach(Self.footer(c), id: \.self) { s in faint(s) }
         }
         .accessibilityElement(children: .contain)
     }
@@ -350,7 +330,7 @@ struct XrayRefPopover: View {
         } else {
             flatMentions(Self.filtered(c.groups, q), c, q, part: 1)
         }
-        if hover == nil, q.isEmpty, let title = Self.othersTitle(panel) { others(title, c) }   // #1565: unpinned, no other project
+        if q.isEmpty, let title = Self.othersTitle(panel) { others(title, c) }
     }
 
     /// #1900: the arrow's and the turn header's help and spoken hint.
@@ -523,13 +503,12 @@ struct XrayRefPopover: View {
 
 /// #1569 (X7 c, spec 5.6): an extension ref's card: the rule's label and the text, "Extension ref · not indexed" where a
 /// dch ref's counts go, then the handler's block (title, subtitle, body) and its actions, which the host runs (open an
-/// http(s) url, copy a text). No tab, no count, no dch read. Esc closes; on a hover card the pointer keeps it, Pin pins it.
+/// http(s) url, copy a text). No tab, no count, no dch read. Esc closes.
 struct XrayExtensionBlock: View {
     @ObservedObject var liveTheme = ThemeStore.shared
     @ObservedObject var card: XrayExtensionCard
     let panel: XrayPanelModel
     let entry: XrayRefs.Entry
-    let hover: XrayHover?
     let pasteboard: NSPasteboard
 
     static func header(_ e: XrayRefs.Entry) -> [String] { [e.title + " " + e.text, XrayExtensionRefs.notIndexed] }
@@ -569,14 +548,12 @@ struct XrayExtensionBlock: View {
                     }
                 }
                 Button("Copy", action: copy).accessibilityLabel("Copy \(entry.text)")
-                if let hover { Button("Pin", action: hover.pin).accessibilityLabel("Pin the card for \(entry.text)") }
             }
             .font(Neon.font(11))
         }
         .padding(sz(12))
         .frame(width: XrayRefPopover.size.width, height: XrayRefPopover.size.height, alignment: .topLeading)
         .onExitCommand(perform: panel.dismiss)
-        .onHover { inside in hover?.onCard(inside) }
     }
 
     @ViewBuilder var block: some View {

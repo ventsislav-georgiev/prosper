@@ -161,24 +161,21 @@ final class XrayRefResultsTests: XCTestCase {
         XCTAssertEqual(c.entries.map { $0.key.target }, [Self.other], "evict (no key) drops the session's")
     }
 
-    /// Red with M-lightpin (a full ask takes a light answer): the pin was served the hover's light read. A full answer
-    /// serves a later hover (red with M-fullhover) and is not light there; a hit records no spawn cost (M-spent).
-    func testALightAnswerNeverServesAPinAFullOneServesAHover() async {
+    /// Red with M-lightpin (a full ask takes a light answer): a click was served a cached light answer as its full one. The
+    /// light hit shows at once and records no spawn cost (M-spent); the full answer serves the next click (#1931: was
+    /// driven by the hover's light ask, runRef's budget, gone with the hover).
+    func testALightAnswerNeverServesAFullAskAFullOneServesTheNext() async {
         let clock = Clock(), c = cache(clock), run = XrayRefRunTests.Run(), panels = XrayPanels(), p = panel(run, c)
-        XCTAssertTrue(panels.runRef("#12", budget: 120, for: p))
+        c.put(key("#12", light: true), Data(XrayHoverTests.stream.utf8))
+        XCTAssertTrue(panels.runRef("#12", staged: true, for: p))
+        XCTAssertEqual(p.refContext?.light, true, "the cached light answer at once")
+        XCTAssertEqual(XrayPanels.spawnCosts, [], "a hit spawned nothing: no cost")
         await panels.refReading?.value
-        XCTAssertEqual(run.calls.count, 1)
-        XCTAssertEqual(p.refContext?.light, true)
-        XCTAssertEqual(XrayPanels.spawnCosts, [0], "the light read's elapsed_ms")
-        XCTAssertTrue(panels.runRef("#12", budget: 120, for: p))
-        XCTAssertEqual(run.calls.count, 1, "a light answer serves a light ask")
-        XCTAssertEqual(XrayPanels.spawnCosts, [0], "a hit spawned nothing: no cost")
-        XCTAssertTrue(panels.runRef("#12", for: p))
-        await panels.refReading?.value
-        XCTAssertEqual(run.calls.count, 2, "a pin reads in full")
+        XCTAssertEqual(run.calls.count, 1, "a light answer never serves the full ask")
         XCTAssertTrue(run.calls.last?.contains("--full") == true)
-        XCTAssertTrue(panels.runRef("#12", budget: 120, for: p))
-        XCTAssertEqual(run.calls.count, 2, "the full answer serves the hover")
+        XCTAssertEqual(p.refContext?.light, false)
+        XCTAssertTrue(panels.runRef("#12", for: p))
+        XCTAssertEqual(run.calls.count, 1, "the full answer serves the next click")
         XCTAssertEqual(p.refContext?.light, false)
         XCTAssertTrue(c.get(key("#12", light: false)).map { !$0.light } == true)
     }
@@ -225,21 +222,21 @@ final class XrayRefResultsTests: XCTestCase {
         return XrayRefStreamTests.parse([XrayRefStreamTests.first, last])
     }
 
-    static func footer(_ s: XrayRefStream, light: Bool = false, onScreen: Int = 0) -> [String] {
+    static func footer(_ s: XrayRefStream, light: Bool = false) -> [String] {
         var c = XrayRefContext(s, ref: "#12", tasks: nil, memory: nil)
         c.light = light
-        return XrayRefPopover.footer(c, onScreen: onScreen)
+        return XrayRefPopover.footer(c)
     }
 
-    /// Red at base (no footer). Each slot at partial and at done: "N on screen", "This session ≥12" (#1641), "9 in 3 others",
+    /// Red at base (no footer). Each slot at partial and at done: "This session ≥12" (#1641), "9 in 3 others",
     /// "searching more…" until done (M-searching), a light read that ended partial "≥21 · click for all" (M-click: a
     /// full one too); no others slot at 0 sessions (M-zero).
     func testEachFooterSlotAtPartialAndDone() {
         let ge = "\u{2265}"
-        XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: false), onScreen: 2),
-                       ["2 on screen", "This session \(ge)12", "\(ge)9 in 3 others", "searching more\u{2026}"], "partial: no done yet")
-        XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true), onScreen: 2),
-                       ["2 on screen", "This session 12", "9 in 3 others"], "done, complete")
+        XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: false)),
+                       ["This session \(ge)12", "\(ge)9 in 3 others", "searching more\u{2026}"], "partial: no done yet")
+        XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true)),
+                       ["This session 12", "9 in 3 others"], "done, complete")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true, partial: true), light: true),
                        ["This session \(ge)12", "\(ge)9 in 3 others", "\(ge)21 \u{00B7} click for all"], "a light read ended partial")
         XCTAssertEqual(Self.footer(Self.stream(session: 12, project: 9, sessions: 3, done: true, partial: true)),
@@ -286,18 +283,5 @@ final class XrayRefResultsTests: XCTestCase {
         }
         let short = XrayRefContext(Self.mention(line: "Work on #12 please", sentence: "#12 please"), ref: "#12", tasks: nil, memory: nil)
         XCTAssertEqual(short.firstMention.map(XrayRefPopover.firstMentionText), "Work on #12 please", "a shorter sentence keeps the line")
-    }
-
-    /// Red at base (no hook): the card had no on-screen count. Red with M-onscreen (every mark counted): "issue:#12"
-    /// gave 2. Through XrayGridMarksTests' rig: a live local pane, its follow's snapshot, the marks placed.
-    func testOnScreenCountsTheGridsMarksOfTheKey() throws {
-        let g = XrayGridMarksTests()
-        try g.withSeams { fake in
-            let r = g.rig(g.local)
-            r.v.marks.follow = try g.follow(fake, 1, XrayTarget(name: "api", dir: g.local.dir))
-            XCTAssertEqual(r.v.marks.marks.count, 2, "two marks on the grid")
-            XCTAssertEqual(r.v.marks.hover.onScreen("issue:#12"), 1)
-            XCTAssertEqual(r.v.marks.hover.onScreen("ticket:API-7"), 0, "a key with no mark")
-        }
     }
 }

@@ -226,7 +226,7 @@ struct XrayRefContext: Equatable {
     let shape: XrayRefs.Shape?
     let resolved: XrayRefStream.Resolved?
     /// Newest first (a define_command line has no time: after the dated ones, in dch's order).
-    var definitions: [XrayRefStream.Definition]   // var: guarded(pinned:shell:) trims a copy
+    var definitions: [XrayRefStream.Definition]
     let heading: String
     /// When there is no definition and no define_warn: the first mention ("First mention").
     var firstMention: XrayRefStream.Mention?
@@ -246,7 +246,7 @@ struct XrayRefContext: Equatable {
     let taskRich: [[XrayRich.Run]]
     let memoryRich: [[XrayRich.Run]]
     /// #1567: the footer's facts: dch's counts as sent, a done line came, every count a lower bound (XrayRefStream), and
-    /// the answer came from a light read (takeRef sets it; a full result serving a hover is not light).
+    /// the answer came from a light read (takeRef sets it; a full result serving a light ask is not light).
     let rawCounts: XrayRefStream.Counts?
     let done: Bool
     let partial: Bool
@@ -359,38 +359,6 @@ struct XrayRefContext: Equatable {
         return c
     }
 
-    /// #1565 (6.2 unpinned guard, S18, K4.2): what an unpinned hover card may show. Pinned: all of it. Unpinned: no
-    /// other session's line or passage (pinned || sameSession) and no Other projects; a shell session's card titles and
-    /// counts alone (the guard is `pinned` alone there): no mention line, no passage, no first mention.
-    func guarded(pinned: Bool, shell: Bool) -> XrayRefContext {
-        guard !pinned else { return self }
-        var c = self
-        (c.others, c.othersCount) = (nil, nil)
-        let own = session
-        c.definitions = definitions.map { d in
-            var d = d
-            if shell || d.session != own { d.passage = "" }
-            return d
-        }
-        func mine(_ m: XrayRefStream.Mention) -> Bool { !shell && m.session == own }
-        c.groups = groups.compactMap { g in
-            let ms = g.mentions.filter(mine)
-            return ms.isEmpty ? nil : Group(session: g.session, mentions: ms)
-        }
-        c.turns = turns.map { $0.compactMap { t in
-            let ms = t.mentions.filter(mine)
-            return ms.isEmpty ? nil : Turn(turn: t.turn, mentions: ms)
-        } }
-        c.firstMention = firstMention.flatMap { mine($0) ? $0 : nil }
-        return c
-    }
-
-    /// #1565: a live shell session's id (dch README v1.99.0 "session_id": the ring's id, `m` + 16 hex).
-    static func shell(_ sessionID: String?) -> Bool {
-        guard let id = sessionID, id.count == 17, id.first == "m" else { return false }
-        return id.dropFirst().allSatisfy { $0.isHexDigit }
-    }
-
     /// #1560 (dch README v1.99.0 "--ref" :1775-1893, resolved states): one plain line for a state that is not `ok` (nil:
     /// draw the resolver's title and lines as before). A word Prosper does not know is shown as itself (cleaned by the parse).
     static func stateLine(_ r: XrayRefStream.Resolved) -> String? {
@@ -457,11 +425,10 @@ extension XrayPanels {
     /// #1567: the window's result cache (m.refResults, XrayRefResults) does not need it: a hit within 30 s lands at once
     /// with no spawn and no read in flight; an exit-0 answer goes into the cache of the window that asked.
     @discardableResult
-    /// #1565: `budget` set: the hover card's light read (lightArgs), whose `first.elapsed_ms` goes to spawnCosts.
-    /// #1824: `staged` (a pin or a click, openRef): dch's full project read takes about 5 s (dch, 2026-11-21), its light
-    /// one 0.5 s, so the card opens from the window's cached light answer (a hover's) at once, else from a light read run
-    /// beside the full one (local only: a remote hover runs no read, K4.1); the full answer replaces it when it lands.
-    func runRef(_ text: String, shown: String? = nil, scope: String = "project", budget: Int? = nil, staged: Bool = false,
+    /// #1824: `staged` (a click, openRef): dch's full project read takes about 5 s (dch, 2026-11-21), its light one
+    /// 0.5 s, so the card opens from the window's cached light answer at once, else from a light read run beside the
+    /// full one (local only: a remote runs one full read, K4.1); the full answer replaces it when it lands.
+    func runRef(_ text: String, shown: String? = nil, scope: String = "project", staged: Bool = false,
                 for m: XrayPanelModel) -> Bool {
         let (arg, input) = m.target.viaStdin(text, version: XrayPanels.probed?.version)   // #1410: on stdin dch's 256 bytes count the newline
         guard DchCtl.refOK(text), !text.hasPrefix("-"), !Self.overStdin(input), let dch = m.dch,
@@ -471,20 +438,20 @@ extension XrayPanels {
         closeRef()
         if scope == "project" { m.refContext = nil }   // Other projects adds to the card's context, never clears it
         m.refNote = nil
-        let cache = m.refResults(), key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: budget != nil, scope: scope)
+        let cache = m.refResults(), key = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: false, scope: scope)
         if let hit = cache?.get(key) {   // #1567: no spawn; a light answer never reaches a full ask (get)
             Self.othersRead = nil
             m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, scope: scope, light: hit.light, cached: true)
             return true
         }
-        let early = staged && scope == "project" && budget == nil
+        let early = staged && scope == "project"
         let lightKey = XrayRefResults.Key(target: m.target, ref: shown ?? text, light: true, scope: scope)
-        let hit = early ? cache?.get(lightKey) : nil   // #1824: the hover's light answer (a full one was a hit above)
+        let hit = early ? cache?.get(lightKey) : nil   // #1824: a cached light answer (a full one was a hit above)
         if let hit { m.takeRef((0, hit.out), parsed: hit.parsed, text: shown ?? text, light: true, cached: true, more: true) }
         let lightRead = early && hit == nil && m.target.dir != nil && Self.lightFirst()
             ? m.target.refCall(m.target.lightArgs(arg, budget: Self.budget()), version: XrayPanels.probed?.version,
                                lookups: Preferences.xrayGithubLookups) : nil
-        let plain = budget.map { m.target.lightArgs(arg, budget: $0) } ?? m.target.refArgs(arg, scope: scope)
+        let plain = m.target.refArgs(arg, scope: scope)
         let (a, env, flagged) = m.target.refCall(plain, version: XrayPanels.probed?.version, lookups: Preferences.xrayGithubLookups)   // #1623
         refReading = Task { [weak m, weak cache] in
             // #1824: a child of this read: the card's close, or the full answer landing first, cancels (SIGTERMs) it
@@ -500,7 +467,7 @@ extension XrayPanels {
             let parsed = r.status == 0 ? await Task.detached(priority: .userInitiated) { XrayRefStream.parse(out) }.value : nil
             if r.status == 0 { cache?.put(key, r.out, parsed: parsed) }   // #1567: only an answer the card shows as a context
             guard !Task.isCancelled else { return }
-            m.takeRef(r, parsed: parsed, text: shown ?? text, scope: scope, light: budget != nil)
+            m.takeRef(r, parsed: parsed, text: shown ?? text, scope: scope)
         }
         Self.othersRead = scope == "project" ? nil : card.map { (card: $0, read: refReading) }
         return true
@@ -572,8 +539,6 @@ extension XrayPanelModel {
     static let refFailed = "The ref read failed"
     /// #1568: a remote --xray's exit 6 (dch README v1.99.0:1267-1269: the host's hello lacks the `xray` token).
     static let refNoXray = "The host's dch has no X-ray: needs dch serve 1.55.0+"
-    /// #1568 (K4.1): a remote hover card's note: it runs no read; Pin runs the full one.
-    static let pinForPassages = "Pin for passages"
 
     /// Exit 0: the context; 1: no corpus; 2: not a ref; 4/7 (or a remote -1): host unreachable; #1568: a remote 6: the
     /// host's dch has no X-ray; else failed.

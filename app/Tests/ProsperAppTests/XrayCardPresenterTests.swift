@@ -16,43 +16,11 @@ final class XrayCardPresenterTests: XCTestCase {
         return (p, { shows })
     }
 
-    func show(_ p: XrayCardPanelPresenter, key: Bool = true, _ closed: @escaping @MainActor () -> Void) {
-        p.present(AnyView(Text(verbatim: "card")), size: CGSize(width: 460, height: 520), anchor: NSView(), key: key, closed: closed)
+    func show(_ p: XrayCardPanelPresenter, _ closed: @escaping @MainActor () -> Void) {
+        p.present(AnyView(Text(verbatim: "card")), size: CGSize(width: 460, height: 520), anchor: NSView(), closed: closed)
     }
 
-    /// Red with a hover card shown key: it takes no key, is never key-able, and the key window stays where it was.
-    func testAHoverCardNeverTakesKeyUntilClicked() throws {
-        let (p, shows) = presenter()
-        let keyBefore = NSApp.keyWindow
-        show(p, key: false) {}
-        let panel = try XCTUnwrap(p.panel)
-        XCTAssertEqual(shows(), [.showQuiet], "no key request")
-        XCTAssertFalse(panel.canBecomeKey)
-        XCTAssertFalse(panel.canBecomeMain)
-        XCTAssertTrue(NSApp.keyWindow === keyBefore, "the first responder's window is unchanged")
-        panel.clicked()   // what its sendEvent runs on a mouse-down
-        XCTAssertEqual(shows(), [.showQuiet, .promote], "a click on the hover card promotes it")
-        XCTAssertTrue(panel.canBecomeKey)
-        panel.clicked()
-        XCTAssertEqual(shows(), [.showQuiet, .promote], "once")
-        p.close()
-    }
-
-    /// #1772: red if a click's promote does not tell the hover (`promoted`), or a key card's click does.
-    func testAClickOnAHoverCardRunsPromotedOnce() throws {
-        let (p, _) = presenter()
-        var n = 0
-        show(p, key: false) {}
-        p.promoted = { n += 1 }
-        let panel = try XCTUnwrap(p.panel)
-        panel.clicked()
-        panel.clicked()
-        XCTAssertEqual(n, 1)
-        p.close()
-        XCTAssertTrue(p.promoted == nil, "cleared with the card")
-    }
-
-    /// A clicked or keyboard open asks for key; the protocol's old form is a key open.
+    /// A clicked or keyboard open asks for key (#1931: the only open; the quiet hover card is gone).
     func testAClickOpenRequestsKey() {
         let (p, shows) = presenter()
         p.present(AnyView(Text(verbatim: "card")), size: CGSize(width: 460, height: 520), anchor: NSView()) {}

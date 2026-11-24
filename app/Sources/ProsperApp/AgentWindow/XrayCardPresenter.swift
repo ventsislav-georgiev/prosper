@@ -8,39 +8,17 @@ import SwiftUI
 protocol XrayCardPresenter: AnyObject {
     /// Shows `content` at `size` under `anchor`; `closed` runs once when it goes, whoever closed it.
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void)
-    /// #1760: `key` false: a hover card, shown without taking key (typing stays in the terminal) until it is clicked.
-    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void)
     func close()
     var isShown: Bool { get }
-}
-
-extension XrayCardPresenter {
-    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void) {
-        present(content, size: size, anchor: anchor, closed: closed)
-    }
 }
 
 /// #1760: the card's window: borderless and clear (the card draws its own rounded surface), the system's soft shadow,
 /// no arrow. Key while shown, so Escape and the filter field reach the card; Escape the card does not take closes it.
 final class XrayCardPanel: NSPanel {
     var onCancel: (() -> Void)?
-    /// #1760: a hover card: never key or main until a click on it (clicked) promotes it; #1772: a promoted card is pinned in
-    /// its hover (XrayHover.promote: the 250 ms linger no longer closes it) through the presenter's `promoted`.
-    var quiet = false
-    var onPromote: (() -> Void)?
-    override var canBecomeKey: Bool { !quiet }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { onCancel?() }
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .rightMouseDown { clicked() }
-        super.sendEvent(event)
-    }
-    /// A click on the card: a quiet (hover) card becomes a key one.
-    func clicked() {
-        guard quiet else { return }
-        quiet = false
-        onPromote?()
-    }
 }
 
 /// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
@@ -50,20 +28,17 @@ final class XrayCardPanel: NSPanel {
 final class XrayCardPanelPresenter: XrayCardPresenter {
     // Internal, not private: rows read the panel and post its resign-key without ever showing one.
     var panel: XrayCardPanel?
-    /// #1772: runs once the card's click promotes it (the hover's pin); cleared with the card.
-    var promoted: (@MainActor () -> Void)?
     var closed: (@MainActor () -> Void)?
     private var resign: NSObjectProtocol?
-    enum Order: Equatable { case showKey, showQuiet, promote, hide }
-    /// The seam that shows (key: a click or keyboard open; quiet: a hover), promotes (a click on a hover card) or hides
-    /// the card's panel over `parent`; rows put a recorder here, so no window is ever ordered front or made key by a test.
+    enum Order: Equatable { case showKey, hide }
+    /// The seam that shows (key: a click or keyboard open) or hides the card's panel over `parent`; rows put a recorder
+    /// here, so no window is ever ordered front or made key by a test.
     var order: @MainActor (XrayCardPanel, NSWindow?, Order) -> Void = { p, parent, o in
         switch o {
-        case .showKey, .showQuiet:
+        case .showKey:
             parent?.addChildWindow(p, ordered: .above)   // moves with its window
-            if o == .showKey { p.makeKeyAndOrderFront(nil) } else { p.orderFront(nil) }
+            p.makeKeyAndOrderFront(nil)
             p.invalidateShadow()
-        case .promote: p.makeKey()
         case .hide:
             parent?.removeChildWindow(p)
             p.orderOut(nil)
@@ -73,10 +48,6 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
     var isShown: Bool { panel != nil }
 
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
-        present(content, size: size, anchor: anchor, key: true, closed: closed)
-    }
-
-    func present(_ content: AnyView, size: CGSize, anchor: NSView, key: Bool, closed: @escaping @MainActor () -> Void) {
         close()   // one card at a time: the old card's closed runs before the new one is installed (#1432)
         let win = anchor.window
         let screen = (win?.screen ?? NSScreen.main)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -101,20 +72,18 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         host.frame = CGRect(origin: .zero, size: f.size)
         p.contentView = host
         p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close() } }
-        p.quiet = !key
-        p.onPromote = { [weak self, weak p] in if let self, let p, self.panel === p { self.order(p, p.parent, .promote); self.promoted?() } }
         resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
             [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
         }
         (panel, self.closed) = (p, closed)
-        order(p, win, key ? .showKey : .showQuiet)
+        order(p, win, .showKey)
     }
 
     func close() {
         guard let p = panel else { return }
         let f = closed
         resign.map { NotificationCenter.default.removeObserver($0) }
-        (panel, self.closed, resign, promoted) = (nil, nil, nil, nil)
+        (panel, self.closed, resign) = (nil, nil, nil)
         order(p, p.parent, .hide)
         f?()
     }

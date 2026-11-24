@@ -355,11 +355,11 @@ final class XrayExtensionCardTests: XCTestCase {
     }
 }
 
-/// #1569: the extension card through the grid's own hover (XrayHoverTests' rig: a fake follow, a fake dch runner).
+/// #1569: the extension card through the grid's Command-click (XrayHoverTests' rig: a fake follow, a fake dch runner).
 extension XrayHoverTests {
     /// The handler's argument is the match, the pane's dir and the session, and nothing of the screen or the transcript
-    /// (mutant 5); hover and Pin spawn no dch and ask the lane once (Pin takes the kept answer). Red if the arg carries
-    /// more keys or other text, or an extension card runs a --ref read.
+    /// (mutant 5); the click spawns no dch and asks the lane once. Red if the arg carries more keys or other text, or an
+    /// extension card runs a --ref read.
     func testExtensionCardArgHasNoTranscriptAndSpawnsNoDch() async throws {
         try await withSeams { fake in
             let r = try rig(fake)
@@ -376,9 +376,9 @@ extension XrayHoverTests {
             let key = "xref:com.example.kit/api:API-7"
             XCTAssertEqual(r.v.marks.marks.filter { $0.key == key }.count, 2)
             XCTAssertEqual(r.v.marks.marks.filter { $0.key.hasPrefix("issue:") }.count, 2)
-            dwell(r, key)
+            open(r, key)
             XCTAssertEqual(r.cards.views.count, 1)
-            XCTAssertEqual(r.v.marks.hover.extCard?.text, "API-7")
+            XCTAssertTrue(r.v.marks.hover.model === r.panel)
             let end = Date().addingTimeInterval(5)
             while lane.args.isEmpty, Date() < end { try? await Task.sleep(nanoseconds: 1_000_000) }
             let arg = try XCTUnwrap(lane.args.last)
@@ -389,9 +389,6 @@ extension XrayHoverTests {
             XCTAssertEqual(o["dir"] as? String, "/Users/example/api")
             XCTAssertEqual(o["session"] as? String, "api")
             for other in ["git log", "#12", "#1", "see", "fix"] { XCTAssertFalse(arg.contains(other), other) }
-            r.v.marks.hover.pin()
-            XCTAssertEqual(r.cards.views.count, 2)
-            XCTAssertTrue(r.v.marks.hover.card == nil)
             try? await Task.sleep(nanoseconds: 50_000_000)
             XCTAssertEqual(lane.args.count, 1)
             XCTAssertEqual(r.run.calls.count, 0)

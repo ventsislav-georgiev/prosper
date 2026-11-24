@@ -1,7 +1,7 @@
 import AppKit
 
 /// #1567 (X-ray C1, spec 5.8): one window's --ref results, keyed (session target, ref, mode, scope); the oldest use goes
-/// first past 64 keys or 32 MB, and an entry is kept 30 s on the injected clock. A full result serves a later hover's
+/// first past 64 keys or 32 MB, and an entry is kept 30 s on the injected clock. A full result serves a later
 /// light ask; a light one never serves a full ask (a pin, a Refs row), #1824: it only opens that card while the full
 /// read runs (XrayPanels.runRef `staged`). A follow's `ref` delta for the ref, an `evict`
 /// (dch README v1.99.0:2201: shell only, no key) and a `reset` rotated / shrunk / cleared (:2204-2212) drop entries;
