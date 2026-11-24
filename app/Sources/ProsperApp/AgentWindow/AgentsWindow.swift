@@ -2279,6 +2279,7 @@ struct AgentRemoteHeader: View {
             AgentXrayButton(pane: pane, target: XrayTarget.of(row))   // #1476: where the disabled mode toggle was (no "..." here)
         }
         .padding(.horizontal, sz(16)).padding(.vertical, sz(10))
+        .contentShape(Rectangle())   // #1914: a layout pane drags from the header's gap too
     }
 }
 
@@ -3409,6 +3410,7 @@ struct AgentCompactHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: Self.height)
         .clipped()
+        .contentShape(Rectangle())   // #1914: the gap between the title and the "⋯" takes the pane drag too
     }
 }
 

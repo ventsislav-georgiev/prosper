@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.177.0 *(unreleased)*
+- Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.
+  (#1914)
 
 ## v2.176.0
 

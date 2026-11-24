@@ -154,4 +154,57 @@ extension AgentWindowD1Tests {
         }
         return nil
     }
+
+    /// #1914: the view AppKit hands a mouse-down at `p` (the header's midline at `x`) in `view` hosted offscreen (never
+    /// shown) at `size`, once SwiftUI has mounted its AgentWindowDragView.
+    @MainActor
+    func paneHeaderHit<V: View>(_ view: V, _ size: CGSize, x: CGFloat) -> NSView? {
+        let (win, host) = AXTreeSupport.hosted(view, size)
+        defer { win.close() }
+        func drag(_ v: NSView) -> Bool { v is AgentWindowDragView || v.subviews.contains(where: drag) }
+        for _ in 0..<50 where !drag(host) {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(drag(host), "control: the drag area is mounted")
+        XCTAssertFalse(win.isVisible, "never shown")
+        return host.hitTest(CGPoint(x: x, y: size.height / 2))
+    }
+
+    /// #1914 (operator: a pane dragged only from its state label): a layout pane's compact header, over a window-move
+    /// area as the #1378 one, takes the press in the gap between the title and the "⋯" itself (its .onDrag starts there),
+    /// where it fell through to what lay behind. Red at base: AgentCompactHeader had no contentShape, the gap went to the
+    /// AgentWindowDragView. Mutant compact-header-no-content-shape.
+    @MainActor
+    func testPaneDropRoutingHeaderGapIsTheLayoutPanesDragSource() throws {
+        let s = session("api", .idle)
+        let m = windowModel(store([s]))
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(s.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let header = AgentCompactHeader.of(row, s, cwd: nil, ended: false, store: nil, ask: { _ in }, open: {},
+                                           xrayPane: m.layout.focused)
+            .modifier(AgentRowDrag(token: "api"))
+        let hit = paneHeaderHit(ZStack { AgentWindowDragArea(); header }, CGSize(width: 500, height: AgentCompactHeader.height), x: 300)
+        XCTAssertTrue(hit != nil, "the gap takes the press")
+        XCTAssertFalse(hit is AgentWindowDragView, "the gap is the pane's drag, not the window's move: \(String(describing: hit))")
+    }
+
+    /// #1914, the single-pane split: AgentSessionHeader (one pane, no layout) keeps #1378's window move on its empty
+    /// parts (a double-click there follows AppleActionOnDoubleClick, AgentWindowDragView.mouseDown). Green at base;
+    /// mutant session-header-content-shape turns it red.
+    @MainActor
+    func testPaneDropRoutingSinglePaneHeaderGapStillMovesTheWindow() throws {
+        let s = session("api", .idle)
+        let m = windowModel(store([s]))
+        m.setVisible(true)
+        defer { m.close() }
+        m.select(.live(s.key))
+        let row = try XCTUnwrap(m.selectedRow)
+        let header = AgentSessionHeader(row: row, session: s, cwd: nil, open: {}, xrayPane: m.layout.focused)
+            .modifier(AgentRowDrag(token: "api"))
+        let hit = paneHeaderHit(header, CGSize(width: 900, height: AgentSessionHeader.height), x: 450)
+        XCTAssertTrue(hit is AgentWindowDragView, "the gap moves the window: \(String(describing: hit))")
+    }
 }
