@@ -27,6 +27,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: the window can no longer be dragged so narrow that the sessions disappear behind
   the sidebar; it now stops at the sidebar plus a small strip of the terminal, so it can also be
   narrower than before (with a hidden or slide-in sidebar, down to just that strip). (#1925)
+- Agent Sessions: Resume and Resume (no message) on a pane's History card now follow the session:
+  once it starts, that pane shows it and you can type in its terminal right away. Resume from a
+  sidebar row's right-click menu still leaves your focus where it is. (#1924)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

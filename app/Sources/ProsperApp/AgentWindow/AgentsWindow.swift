@@ -302,7 +302,7 @@ final class AgentsNSWindow: NSWindow {
                                    AgentGoMenu(window: self, kind: .layout)]
     /// #1359 (tests): the last action `perform` ran, the key's or a Go menu item's.
     private(set) var lastPerformed: AgentGoMenu.Action?
-    @MainActor static func resignedKey(_ m: AgentWindowModel?) { m?.dragEnded() }
+    @MainActor static func resignedKey(_ m: AgentWindowModel?) { m?.dragEnded(); m?.dropPendingResume() }   // #1924: moved on
 
     @discardableResult override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
         responderAsks += 1
@@ -699,6 +699,7 @@ final class AgentsNSWindow: NSWindow {
                 return
             }
         }
+        if event.type == .keyDown { model?.dropPendingResume() }   // #1924: typed before the resumed session listed
         var focusing = false
         let left = event.type == .leftMouseDown
         if FocusClick.downs.contains(event.type), let model {
@@ -2552,7 +2553,7 @@ struct AgentDetailView: View {
             titled(row.title) {
                 AgentHistoryDetail(row: row, record: r, store: model.store,
                                    refusal: model.refusalText(row.id) ?? model.remoteResumeText[r.id],
-                                   act: { model.act($0, r) },
+                                   act: { model.actInPane($0, r) },   // #1924: its Resume follows the session
                                    close: AgentPanePlaceholder.close(model, pane: model.layout.focused))   // #1906
                     // #829 G8: Remove asks, over the pane's top. #900 6b2d (fixed slots): one slot, the question wins it, so
                     // the strip never moves; the refusal line takes it once the question is gone.

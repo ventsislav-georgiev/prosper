@@ -2035,6 +2035,7 @@ final class AgentWindowModel: ObservableObject {
         expireDirLine(sessions: sessions, actions: actions)
         endUnlisted(history)
         landSpawn()   // #847
+        landResume()   // #1924
         // #828: the first shown row; every section folded leaves the hint, not a hidden pick.
         if !filled, !rows.isEmpty {
             filled = true
@@ -2180,7 +2181,7 @@ final class AgentWindowModel: ObservableObject {
     /// Any change of row drops the confirm strip's question (R5).
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
-        if manual { removing = nil; pendingSpawn = nil; newSession = nil }
+        if manual { removing = nil; pendingSpawn = nil; newSession = nil; pendingResume = nil }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
         // `settle()` drops the strip's question on a change of row.
@@ -2392,6 +2393,7 @@ final class AgentWindowModel: ObservableObject {
     func dropPendingFocus() {
         terminal.dropPendingFocus()
         interaction.dropPendingFocus()
+        pendingResume = nil   // #1924
     }
 
     /// Up/down: the next or previous shown row across groups, clamped; from none, the first.
@@ -3117,6 +3119,39 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
+    /// #1924: the pane History card's verbs. Its Resume and Resume (no message) also follow the session they start: once
+    /// it lists, this pane shows it with the keys in its terminal (landResume). The sidebar's menu calls act() alone.
+    /// Not armed: another machine's record (#1324: it lists in Other machines, never attached), a closed gate (nothing runs).
+    func actInPane(_ verb: AgentWindowVerb, _ r: DchHistoryRecord) {
+        act(verb, r)
+        guard verb == .resume || verb == .resumeNoMessage, !Self.isRemote(r), let store,
+              (verb == .resume ? store.resumeGate : store.reviveNoMessageGate).isOK else { return }
+        // The island's name for it: a live name revives under the first free <name>-N.
+        let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))
+        let records = Set(store.history.filter { $0.key.dir == r.key.dir && $0.key != r.key }.map(\.name))
+        let name = AgentIsland.reviveAs(r, live: live, records: records) ?? r.name
+        pendingResume = (AgentSessionKey(dir: r.key.dir, name: name), layout.focused, focusedTarget)
+    }
+
+    /// #1924: the card's resume waiting for its session to list; the pane and the target (the record) it was asked from.
+    /// Dropped when the person moves on: a manual pick, a sidebar mouse-down (dropPendingFocus), a key typed, the window
+    /// no longer key (dropPendingResume), a hidden or closed window; at the landing, another target in the focused pane
+    /// (another pane focused, another layout, any pick: a layout never shows one target in two panes).
+    private(set) var pendingResume: (key: AgentSessionKey, pane: UUID, target: PaneTarget?)?
+
+    func dropPendingResume() { pendingResume = nil }
+
+    /// #1924: the resumed session listed: into the pane it was asked from (choose: the pane takes it and the keys; a
+    /// .session pane that resolves to it already only takes the keys), once, and only if that pane still holds the target
+    /// it was asked on.
+    private func landResume() {
+        guard let p = pendingResume, row(.live(p.key))?.session != nil else { return }
+        pendingResume = nil
+        guard p.target == focusedTarget else { return }   // moved on
+        // The exact target: a pane holding the record has the session's identity too (PaneTarget.identity: the name).
+        if focusedTarget == target(.live(p.key)) { focusSelection() } else { choose(.live(p.key), into: p.pane) }
+    }
+
     /// #1324: a record from another machine (its dir is "@" + host; a socket dir is an absolute path).
     nonisolated static func isRemote(_ r: DchHistoryRecord) -> Bool { r.key.dir.hasPrefix("@") }
 
@@ -3199,7 +3234,7 @@ final class AgentWindowModel: ObservableObject {
         guard !closed, v != visible else { return }
         visible = v
         onVisible(v)
-        if !v { stopFollow() }   // #1555: none while hidden (close hides first)
+        if !v { stopFollow(); pendingResume = nil }   // #1555: none while hidden (close hides first); #1924
         clock?.invalidate()
         clock = nil
         if v {
