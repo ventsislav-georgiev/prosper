@@ -1,33 +1,33 @@
 {
   "entry": 1918,
-  "filter": "KitShellPathTests|KitRenderTests",
+  "filter": "KitShellPathTests|KitRenderTests|ManagedConfigQATests|ManagedConfigCommitTests|ManagedConfigConsentSheetTests",
   "mutants": [
     {
       "name": "bash-to-zshrc",
       "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
-      "old": "case \"bash\": \".bash_profile\"",
+      "old": "case \"bash\": bashRC",
       "new": "case \"bash\": \".zshrc\"",
       "expect": "killed"
     },
     {
       "name": "bash-to-bashrc",
       "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
-      "old": "case \"bash\": \".bash_profile\"",
+      "old": "case \"bash\": bashRC",
       "new": "case \"bash\": \".bashrc\"",
       "expect": "killed"
     },
     {
       "name": "bash-profile-not-allowed",
       "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
-      "old": "[\".zshrc\", \".bashrc\", \".bash_profile\"]",
-      "new": "[\".zshrc\", \".bashrc\"]",
+      "old": "\".bashrc\", \".bash_profile\", \".bash_login\"",
+      "new": "\".bashrc\", \".bash_login\"",
       "expect": "killed"
     },
     {
       "name": "bash-profile-no-hash-syntax",
       "file": "app/Sources/ProsperApp/ManagedConfig/ManagedTextBlock.swift",
-      "old": "\".bash_profile\", \"zshrc\"",
-      "new": "\"zshrc\"",
+      "old": "\".bash_profile\", \".bash_login\"",
+      "new": "\".bash_login\"",
       "expect": "killed"
     },
     {
@@ -105,6 +105,41 @@
       "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
       "old": "shellRCFiles.contains(rel) || rel == fishRC(owner)",
       "new": "shellRCFiles.contains(rel) || rel.hasSuffix(\".fish\")",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-first-existing-order",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "[\".bash_profile\", \".bash_login\", \".profile\"].first",
+      "new": "[\".profile\", \".bash_login\", \".bash_profile\"].first",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-creates-profile-always",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": ".first(where: exists) ?? \".bash_profile\"",
+      "new": ".first(where: { _ in false }) ?? \".bash_profile\"",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-rule4-ignores-new-bash-profile",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "bashRC: KitRender.bashLoginRC { FileManager",
+      "new": "bashRC: KitRender.bashLoginRC { $0 != \".bash_profile\" && FileManager",
+      "expect": "killed"
+    },
+    {
+      "name": "profile-not-allowed",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+      "old": "\".bash_login\", \".profile\"]",
+      "new": "\".bash_login\"]",
+      "expect": "killed"
+    },
+    {
+      "name": "drift-note-says-remove",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+      "old": "driftNote(&w, r.piece.id, \"removing it deletes\")",
+      "new": "driftNote(&w, r.piece.id, \"Remove deletes\")",
       "expect": "killed"
     },
     {

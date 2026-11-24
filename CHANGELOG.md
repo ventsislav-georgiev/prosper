@@ -31,9 +31,10 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: Command-click on an underlined X-ray ref opens its card again after you switch a
   pane to another session (the new session's refs were not underlined until the list refreshed).
   (#1917)
-- Agent kits' optional PATH setup now goes to your login shell's startup file: ~/.bash_profile for
-  bash, a file in ~/.config/fish/conf.d for fish (zsh keeps ~/.zshrc); for any other shell Prosper
-  writes nothing and the kit pane shows the line to add yourself. (#1918)
+- Agent kits' optional PATH setup now goes to your login shell's startup file: for bash the first of
+  ~/.bash_profile, ~/.bash_login and ~/.profile that exists (the one bash reads), a file in
+  ~/.config/fish/conf.d for fish, and ~/.zshrc for zsh as before; for any other shell Prosper writes
+  nothing and the kit pane shows the line to add yourself. (#1918)
 
 ## v2.176.0
 
