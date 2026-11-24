@@ -1,0 +1,55 @@
+{
+ "entry": 1930,
+ "filter": "testAgentWindowConfirmCard",
+ "mutants": [
+  {
+   "name": "escape-not-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "case 53: m.confirm(false)",
+   "new": "case 53: return false",
+   "expect": "killed"
+  },
+  {
+   "name": "return-not-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "case 36, 76: m.confirm(true)",
+   "new": "case 36: m.confirm(true)",
+   "expect": "killed"
+  },
+  {
+   "name": "keys-without-question",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard event.type == .keyDown, m.confirmQuestion != nil,",
+   "new": "guard event.type == .keyDown,",
+   "expect": "killed"
+  },
+  {
+   "name": "keys-ignore-modifiers",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }",
+   "new": "true else { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "pane-rule-focused-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "panes.first { resolvedRow($0.1) == row }?.0 ?? focused",
+   "new": "focused",
+   "expect": "killed"
+  },
+  {
+   "name": "dim-whole-area",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Rectangle().fill(.ultraThinMaterial).overlay(Neon.bgBottom.opacity(0.35))\n                    .frame(width: f.width, height: f.height)",
+   "new": "Rectangle().fill(.ultraThinMaterial).overlay(Neon.bgBottom.opacity(0.35))\n                    .frame(width: area.width, height: area.height)",
+   "expect": "killed"
+  },
+  {
+   "name": "card-not-centred",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".modifier(AgentPaneProbe(kind: \"confirm\"))\n                    .position(x: f.midX, y: f.midY)",
+   "new": ".modifier(AgentPaneProbe(kind: \"confirm\"))\n                    .position(x: area.midX, y: f.midY)",
+   "expect": "killed"
+  }
+ ]
+}
