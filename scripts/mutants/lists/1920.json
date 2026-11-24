@@ -1,0 +1,41 @@
+{
+ "entry": "1920",
+ "filter": "AgentWindowD1Tests/testEmptyPaneNewShellPillStartsAShellIntoItsOwnPane|AgentWindowD1Tests/testEmptyPaneClosePillOnlyWithSeveralPanesAndClosesItsOwnPane",
+ "mutants": [
+  {
+   "name": "no_focus",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "{ model.focusPane(pane); model.startShell() }",
+   "new": "{ model.startShell() }",
+   "expect": "killed"
+  },
+  {
+   "name": "focused_pane_at_unfocused_site",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)",
+   "new": "AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)",
+   "expect": "killed"
+  },
+  {
+   "name": "gate_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane)",
+   "new": "enabled: true) { model.focusPane(pane)",
+   "expect": "killed"
+  },
+  {
+   "name": "no_pill_unfocused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                            AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)   // #1920\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no_pill_focused",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                    AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)   // #1920\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
