@@ -1,0 +1,76 @@
+{
+ "entry": "1923",
+ "filter": "AgentSidebarWidthTests",
+ "mutants": [
+  {
+   "name": "min-clamp-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let w = max(least, min((stored ?? 0) * ThemeRuntime.scale, content * share))",
+   "new": "let w = max(0, min((stored ?? 0) * ThemeRuntime.scale, content * share))",
+   "expect": "killed"
+  },
+  {
+   "name": "max-share-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "static let share: CGFloat = 0.4",
+   "new": "static let share: CGFloat = 1.0",
+   "expect": "killed"
+  },
+  {
+   "name": "sliver-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return max(0, min(w, content - 1 - sz(sliver)))",
+   "new": "return w",
+   "expect": "killed"
+  },
+  {
+   "name": "persist-every-tick",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if p != points { points = p }",
+   "new": "if p != points { points = p }; Preferences.agentSidebarWidth = Double(p)",
+   "expect": "killed"
+  },
+  {
+   "name": "persist-never",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let points { Preferences.agentSidebarWidth = Double(points) }",
+   "new": "if let points { _ = points }",
+   "expect": "killed"
+  },
+  {
+   "name": "content-never-measured",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { model.sidebarWidth.content = $0 }",
+   "new": ".onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { _ = $0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "resize-always-publishes",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "didSet { if Self.width(stored: points, content: content) != Self.width(stored: points, content: oldValue) { objectWillChange.send() } }",
+   "new": "didSet { objectWillChange.send() }",
+   "expect": "killed"
+  },
+  {
+   "name": "mini-reads-dragged",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        case .mini: return Self.miniSidebarWidth\n",
+   "new": "        case .mini: return sidebarWidth.drawn\n",
+   "expect": "killed"
+  },
+  {
+   "name": "frame-keeps-min",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "sidebarMode == .mini ? Self.miniSidebarWidth : sidebarWidth.drawn,",
+   "new": "sidebarMode == .mini ? Self.miniSidebarWidth : Self.fullSidebarWidth,",
+   "expect": "killed"
+  },
+  {
+   "name": "stored-not-scale-free",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let p = Self.width(stored: (from + dx) / ThemeRuntime.scale, content: content) / ThemeRuntime.scale",
+   "new": "let p = Self.width(stored: (from + dx) / ThemeRuntime.scale, content: content)",
+   "expect": "killed"
+  }
+ ]
+}
