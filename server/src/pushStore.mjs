@@ -165,6 +165,8 @@ const keyed = (st, r, ...more) => st.bind(r.email, r.device_id, r.kind, r.activi
  * (a lapse or offline end) a failed end keeps its row at every count, capped at SEND_TRIES: the
  * retry stops there (it only reads 0 < fails < SEND_TRIES) but the card is still a card, so the
  * Mac's return updates it instead of starting a second one beside it.
+ * #1939: an end APNs took ("ok") keeps the token as la_ended, not deleted: "ok" is not "shown",
+ * and a phone that never applied the end still holds that card when the next one registers.
  */
 function cardStatements(db, cards, results, deferred, now, ending = false, keep = false) {
   const out = [];
@@ -175,7 +177,9 @@ function cardStatements(db, cards, results, deferred, now, ending = false, keep 
       out.push(
         failed && (keep || r.fails + 1 < SEND_TRIES)
           ? keyed(db.prepare(`UPDATE push_tokens SET fails = MIN(fails + 1, ?6) WHERE ${ROW_KEY}`), r, SEND_TRIES)
-          : keyed(db.prepare(`DELETE FROM push_tokens WHERE ${ROW_KEY}`), r),
+          : res === "ok"
+            ? keyed(db.prepare(`UPDATE OR REPLACE push_tokens SET kind = 'la_ended', fails = 0, due_at = NULL WHERE ${ROW_KEY}`), r)
+            : keyed(db.prepare(`DELETE FROM push_tokens WHERE ${ROW_KEY}`), r),
       );
     } else if (failed) {
       const sql = `UPDATE push_tokens SET fails = fails + 1, due_at = CASE WHEN fails + 1 < ?7 THEN ?6 END WHERE ${ROW_KEY}`;
@@ -282,21 +286,31 @@ export async function putToken(deps, email, body, tokenHash) {
        WHERE email = ?1 AND device_id = ?2 AND kind = 'la_expired' AND activity_id = ?3`,
     )
     .bind(email, v.device_id, v.activity_id, v.token, v.env, now, tokenHash);
+  // One card per phone per Mac: a newer activity replaces any older one's token. #1939: and an
+  // la_ended card of an older activity (its end may never have been applied: a relaunch's offline
+  // end lost at APNs) is ended again, so the new card never sits beside a frozen copy. This
+  // activity's own la_ended row goes unended: it re-posted, so it is live and a card again.
+  const OLD = `email = ?1 AND device_id = ?2 AND mac_id = ?3 AND NOT ${ROTATING}`;
+  const older = db
+    .prepare(`SELECT ${TOKEN_COLS} FROM push_tokens WHERE ${OLD} AND +kind = 'la_ended' AND activity_id != ?4`)
+    .bind(email, v.device_id, v.mac_id, v.activity_id);
   if (v.kind === "la_update") {
-    // One card per phone per Mac: a newer activity replaces any older one's token.
     stmts.unshift(
+      older,
       db
-        .prepare(
-          `DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2 AND kind = 'la_update'
-           AND mac_id = ?3 AND activity_id != ?4 AND NOT ${ROTATING}`,
-        )
+        .prepare(`DELETE FROM push_tokens WHERE ${OLD} AND ((+kind = 'la_update' AND activity_id != ?4) OR +kind = 'la_ended')`)
         .bind(email, v.device_id, v.mac_id, v.activity_id),
       carry,
     );
   }
   const res = await db.batch(stmts);
   const rotating = v.kind === "la_update" && res[stmts.indexOf(carry)].meta.changes;
-  if (v.kind === "la_update" && !rotating) deps.defer(catchUp(deps, email, v, name, now));
+  if (v.kind === "la_update" && !rotating) {
+    const old = res[stmts.indexOf(older)].results;
+    const cs = contentState([], false);
+    if (old.length) deps.defer(deliver(deps, old.map((row) => laPush(row, 5, laPayload("end", cs, now, { "dismissal-date": now })))));
+    deps.defer(catchUp(deps, email, v, name, now));
+  }
   if (v.kind === "la_start" && res[stmts.indexOf(upsert)].meta.changes) deps.defer(startPhone(deps, email, v, now));
   return NO_CONTENT;
 }
@@ -396,7 +410,7 @@ export async function deleteTokens(deps, email, body) {
   const del = deps.db
     .prepare(
       `DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2
-       AND (?3 IS NULL OR kind = ?3 OR (?3 = 'la_update' AND kind = 'la_expired'))
+       AND (?3 IS NULL OR kind = ?3 OR (?3 = 'la_update' AND kind IN ('la_expired', 'la_ended')))
        AND (?4 IS NULL OR activity_id = ?4)`,
     )
     .bind(email, v.device_id, v.kind, v.activity_id);
@@ -654,5 +668,7 @@ export function sessionCleanupStatements(db, now) {
     db.prepare(
       `DELETE FROM push_tokens WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.token_hash = push_tokens.token_hash)`,
     ),
+    // #1939: an la_ended token past iOS's 8 h limit can name no live card any more.
+    db.prepare(`DELETE FROM push_tokens WHERE kind = 'la_ended' AND created_at <= ?1`).bind(now - LA_MAX_AGE_S),
   ];
 }

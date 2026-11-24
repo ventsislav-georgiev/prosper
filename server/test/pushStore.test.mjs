@@ -356,7 +356,110 @@ test("offline post ends the cards at once", async () => {
   assert.equal(c.body.aps.event, "end");
   assert.equal(c.body.aps["content-state"].online, false);
   assert.equal(c.body.aps["dismissal-date"], t.clock.now + 600);
-  assert.equal(t.rows(`SELECT * FROM push_tokens`).length, 0);
+  assert.deepEqual(t.rows(`SELECT kind, activity_id FROM push_tokens`), [{ kind: "la_ended", activity_id: "act-1" }], "no card; the ended one's token kept (#1939)");
+});
+
+// #1939: a Mac restart (offline post, then the start edge) must leave ONE card on the phone. The
+// offline end APNs took may never have been applied (lost while the phone slept), so the old card
+// can still be up when the new one registers: it gets its end again then, and only then.
+const relaunchCard = (activity_id, c) => ({ device_id: PHONE, kind: "la_update", token: tok(c), env: "production", activity_id, mac_id: MAC });
+const sentLA = (t) => t.takeCalls().map((c) => [c.token[0], c.body.aps.event]);
+
+test("#1939: restart with an offline post: the old card is ended again when the new one registers; one card left", async () => {
+  const t = setup();
+  await registerPhone(t); // alert 1, la_start 2
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, relaunchCard("act-old", "3"));
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 10;
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2, offline: true }); // quit
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["3", "end"]], "the offline end; APNs says ok");
+  t.clock.now += 70; // past START_GAP_S
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working")])); // the relaunch's first post
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["2", "start"]], "the start edge push-starts the new card, nothing else yet");
+  await putToken(t.deps, ALICE, relaunchCard("act-new", "4")); // the new card registers
+  await t.settle();
+  const calls = t.takeCalls();
+  const end = calls.find((c) => c.token === tok("3"));
+  assert.deepEqual(calls.map((c) => [c.token[0], c.body.aps.event]).sort(), [["3", "end"], ["4", "update"]]);
+  assert.equal(end.body.aps["dismissal-date"], t.clock.now, "the old card goes now");
+  assert.equal(end.body.aps.timestamp, t.clock.now);
+  assert.deepEqual(t.rows(`SELECT kind, activity_id FROM push_tokens WHERE kind LIKE 'la_%' AND kind != 'la_start'`), [
+    { kind: "la_update", activity_id: "act-new" },
+  ]);
+  // Later updates reach only the new card; the old one is never sent again.
+  t.clock.now += 30;
+  await postSessions(t.deps, ALICE, sessions(4, [S("a", "idle")]));
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["4", "update"]]);
+});
+
+test("#1939: quick relaunch with no offline post (Sparkle): the card just stays, no start, no end", async () => {
+  const t = setup();
+  await registerPhone(t);
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, relaunchCard("act-1", "3"));
+  await t.settle();
+  t.takeCalls();
+  t.clock.now += 90; // the quit posted nothing; the new process posts within the 180 s lapse
+  await postSessions(t.deps, ALICE, sessions(2, [S("a", "working")]));
+  await runCron(t.deps);
+  await t.settle();
+  assert.deepEqual(sentLA(t), [], "same list: nothing to send, no push-to-start");
+  t.clock.now += 5;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "idle")])); // then, the first island list comes up idle
+  t.clock.now += 5;
+  await postSessions(t.deps, ALICE, sessions(4, [S("a", "working")])); // and working again: a start edge
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["3", "update"], ["3", "update"]], "both go to the one card; the phone holding it gets no start");
+  assert.deepEqual(t.rows(`SELECT kind, activity_id FROM push_tokens WHERE kind IN ('la_update', 'la_ended')`), [
+    { kind: "la_update", activity_id: "act-1" },
+  ]);
+});
+
+test("#1939: the la_ended card re-posting is a card again, unended; a dismissal or the 8 h prune takes an la_ended row", async () => {
+  const t = setup();
+  await registerPhone(t);
+  await postSessions(t.deps, ALICE, sessions(1, [S("a", "working")]));
+  await putToken(t.deps, ALICE, relaunchCard("act-1", "3"));
+  await t.settle();
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 2, offline: true });
+  await t.settle();
+  t.takeCalls();
+  // The phone never applied the end and re-posts the card's token (an app launch): it is the card.
+  await putToken(t.deps, ALICE, relaunchCard("act-1", "3"));
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["3", "end"]], "the Mac is offline: catch-up ends it, as before; no extra end");
+  t.clock.now += 70;
+  await postSessions(t.deps, ALICE, sessions(3, [S("a", "working")]));
+  await t.settle();
+  assert.deepEqual(sentLA(t), [["2", "start"]]);
+  // The phone's own dismissal of an la_ended card (kind la_update DELETE) takes the row: nothing to re-end.
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 4, offline: true });
+  await putToken(t.deps, ALICE, relaunchCard("act-2", "4"));
+  await t.settle();
+  t.takeCalls();
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_ended'`).length, 0, "act-2 registered while offline: ended and dropped by catch-up");
+  await postSessions(t.deps, ALICE, sessions(5, [S("a", "working")]));
+  await putToken(t.deps, ALICE, relaunchCard("act-3", "5"));
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 6, offline: true });
+  await t.settle();
+  assert.deepEqual(t.rows(`SELECT activity_id FROM push_tokens WHERE kind = 'la_ended'`), [{ activity_id: "act-3" }]);
+  await deleteTokens(t.deps, ALICE, { device_id: PHONE, kind: "la_update", activity_id: "act-3" });
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_ended'`).length, 0, "a dismissal takes it");
+  await postSessions(t.deps, ALICE, sessions(7, [S("a", "working")]));
+  await putToken(t.deps, ALICE, relaunchCard("act-4", "6"));
+  await postSessions(t.deps, ALICE, { mac_id: MAC, seq: 8, offline: true });
+  await t.settle();
+  const born = t.rows(`SELECT created_at FROM push_tokens WHERE kind = 'la_ended'`)[0].created_at;
+  await t.deps.db.batch(sessionCleanupStatements(t.deps.db, born + LA_MAX_AGE_S - 1));
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_ended'`).length, 1, "under 8 h: kept");
+  await t.deps.db.batch(sessionCleanupStatements(t.deps.db, born + LA_MAX_AGE_S));
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_ended'`).length, 0, "at 8 h: iOS has ended it, the row goes");
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_start'`).length, 1, "nothing else goes");
 });
 
 test("cron: idle for 10 min ends the card now; a live card is re-pushed every 50 min (#766)", async () => {
@@ -398,7 +501,7 @@ test("cron: idle for 10 min ends the card now; a live card is re-pushed every 50
   assert.equal(calls[0].body.aps.event, "end");
   assert.equal(calls[0].body.aps["dismissal-date"], t.clock.now);
   assert.equal(calls[0].body.aps["content-state"].online, true);
-  assert.equal(t.rows(`SELECT * FROM push_tokens`).length, 0);
+  assert.deepEqual(t.rows(`SELECT kind FROM push_tokens`), [{ kind: "la_ended" }], "no card; the ended one's token kept (#1939)");
 });
 
 test("cron: a card token near iOS's 8 h limit is rotated out, so the next edge can start a card", async () => {
@@ -2374,7 +2477,7 @@ test("#1089: a Mac's lapse still fires from its own last_seen, which every heart
 // QA 822: the audit below sees only the texts this file's tests made the store prepare. A new
 // prepare( in pushStore.mjs bumps SITES (and a new text must be listed in HEADS): red until both are
 // updated on purpose, so a query no test runs is not left out of the audit unseen.
-const PREPARE_SITES = 34;
+const PREPARE_SITES = 37;
 const STORE_SQL_HEADS = [
   "DELETE FROM devices WHERE email = ?1",
   "DELETE FROM devices WHERE email = ?1 AND device_id = ?2",
@@ -2385,6 +2488,8 @@ const STORE_SQL_HEADS = [
   "DELETE FROM push_tokens WHERE email = ?1 AND +kind = 'la_upd",
   "DELETE FROM push_tokens WHERE email = ?1 AND device_id = ?2 ",
   "DELETE FROM push_tokens WHERE email = ?1 AND device_id IN ( ",
+  "DELETE FROM push_tokens WHERE kind = 'la_ended' AND created_",
+  "UPDATE OR REPLACE push_tokens SET kind = 'la_ended', fails =",
   "DELETE FROM push_tokens WHERE token_hash = ?1",
   "DELETE FROM sessions WHERE expires_at IS NOT NULL AND expire",
   "DELETE FROM sessions WHERE token_hash = ?1",
