@@ -12,7 +12,7 @@ enum ManagedTextBlock {
     static let markdownExtensions: Set<String> = ["md", "markdown"]
     static let hashExtensions: Set<String> = ["sh", "bash", "zsh", "fish", "conf", "toml", "yaml", "yml"]
     /// #922: shell rc files have no extension; a dotfile manager's target may drop the leading dot.
-    static let hashNames: Set<String> = [".zshrc", ".bashrc", ".bash_profile", "zshrc", "bashrc", "bash_profile"]
+    static let hashNames: Set<String> = [".zshrc", ".bashrc", ".bash_profile", ".bash_login", ".profile", "zshrc", "bashrc", "bash_profile"]
 
     static func syntax(for url: URL) -> Syntax? {
         if hashNames.contains(url.lastPathComponent.lowercased()) { return .hash }

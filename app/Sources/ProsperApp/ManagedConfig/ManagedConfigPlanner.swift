@@ -204,6 +204,7 @@ struct ManagedConfigPlanner {
             let resolved = try ManagedConfigPaths.resolve(piece.target, kind: piece.kind, owner: owner, roots: roots).get()
             // #1918: the piece's target changed (a kit's shell-path block, zsh -> fish): the old one leaves its file in this
             // same plan, then the piece is written fresh. relocate below is for the same target behind a new symlink only.
+            // On a move the actions hold this id twice (remove, then write) and pieceFiles names only the new file: harmless, a replan recomputes both.
             if let r = record(piece.id), r.target != piece.target {
                 remove(r)
                 guard record(piece.id) == nil else { return } // the old one could not be removed: remove() refused it
@@ -230,7 +231,7 @@ struct ManagedConfigPlanner {
     private mutating func applyBlock(_ piece: ManagedConfigPiece, _ existing: ManagedConfigRecord?, _ repair: Bool, _ w: inout Work) throws(ManagedConfigRefusalReason) -> ManagedConfigPieceAction.Kind {
         guard let body = piece.text, ManagedTextBlock.bodyIsValid(body) else { throw .invalidPiece("a block needs text without prosper markers") }
         guard let syntax = ManagedTextBlock.syntax(for: w.url) else {
-            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files, or .zshrc, .bashrc or .bash_profile")
+            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files, or .zshrc, .bashrc, .bash_profile, .bash_login or .profile")
         }
         let block = ManagedTextBlock.render(owner: owner.id, piece: piece.id, version: owner.version, body: body, syntax: syntax)
         let record = newRecord(piece, w, written: block, hash: OrderedJSON.sha256(Array(block.utf8)))
@@ -512,7 +513,7 @@ struct ManagedConfigPlanner {
             case .present(let b, let e):
                 // A-INFO-10: an edited block is drift here too; Remove asks (spec 2.5) and the sheet names it
                 if !ManagedTextBlock.bytes(of: w.text, begin: b, end: e).elementsEqual(r.written.utf8) {
-                    driftNote(&w, r.piece.id, "Remove deletes")
+                    driftNote(&w, r.piece.id, "removing it deletes")
                 }
                 step(&w, ManagedTextBlock.removing(begin: b, end: e, from: w.text))
                 action = .remove

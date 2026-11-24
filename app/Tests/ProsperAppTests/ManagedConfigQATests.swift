@@ -485,7 +485,7 @@ extension ManagedConfigQATests {
         XCTAssertEqual(r.pieces, [.init(id: "rules", action: .remove)])
         XCTAssertEqual(env.consent.seen.count, 2, "the Remove asked")
         XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
-                       ["The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
+                       ["The rules block was edited by hand: removing it deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
         XCTAssertTrue(env.consent.seen.last?.files.first?.lines.contains(.init(sign: .removed, text: "Follow the kit rules, and mine.")) ?? false)
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
         let pre = backups(env, suffix: ".pre")
@@ -720,7 +720,7 @@ extension ManagedConfigQATests {
         let r = await env.mc.remove(owner: env.owner)
         XCTAssertEqual(r.status, .done)
         XCTAssertEqual(env.consent.seen.last?.files.first?.notes,
-                       ["The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
+                       ["The rules block was edited by hand: removing it deletes those edits too. A copy of the file as it is now goes to the backups, which keep the copies from Prosper's last 5 writes to this file."])
         XCTAssertEqual(env.read(env.claudeMD), "# mine\n")
     }
 

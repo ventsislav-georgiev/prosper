@@ -16,6 +16,8 @@ struct KitRenderContext: Equatable, Sendable {
     var loginShell = "zsh"
     /// #1918: the kitconfig: slug; names the fish conf.d file.
     var slug = ""
+    /// #1918 r b: the bash login file (bashLoginRC over the home's listing).
+    var bashRC = ".bash_profile"
 
     /// `configHome` is the `kitconfig:` parent (ManagedConfigRoots.configHome, `~/.config`), so the
     /// rendered `{{kit_config}}` is the dir the seeds land in.
@@ -27,7 +29,8 @@ struct KitRenderContext: Equatable, Sendable {
                 .appendingPathComponent("bin", isDirectory: true).path,
             kitConfig: configHome.appendingPathComponent(slug, isDirectory: true).path,
             home: home.path,
-            runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path, loginShell: loginShell, slug: slug)
+            runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path, loginShell: loginShell, slug: slug,
+            bashRC: KitRender.bashLoginRC { FileManager.default.fileExists(atPath: home.appendingPathComponent($0).path) })
     }
 
     /// #919 S2: the Marketplace listing's context: the placeholders themselves, so a listing names no path of the publisher's Mac.
@@ -166,10 +169,17 @@ enum KitRender {
     static func loginShellName(_ pwShell: String?) -> String { (pwShell ?? "").split(separator: "/").last.map(String.init) ?? "" }
 
     /// #1918: the home-relative file the shell-path block goes in, by login shell; nil: a shell Prosper writes no block for.
-    static func shellRC(_ shell: String, slug: String) -> String? {
+    /// #1918 r b: a bash login shell reads only the first of these that exists, so the block goes there; .bash_profile is
+    /// created only when none exists. Always first-existing, also for a block already written: a file that appears earlier in
+    /// the list shadows the old one, so the next apply moves the block there (planner target change); otherwise it stays.
+    static func bashLoginRC(_ exists: (String) -> Bool) -> String {
+        [".bash_profile", ".bash_login", ".profile"].first(where: exists) ?? ".bash_profile"
+    }
+
+    static func shellRC(_ shell: String, slug: String, bashRC: String = ".bash_profile") -> String? {
         switch shell {
         case "zsh": ".zshrc"
-        case "bash": ".bash_profile" // a macOS terminal starts bash as a login shell: it reads only this, and children inherit PATH
+        case "bash": bashRC // a macOS terminal starts bash as a login shell; children inherit PATH
         case "fish": ".config/fish/conf.d/\(slug).fish"
         default: nil
         }
@@ -177,14 +187,14 @@ enum KitRender {
 
     /// #1918: the shell-path piece's (target, line) for this context; nil when the shell has no rc here or the path cannot be quoted.
     static func shellPath(_ c: KitRenderContext) -> (target: String, line: String)? {
-        guard let rc = shellRC(c.loginShell, slug: c.slug),
+        guard let rc = shellRC(c.loginShell, slug: c.slug, bashRC: c.bashRC),
               let line = c.loginShell == "fish" ? fishPathLine(c.kitBin) : shellPathLine(c.kitBin) else { return nil }
         return ("shellrc:" + rc, line)
     }
 
     /// #1918: what the kit pane shows under the shell-path piece: the file and its line, or the POSIX line to add by hand.
-    static func shellPathNote(kitBin: String, shell: String, slug: String) -> String? {
-        let c = KitRenderContext(extensionID: "", kitDir: "", kitBin: kitBin, kitConfig: "", home: "", runner: "", loginShell: shell, slug: slug)
+    static func shellPathNote(kitBin: String, shell: String, slug: String, bashRC: String) -> String? {
+        let c = KitRenderContext(extensionID: "", kitDir: "", kitBin: kitBin, kitConfig: "", home: "", runner: "", loginShell: shell, slug: slug, bashRC: bashRC)
         if case let (target, line)? = shellPath(c) { return "~/\(target.dropFirst("shellrc:".count)) gets: " + line }
         guard let line = shellPathLine(kitBin) else { return nil }
         let shell = shell.isEmpty ? "unknown" : shell
@@ -333,7 +343,7 @@ enum KitRender {
                 let names = (v.agents[p.id] ?? []).map { $0.name + ".md" }.joined(separator: ", ")
                 lines.append("\(p.id): installs agents \(names.isEmpty ? "(none)" : names) into \(c.home)/.claude/agents; a file you already have is never overwritten")
             case .shellPath:
-                if let rc = shellRC(c.loginShell, slug: c.slug) {
+                if let rc = shellRC(c.loginShell, slug: c.slug, bashRC: c.bashRC) {
                     lines.append("\(p.id): only when you switch it on, a block at the bottom of \(c.home)/\(rc) appends \(c.kitBin) to PATH")
                 } else {
                     lines.append("\(p.id): your login shell (\(c.loginShell.isEmpty ? "unknown" : c.loginShell)) is not zsh, bash or fish: nothing is written; add \(c.kitBin) to PATH yourself")

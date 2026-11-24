@@ -20,7 +20,7 @@ final class ManagedConfigConsentSheetTests: XCTestCase {
         backupDirectory: "/Users/example/.config/prosper/managed-config/backups/kitconfig-kit.json",
         lines: [.init(sign: .added, text: "{}")], notes: [], newFile: true)
     /// The planner's drift note for a Remove (ManagedConfigPlanner.driftNote is private: its format, copied).
-    private static let driftNote = "The rules block was edited by hand: Remove deletes those edits too. A copy of the file as it is now goes to the backups, "
+    private static let driftNote = "The rules block was edited by hand: removing it deletes those edits too. A copy of the file as it is now goes to the backups, "
         + "which keep the copies from Prosper's last \(ManagedConfig.preWriteBackupsKept) writes to this file."
 
     private static func set(_ action: ManagedConfigChangeSet.Action = .apply, name: String? = nil,

@@ -120,7 +120,8 @@ struct KitPaneView: View {
         var shellLine: String? = nil
     }
 
-    static func pieceRows(_ m: KitPaneModel, shell: String = KitRender.userLoginShell) -> [PieceRow] {
+    static func pieceRows(_ m: KitPaneModel, shell: String = KitRender.userLoginShell,
+                          bashRC: @autoclosure () -> String = KitRender.bashLoginRC { FileManager.default.fileExists(atPath: NSHomeDirectory() + "/" + $0) }) -> [PieceRow] {
         guard case .ok(let v)? = m.facts?.preview else { return [] }
         let off = m.facts?.status?.off ?? []
         return v.kit.pieces.map { p in
@@ -133,7 +134,7 @@ struct KitPaneView: View {
                             target: st.map { OutsideText.shown($0.target, max: 120) }, hook: hook.map { OutsideText.shown($0, max: 120) },
                             inUse: m.facts?.inUse[p.id], tools: (v.tools[p.id] ?? []).map(\.name).sorted(),
                             shellLine: p.kind == .shellPath
-                                ? KitRender.shellPathNote(kitBin: m.facts?.kitBin ?? "", shell: shell, slug: v.slug).map { OutsideText.shown($0, max: 400) } : nil)
+                                ? KitRender.shellPathNote(kitBin: m.facts?.kitBin ?? "", shell: shell, slug: v.slug, bashRC: shell == "bash" ? bashRC() : "").map { OutsideText.shown($0, max: 400) } : nil)
         }
     }
 

@@ -8,7 +8,7 @@ import XCTest
 final class KitShellPathTests: XCTestCase {
     static let bin = "/Users/example/.config/prosper/kits/com.example.kit/bin"
     static let userRC = "export EDITOR=vi\n"
-    static let refusal = "shellrc: takes a block in .zshrc, .bashrc, .bash_profile or the kit's own .config/fish/conf.d/<slug>.fish only"
+    static let refusal = "shellrc: takes a block in .zshrc, .bashrc, .bash_profile, .bash_login, .profile or the kit's own .config/fish/conf.d/<slug>.fish only"
 
     /// makeMCEnv's roots plus a scratch home holding a .zshrc.
     private func shellEnv(label: String = #function) throws -> (env: MCEnv, home: URL, rc: URL, mc: ManagedConfig) {
@@ -78,7 +78,7 @@ final class KitShellPathTests: XCTestCase {
             if case .failure(let r) = ManagedConfigPaths.resolve(target, kind: kind, owner: env.owner, roots: roots ?? mc.roots) { return r }
             return nil
         }
-        XCTAssertEqual(reason("shellrc:.profile"), .wrongKind(Self.refusal))
+        XCTAssertEqual(reason("shellrc:.kshrc"), .wrongKind(Self.refusal))
         XCTAssertEqual(reason("shellrc:.zshrc", .json), .wrongKind(Self.refusal))
         XCTAssertEqual(reason("shellrc:.zshrc", .seed), .wrongKind(Self.refusal))
         XCTAssertEqual(reason("shellrc:sub/.zshrc"), .wrongKind(Self.refusal))
@@ -91,6 +91,11 @@ final class KitShellPathTests: XCTestCase {
         // #1918: the kit's bash target (a login shell reads only .bash_profile)
         XCTAssertTrue(reason("shellrc:.bash_profile") == nil, "a missing .bash_profile is created")
         XCTAssertEqual(ManagedTextBlock.syntax(for: home.appendingPathComponent(".bash_profile")), .hash)
+        // #1918 r b: bash's other two login files
+        for f in [".bash_login", ".profile"] {
+            XCTAssertTrue(reason("shellrc:" + f) == nil, f)
+            XCTAssertEqual(ManagedTextBlock.syntax(for: home.appendingPathComponent(f)), .hash, f)
+        }
         XCTAssertEqual(ManagedTextBlock.syntax(for: home.appendingPathComponent("zshrc")), .hash, "a dotfile manager's target")
     }
 
@@ -149,7 +154,7 @@ final class KitShellPathTests: XCTestCase {
             let plan = KitRender.plan(v, ctx(row.shell))
             XCTAssertEqual(plan.refusals, [], row.shell)
             XCTAssertEqual(plan.pieces, row.target.map { [ManagedConfigPiece(id: "path", kind: .block, target: $0, text: row.text)] } ?? [], row.shell)
-            let note = KitRender.shellPathNote(kitBin: bin, shell: row.shell, slug: "calm-agent") ?? "?"
+            let note = KitRender.shellPathNote(kitBin: bin, shell: row.shell, slug: "calm-agent", bashRC: ".bash_profile") ?? "?"
             let summary = KitRender.summary(v, ctx(row.shell)).first ?? "?"
             if let target = row.target {
                 let rc = String(target.dropFirst("shellrc:".count))
@@ -162,6 +167,68 @@ final class KitShellPathTests: XCTestCase {
                 XCTAssertEqual(summary, "path: your login shell (\(name)) is not zsh, bash or fish: nothing is written; add \(bin) to PATH yourself")
             }
         }
+    }
+
+    /// #1918 r b: bash gets the first of .bash_profile, .bash_login, .profile that exists; .bash_profile only when none does.
+    func testBashTakesTheFirstExistingLoginFile() throws {
+        let cases: [(have: [String], rc: String)] = [
+            ([], ".bash_profile"), ([".profile"], ".profile"), ([".bash_login"], ".bash_login"),
+            ([".bash_login", ".profile"], ".bash_login"), ([".bash_profile", ".profile"], ".bash_profile"),
+        ]
+        let v = validated([.init(id: "path", kind: .shellPath)])
+        for c in cases {
+            XCTAssertEqual(KitRender.bashLoginRC { c.have.contains($0) }, c.rc, "\(c.have)")
+            let home = tempDir(#function)
+            defer { try? FileManager.default.removeItem(at: home) }
+            for f in c.have { try Data("x\n".utf8).write(to: home.appendingPathComponent(f)) }
+            let ctx = KitRenderContext.standard(extensionID: "com.example.kit", slug: "calm-agent", kitDir: home, home: home,
+                                                configHome: home.appendingPathComponent(".config"), loginShell: "bash")
+            XCTAssertEqual(KitRender.plan(v, ctx).pieces.first?.target, "shellrc:" + c.rc, "\(c.have)")
+            XCTAssertEqual(KitRender.summary(v, ctx).first, "path: only when you switch it on, a block at the bottom of \(home.path)/\(c.rc) appends \(ctx.kitBin) to PATH")
+            XCTAssertTrue(KitRender.shellPathNote(kitBin: ctx.kitBin, shell: "bash", slug: "calm-agent", bashRC: ctx.bashRC)?.hasPrefix("~/\(c.rc) gets: ") ?? false)
+        }
+    }
+
+    /// #1918 r b: a home with only ~/.profile gets the block there and no .bash_profile; once the user makes a
+    /// .bash_profile (which now shadows .profile), the next update moves the block into it and .profile is the user's again.
+    func testBashBlockFollowsTheFileBashReads() async throws {
+        let root = tempDir(#function)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let roots = ManagedConfigRoots(claude: root.appendingPathComponent("claude home", isDirectory: true),
+                                       configHome: root.appendingPathComponent("config", isDirectory: true),
+                                       stateDir: root.appendingPathComponent("state", isDirectory: true), home: root)
+        for d in [roots.claude, roots.configHome] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        try Data("{}\n".utf8).write(to: roots.claude.appendingPathComponent("settings.json"))
+        let profile = root.appendingPathComponent(".profile"), bashProfile = root.appendingPathComponent(".bash_profile")
+        try Data(Self.userRC.utf8).write(to: profile)
+        let clock = MCClock()
+        let provider = ManagedConfigProvider(ManagedConfig(roots: roots, consent: KitRTConsent(), writer: ManagedConfigPOSIXWriter(), now: { clock.now() }))
+        let ext = "com.example.kit"
+        let kit = "[contributes.kit]\nschema = 1\n\n[[contributes.kit.pieces]]\nid   = \"path\"\nkind = \"shell-path\"\n"
+        func source(_ version: String) throws -> LoadedExtension {
+            let head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(ext)\"")
+                .replacingOccurrences(of: "\"1.0.0\"", with: "\"\(version)\"").replacingOccurrences(of: "\"2.170.0\"", with: "\"0.0.1\"")
+            let dir = root.appendingPathComponent("sources/shell-kit-\(version)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            for (rel, body) in ["extension.toml": head + "\n" + kit, "README.md": KitDirFixture.readme, "init.lua": "return {}\n"] {
+                try Data(body.utf8).write(to: dir.appendingPathComponent(rel))
+            }
+            return LoadedExtension(manifest: try KitFixture.manifest(kit, head: head), directory: dir, isSystem: false)
+        }
+        let rt = KitRuntime(provider: provider, store: try KitStore(configHome: roots.configHome, extID: ext), isTrusted: { _ in true }, loginShell: "bash")
+        let v = KitValidated(extensionID: ext, slug: "calm-agent", version: "1.0.0", kit: KitManifest(pieces: [.init(id: "path", kind: .shellPath)]))
+        _ = try rt.setSelection(v, off: [])
+        let first = await rt.apply(try source("1.0.0"))
+        XCTAssertEqual(first.failures, [], "\(first)")
+        XCTAssertTrue((text(profile) ?? "").contains("export PATH="), text(profile) ?? "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bashProfile.path), "no .bash_profile is created over a .profile")
+
+        try Data("# mine\n".utf8).write(to: bashProfile)
+        let moved = await rt.apply(try source("1.0.1"))
+        XCTAssertEqual(moved.failures, [], "\(moved)")
+        XCTAssertTrue(moved.configRefusals.isEmpty, "\(moved.configRefusals)")
+        XCTAssertEqual(text(profile), Self.userRC, "the block left the shadowed .profile byte for byte")
+        XCTAssertTrue((text(bashProfile) ?? "").hasPrefix("# mine\n") && (text(bashProfile) ?? "").contains("export PATH="), text(bashProfile) ?? "")
     }
 
     /// A zsh install plans the bytes it planned before #1918: same target, same block text, same summary line.
