@@ -1,6 +1,6 @@
 {
  "entry": 1930,
- "filter": "testAgentWindowConfirmCard",
+ "filter": "AgentWindowD1Tests/testAgentWindowConfirmCard",
  "mutants": [
   {
    "name": "escape-not-taken",
