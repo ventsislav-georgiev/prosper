@@ -1,0 +1,34 @@
+{
+ "entry": 1932,
+ "filter": "AgentWindowMinWidthTests",
+ "mutants": [
+  {
+   "name": "no-floor",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "return NSSize(width: max(column + AgentSidebarWidth.strip * scale, floor), height: 420 * scale)",
+   "new": "return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)",
+   "expect": "killed"
+  },
+  {
+   "name": "style-not-reread",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        applyMinSize(win)   // #1932: the new mask's title buttons need another width",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "borderless-floored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard win.styleMask.contains(.titled) else { return 0 }",
+   "new": "guard true else { return 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "hook-no-floor",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "if let win = win as? AgentsNSWindow { AgentsWindow.applyMinSize(win, scale: scale) }",
+   "new": "if let win = win as? AgentsNSWindow { win.minimum = AgentsWindow.contentMinSize(win.model, scale: scale) }",
+   "expect": "killed"
+  }
+ ]
+}
