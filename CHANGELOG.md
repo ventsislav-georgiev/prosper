@@ -18,6 +18,8 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
+## v2.177.0 *(unreleased)*
+
 ## v2.176.0
 
 - Settings, Claude Account Pool: "Start new Claude sessions through the pool" is now on by default
