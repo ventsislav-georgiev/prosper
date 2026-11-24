@@ -19,7 +19,7 @@
   {
    "name": "sliver-gone",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "return max(0, min(w, content - 1 - sz(sliver)))",
+   "old": "return max(0, min(w, content - 1 - sz(strip)))",
    "new": "return w",
    "expect": "killed"
   },

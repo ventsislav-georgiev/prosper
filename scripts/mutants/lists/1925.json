@@ -1,0 +1,104 @@
+{
+ "entry": "1925",
+ "filter": "AgentWindowMinWidthTests|AgentSidebarWidthTests",
+ "mutants": [
+  {
+   "name": "sizing-default",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        hosting.sizingOptions = []\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-strip",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)",
+   "new": "return NSSize(width: column, height: 420 * scale)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-line",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ": AgentWindowModel.fullSidebarWidth(at: scale)) + 1",
+   "new": ": AgentWindowModel.fullSidebarWidth(at: scale))",
+   "expect": "killed"
+  },
+  {
+   "name": "slide-counted",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "model.sidebarShown, model.sidebarMode != .slide {",
+   "new": "model.sidebarShown {",
+   "expect": "killed"
+  },
+  {
+   "name": "old-min",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)",
+   "new": "return NSSize(width: 640 * scale + AgentWindowModel.digitColumnExtra(at: scale), height: 420 * scale)",
+   "expect": "killed"
+  },
+  {
+   "name": "no-grow",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)\n        win.clampToContentMinSize()\n",
+   "new": "        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-hook",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "mode-not-observed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "var sidebarMode = Preferences.agentSidebarMode { didSet { sidebarColumnMoved() } }",
+   "new": "var sidebarMode = Preferences.agentSidebarMode",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden-not-observed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "var sidebarHidden = Preferences.agentWindowSidebarHidden { didSet { sidebarColumnMoved() } }",
+   "new": "var sidebarHidden = Preferences.agentWindowSidebarHidden",
+   "expect": "killed"
+  },
+  {
+   "name": "theme-hook-no-model",
+   "file": "app/Sources/ProsperApp/AppDelegate.swift",
+   "old": "win.minimum = AgentsWindow.contentMinSize(win.model, scale: scale)",
+   "new": "win.minimum = AgentsWindow.contentMinSize(nil, scale: scale)",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-split",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return max(0, min(w, content - 1 - sz(strip)))",
+   "new": "return max(0, min(w, content - 1 - sz(24)))",
+   "expect": "killed"
+  },
+  {
+   "name": "drag-not-ended-on-move",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "    private func sidebarColumnMoved() {\n        sidebarDragEnded()\n",
+   "new": "    private func sidebarColumnMoved() {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "outside-write-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        set { super.contentMinSize = minimum }",
+   "new": "        set { super.contentMinSize = newValue }",
+   "expect": "killed"
+  },
+  {
+   "name": "stale-start-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if let x, x != sidebarDragOrigin { sidebarDragEnded(); sidebarDragOrigin = x }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
