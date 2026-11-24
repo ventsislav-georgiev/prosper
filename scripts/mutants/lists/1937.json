@@ -1,0 +1,41 @@
+{
+ "entry": 1937,
+ "filter": "AgentWindowD1Tests/testAgentWindowConfirmCardHeldReturnNeverRepeatsIntoTheResponder|AgentWindowD1Tests/testAgentWindowConfirmCardReturnWithMarkedTextPassesThrough",
+ "mutants": [
+  {
+   "name": "held-never-set",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if event.keyCode == 36 || event.keyCode == 76 { heldConfirmKey = event.keyCode }",
+   "new": "if event.keyCode == 36 || event.keyCode == 76 { }",
+   "expect": "killed"
+  },
+  {
+   "name": "repeat-not-swallowed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if event.type == .keyDown, event.isARepeat, event.keyCode == heldConfirmKey { return true }",
+   "new": "if event.type == .keyDown, event.isARepeat, event.keyCode == heldConfirmKey { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "keyup-never-releases",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "if event.type == .keyUp { if event.keyCode == heldConfirmKey { heldConfirmKey = nil }; return false }",
+   "new": "if event.type == .keyUp { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "resign-keeps-hold",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        heldConfirmKey = nil   // #1937: its keyUp goes to whoever is key then\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "ime-not-checked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            if (responder as? NSTextInputClient)?.hasMarkedText() == true { return false }\n",
+   "new": "\n",
+   "expect": "killed"
+  }
+ ]
+}
