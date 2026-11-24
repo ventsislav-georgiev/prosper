@@ -37,6 +37,10 @@ tag from the now-released section and put it on the new top draft.
 - Empty panes now take part in pane drag and drop: a session dragged over an empty pane gets the
   same drop zones (swap into its place or split on any edge), and an empty pane can itself be
   dragged by its header to another place. (#1927)
+- Empty pane cards now look the same whether or not their pane is focused: one line of text ("Pick a
+  session from the list, or start one here.") and the same buttons (Close Pane with several panes,
+  New shell, New session); pressing New session on an unfocused pane's card opens the form in that
+  pane. (#1928)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

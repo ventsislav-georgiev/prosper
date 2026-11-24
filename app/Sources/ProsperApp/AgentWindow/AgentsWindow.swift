@@ -2605,18 +2605,7 @@ struct AgentDetailView: View {
 
     /// No target: today's state (the hint and the New session pill, #847); #1658: with several panes, Close Pane first.
     var emptyPane: some View {
-            AgentEmptyState(icon: "sidebar.left", title: "Select a session",
-                            detail: "Up and down move through the list; Return or a click moves into it.") {
-                HStack(spacing: sz(8)) {
-                    AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: model.layout.focused))
-                    AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)   // #1920
-                    AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
-                                    enabled: model.store?.resumeGate.isOK == true) { model.openNewSession() }
-                        .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
-                        .accessibilityLabel("New session")
-                }
-                .padding(.top, sz(4))
-            }
+            AgentPanePlaceholder.emptyCard(model, pane: model.layout.focused)   // #1928: the unfocused pane's card too
     }
 
     /// #822 (spec 5.4): the terminal to the window's bottom, no prompt panel or input box (the terminal
@@ -3397,13 +3386,7 @@ struct AgentUnfocusedPane: View {
                     AgentPanePlaceholder(title: title, close: { model.closePane(runtime.pane) },
                                          pick: { model.pickAnother(runtime.pane) })
                 } else {
-                    AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail) {
-                        HStack(spacing: sz(8)) {
-                            AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: runtime.pane))   // #1658
-                            AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)   // #1920
-                        }
-                        .padding(.top, sz(4))
-                    }
+                    AgentPanePlaceholder.emptyCard(model, pane: runtime.pane)   // #1928: the focused pane's card too
                 }
             }
         }
@@ -3455,6 +3438,25 @@ struct AgentPanePlaceholder: View {
                         enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane); model.startShell() }
             .help(AgentNewSessionButtons.help("New shell (⇧⌘N)", refusal: model.store?.resumeGate.refusal))
             .accessibilityLabel("New shell")
+    }
+
+    static let emptyDetail = "Pick a session from the list, or start one here."
+
+    /// #1928: the empty pane's card, one view for the focused and the unfocused pane: the same text and pills (Close Pane
+    /// with several panes, New shell, New session). `pane` is captured at draw: a press focuses it first (as #1920's New
+    /// shell), so New session's form opens in it.
+    @MainActor @ViewBuilder static func emptyCard(_ model: AgentWindowModel, pane: UUID) -> some View {
+        AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: emptyDetail) {
+            HStack(spacing: sz(8)) {
+                closePill(close(model, pane: pane))   // #1658
+                newShellPill(model, pane: pane)   // #1920
+                AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
+                                enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane); model.openNewSession() }
+                    .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
+                    .accessibilityLabel("New session")
+            }
+            .padding(.top, sz(4))
+        }
     }
 
     /// The Close Pane pill (nil: none), the placeholder's and #1658's empty pane's alike.

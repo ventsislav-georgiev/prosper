@@ -164,7 +164,7 @@ extension AgentWindowD1Tests {
             return host.hitTest(CGPoint(x: p.x, y: size.height - p.y))
         }
         // Control (the base bug): an empty pane's card alone, no contentShape: its blank band is not the card's.
-        let card = AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail)
+        let card = AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.emptyDetail)
         let square = CGSize(width: 600, height: 600)
         XCTAssertTrue(hit(card.frame(width: 600, height: 600), square, CGPoint(x: 10, y: 300)) is AgentWindowDragView,
                       "control: a blank part of the card falls through")

@@ -182,7 +182,7 @@ extension AgentWindowD1Tests {
             let focused = try emptyPanePills(m, a)
             XCTAssertEqual(focused.map(\.title), ["Close Pane", "New shell", "New session"], "the focused empty pane")
             let other = try emptyPanePills(m, b)
-            XCTAssertEqual(other.map(\.title), ["Close Pane", "New shell"], "the unfocused empty pane")
+            XCTAssertEqual(other.map(\.title), ["Close Pane", "New shell", "New session"], "the unfocused empty pane: the same pills (#1928)")
             m.focusPane(b)
             XCTAssertEqual(m.layout.focused, b)
             for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
@@ -242,7 +242,7 @@ extension AgentWindowD1Tests {
             defer { m.close() }
             XCTAssertEqual(m.layout.focused, a)
             XCTAssertEqual(try emptyPanePills(m, a).map(\.title), ["Close Pane", "New shell", "New session"])
-            XCTAssertEqual(try emptyPanePills(m, b).map(\.title), ["Close Pane", "New shell"])
+            XCTAssertEqual(try emptyPanePills(m, b).map(\.title), ["Close Pane", "New shell", "New session"])
             let other = try XCTUnwrap(try emptyPanePills(m, b).first { $0.title == "New shell" })
             other.action()
             XCTAssertEqual(m.layout.focused, b, "the press focused its own pane first")
@@ -256,6 +256,52 @@ extension AgentWindowD1Tests {
             let off = try XCTUnwrap(try emptyPanePills(m, a).first { $0.title == "New shell" })
             XCTAssertFalse(off.enabled)
             XCTAssertNotNil(st2.resumeGate.refusal)
+        } }
+    }
+
+    /// The (title, detail) of the AgentEmptyState card in a built view value (nil: none).
+    func emptyCardText(_ v: Any, depth: Int = 0) -> (String, String)? {
+        let m = Mirror(reflecting: v)
+        if "\(type(of: v))".hasPrefix("AgentEmptyState<") {
+            let f = Dictionary(m.children.compactMap { c in c.label.map { ($0, c.value) } }, uniquingKeysWith: { a, _ in a })
+            if let t = f["title"] as? String, let d = f["detail"] as? String { return (t, d) }
+        }
+        guard depth < 80, m.displayStyle != .class else { return nil }
+        return m.children.lazy.compactMap { self.emptyCardText($0.value, depth: depth + 1) }.first
+    }
+
+    @MainActor
+    func emptyCardText(_ m: AgentWindowModel, _ id: UUID) throws -> (String, String)? {
+        let view = AgentPaneArea(model: m, scrolls: false).pane(id, compact: m.layout.panes.count > 1)
+        if let d = paneRiderFind(view, AgentDetailView.self) { return emptyCardText(d.body) }
+        return emptyCardText(try XCTUnwrap(paneRiderFind(view, AgentUnfocusedPane.self), "a pane view: \(type(of: view))").body)
+    }
+
+    /// #1928: the empty pane card is one view: the focused and the unfocused pane show the same title and text (no
+    /// keyboard instruction) and the same pills; New session pressed on the unfocused card focuses that pane first, so
+    /// its form opens in it. Old line that makes it red: the two call sites' own texts (focused "Up and down move...",
+    /// unfocused "Pick another session..."), no New session pill on the unfocused card, `model.focusPane(pane)` missing in
+    /// the New session action (the focused stays a).
+    @MainActor
+    func testEmptyPaneCardIsTheSameFocusedOrNotAndNewSessionFocusesItsPane() throws {
+        try withPaneMenu(true) { try withNewSessionPrefs {
+            let two = paneLayout([nil, nil])
+            let a = try XCTUnwrap(two.order.first), b = try XCTUnwrap(two.order.last)
+            let m = newSessionModel(store([]), SpawnCalls(), layouts: layoutSuite())
+            m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+            m.adopt(two)
+            m.select(nil)
+            defer { m.close() }
+            XCTAssertEqual(m.layout.focused, a)
+            let focused = try XCTUnwrap(try emptyCardText(m, a), "the focused card"), other = try XCTUnwrap(try emptyCardText(m, b), "the unfocused card")
+            XCTAssertEqual(focused.0, "Select a session")
+            XCTAssertEqual(focused.1, "Pick a session from the list, or start one here.")
+            XCTAssertTrue(focused == other, "the same title and text: \(focused) vs \(other)")
+            XCTAssertEqual(try emptyPanePills(m, a).map(\.title), try emptyPanePills(m, b).map(\.title))
+            XCTAssertTrue(m.newSession == nil)
+            try XCTUnwrap(try emptyPanePills(m, b).first { $0.title == "New session" }).action()
+            XCTAssertEqual(m.layout.focused, b, "the press focused its own pane first")
+            XCTAssertTrue(m.newSession != nil, "the form is open, in b")
         } }
     }
 
