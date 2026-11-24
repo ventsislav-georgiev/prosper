@@ -273,8 +273,26 @@ enum AgentWindowControls {
 
     static let closePaneLabel = "Close Pane"   // #1817 (operator 2026-11-21): the short label
     static let swapLabel = "Swap Session\u{2026}"   // #1895 (operator 2026-11-23)
-    /// #1351: the "..." item of the X-ray panel.
-    static let xrayLabel = "X-Ray\u{2026} \u{21E7}\u{2318}X"
+    /// #1351: the "..." item of the X-ray panel. #1916: no typed chord; the item shows its key as a menu shortcut (keyHint).
+    static let xrayLabel = "X-Ray\u{2026}"
+    /// #1916: the Go menu's words; a bare "Zoom" drew the Window menu's Command-M beside it.
+    static let zoomLabel = "Zoom Pane"
+
+    /// #1916: the key an item shows, read from the Go menu's table (one source: a key change moves both menus). Pane
+    /// items only in the focused pane's menu (`keyPanes`: the active layout's pane count; nil: another pane's menu, whose
+    /// items no key acts on), Close Pane only with more than one pane (the table's own rule). X-Ray's item is drawn in the
+    /// focused pane's menu only and its key toggles that pane's panel. nil: no key does exactly this item.
+    @MainActor
+    static func keyHint(_ e: AgentWindowMenuEntry, keyPanes: Int?) -> AgentGoMenu.Entry? {
+        let action: AgentGoMenu.Action
+        switch e {
+        case .xray: action = .key(.xray)
+        case .pane(_, _, .action(let a)) where keyPanes != nil: action = .pane(a)
+        default: return nil
+        }
+        // splits: true: pane items exist only with the split gate on (paneMenu).
+        return AgentGoMenu.entries(splits: true, panes: keyPanes ?? 1).lazy.compactMap { $0 }.first { $0.action == action }
+    }
 
     /// #900 B2 step 6a (7.3, 3.3, 15.0): the pane part of the header "⋯", appended after `sessionMenu` behind one
     /// divider. Gate off: nothing, whatever the layout holds (the menu is today's). Gate on: Split Right and Split Down;
@@ -294,7 +312,7 @@ enum AgentWindowControls {
         }
         var out: [AgentWindowMenuEntry] = [.divider, split("Split Right", .columns, right()), split("Split Down", .rows, down())]
         if panes > 1 {
-            out += [.pane("Zoom", enabled: true, verb: .action(.zoom)), .pane("Equalize", enabled: true, verb: .equalize),
+            out += [.pane(zoomLabel, enabled: true, verb: .action(.zoom)), .pane("Equalize", enabled: true, verb: .equalize),
                     .pane(closePaneLabel, enabled: true, verb: .action(.closePane))]
         }
         return out
@@ -681,6 +699,8 @@ struct AgentMenuEntries: View {
     var open: () -> Void = {}
     var pane: (AgentPaneVerb) -> Void = { _ in }
     var side: () -> Void = {}
+    /// #1916: the focused pane's menu: the layout's pane count (keyHint); nil: no pane key hints.
+    var keyPanes: Int? = nil
 
     var body: some View {
         ForEach(Array(entries.enumerated()), id: \.offset) { _, e in
@@ -694,13 +714,15 @@ struct AgentMenuEntries: View {
             case .note(let text):
                 Text(verbatim: text)
             case .pane(let title, let enabled, let verb):
-                Button { pane(verb) } label: { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
+                Button { pane(verb) } label: { Label(title, systemImage: e.symbol ?? "") }
+                    .keyboardShortcut(AgentWindowControls.keyHint(e, keyPanes: keyPanes)?.shortcut).disabled(!enabled)
             case .side(let title, let enabled):
                 Button(action: side) { Label(title, systemImage: e.symbol ?? "") }.disabled(!enabled)
             case .xray(let pane):
                 Button { AgentsNSWindow.xrayChosen(pane: pane) } label: {
                     Label(AgentWindowControls.xrayLabel, systemImage: e.symbol ?? "")
                 }
+                .keyboardShortcut(AgentWindowControls.keyHint(e, keyPanes: keyPanes)?.shortcut)
             }
         }
     }
@@ -718,6 +740,8 @@ struct AgentSessionMenuButton: View {
     /// #900 B2 step 6a: the pane items after the session's (empty with the gate off: the menu is today's).
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
+    /// #1916: AgentMenuEntries.keyPanes (this is the focused pane's header: the layout's pane count).
+    var keyPanes: Int? = nil
 
     /// StableMenuProbe.bodies key.
     static let menuID = "agent.paneHeader"
@@ -727,6 +751,7 @@ struct AgentSessionMenuButton: View {
     struct Snapshot: Equatable {
         var entries: [AgentWindowMenuEntry]
         var switches: [AgentModelSwitch.Submenu]
+        var keyPanes: Int? = nil
     }
 
     /// #1540: a menu item's verb, run through the newest closures of the header's draw.
@@ -736,9 +761,10 @@ struct AgentSessionMenuButton: View {
 
     @MainActor
     static func snapshot(_ s: AgentSession, store: AgentIslandStore?, ended: Bool,
-                         panes: [AgentWindowMenuEntry]) -> Snapshot {
+                         panes: [AgentWindowMenuEntry], keyPanes: Int? = nil) -> Snapshot {
         Snapshot(entries: AgentWindowControls.sessionMenu(s, store: store, ended: ended) + panes,
-                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [])
+                 switches: store != nil && !ended && AgentIsland.passable(s.name) ? AgentModelSwitch.menus(s) : [],
+                 keyPanes: keyPanes)
     }
 
     var body: some View {
@@ -746,9 +772,9 @@ struct AgentSessionMenuButton: View {
         // when what it draws changes. With a store, an observing reader re-reads the gates as they change.
         Group {
             if let store {
-                AgentSessionMenuReader(store: store) { menu(Self.snapshot(session, store: store, ended: ended, panes: panes)) }
+                AgentSessionMenuReader(store: store) { menu(Self.snapshot(session, store: store, ended: ended, panes: panes, keyPanes: keyPanes)) }
             } else {
-                menu(Self.snapshot(session, store: nil, ended: ended, panes: panes))
+                menu(Self.snapshot(session, store: nil, ended: ended, panes: panes, keyPanes: keyPanes))
             }
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
@@ -791,7 +817,8 @@ struct AgentSessionMenuButton: View {
             case .pane(let p): pane(p)
             }
         }) { snap, run in
-            AgentMenuEntries(entries: snap.entries, act: { run(.ask($0)) }, open: { run(.open) }, pane: { run(.pane($0)) })
+            AgentMenuEntries(entries: snap.entries, act: { run(.ask($0)) }, open: { run(.open) }, pane: { run(.pane($0)) },
+                             keyPanes: snap.keyPanes)
             if !snap.switches.isEmpty {
                 Divider()
                 AgentSwitchMenus(menus: snap.switches, act: { run(.ask($0)) })

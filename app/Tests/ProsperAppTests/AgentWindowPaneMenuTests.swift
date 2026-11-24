@@ -102,19 +102,19 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// 7.3 / 7.4: gate on, more than one pane: the five items in order; zoomed, the zoom item still reads "Zoom" (the
+    /// 7.3 / 7.4: gate on, more than one pane: the five items in order; zoomed, the zoom item still reads "Zoom Pane" (#1916; the
     /// spec names no "Unzoom"); too small (one pane drawn, two in the layout): the five still, as the keys count.
     @MainActor
     func testPaneMenuGateOnTwoPanesFiveItems() throws {
         try withPaneMenu(true) {
-            let five = ["Split Right", "Split Down", "Zoom", "Equalize", "Close Pane"]
+            let five = ["Split Right", "Split Down", "Zoom Pane", "Equalize", "Close Pane"]
             let m = paneMenuModel(paneLayout([paneTarget("api"), paneTarget("web")]))
             defer { m.close() }
             let e = AgentWindowControls.paneMenu(m, pane: m.layout.focused)
             XCTAssertEqual(e.first, .divider)
             XCTAssertEqual(e.count, 6)
             XCTAssertEqual(paneMenuItems(e), five)
-            XCTAssertEqual(try paneMenuVerb(e, "Zoom"), .action(.zoom))
+            XCTAssertEqual(try paneMenuVerb(e, "Zoom Pane"), .action(.zoom))
             XCTAssertEqual(try paneMenuVerb(e, "Equalize"), .equalize)
             XCTAssertEqual(try paneMenuVerb(e, "Close Pane"), .action(.closePane))
             m.adopt(m.layout.toggleZoom())
@@ -182,7 +182,7 @@ extension AgentWindowD1Tests {
             let t = paneMenuThree()
             let names = [t.api: "api", t.web: "web", t.db: "db"]
             let keys: [(String, PaneAction?)] = [("Split Right", .split(.columns)), ("Split Down", .split(.rows)),
-                                                 ("Zoom", .zoom), ("Equalize", nil),
+                                                 ("Zoom Pane", .zoom), ("Equalize", nil),
                                                  ("Close Pane", .closePane)]
             for (title, action) in keys {
                 let menu = paneMenuModel(t.l), twin = paneMenuModel(t.l)

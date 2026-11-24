@@ -142,7 +142,7 @@ extension AgentWindowD1Tests {
                 let items = AgentWindowControls.paneMenu(m, pane: web)
                 XCTAssertFalse(AgentSessionMenuButton.disabled(ended: false, entries: items), "the \"...\" is on")
                 let zoom = try XCTUnwrap(items.compactMap { e -> AgentPaneVerb? in
-                    if case let .pane(t, true, v) = e, t == "Zoom" { return v } else { return nil }
+                    if case let .pane(t, true, v) = e, t == "Zoom Pane" { return v } else { return nil }
                 }.first)
                 AgentWindowControls.runPane(zoom, pane: web, in: m)
                 XCTAssertEqual(m.layout.zoomed, web, "its Zoom acts on web")

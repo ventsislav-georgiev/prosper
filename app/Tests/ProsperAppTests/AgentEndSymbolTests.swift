@@ -184,7 +184,7 @@ final class AgentEndSymbolTests: XCTestCase {
     @MainActor
     func testPaneMenuEntriesCarryTheirSymbols() {
         XCTAssertEqual(AgentWindowControls.paneMenu(splits: true, panes: 2, right: nil, down: nil).compactMap(pair), [
-            "Split Right|rectangle.split.2x1", "Split Down|rectangle.split.1x2", "Zoom|arrow.up.left.and.arrow.down.right",
+            "Split Right|rectangle.split.2x1", "Split Down|rectangle.split.1x2", "Zoom Pane|arrow.up.left.and.arrow.down.right",
             "Equalize|equal.square", "\(AgentWindowControls.closePaneLabel)|xmark.rectangle",
         ])
     }

@@ -164,7 +164,7 @@ extension AgentWindowD1Tests {
             let a = session("api", .idle)
             let button = AgentSessionMenuButton(store: nil, session: a, ask: { _ in }, open: {}, ended: true, panes: panes)
             XCTAssertEqual(button.entries, [.open(enabled: false)] + panes, "Open in terminal off; pane items as built")
-            XCTAssertEqual(paneMenuItems(button.entries), ["Split Right", "Split Down", "Zoom", "Equalize",
+            XCTAssertEqual(paneMenuItems(button.entries), ["Split Right", "Split Down", "Zoom Pane", "Equalize",
                                                            AgentWindowControls.closePaneLabel])
         }
     }

@@ -478,7 +478,21 @@ final class AgentsNSWindow: NSWindow {
         let r = Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
                            terminalMode: model.paneHasTerminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
                            form: model.newSession != nil)
-        return perform(r) || super.performKeyEquivalent(with: event)
+        if perform(r) { return true }
+        // #1916: a pane "⋯" item shows its key as a SwiftUI shortcut; the route above stays the key's only performer. A
+        // chord it passed (the rename field, the form) skips the view tree, where a menu could match it, and goes to the
+        // first responder alone, as before (a terminal, a text field).
+        if Self.menuHintKey(event) { return (firstResponder as? NSView)?.performKeyEquivalent(with: event) ?? false }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// #1916: a chord a menu item shows (AgentWindowControls.keyHint), read by the window's own matchers.
+    static func menuHintKey(_ event: NSEvent) -> Bool {
+        let c = PaneKeys.Context(responder: .other, keyFocus: .pane, panes: 2, splitsEnabled: true)
+        switch PaneKeys.action(for: event, context: c) {
+        case .split?, .zoom?, .closePane?: return true
+        default: return route(event, responder: .other, sidebarFocused: false, terminalMode: true) == .xray
+        }
     }
 
     /// #1359: what a pane key does, for the key (above) and the Go menu's pane items alike.
@@ -2540,15 +2554,15 @@ struct AgentDetailView: View {
     /// draws it too.
     @ViewBuilder func header(_ row: AgentSidebar.Row, _ s: AgentSession) -> some View {
         // #900 B2 step 6a: the "⋯" pane items act on this pane (the focused one); empty with the gate off.
-        let id = model.layout.focused, ended = model.focusedEnded
+        let id = model.layout.focused, ended = model.focusedEnded, keyPanes = model.layout.panes.count   // #1916
         let panes = [.divider] + [AgentsNSWindow.xrayItem(model)].compactMap { $0 }
             + AgentWindowControls.paneMenu(model, pane: id) + AgentWindowControls.swapMenu(model, pane: id)   // #1895
         Group {
             if compact {
                 AgentCompactHeader.of(row, s, cwd: transcript.cwd, ended: ended, store: model.store,
                                       ask: { model.ask($0, s) }, open: { model.openSelected() }, panes: panes,
-                                      pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                      switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
+                                      pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, keyPanes: keyPanes,
+                                      xrayPane: id, switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
             } else {
                 AgentSessionHeader(row: row, session: s, cwd: transcript.cwd, open: { model.openSelected() },
                                    todos: transcript.todos,
@@ -2556,8 +2570,8 @@ struct AgentDetailView: View {
                                    store: model.store, ask: { model.ask($0, s) }, ended: ended,
                                    rename: ended ? nil : model.renameEdit.flatMap { $0.key == s.key ? $0 : nil },
                                    endRename: { model.endRename($0, $1) }, panes: panes,
-                                   pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, xrayPane: id,
-                                   switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
+                                   pane: { AgentWindowControls.runPane($0, pane: id, in: model) }, keyPanes: keyPanes,
+                                   xrayPane: id, switcher: AgentPaneSwitch(model: model, pane: id, detail: true))   // #1491
             }
         }
         .modifier(AgentPaneProbe(kind: "header"))
@@ -3175,6 +3189,7 @@ struct AgentPaneTerminalColumn: View {
                                           + AgentWindowControls.paneMenu(model, pane: runtime.pane)
                                           + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
+                                      keyPanes: focused ? model.layout.panes.count : nil,   // #1916
                                       xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))
             }
@@ -3245,6 +3260,7 @@ struct AgentUnfocusedPane: View {
                                       panes: AgentWindowControls.paneMenu(model, pane: runtime.pane)
                                           + AgentWindowControls.swapMenu(model, pane: runtime.pane),   // #1895
                                       pane: { AgentWindowControls.runPane($0, pane: runtime.pane, in: model) },
+                                      keyPanes: runtime.pane == model.layout.focused ? model.layout.panes.count : nil,   // #1916
                                       xrayPane: runtime.pane, switcher: AgentPaneSwitch(model: model, pane: runtime.pane))   // #1491
                     .modifier(AgentPaneProbe(kind: "header"))
                     .modifier(AgentRowDrag(token: model.paneDragToken(runtime.pane)))   // #1895
@@ -3382,12 +3398,12 @@ struct AgentCompactHeader: View {
 
     static func of(_ row: AgentSidebar.Row, _ s: AgentSession, cwd: String?, ended: Bool, store: AgentIslandStore?,
                    ask: @escaping (AgentWindowVerb) -> Void, open: @escaping () -> Void, panes: [AgentWindowMenuEntry] = [],
-                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }, xrayPane: UUID? = nil,
+                   pane: @escaping (AgentPaneVerb) -> Void = { _ in }, keyPanes: Int? = nil, xrayPane: UUID? = nil,
                    switcher: AgentPaneSwitch? = nil) -> AgentCompactHeader {
         AgentCompactHeader(title: row.title, project: AgentSessionHeader.project(cwd: cwd, session: s),
                            chip: AgentStateChip(state: s.state, ended: ended), ended: ended,
                            menu: AgentSessionMenuButton(store: ended ? nil : store, session: s, ask: ask, open: open, ended: ended,
-                                                        panes: panes, pane: pane),
+                                                        panes: panes, pane: pane, keyPanes: keyPanes),
                            xray: xrayPane.map { AgentXrayButton(pane: $0, target: XrayTarget.of(row)) }, switcher: switcher)
     }
 
@@ -3702,6 +3718,8 @@ struct AgentSessionHeader: View {
     /// #900 B2 step 6a: the "⋯" pane items (empty with the gate off) and their run.
     var panes: [AgentWindowMenuEntry] = []
     var pane: (AgentPaneVerb) -> Void = { _ in }
+    /// #1916: AgentSessionMenuButton.keyPanes.
+    var keyPanes: Int? = nil
     /// #1476: the pane the X-ray button acts on; nil: no button (a header drawn outside a pane).
     var xrayPane: UUID?
     /// #1491: the title is the pane's session switcher; nil: a plain title.
@@ -3866,7 +3884,7 @@ struct AgentSessionHeader: View {
     /// #1103: Open in terminal is its first item, with the header's `open` and `ended`.
     var menuButton: AgentSessionMenuButton {
         AgentSessionMenuButton(store: menuStore, session: session, ask: ask, open: open, ended: ended, panes: panes,
-                               pane: pane)
+                               pane: pane, keyPanes: keyPanes)
     }
 }
 

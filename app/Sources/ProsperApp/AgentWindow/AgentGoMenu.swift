@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// #1359: the main menu's "Go" menu, put right after Edit while the Agent Sessions window is key, so its keyboard
 /// shortcuts can be found. Each item runs the window's own `perform` (the function its key runs). The items only show
@@ -65,6 +66,15 @@ final class AgentGoMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
         let action: Action
         init(_ title: String, _ key: String, _ mods: NSEvent.ModifierFlags, _ action: Action) {
             (self.title, self.key, self.mods, self.action) = (title, key, mods, action)
+        }
+
+        /// #1916: the chord as a SwiftUI shortcut, only so a pane "⋯" item shows it (AgentWindowControls.keyHint); the
+        /// key itself stays the window's route alone (AgentsNSWindow.menuHintKey).
+        var shortcut: KeyboardShortcut? {
+            guard let c = key.first else { return nil }
+            let m: [(NSEvent.ModifierFlags, EventModifiers)] = [(.command, .command), (.shift, .shift), (.option, .option),
+                                                               (.control, .control)]
+            return KeyboardShortcut(KeyEquivalent(c), modifiers: EventModifiers(m.filter { mods.contains($0.0) }.map(\.1)))
         }
     }
 

@@ -25,6 +25,9 @@ tag from the now-released section and put it on the new top draft.
   one outlined), every limit sits on one aligned row with its reset time next to it, the pool's free
   share is a short table on top, and accounts with no recent data or benched show as one quiet line.
   (#1915)
+- Agent Sessions: a pane's "⋯" menu now shows the keyboard shortcuts of its items (Split Right ⌘D,
+  Split Down ⇧⌘D, Zoom Pane ⇧⌘↩, Close Pane ⌘W, X-Ray… ⇧⌘X) on the focused pane, and Zoom no longer
+  shows a wrong ⌘M. (#1916)
 
 ## v2.176.0
 
