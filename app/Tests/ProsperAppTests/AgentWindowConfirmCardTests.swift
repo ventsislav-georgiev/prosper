@@ -170,4 +170,117 @@ extension AgentWindowD1Tests {
             }
         }
     }
+
+    /// #1937: a first responder that records the keys it is handed and answers hasMarkedText as told (a fake input client:
+    /// no input source is touched).
+    final class KeyRecorderView: NSView, @preconcurrency NSTextInputClient {
+        var downs = 0, ups = 0, marked = false
+        override var acceptsFirstResponder: Bool { true }
+        override func keyDown(with event: NSEvent) { downs += 1 }
+        override func keyUp(with event: NSEvent) { ups += 1 }
+        func insertText(_ string: Any, replacementRange: NSRange) {}
+        func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {}
+        func unmarkText() {}
+        func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+        func markedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+        func hasMarkedText() -> Bool { marked }
+        func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
+        func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+        func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect { .zero }
+        func characterIndex(for point: NSPoint) -> Int { 0 }
+    }
+
+    @MainActor
+    func confirmCardKey(_ type: NSEvent.EventType, _ code: UInt16, _ win: NSWindow, repeating: Bool = false) -> NSEvent {
+        NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: win.windowNumber,
+                         context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: repeating, keyCode: code)!
+    }
+
+    /// #1937 f1: the Return (or keypad Enter) that confirmed is held: its repeats reach no responder, even with a new
+    /// question open (the held key must not answer it), until its keyUp (which does reach the responder); then a fresh
+    /// Return confirms and, with no question, goes to the responder. A resign key ends the hold too. Red at base: the
+    /// repeat reaches the responder (downs 1) and answers the next question.
+    @MainActor
+    func testAgentWindowConfirmCardHeldReturnNeverRepeatsIntoTheResponder() throws {
+        try withModePref {
+            try withPaneMenu(true) {
+                let (m, _, _, stops) = try confirmCardModel()
+                defer { m.close() }
+                let (_, win, _) = confirmCardFrames(m)
+                defer { win.close() }
+                let rec = KeyRecorderView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+                win.contentView?.addSubview(rec)
+                XCTAssertTrue(win.makeFirstResponder(rec), "premise: the recorder has the keys")
+                for code: UInt16 in [36, 76] {
+                    let before = stops()
+                    try confirmCardAsk(m)
+                    win.sendEvent(confirmCardKey(.keyDown, code, win))
+                    XCTAssertEqual(stops(), before + 1, "\(code): confirmed")
+                    XCTAssertEqual(win.heldConfirmKey, code, "\(code): held")
+                    try confirmCardAsk(m)
+                    for _ in 0..<3 { win.sendEvent(confirmCardKey(.keyDown, code, win, repeating: true)) }
+                    XCTAssertEqual(rec.downs, 0, "\(code): the repeats reached no responder")
+                    XCTAssertEqual(stops(), before + 1, "\(code): the repeats answered nothing")
+                    XCTAssertTrue(m.confirming != nil, "\(code): the new question stays")
+                    win.sendEvent(confirmCardKey(.keyUp, code, win))
+                    XCTAssertEqual(rec.ups, 1, "\(code): the keyUp reached the responder")
+                    XCTAssertTrue(win.heldConfirmKey == nil, "\(code): released")
+                    win.sendEvent(confirmCardKey(.keyDown, code, win))
+                    XCTAssertEqual(stops(), before + 2, "\(code): a fresh Return after the keyUp confirms")
+                    win.sendEvent(confirmCardKey(.keyUp, code, win))
+                    win.sendEvent(confirmCardKey(.keyDown, code, win))
+                    XCTAssertEqual(rec.downs, 1, "\(code): no question: Return passes")
+                    win.sendEvent(confirmCardKey(.keyUp, code, win))
+                    rec.downs = 0; rec.ups = 0
+                }
+                // a keyUp of the other key does not release; a resign key does
+                try confirmCardAsk(m)
+                win.sendEvent(confirmCardKey(.keyDown, 36, win))
+                win.sendEvent(confirmCardKey(.keyUp, 76, win))
+                XCTAssertEqual(win.heldConfirmKey, 36, "the other key's keyUp leaves the hold")
+                win.resignKey()
+                XCTAssertTrue(win.heldConfirmKey == nil, "resign key ended the hold")
+                win.sendEvent(confirmCardKey(.keyDown, 36, win, repeating: true))
+                XCTAssertEqual(rec.downs, 1, "after the hold ended a repeat passes")
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
+
+    /// #1937 i1: Return while the first responder has marked text (an IME composition) commits the composition: it
+    /// passes on (the recorder gets it), the question stays, nothing is held; keypad Enter the same. Escape still
+    /// cancels, and with no marked text Return confirms. Red at base: Return confirmed under the composition.
+    @MainActor
+    func testAgentWindowConfirmCardReturnWithMarkedTextPassesThrough() throws {
+        try withModePref {
+            try withPaneMenu(true) {
+                let (m, _, _, stops) = try confirmCardModel()
+                defer { m.close() }
+                let (_, win, _) = confirmCardFrames(m)
+                defer { win.close() }
+                let rec = KeyRecorderView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+                win.contentView?.addSubview(rec)
+                XCTAssertTrue(win.makeFirstResponder(rec), "premise: the recorder has the keys")
+                try confirmCardAsk(m)
+                rec.marked = true
+                for code: UInt16 in [36, 76] {
+                    win.sendEvent(confirmCardKey(.keyDown, code, win))
+                    XCTAssertTrue(m.confirming != nil, "\(code): the question stays")
+                    XCTAssertEqual(stops(), 0, "\(code): nothing stopped")
+                }
+                XCTAssertEqual(rec.downs, 2, "both reached the responder")
+                XCTAssertTrue(win.heldConfirmKey == nil, "nothing held")
+                rec.marked = false
+                win.sendEvent(confirmCardKey(.keyDown, 36, win))
+                XCTAssertTrue(m.confirming == nil, "no composition: Return confirms")
+                XCTAssertEqual(stops(), 1, "confirmed once")
+                XCTAssertEqual(rec.downs, 2, "and was not passed on")
+                try confirmCardAsk(m)
+                rec.marked = true
+                win.sendEvent(confirmCardKey(.keyDown, 53, win, repeating: false))
+                XCTAssertTrue(m.confirming == nil, "Escape still cancels")
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
 }

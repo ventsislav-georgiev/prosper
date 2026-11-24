@@ -245,6 +245,9 @@ final class AgentsWindow {
 /// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
+    /// #1937: the Return (36) or keypad Enter (76) that answered the card and is still down: its auto-repeats are taken
+    /// (they would go into the terminal and submit its prompt) until its keyUp, a resign key, or the end of the window.
+    var heldConfirmKey: UInt16?
     /// #1925: the window's minimum content size, AgentsWindow's alone. On its update pass the hosting controller writes
     /// contentMinSize (SwiftUI's own minimum by default, zero with no sizing options; probed offscreen), so any other
     /// write puts this back.
@@ -302,6 +305,7 @@ final class AgentsNSWindow: NSWindow {
     /// saved once. No drag (always with the gate off): nothing.
     override func resignKey() {
         super.resignKey(); Self.resignedKey(model)
+        heldConfirmKey = nil   // #1937: its keyUp goes to whoever is key then
         let main = AgentGoMenu.mainMenu()
         for m in menus { m.remove(from: main) }
     }
@@ -495,7 +499,7 @@ final class AgentsNSWindow: NSWindow {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if style != .standard, Self.isMinimizeChord(event) { minimize(self); return true }
-        if let model, Self.confirmKey(event, model) { return true }   // #1930
+        if let model, takesConfirmKey(event, model) { return true }   // #1930
         guard let model else {
             if event.modifierFlags.contains(.command), Self.chordLetter(event) == "w" {
                 performClose(nil)
@@ -706,7 +710,7 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if let model, Self.confirmKey(event, model) { return }   // #1930: before the dividers, the routes and the responder
+        if let model, takesConfirmKey(event, model) { return }   // #1930: before the dividers, the routes and the responder
         // #900 B2 step 5a (7.5): a divider's down, drags and up go to the model before the first-click rule (gate on only).
         if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown].contains(event.type) {
             let r = contentLayoutRect, at = event.type == .keyDown ? CGPoint.zero : event.locationInWindow
@@ -764,15 +768,28 @@ final class AgentsNSWindow: NSWindow {
         return true
     }
 
+    /// #1937: confirmKey plus the held Return: the repeats of the Return that answered are taken until its keyUp (the
+    /// keyUp itself goes on to the responders).
+    @MainActor func takesConfirmKey(_ event: NSEvent, _ m: AgentWindowModel) -> Bool {
+        if event.type == .keyUp { if event.keyCode == heldConfirmKey { heldConfirmKey = nil }; return false }
+        if event.type == .keyDown, event.isARepeat, event.keyCode == heldConfirmKey { return true }
+        guard Self.confirmKey(event, m, responder: firstResponder) else { return false }
+        if event.keyCode == 36 || event.keyCode == 76 { heldConfirmKey = event.keyCode }
+        return true
+    }
+
     /// #1930: while the window's confirmation card shows, Return (keypad Enter too) confirms and Escape cancels, whatever
     /// has the keys (the terminal, the sidebar, the composer): taken here, before any responder sees it. The first
     /// responder is never moved, so the keys are back where they were once the card closes. Command, Option or Control
     /// held: not the card's (it passes on). Nothing taken while no card shows.
-    @MainActor static func confirmKey(_ event: NSEvent, _ m: AgentWindowModel) -> Bool {
+    @MainActor static func confirmKey(_ event: NSEvent, _ m: AgentWindowModel, responder: NSResponder? = nil) -> Bool {
         guard event.type == .keyDown, m.confirmQuestion != nil,
               event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
         switch event.keyCode {
-        case 36, 76: m.confirm(true)
+        // #1937: Return with marked text (an IME composition) commits the composition: not the card's, it passes on.
+        case 36, 76:
+            if (responder as? NSTextInputClient)?.hasMarkedText() == true { return false }
+            m.confirm(true)
         case 53: m.confirm(false)
         default: return false
         }
