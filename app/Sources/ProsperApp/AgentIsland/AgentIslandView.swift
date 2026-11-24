@@ -1846,69 +1846,138 @@ struct AgentIslandComposer: View {
 
 /// #1898: the plan usage line's popover: the pool's free share on top, then one row per account, most urgent first
 /// (AgentPlanLimits' order). Read only: the one control is the link to the Account pool settings. Pure over its value.
+/// #1915: the pool is one aligned row per window; an account with limits is a card (the current one stroked), its windows
+/// rows on one grid across the cards with the reset inline; an account with none is one compact dimmed row after the cards.
 struct AgentPlanLimitsView: View {
     let limits: AgentPlanLimits
     let now: Double
     var timeZone: TimeZone = .current
     var onSettings: () -> Void = {}
 
+    /// The grid's columns: the window's name, its bar, its percent (right-aligned).
+    static let nameWidth: CGFloat = 34
+    static let barWidth: CGFloat = 104
+    static let percentWidth: CGFloat = 38
+
+    /// #1915: the cards (accounts with limits) and the compact rows (with their status), each in AgentPlanLimits' order.
+    static func split(_ limits: AgentPlanLimits, timeZone: TimeZone)
+        -> (cards: [AgentPlanLimits.Account], compact: [(account: AgentPlanLimits.Account, status: String)]) {
+        var cards: [AgentPlanLimits.Account] = [], compact: [(account: AgentPlanLimits.Account, status: String)] = []
+        for a in limits.accounts {
+            if let s = AgentPlanLimits.compactStatus(a, timeZone: timeZone) { compact.append((a, s)) } else { cards.append(a) }
+        }
+        return (cards, compact)
+    }
+
+    /// #1915: the current account's card has a 1 pt accent stroke; the others none.
+    static func strokeWidth(_ a: AgentPlanLimits.Account) -> CGFloat { a.isCurrent ? 1 : 0 }
+
+    /// A bar's fill: 90% and over in the danger colour.
+    static func barColor(_ u: Double) -> Color { u >= 0.9 ? Neon.magenta : Neon.blue }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let pool = limits.pool {
-                Text(verbatim: "Free across all accounts: \(pool)")
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(Color.white)
+        let parts = Self.split(limits, timeZone: timeZone)
+        VStack(alignment: .leading, spacing: 8) {
+            if let pool = limits.pool { poolBlock(pool) }
+            ForEach(parts.cards, id: \.label) { card($0) }
+            if !parts.compact.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(parts.compact, id: \.account.label) { compactRow($0.account, status: $0.status) }
+                }
             }
-            ForEach(limits.accounts, id: \.label) { row($0) }
             Button(AgentPlanLimits.settingsLink, action: onSettings)
                 .buttonStyle(.plain)
                 .font(.system(size: 11))
                 .foregroundStyle(AgentIslandInk.selectedTab)
         }
         .padding(12)
-        .frame(width: 320, alignment: .leading)
+        .frame(width: 340, alignment: .leading)
         .background(Color.black)
     }
 
-    private func row(_ a: AgentPlanLimits.Account) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func poolBlock(_ pool: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(verbatim: "FREE ACROSS ACCOUNTS")
+                .font(.system(size: 9, weight: .semibold)).tracking(0.6).foregroundStyle(Neon.faded(.white, 0.6))
+            ForEach(Array(AgentPlanLimits.poolParts(pool).enumerated()), id: \.offset) { _, p in
+                HStack(spacing: 6) {
+                    Text(verbatim: p.name).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white)
+                        .lineLimit(1).frame(width: Self.nameWidth, alignment: .leading)
+                    Text(verbatim: p.free).font(.system(size: 11, weight: .semibold).monospacedDigit()).foregroundStyle(Color.white)
+                        .lineLimit(1).frame(width: Self.percentWidth + 8, alignment: .trailing)
+                    if let m = p.more { dim(m) }
+                }
+            }
+        }
+        // The spoken pool keeps #1898's one sentence.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "Free across all accounts: \(pool)"))
+    }
+
+    private func card(_ a: AgentPlanLimits.Account) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(verbatim: OutsideText.shown(a.label, max: 40))
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.white).lineLimit(1)
                 if a.isCurrent {
                     Text(verbatim: "current").font(.system(size: 10, weight: .medium)).foregroundStyle(AgentIslandInk.selectedTab)
                 }
+                Spacer(minLength: 6)
+                if let at = a.sampleAt { dim(AgentPlanLimits.ago(at, now: now)) }
             }
-            if a.limits.isEmpty { dim(AgentPlanLimits.noData) }
             ForEach(a.limits, id: \.claim) { l in
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
+                        Text(verbatim: l.name).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white)
+                            .lineLimit(1).frame(width: Self.nameWidth, alignment: .leading)
                         bar(l.util)
-                        Text(verbatim: "\(l.name) \(AgentPlanUsage.percent(l.util))")
+                        Text(verbatim: AgentPlanUsage.percent(l.util))
                             .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(Color.white)
+                            .lineLimit(1).frame(width: Self.percentWidth, alignment: .trailing)
+                        if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r).lineLimit(1).minimumScaleFactor(0.8) }
                     }
-                    if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r) }
-                    if let o = AgentPlanLimits.runsOutText(l, timeZone: timeZone) { dim(o) }
+                    if let o = AgentPlanLimits.runsOutText(l, timeZone: timeZone) {
+                        // The alert: under its window's row, past the name column, in the warning colour.
+                        Text(verbatim: o).font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(AgentIslandInk.glyph(.blocked)).padding(.leading, Self.nameWidth + 6)
+                    }
                 }
             }
             if let b = a.benchedUntil { dim(AgentPlanLimits.benchedText(b, timeZone: timeZone)) }
-            if let at = a.sampleAt { dim(AgentPlanLimits.updatedText(at, now: now)) }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // A plain opacity: Neon.faded draws white opaque under Increase Contrast, which would hide the card's white ink.
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(AgentIslandInk.selectedTab, lineWidth: Self.strokeWidth(a)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
     }
 
-    private func dim(_ s: String) -> some View {
+    private func compactRow(_ a: AgentPlanLimits.Account, status: String) -> some View {
+        HStack(spacing: 6) {
+            Text(verbatim: OutsideText.shown(a.label, max: 40)).font(.system(size: 11, weight: .medium)).lineLimit(1)
+            if a.isCurrent { Text(verbatim: "current").font(.system(size: 10, weight: .medium)) }
+            Spacer(minLength: 6)
+            Text(verbatim: status).font(.system(size: 10).monospacedDigit()).lineLimit(1)
+        }
+        .foregroundStyle(Neon.faded(.white, 0.6))
+        .padding(.horizontal, 10)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
+    }
+
+    private func dim(_ s: String) -> Text {
         Text(verbatim: s).font(.system(size: 10).monospacedDigit()).foregroundStyle(Neon.faded(.white, 0.6))
     }
 
-    /// A thin bar, full at 100%; 90% and over in the danger colour.
+    /// A thin bar, full at 100%.
     private func bar(_ u: Double) -> some View {
         let f = min(1, max(0, u))
         return ZStack(alignment: .leading) {
             Capsule().fill(Neon.faded(.white, 0.15))
-            Capsule().fill(f >= 0.9 ? Neon.magenta : Neon.blue).frame(width: 80 * f)
+            Capsule().fill(Self.barColor(u)).frame(width: Self.barWidth * f)
         }
-        .frame(width: 80, height: 4)
+        .frame(width: Self.barWidth, height: 4)
     }
 }

@@ -74,10 +74,80 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         let a = account("alpha", current: true, util: ["five_hour": 0.15, "seven_day": 0.99], at: now - 180,
                         reset: ["five_hour": Int(now) + 8040, "seven_day": 1_800_259_200])
         let first = try XCTUnwrap(a.limits.first)
-        XCTAssertEqual(AgentPlanLimits.resetText(first, now: now, timeZone: utc), "resets in 2 h 14 min (Fri 10:14)")
+        XCTAssertEqual(AgentPlanLimits.resetText(first, now: now, timeZone: utc), "2 h 14 min \u{00B7} Fri 10:14")
         XCTAssertEqual(AgentPlanLimits.spoken(a, now: now, timeZone: utc),
                        "alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14; "
                        + "week 99 percent, resets in 3 days, Monday 08:00, updated 3 min ago")
+    }
+
+    // MARK: - #1915: the redesign's words and its split
+
+    func testCardAgeDropsTheUpdatedWordTheSpokenRowKeepsIt() {
+        XCTAssertEqual(AgentPlanLimits.ago(now - 20, now: now), "just now")
+        XCTAssertEqual(AgentPlanLimits.ago(now - 300, now: now), "5 min ago")
+        XCTAssertEqual(AgentPlanLimits.updatedText(now - 300, now: now), "updated 5 min ago")
+    }
+
+    func testPoolSplitsIntoOneAlignedPartPerWindow() {
+        XCTAssertEqual(AgentPlanLimits.poolParts("5h 292% (more at Tue 11:20) \u{00B7} week 248% (more at Wed 16:00) \u{00B7} opus 40%"),
+                       [.init(name: "5h", free: "292%", more: "more at Tue 11:20"), .init(name: "week", free: "248%", more: "more at Wed 16:00"),
+                        .init(name: "opus", free: "40%", more: nil)])
+        XCTAssertEqual(AgentPlanLimits.poolParts("5h 60%"), [.init(name: "5h", free: "60%", more: nil)])
+        XCTAssertEqual(AgentPlanLimits.poolParts("odd"), [.init(name: "odd", free: "", more: nil)], "no space: all name, nothing dropped")
+        XCTAssertEqual(AgentPlanLimits.poolParts(""), [])
+    }
+
+    /// The parts from the pane's own words: a change to poolText's format turns this row red, not just the popover.
+    func testPoolPartsReadThePanesPoolText() throws {
+        let cells = [CCPoolCore.PoolCell(claim: "five_hour", free: 2.92, growsAt: Int(now) + 3600),
+                     CCPoolCore.PoolCell(claim: "seven_day", free: 2.48, growsAt: Int(now) + 3 * 86400),
+                     CCPoolCore.PoolCell(claim: "seven_day_opus", free: 0.4, growsAt: nil)]
+        let pool = try XCTUnwrap(CCPoolPaneModel.poolText(cells, timeZone: utc))
+        XCTAssertEqual(AgentPlanLimits.poolParts(pool),
+                       [.init(name: "5h", free: "292%", more: "more at Fri 09:00"), .init(name: "week", free: "248%", more: "more at Mon 08:00"),
+                        .init(name: "opus", free: "40%", more: nil)])
+    }
+
+    @MainActor func testAccountsWithoutLimitsDrawTheCompactRowAfterTheCards() {
+        let alpha = account("alpha", current: true, util: ["five_hour": 0.15])
+        let beta = account("beta", util: ["five_hour": 0.95], cooldown: ["five_hour": Int(now) + 6000])
+        let gamma = AgentPlanLimits.Account(label: "gamma", isCurrent: false, util: [:], at: nil, reset: [:], cooldown: [:],
+                                            claims: claims, now: now)
+        let delta = AgentPlanLimits.Account(label: "delta", isCurrent: false, util: [:], at: nil, reset: [:],
+                                            cooldown: ["five_hour": Int(now) + 6000], claims: claims, now: now)
+        XCTAssertEqual(AgentPlanLimits.compactStatus(alpha, timeZone: utc), nil, "limits: a card")
+        XCTAssertEqual(AgentPlanLimits.compactStatus(beta, timeZone: utc), nil, "benched with limits: still a card")
+        XCTAssertEqual(AgentPlanLimits.compactStatus(gamma, timeZone: utc), "no recent data")
+        XCTAssertEqual(AgentPlanLimits.compactStatus(delta, timeZone: utc), "benched until 09:40")
+        let split = AgentPlanLimitsView.split(AgentPlanLimits(pool: nil, accounts: [gamma, alpha, delta, beta]), timeZone: utc)
+        XCTAssertEqual(split.cards.map(\.label), ["beta", "alpha"], "most urgent first")
+        XCTAssertEqual(split.compact.map(\.account.label), ["delta", "gamma"], "the order kept")
+        XCTAssertEqual(split.compact.map(\.status), ["benched until 09:40", "no recent data"])
+    }
+
+    @MainActor func testOnlyTheCurrentCardIsStroked() {
+        XCTAssertEqual(AgentPlanLimitsView.strokeWidth(account("alpha", current: true, util: ["five_hour": 0.1])), 1)
+        XCTAssertEqual(AgentPlanLimitsView.strokeWidth(account("beta", util: ["five_hour": 0.1])), 0)
+    }
+
+    @MainActor func testBarIsDangerFromNinetyPercent() {
+        XCTAssertNotEqual(Neon.magenta, Neon.blue, "the row needs two colours")
+        XCTAssertEqual(AgentPlanLimitsView.barColor(0.9), Neon.magenta)
+        XCTAssertEqual(AgentPlanLimitsView.barColor(1.2), Neon.magenta)
+        XCTAssertEqual(AgentPlanLimitsView.barColor(0.89), Neon.blue)
+    }
+
+    @MainActor func testCardsAndCompactRowsSpeakTheSameWords() {
+        let alpha = account("alpha", current: true, util: ["five_hour": 0.15], at: now - 180, reset: ["five_hour": Int(now) + 8040])
+        let delta = AgentPlanLimits.Account(label: "delta", isCurrent: false, util: [:], at: nil, reset: [:],
+                                            cooldown: ["five_hour": Int(now) + 6000], claims: claims, now: now)
+        let spoken = ["alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14, updated 3 min ago",
+                      "delta, no recent data, benched until 09:40"]
+        XCTAssertEqual([alpha, delta].map { AgentPlanLimits.spoken($0, now: now, timeZone: utc) }, spoken, "#1898's words")
+        let view = AgentPlanLimitsView(limits: AgentPlanLimits(pool: "5h 85% (more at Fri 09:00)", accounts: [alpha, delta]), now: now, timeZone: utc)
+        let tree = AXTreeSupport.tree(view, CGSize(width: 340, height: 400)) { t in spoken.allSatisfy { s in t.contains { $0.reads(s) } } }
+        for s in spoken { XCTAssertTrue(tree.contains { $0.reads(s) }, "one element per account: \(s)") }
+        XCTAssertTrue(tree.contains { $0.reads("Free across all accounts: 5h 85% (more at Fri 09:00)") }, "the pool speaks one sentence")
     }
 
     // MARK: - #1899: the pace, "at this pace runs out ~HH:mm" before the reset

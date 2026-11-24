@@ -1466,18 +1466,49 @@ struct AgentPlanLimits: Equatable, Sendable {
         return f.string(from: Date(timeIntervalSince1970: Double(epoch)))
     }
 
-    /// "resets in 2 h 14 min (Tue 18:00)", the absolute in the line's help format; nil: no reset known.
+    /// #1915: "2 h 14 min · Tue 18:00", on the limit's own row (the absolute in the line's help format); nil: no reset known.
     static func resetText(_ l: Limit, now: Double, timeZone: TimeZone) -> String? {
-        l.reset.map { "resets in \(duration(Double($0) - now)) (\(clock($0, format: "EEE HH:mm", timeZone: timeZone)))" }
+        l.reset.map { "\(duration(Double($0) - now)) \u{00B7} \(clock($0, format: "EEE HH:mm", timeZone: timeZone))" }
     }
 
-    static func updatedText(_ at: Double, now: Double) -> String {
-        now - at < 60 ? "updated just now" : "updated \(duration(now - at)) ago"
+    /// #1915: "just now", "3 min ago": the card header's trailing age; the spoken row keeps updatedText.
+    static func ago(_ at: Double, now: Double) -> String {
+        now - at < 60 ? "just now" : "\(duration(now - at)) ago"
     }
+
+    static func updatedText(_ at: Double, now: Double) -> String { "updated \(ago(at, now: now))" }
 
     static func benchedText(_ until: Int, timeZone: TimeZone) -> String { "benched until \(clock(until, format: "HH:mm", timeZone: timeZone))" }
 
     static let noData = "no recent data"
+
+    /// #1915: an account with no fresh limit draws one compact dimmed row (no card) with this trailing status: its bench, else
+    /// no recent data; nil: it has limits, a card.
+    static func compactStatus(_ a: Account, timeZone: TimeZone) -> String? {
+        guard a.limits.isEmpty else { return nil }
+        return a.benchedUntil.map { benchedText($0, timeZone: timeZone) } ?? noData
+    }
+
+    /// #1915: one window of the pool's free share, for an aligned row: "5h", "292%", "more at Tue 11:20" (nil: none).
+    struct PoolPart: Equatable, Sendable {
+        var name: String
+        var free: String
+        var more: String?
+    }
+
+    /// #1915: `pool` split into its windows: the pane's words are "<name> <n>%[ (more at <when>)]" joined by " · ". A part
+    /// without a space is all name.
+    static func poolParts(_ pool: String) -> [PoolPart] {
+        pool.components(separatedBy: " \u{00B7} ").filter { !$0.isEmpty }.map { part in
+            var head = part, more: String?
+            if part.hasSuffix(")"), let r = part.range(of: " (more at ") {
+                head = String(part[..<r.lowerBound])
+                more = "more at " + part[r.upperBound...].dropLast()
+            }
+            guard let sp = head.lastIndex(of: " ") else { return PoolPart(name: head, free: "", more: more) }
+            return PoolPart(name: String(head[..<sp]), free: String(head[head.index(after: sp)...]), more: more)
+        }
+    }
     static let settingsLink = "Account pool settings\u{2026}"
     /// The Account pool pane's Settings id ("ext:<extension id>|<section id>", the sidebar's rule).
     static let settingsPane = "ext:com.prosper.ccpool|ccpool"

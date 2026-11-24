@@ -21,6 +21,10 @@ tag from the now-released section and put it on the new top draft.
 ## v2.177.0 *(unreleased)*
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.
   (#1914)
+- The Agent Island plan usage popover is easier to read: each account is its own card (the current
+  one outlined), every limit sits on one aligned row with its reset time next to it, the pool's free
+  share is a short table on top, and accounts with no recent data or benched show as one quiet line.
+  (#1915)
 
 ## v2.176.0
 
