@@ -520,8 +520,8 @@ final class AgentIslandController {
     /// free `<name>-N`. A busy row refuses (the runner never queues).
     /// #669: `noMessage` is the row's Resume (no message), on its own 1.27.0 gate.
     /// #908: false when nothing started.
-    @discardableResult
     /// #1935: `failed` runs on main when the job ends and the row does not read "Resumed…" (an error, a cancel).
+    @discardableResult
     func resume(_ r: DchHistoryRecord, noMessage: Bool = false, failed: (@MainActor @Sendable () -> Void)? = nil) -> Bool {
         guard let store, case .ok(let dch) = noMessage ? store.reviveNoMessageGate : store.resumeGate else { return false }
         let live = Set(store.sessions.filter { $0.key.dir == r.key.dir }.map(\.name))

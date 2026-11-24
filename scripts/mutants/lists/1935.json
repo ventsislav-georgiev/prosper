@@ -1,0 +1,50 @@
+{
+ "entry": 1935,
+ "filter": "AgentWindowD1Tests/testAgentWindowCardResume",
+ "mutants": [
+  {
+   "name": "busy-armed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard resumeStarted, refusalText(.history(r.id)) == nil else { return }",
+   "new": "guard refusalText(.history(r.id)) == nil else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "refusal-armed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard resumeStarted, refusalText(.history(r.id)) == nil else { return }",
+   "new": "guard resumeStarted else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "failure-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "func resumeFailed(_ r: DchHistoryRecord) { if pendingResume?.record == r.id { pendingResume = nil } }",
+   "new": "func resumeFailed(_ r: DchHistoryRecord) { }",
+   "expect": "killed"
+  },
+  {
+   "name": "failure-any-record",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if pendingResume?.record == r.id { pendingResume = nil }",
+   "new": "pendingResume = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "island-no-failed-call",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if !text.hasPrefix(\"Resumed\") { failed?() }",
+   "new": "_ = failed",
+   "expect": "killed",
+   "filter": "AgentIslandControlsTests/testResumeFailedHookRunsOnlyOnAFailure"
+  },
+  {
+   "name": "island-failed-always",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if !text.hasPrefix(\"Resumed\") { failed?() }",
+   "new": "failed?()",
+   "expect": "killed",
+   "filter": "AgentIslandControlsTests/testResumeFailedHookRunsOnlyOnAFailure"
+  }
+ ]
+}
