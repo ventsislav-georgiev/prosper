@@ -1212,7 +1212,7 @@ private final class Client {
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
         }
-        guard fd >= 0, ok else { Darwin.close(fd); throw Failure.connect }
+        guard fd >= 0, ok else { throw Failure.connect }  // deinit closes fd
     }
 
     /// An accepted socket (FakeServer's side).

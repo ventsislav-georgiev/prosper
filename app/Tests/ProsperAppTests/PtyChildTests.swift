@@ -13,6 +13,10 @@ final class PtyChildTests: XCTestCase {
         var text: String { lock.withLock { String(decoding: bytes, as: UTF8.self) } }
     }
 
+    /// How the last pwd() child's reader ended, for the failure messages (#1942).
+    private var readerEnd = ""
+    private var readBytes = 0
+
     /// Runs /bin/pwd in a PtyChild and returns its output line once the child is reaped.
     private func pwd(cwd: String?) throws -> String {
         let out = Output()
@@ -31,7 +35,9 @@ final class PtyChildTests: XCTestCase {
         }
         child.run()
         wait(for: [exited], timeout: 15)
-        XCTAssertEqual(code, 0, "pwd did not exec cleanly: \(out.text)")
+        readerEnd = child.endReason
+        readBytes = out.text.utf8.count
+        XCTAssertEqual(code, 0, "pwd did not exec cleanly: \(out.text) (reader ended: \(readerEnd))")
         return out.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -44,11 +50,18 @@ final class PtyChildTests: XCTestCase {
 
     func testExplicitDirIsTheChildsCwd() throws {
         let dir = tempDir().path
-        XCTAssertEqual(try pwd(cwd: dir), real(dir))
+        XCTAssertEqual(try pwd(cwd: dir), real(dir), "reader ended: \(readerEnd)")
     }
 
     func testDefaultCwdIsHome() throws {
-        XCTAssertEqual(try pwd(cwd: nil), real(NSHomeDirectory()))
+        XCTAssertEqual(try pwd(cwd: nil), real(NSHomeDirectory()), "reader ended: \(readerEnd)")
+    }
+
+    /// #1942: the reader says how it ended and how many bytes it read.
+    func testReaderEndReasonCountsTheBytes() throws {
+        _ = try pwd(cwd: nil)
+        XCTAssertTrue(readBytes > 0, "no output: reader ended: \(readerEnd)")
+        XCTAssertTrue(["EOF", "EIO"].map { "\($0) after \(readBytes) bytes" }.contains(readerEnd), readerEnd)
     }
 
     /// The fallback must land in "/", not the test runner's own cwd.
@@ -56,7 +69,7 @@ final class PtyChildTests: XCTestCase {
         XCTAssertNotEqual(FileManager.default.currentDirectoryPath, "/",
                           "runner cwd is / — this test could not tell the fallback from no chdir")
         let missing = tempDir().appendingPathComponent("gone").path
-        XCTAssertEqual(try pwd(cwd: missing), "/")
+        XCTAssertEqual(try pwd(cwd: missing), "/", "reader ended: \(readerEnd)")
     }
 
     /// #522, a scan by necessity: a Swift String bridged to a C string in the forked

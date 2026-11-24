@@ -23,6 +23,9 @@ final class PtyChild: @unchecked Sendable {
     private var jiggling = false
     /// Test seam (#212): true from redraw()'s shrink until its delayed restore has run.
     var isJiggling: Bool { lock.withLock { jiggling } }
+    /// How the read loop ended, e.g. "EIO after 12 bytes" (#1942). Set before onExit, so a test reads it there.
+    private var _endReason = ""
+    var endReason: String { lock.withLock { _endReason } }
 
     enum PtyError: Error { case forkFailed }
 
@@ -90,17 +93,23 @@ final class PtyChild: @unchecked Sendable {
     /// the session; we reap the child for its exit code and notify.
     private func pump() {
         var buf = [UInt8](repeating: 0, count: 1 << 15)
+        var total = 0
+        var why = "EOF"
         while true {
             let n = buf.withUnsafeMutableBytes { read(masterFD, $0.baseAddress, $0.count) }
             if n > 0 {
+                total += n
                 onOutput(Array(buf[0..<n]))
             } else if n == 0 {
                 break                       // EOF
             } else {
-                if errno == EINTR { continue }
+                let e = errno
+                if e == EINTR { continue }
+                why = e == EIO ? "EIO" : e == EBADF ? "EBADF" : "errno \(e)"
                 break                       // EIO when the slave side is gone, etc.
             }
         }
+        lock.withLock { _endReason = "\(why) after \(total) bytes" }
         reap()
     }
 
@@ -123,11 +132,12 @@ final class PtyChild: @unchecked Sendable {
 
     /// Write client keystrokes / pasted bytes to the pty. Partial writes are looped.
     func write(_ bytes: [UInt8]) {
-        guard masterFD >= 0 else { return }
+        let fd = lock.withLock { masterFD }
+        guard fd >= 0 else { return }
         var off = 0
         bytes.withUnsafeBytes { raw in
             while off < raw.count {
-                let n = Darwin.write(masterFD, raw.baseAddress!.advanced(by: off), raw.count - off)
+                let n = Darwin.write(fd, raw.baseAddress!.advanced(by: off), raw.count - off)
                 if n > 0 { off += n }
                 else if n < 0 && errno == EINTR { continue }
                 else { break }
