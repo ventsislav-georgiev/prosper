@@ -41,6 +41,8 @@ tag from the now-released section and put it on the new top draft.
   session from the list, or start one here.") and the same buttons (Close Pane with several panes,
   New shell, New session); pressing New session on an unfocused pane's card opens the form in that
   pane. (#1928)
+- Agents window: Remove from History on the session a pane shows now closes that pane (or leaves the
+  only pane empty) instead of showing another ended session in it. (#1929)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

@@ -367,4 +367,67 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m2.layout.order, [a], "the unfocused card's pill closed b, not the focused a")
         }
     }
+
+    /// #1929: three panes (h1, h2, h3); Remove from History on h2's pane closes that pane once the record's row is gone:
+    /// the focus goes where closePane sends it, the other panes keep their targets, the sidebar selection is the
+    /// focused pane's record (never a neighbour put into a pane). A failed remove (the row still there) closes nothing.
+    @MainActor
+    func testAgentWindowRemovalClosesThePaneThatShowedTheRecordAmongSeveral() throws {
+        try withTreeGate(true) {
+            let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300)
+            let st = store([], history: [h1, h2, h3])
+            st.controlDch = bin([1, 38, 0])
+            let m = windowModel(st)
+            m.paneArea = Self.wideArea
+            Calls().wire(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let l = paneLayout([h1, h2, h3].map { PaneTarget.history(dir: $0.id.dir, id: $0.id.name, seen: nil) })
+            let p2 = try XCTUnwrap(l.panes.dropFirst().first)
+            m.adopt(try l.focus(p2.id).get())
+            XCTAssertEqual(m.layout.panes.compactMap { AgentWindowModel.rowID($0.target) },
+                           [.history(h1.id), .history(h2.id), .history(h3.id)])
+            m.act(.remove, h2)
+            XCTAssertEqual(m.layout.focused, p2.id, "act focuses the record's pane")
+            let expected = try m.layout.close(p2.id).get()
+            m.confirm(true)
+            st.history = [h1, h2, h3]   // a re-read with the row still there (a failed forget): nothing closes
+            XCTAssertEqual(m.layout.panes.count, 3)
+            st.history = [h1, h3]
+            XCTAssertEqual(m.layout.order, expected.order, "the pane closed")
+            XCTAssertEqual(m.layout.focused, expected.focused, "focus where closePane sends it")
+            XCTAssertEqual(m.layout.panes.compactMap { AgentWindowModel.rowID($0.target) }, [.history(h1.id), .history(h3.id)],
+                           "the other panes untouched")
+            XCTAssertEqual(m.selection, AgentWindowModel.rowID(m.focusedTarget), "the selection is the focused pane's")
+            XCTAssertNil(m.removing)
+        }
+    }
+
+    /// #1929: a refused Remove (the edit gate closed since the question) keeps every pane: nothing runs, nothing closes,
+    /// even when the record later leaves the list by other means (today's rule: the pane shows it went).
+    @MainActor
+    func testAgentWindowRefusedRemovalKeepsThePane() throws {
+        try withTreeGate(true) {
+            let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200)
+            let st = store([], history: [h1, h2])
+            st.controlDch = bin([1, 38, 0])
+            let m = windowModel(st)
+            m.paneArea = Self.wideArea
+            let calls = Calls()
+            calls.wire(m)
+            m.setVisible(true)
+            defer { m.close() }
+            let l = paneLayout([h1, h2].map { PaneTarget.history(dir: $0.id.dir, id: $0.id.name, seen: nil) })
+            m.adopt(try l.focus(try XCTUnwrap(l.panes.last).id).get())
+            let two = m.layout
+            m.act(.remove, h2)
+            st.controlDch = bin([1, 24, 1])
+            m.confirm(true)
+            XCTAssertTrue(calls.records.isEmpty, "refused: nothing runs")
+            XCTAssertNil(m.removing)
+            XCTAssertTrue(m.layout == two, "refused: the panes as they were")
+            st.history = [h1]
+            XCTAssertEqual(m.layout.order, two.order, "a record gone by other means closes no pane")
+        }
+    }
 }

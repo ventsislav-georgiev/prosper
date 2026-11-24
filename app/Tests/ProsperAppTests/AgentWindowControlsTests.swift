@@ -796,10 +796,11 @@ extension AgentWindowD1Tests {
         XCTAssertNil(m.refusal)
     }
 
-    // MARK: G8: the selection after a removal
+    // MARK: G8, #1929: the pane after a removal (operator 2026-11-24: "auto close pane when the session ends and i click
+    // remove from history, currently it shows me just another ended session which is strange")
 
     @MainActor
-    func testAgentWindowRemovalMovesTheSelectionToTheNextHistoryRow() throws {
+    func testAgentWindowRemovalLeavesTheOnePaneEmptyNeverAnotherRecord() throws {
         let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300)
         let st = store([session("live", .idle)], history: [h1, h2, h3])
         st.controlDch = bin([1, 38, 0])
@@ -818,27 +819,21 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.selection, .history(h2.id))
         seen = []
         st.history = [h1, h3]
-        XCTAssertEqual(m.selection, .history(h3.id), "the next row")
-        XCTAssertEqual(seen, [.history(h3.id)], "one change, never through nothing")
+        XCTAssertTrue(m.selection == nil, "#1929: the one pane goes empty, never the next row")
+        XCTAssertEqual(seen, [nil], "one change")
+        XCTAssertTrue(m.layout.panes.count == 1 && m.focusedTarget == nil, "the empty pane (the Select a session card)")
         XCTAssertNil(m.removing, "one-shot")
         m.act(.remove, h3)
         m.confirm(true)
         seen = []
         st.history = [h1]
-        XCTAssertEqual(m.selection, .history(h1.id), "the last one: the previous row")
-        XCTAssertEqual(seen, [.history(h1.id)])
-        // The next row went too (another remove landed in the same read): the one after it, else before.
-        st.history = [h1, h2, h3, record("h4", ago: 400)]
-        m.act(.remove, h2)
-        m.confirm(true)
-        st.history = [h1, record("h4", ago: 400)]
-        XCTAssertEqual(m.selection, .history(hkey("h4")), "the next row still there")
-        // The only History row: nothing selected (the live rows are not History).
-        st.history = [h1]
+        XCTAssertTrue(m.selection == nil && m.focusedTarget == nil, "the last one: empty too, never the previous row")
+        XCTAssertEqual(seen, [nil])
+        // The only History row: empty as well.
         m.act(.remove, h1)
         m.confirm(true)
         st.history = []
-        XCTAssertNil(m.selection, "no History row left: nothing")
+        XCTAssertTrue(m.selection == nil && m.focusedTarget == nil, "no History row left: empty")
         // A manual pick drops the hand-on.
         st.history = [h1, h2]
         m.act(.remove, h1)
@@ -852,20 +847,11 @@ extension AgentWindowD1Tests {
         m.select(.history(h1.id))
         st.history = [h2]
         XCTAssertNil(m.selection)
-        XCTAssertEqual(calls.records.filter { $0.verb == .remove }.map(\.record.name), ["h2", "h3", "h2", "h1", "h1"])
-        // neighbour() on its own: after, else before, else the first left.
-        let sec = { (ids: [String]) in [AgentSidebar.Section(title: "History", rows: ids.map { self.record($0) }.map { AgentSidebar.row($0, now: Self.now) })] }
-        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["a", "c"])), .history(hkey("c")))
-        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["a"])), .history(hkey("a")))
-        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["a", "b", "c"]), new: sec(["z"])), .history(hkey("z")))
-        XCTAssertNil(AgentWindowModel.neighbour(of: hkey("b"), old: sec(["b"]), new: []))
-        // The previous row is not always the first one left.
-        XCTAssertEqual(AgentWindowModel.neighbour(of: hkey("d"), old: sec(["a", "b", "c", "d"]), new: sec(["a", "b", "c"])),
-                       .history(hkey("c")))
+        XCTAssertEqual(calls.records.filter { $0.verb == .remove }.map(\.record.name), ["h2", "h3", "h1", "h1"])
     }
 
     @MainActor
-    func testAgentWindowRemovingTheLastOfManyHistoryRowsSelectsTheOneBeforeIt() throws {
+    func testAgentWindowRemovingTheLastOfManyHistoryRowsLeavesThePaneEmpty() throws {
         let h1 = record("h1", ago: 100), h2 = record("h2", ago: 200), h3 = record("h3", ago: 300)
         let st = store([], history: [h1, h2, h3])
         st.controlDch = bin([1, 38, 0])
@@ -876,7 +862,7 @@ extension AgentWindowD1Tests {
         m.act(.remove, h3)
         m.confirm(true)
         st.history = [h1, h2]
-        XCTAssertEqual(m.selection, .history(h2.id), "the row just before it, not the first")
+        XCTAssertTrue(m.selection == nil && m.focusedTarget == nil, "#1929: empty, never the row before it")
     }
 
     // MARK: A question whose session or record left is dropped for good

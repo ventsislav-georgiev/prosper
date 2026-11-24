@@ -67,10 +67,10 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.layoutWrites, 0, "no suite: nothing saved")
     }
 
-    /// G2 (follow-to-History) and G8 (a removal hands on) pick through the same pane. #831 B1 step 1 (rewritten:
+    /// G2 (follow-to-History) and G8 (a removal) go through the same pane. #831 B1 step 1 (rewritten:
     /// spec 3.5 retires the raw mapping in B1, so this A2 row was not on rewrites-B1.txt): the ended session's pane
     /// keeps its `.session` target and resolves to the name's own record (4.5), never through the empty pane;
-    /// removing that record from its card hands on (G8, 4.5).
+    /// #1929 (operator 2026-11-24): removing that record from its card leaves the one pane empty, never another record.
     @MainActor
     func testAgentWindowPaneFollowAndRemovalGoThroughTheFocusedPane() throws {
         let st = store([session("a", .idle), session("b", .idle)],
@@ -98,12 +98,12 @@ extension AgentWindowD1Tests {
         XCTAssertEqual(m.layout.panes.first?.target, .session(dir: "/tmp/dch-test", name: "a"), "resolve never retargets")
 
         // G8 from that pane's History card (act() picks the record's row first: the pane swaps to it in place, #580):
-        // the next History row, never the empty pane.
+        // #1929: the one pane goes empty, never the next History row.
         m.act(.remove, record("a", ago: 0))
         XCTAssertEqual(m.layout.panes.first?.id, pane, "in place (#580)")
         m.confirm(true)
         st.history = [record("h1", ago: 100), record("h2", ago: 200)]
-        XCTAssertEqual(m.selection, .history(paneKey("h1")), "G8: the next History row")
+        XCTAssertTrue(m.selection == nil && m.focusedTarget == nil, "#1929: empty, never the next History row")
         assertSelectionIsTheFocusedPane(m, "G8 from the swapped pane")
         XCTAssertEqual(m.layout.panes.first?.id, pane)
 
@@ -112,7 +112,7 @@ extension AgentWindowD1Tests {
         m.act(.remove, h1)
         m.confirm(true)
         st.history = [record("h2", ago: 200)]
-        XCTAssertEqual(m.selection, .history(paneKey("h2")), "G8: the next History row")
+        XCTAssertTrue(m.selection == nil && m.focusedTarget == nil, "#1929: empty, never the next History row")
         assertSelectionIsTheFocusedPane(m, "G8")
         XCTAssertEqual(m.layout.panes.first?.id, pane)
     }

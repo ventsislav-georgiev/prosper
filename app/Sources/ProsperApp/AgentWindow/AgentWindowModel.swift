@@ -1312,9 +1312,12 @@ final class AgentWindowModel: ObservableObject {
     private var publishing: (sessions: [AgentSession], history: [DchHistoryRecord])?
     /// dch writes a record each minute: a Stop or Kill's record has ended by then, with slack.
     static let recordSlack: TimeInterval = AgentPaneLayout.recordSlack
-    /// #829 G8: a record the window removed (its id): once its row is gone, the next History row
-    /// is selected (else the previous, else none), never through nothing. A manual pick drops it.
+    /// #829 G8, #1929 (operator 2026-11-24): a record the window removed (its id): once its row is gone, every pane that
+    /// showed it (`removingPanes`) closes, or goes empty when it is the only pane; never another record. A manual pick drops it.
     private(set) var removing: AgentSessionKey?
+    /// #1929: the panes that showed `removing` when it was confirmed (a `.session` pane on its own record, 4.5, too);
+    /// only a pane still holding the same target closes.
+    private var removingPanes: [Pane] = []
     /// Counts sidebar rebuilds (tests: nothing rebuilds after close).
     private(set) var refreshes = 0
     /// #1634: counts full `AgentSidebar.sections` builds (an activity-only list re-ages the rows instead).
@@ -2021,21 +2024,21 @@ final class AgentWindowModel: ObservableObject {
                                         remoteHistory: remoteHistory)
         }
         built = (sessions, inputs)
-        let old = sections
         publishing = (sessions, history)
         defer { publishing = nil }
         if new != sections { sections = new }
         // #831 B1 (4.3): the focused pane re-resolved on every publish. A session that ended stays Ended (4.4) and
-        // swaps once to its own record (4.5: G2 subsumed). G8: a removed record's pane hands on to its neighbour
-        // before the selection is written (never through nothing). `selection` is still the last resolve's here, so a
-        // `.session` pane showing its own record (4.5) hands on too.
-        if case .history(let id)? = selection, id == removing, row(.history(id)) == nil {
+        // swaps once to its own record (4.5: G2 subsumed). #1929: a removed record's panes close (the only pane goes
+        // empty) before the resolve, so the selection is never another record.
+        if let id = removing, row(.history(id)) == nil {
             removing = nil
-            select(Self.neighbour(of: id, old: old, new: new), manual: false)
-        } else {
-            settle()
-            follow()
+            for p in removingPanes where layout.panes.contains(p) {
+                if layout.panes.count > 1 { closePane(p.id) } else { select(nil, manual: false) }
+            }
+            removingPanes = []
         }
+        settle()
+        follow()
         if confirming != nil, confirmingSession == nil, confirmingRecord == nil { confirming = nil }
         if let k = renaming, !sessions.contains(where: { $0.key == k }) { renameEdit = nil }   // it ended: no field
         // #853 F1 (QA #699): a busy Return's refusal goes with the running text it was refused under,
@@ -2144,16 +2147,6 @@ final class AgentWindowModel: ObservableObject {
             }
         }
         if r.content != c { r.content = c }   // published only on a change (one view update per change)
-    }
-
-    /// G8: the History row after `id` in `old` that is still there, else the one before, else the
-    /// first History row left; nil when History is empty.
-    static func neighbour(of id: AgentSessionKey, old: [AgentSidebar.Section],
-                          new: [AgentSidebar.Section]) -> AgentSidebar.RowID? {
-        let was = old.first { $0.id == "History" }?.rows.map(\.id) ?? []
-        let now = new.first { $0.id == "History" }?.rows.map(\.id) ?? []
-        guard let i = was.firstIndex(of: .history(id)) else { return now.first }
-        return was[(i + 1)...].first { now.contains($0) } ?? was[..<i].reversed().first { now.contains($0) } ?? now.first
     }
 
     func isCollapsed(_ title: String) -> Bool {
@@ -3261,6 +3254,7 @@ final class AgentWindowModel: ObservableObject {
                 return
             }
             removing = r.id
+            removingPanes = layout.panes.filter { Self.resolvedRow(resolvedContent(of: $0.id, $0.target)) == .history(r.id) }
             removeRecord(r)
             return
         }
