@@ -1,0 +1,34 @@
+{
+ "entry": 1929,
+ "filter": "AgentWindowD1Tests/testAgentWindowRemoval|AgentWindowD1Tests/testAgentWindowRemovingTheLastOfManyHistoryRowsLeavesThePaneEmpty|AgentWindowD1Tests/testAgentWindowRefusedRemovalKeepsThePane|AgentWindowD1Tests/testAgentWindowPaneFollowAndRemovalGoThroughTheFocusedPane",
+ "mutants": [
+  {
+   "name": "never-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layout.panes.count > 1 { closePane(p.id) } else { select(nil, manual: false) }",
+   "new": "if false { closePane(p.id) } else { select(nil, manual: false) }",
+   "expect": "killed"
+  },
+  {
+   "name": "never-empty",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if layout.panes.count > 1 { closePane(p.id) } else { select(nil, manual: false) }",
+   "new": "if layout.panes.count > 1 { closePane(p.id) } else { }",
+   "expect": "killed"
+  },
+  {
+   "name": "every-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "removingPanes = layout.panes.filter { Self.resolvedRow(resolvedContent(of: $0.id, $0.target)) == .history(r.id) }",
+   "new": "removingPanes = layout.panes",
+   "expect": "killed"
+  },
+  {
+   "name": "land-before-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let id = removing, row(.history(id)) == nil {",
+   "new": "if let id = removing, id == id {",
+   "expect": "killed"
+  }
+ ]
+}
