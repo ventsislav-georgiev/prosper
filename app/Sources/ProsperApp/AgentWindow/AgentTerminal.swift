@@ -1337,8 +1337,8 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// Tests: each left down and up handed on to libghostty; nil in the product.
     var passedClick: ((NSEvent) -> Void)?
 
-    /// #1701: Command pressed or released over the focused pane (the first responder gets flagsChanged): the hover
-    /// follows it. Then libghostty as before.
+    /// Command pressed or released over the focused pane (the first responder gets flagsChanged): #1724's link underline
+    /// follows it (#1926: no card hover). Then libghostty as before.
     override func flagsChanged(with event: NSEvent) {
         marks.command(event.modifierFlags.contains(.command))
         super.flagsChanged(with: event)

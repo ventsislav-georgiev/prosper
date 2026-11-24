@@ -21,6 +21,9 @@ tag from the now-released section and put it on the new top draft.
 ## v2.178.0 *(unreleased)*
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
   before or wider than 40% of the window, and the width is remembered. (#1923)
+- Terminal X-ray: holding Command over a reference no longer pops up its card (it was inconsistent
+  when moving the pointer off the text). Command-click still opens the card and Command-Shift-click
+  still opens the link. (#1926)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

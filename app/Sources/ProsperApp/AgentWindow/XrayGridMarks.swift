@@ -233,7 +233,8 @@ final class XrayGridMarksView: NSView {
     }
 
     // #1565: the pointer, from this view's tracking area only; never passed on (a plain click is never taken: hitTest nil)
-    // #1701 (operator 2026-11-20): only while Command is held, the same for every mark; without it a move is a hover-out
+    // #1926 (operator 2026-11-24): no hover card: a mark's card opens on a Command-click only (AgentTerminalHostView.mouseDown);
+    // the pointer is kept for #1724's link underline, drawn only while Command is held
     override func mouseMoved(with event: NSEvent) {
         pointer = convert(event.locationInWindow, from: nil)
         command(event.modifierFlags.contains(.command))
@@ -241,17 +242,15 @@ final class XrayGridMarksView: NSView {
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) {
         pointer = nil
-        hover.point(nil)
         linkHover(nil)
     }
 
     /// #1701: the pointer's last point over this view (top-left); nil once it left.
     private(set) var pointer: CGPoint?
 
-    /// #1701: Command is down (the move's flags, or the host's flagsChanged): the mark under the pointer, if any, is
-    /// hovered; Command up is a hover-out (the 250 ms close, a pinned card stays).
+    /// Command is down (the move's flags, or the host's flagsChanged): the link under the pointer is underlined (#1724),
+    /// nothing else (#1926: no card opens on a hold).
     func command(_ down: Bool) {
-        hover.point(down ? pointer.flatMap { mark(at: $0) }?.key : nil)
         linkHover(down ? pointer : nil)
     }
 

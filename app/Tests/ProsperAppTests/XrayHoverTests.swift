@@ -4,7 +4,7 @@ import SwiftUI
 import XCTest
 @testable import ProsperApp
 
-/// #1565 (X-T b, spec 6.2, 6.3): the hover card over the grid's marks. A fake follow (XrayFollowTests.Fake) gives the
+/// #1565 (X-T b, spec 6.2, 6.3): the card over the grid's marks. A fake follow (XrayFollowTests.Fake) gives the
 /// marks, a fake dch runner (XrayRefRunTests.Run) answers and records each argv and cancel, a fake presenter
 /// (XrayRefPopoverTests.Cards) records the cards. The dwell, settle and close items are kept and performed by hand; the
 /// window is never made (the overlay's seams answer key, buttons and cards). No dch, no event posted, no card shown.
@@ -102,7 +102,7 @@ final class XrayHoverTests: XCTestCase {
     }
 
     /// The pointer over a mark's cell through the overlay's own mouseMoved (a built event, never posted).
-    /// #1701: with Command held unless `flags` says otherwise (the hover opens only then).
+    /// #1926: Command held unless `flags` says otherwise (a hold opens nothing).
     func move(_ r: Rig, col: Int, row: Int, _ flags: NSEvent.ModifierFlags = .command) throws {
         let p = CGPoint(x: 4 + 8 * CGFloat(col) + 1, y: 2 + 17 * CGFloat(row) + 1)   // no window: scale 2, cells 8 x 17 pt
         let e = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: r.v.marks.convert(p, to: nil), modifierFlags: flags,
@@ -124,24 +124,6 @@ final class XrayHoverTests: XCTestCase {
     func waitCalls(_ run: XrayRefRunTests.Run, _ n: Int) async {
         let end = Date().addingTimeInterval(5)
         while run.calls.count < n, Date() < end { try? await Task.sleep(nanoseconds: 1_000_000) }
-    }
-
-    /// Red if the pointer's cell does not find the mark under it (mouseMoved, mark(at:)), or a pass that leaves before
-    /// 500 ms spawns a read or shows a card (the dwell item not guarded on the pointer still being there).
-    func testAPassUnder500msSpawnsNothing() async throws {
-        try await withSeams { fake in
-            let r = try rig(fake)
-            try move(r, col: 4, row: 1)   // the mark's first cell
-            XCTAssertEqual(r.v.marks.hover.over, "issue:#12")
-            XCTAssertEqual(r.items.last?.delay, 0.5)
-            try move(r, col: 30, row: 5)   // off every mark before the dwell ran
-            XCTAssertTrue(r.v.marks.hover.over == nil)
-            XCTAssertTrue(r.items.last?.item.isCancelled == true)
-            for i in r.items { i.item.perform() }
-            await r.panels.refReading?.value
-            XCTAssertEqual(r.run.calls.count, 0)
-            XCTAssertTrue(r.cards.views.isEmpty)
-        }
     }
 
     /// Red if the dwell shows no card at once, spawns more than one read, sends --full, or a budget other than 250 with
@@ -368,8 +350,6 @@ final class XrayHoverTests: XCTestCase {
             let r = try rig(fake)
             r.t.paneFocused = { false }
             r.v.marks.place()
-            try move(r, col: 5, row: 1)
-            XCTAssertTrue(r.v.marks.hover.over == nil, "no marks on an unfocused pane")
             dwell(r, "issue:#12")
             r.t.paneFocused = { true }
             r.v.marks.hover.point(nil)
@@ -472,27 +452,27 @@ final class XrayHoverTests: XCTestCase {
         XCTAssertTrue(XrayRefSpans.listed("ticket:OQ-19x8", in: [e]) == nil)
     }
 
-    /// Red if a PR ref (or any kind) hovers without Command, misses the hover with it, a list number gets no mark or
-    /// no card (its read sends "OQ-1978"), or "2558" in prose is marked.
-    func testEveryRefKindHoversWithCommandOnly() async throws {
+    /// Red if a PR ref (or any kind) opens no pinned card on a Command-click, a list number gets no mark or no card (its read
+    /// sends "OQ-1978"), or "2558" in prose is marked.
+    func testEveryRefKindOpensItsCardOnCommandClick() async throws {
         try await withSeams { fake in
             let r = try shotRig(fake)
             XCTAssertEqual(r.v.marks.marks.map(\.key), ["pull:#24065", "ticket:wt-2554", "ticket:OQ-1977", "ticket:OQ-1978",
                                                        "ticket:OQ-1980", "ticket:OQ-1981", "ticket:OQ-1991", "ticket:OQ-1994"])
             XCTAssertFalse(r.v.marks.marks.contains { $0.row == 3 }, "2558 in prose")
+            r.v.passedClick = { _ in }
             for (col, row, key) in [(10, 1, "pull:#24065"), (24, 1, "ticket:wt-2554"), (0, 2, "ticket:OQ-1977"), (9, 2, "ticket:OQ-1978"),
                                     (36, 2, "ticket:OQ-1994")] {
-                let armed = r.items.count
-                try move(r, col: col, row: row, [])
-                XCTAssertTrue(r.v.marks.hover.over == nil, "\(key): no hover without Command")
-                XCTAssertEqual(r.items.count, armed, "\(key): no dwell armed")
-                try move(r, col: col, row: row)
-                XCTAssertEqual(r.v.marks.hover.over, key)
-                r.item(0.5)?.perform()
-                XCTAssertEqual(r.v.marks.hover.card?.key, key, "the same card for every kind")
+                func click(_ type: NSEvent.EventType) throws -> NSEvent {   // no window: the view's own unflipped space
+                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 4 + 8 * CGFloat(col) + 2, y: 410 - (2 + 17 * CGFloat(row) + 3)),
+                                                     modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
+                                                     eventNumber: 0, clickCount: 1, pressure: 1))
+                }
+                r.v.mouseDown(with: try click(.leftMouseDown))
+                r.v.mouseUp(with: try click(.leftMouseUp))
+                XCTAssertEqual(r.panel.refCard?.key, key, "the same pinned card for every kind")
                 await r.panels.refReading?.value
                 r.v.marks.hover.close(all: true)
-                try move(r, col: 30, row: 5)
             }
             XCTAssertEqual(r.run.stdins.last, "OQ-1994\n", "a list number's read is its prefixed text")
             XCTAssertTrue(r.run.stdins.contains("OQ-1978\n"))
@@ -504,22 +484,22 @@ final class XrayHoverTests: XCTestCase {
                                        context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 55))
     }
 
-    /// Red if pressing Command over a mark does not hover it, or releasing it is not a hover-out (the 250 ms close).
-    func testCommandDownHoversAndCommandUpClosesAsHoverOut() async throws {
+    /// #1926 (operator 2026-11-24): red at the parent (a Command move or a Command press over a mark armed the 500 ms dwell:
+    /// hover.over was the mark, a card opened). Holding Command, with the pointer over any mark or moving between them,
+    /// arms nothing, opens no card and reads nothing; Command-click (below) is the only way a card opens.
+    func testCommandHoldOverAMarkOpensNothing() async throws {
         try await withSeams { fake in
-            let r = try rig(fake)
-            try move(r, col: 5, row: 1, [])
-            XCTAssertTrue(r.v.marks.hover.over == nil)
+            let r = try shotRig(fake)
+            let armed = r.items.count
             r.v.flagsChanged(with: try flags(.command))   // the host is the first responder; a built event, never posted
-            XCTAssertEqual(r.v.marks.hover.over, "issue:#12")
-            r.item(0.5)?.perform()
-            XCTAssertTrue(r.cards.shown != nil)
-            await r.panels.refReading?.value
+            for (col, row) in [(10, 1), (24, 1), (0, 2), (30, 5), (36, 2)] { try move(r, col: col, row: row) }
             r.v.flagsChanged(with: try flags([]))
-            XCTAssertTrue(r.v.marks.hover.over == nil)
-            XCTAssertTrue(r.cards.shown != nil, "not before 250 ms")
-            try XCTUnwrap(r.items.last { $0.delay == 0.25 && !$0.item.isCancelled }?.item).perform()
-            XCTAssertTrue(r.cards.shown == nil, "released: closed as a hover-out")
+            for i in r.items { i.item.perform() }
+            await r.panels.refReading?.value
+            XCTAssertEqual(r.items.count, armed, "no dwell, settle or linger armed")
+            XCTAssertTrue(r.v.marks.hover.over == nil && r.v.marks.hover.card == nil)
+            XCTAssertTrue(r.cards.shown == nil && r.cards.views.isEmpty)
+            XCTAssertEqual(r.run.calls.count, 0)
         }
     }
 
@@ -549,7 +529,6 @@ final class XrayHoverTests: XCTestCase {
             await r.panels.refReading?.value
             XCTAssertEqual(r.run.calls.last?.contains("--full"), true)
             try move(r, col: 30, row: 5, [])
-            for i in r.items where !i.item.isCancelled { i.item.perform() }
             XCTAssertTrue(r.cards.shown != nil, "Command up and the pointer gone: the pinned card stays")
             r.v.mouseUp(with: try click(.leftMouseUp, []))
             XCTAssertEqual(passed.count, 3, "the next up goes on")
