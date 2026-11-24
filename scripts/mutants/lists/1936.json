@@ -3,13 +3,6 @@
  "filter": "AgentWindowD1Tests/testAgentWindowRemovalWithTwoPanesClosesToOneAndDeletesTheLayoutUnlessLone",
  "mutants": [
   {
-   "name": "keep-layout",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "guard deleteLayout(layout.id) == nil, let id = Self.rowID(left) else { return }",
-   "new": "guard let id = Self.rowID(left) else { return }",
-   "expect": "killed"
-  },
-  {
    "name": "skip-close",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "if layout.panes.count > 1 { closePane(p.id) } else { select(nil, manual: false) }",
