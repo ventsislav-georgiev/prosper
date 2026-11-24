@@ -54,8 +54,8 @@
   {
    "name": "hide-keeps-child",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if !v { stopFollow() }",
-   "new": "if !v { }",
+   "old": "if !v { stopFollow(); pendingResume = nil }",
+   "new": "if !v { pendingResume = nil }",
    "expect": "killed"
   },
   {

@@ -1,0 +1,76 @@
+{
+ "entry": "1924",
+ "filter": "AgentWindowD1Tests/testAgentWindowCardResume",
+ "mutants": [
+  {
+   "name": "no-landing",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        landResume()   // #1924\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-target-guard",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard p.target == focusedTarget else { return }   // moved on",
+   "new": "guard true else { return }   // moved on",
+   "expect": "killed"
+  },
+  {
+   "name": "no-pick-drop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "newSession = nil; pendingResume = nil }\n",
+   "new": "newSession = nil }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-sidebar-drop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        pendingResume = nil   // #1924\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-hidden-drop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if !v { stopFollow(); pendingResume = nil }",
+   "new": "if !v { stopFollow() }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-gate-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "(verb == .resume ? store.resumeGate : store.reviveNoMessageGate).isOK else { return }",
+   "new": "true else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "no-remote-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "verb == .resumeNoMessage, !Self.isRemote(r), let store",
+   "new": "verb == .resumeNoMessage, let store",
+   "expect": "killed"
+  },
+  {
+   "name": "no-key-drop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if event.type == .keyDown { model?.dropPendingResume() }   // #1924: typed before the resumed session listed\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-resign-drop",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "m?.dragEnded(); m?.dropPendingResume() }",
+   "new": "m?.dragEnded() }",
+   "expect": "killed"
+  },
+  {
+   "name": "card-uses-act",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "act: { model.actInPane($0, r) },",
+   "new": "act: { model.act($0, r) },",
+   "expect": "killed"
+  }
+ ]
+}
