@@ -2531,6 +2531,7 @@ struct AgentDetailView: View {
                             detail: "Up and down move through the list; Return or a click moves into it.") {
                 HStack(spacing: sz(8)) {
                     AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: model.layout.focused))
+                    AgentPanePlaceholder.newShellPill(model, pane: model.layout.focused)   // #1920
                     AgentPillButton(title: "New session", icon: "plus", tint: Neon.blue,
                                     enabled: model.store?.resumeGate.isOK == true) { model.openNewSession() }
                         .help(AgentNewSessionButtons.help("New session… (⌘N)", refusal: model.store?.resumeGate.refusal))
@@ -3315,7 +3316,11 @@ struct AgentUnfocusedPane: View {
                                          pick: { model.pickAnother(runtime.pane) })
                 } else {
                     AgentEmptyState(icon: "sidebar.left", title: "Select a session", detail: AgentPanePlaceholder.detail) {
-                        AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: runtime.pane)).padding(.top, sz(4))   // #1658
+                        HStack(spacing: sz(8)) {
+                            AgentPanePlaceholder.closePill(AgentPanePlaceholder.close(model, pane: runtime.pane))   // #1658
+                            AgentPanePlaceholder.newShellPill(model, pane: runtime.pane)   // #1920
+                        }
+                        .padding(.top, sz(4))
                     }
                 }
             }
@@ -3358,6 +3363,16 @@ struct AgentPanePlaceholder: View {
     @MainActor
     static func close(_ model: AgentWindowModel, pane: UUID) -> (() -> Void)? {
         model.layout.panes.count > 1 ? { model.closePane(pane) } : nil
+    }
+
+    /// #1920: New shell on an empty pane's card: the quick login shell at once (⇧⌘N's, no form). `pane` is captured at
+    /// draw (as close): it takes the focus first, so the shell's row lands in it (#1895 rule 2: an empty focused pane
+    /// takes the next pick). Gate and help as the sidebar's [>_].
+    @MainActor @ViewBuilder static func newShellPill(_ model: AgentWindowModel, pane: UUID) -> some View {
+        AgentPillButton(title: "New shell", icon: "apple.terminal", tint: Neon.terminal,
+                        enabled: model.store?.resumeGate.isOK == true) { model.focusPane(pane); model.startShell() }
+            .help(AgentNewSessionButtons.help("New shell (⇧⌘N)", refusal: model.store?.resumeGate.refusal))
+            .accessibilityLabel("New shell")
     }
 
     /// The Close Pane pill (nil: none), the placeholder's and #1658's empty pane's alike.

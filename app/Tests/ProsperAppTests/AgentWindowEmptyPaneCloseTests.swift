@@ -170,7 +170,7 @@ extension AgentWindowD1Tests {
             single.select(nil)
             XCTAssertTrue(single.layout.panes.allSatisfy { $0.target == nil }, "the pane is empty")
             let alone = try emptyPanePills(single, single.layout.focused)
-            XCTAssertEqual(alone.map(\.title), ["New session"], "one pane: no Close Pane")
+            XCTAssertEqual(alone.map(\.title), ["New shell", "New session"], "one pane: no Close Pane")
 
             let two = paneLayout([nil, nil])
             let a = try XCTUnwrap(two.order.first), b = try XCTUnwrap(two.order.last)
@@ -180,9 +180,9 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.layout.panes.allSatisfy { $0.target == nil }, "both panes empty")
             XCTAssertEqual(m.layout.focused, a)
             let focused = try emptyPanePills(m, a)
-            XCTAssertEqual(focused.map(\.title), ["Close Pane", "New session"], "the focused empty pane")
+            XCTAssertEqual(focused.map(\.title), ["Close Pane", "New shell", "New session"], "the focused empty pane")
             let other = try emptyPanePills(m, b)
-            XCTAssertEqual(other.map(\.title), ["Close Pane"], "the unfocused empty pane")
+            XCTAssertEqual(other.map(\.title), ["Close Pane", "New shell"], "the unfocused empty pane")
             m.focusPane(b)
             XCTAssertEqual(m.layout.focused, b)
             for l in m.layouts?.layouts ?? [] where l.id != m.layout.id { m.deleteLayout(l.id) }   // #1894: the lone layout, so the close to one pane keeps it
@@ -199,6 +199,64 @@ extension AgentWindowD1Tests {
             pill.action()
             XCTAssertEqual(m2.layout.order, [a], "the unfocused pane's pill closed b, not the focused a")
         }
+    }
+
+    /// #1920: New shell on the empty card, both sites (the focused pane's, with New session; the unfocused pane's, without):
+    /// its press starts ⇧⌘N's login shell at once (no form) named shellName(folder) in the default folder through the spawn
+    /// seam; the session lands in the PRESSED pane, in one pane and in two (the unfocused pane's card focuses it first); the
+    /// gate off disables it with the sidebar's refusal. Old line that makes it red: no newShellPill at the call sites (no
+    /// pill), `model.focusPane(pane)` missing (lands in the focused a, not b), `pane: model.layout.focused` at the
+    /// unfocused site (same), enabled: true (the disabled row).
+    @MainActor
+    func testEmptyPaneNewShellPillStartsAShellIntoItsOwnPane() throws {
+        try withPaneMenu(true) { try withNewSessionPrefs {
+            Preferences.agentWindowNewSessionFolder = "/Users/example/last"
+            @MainActor func pane(_ layout: PaneLayout, _ spawns: SpawnCalls, _ st: AgentIslandStore) -> AgentWindowModel {
+                let m = newSessionModel(st, spawns, layouts: layoutSuite())
+                m.paneArea = CGRect(x: 0, y: 0, width: 3000, height: 1000)
+                m.adopt(layout)
+                m.select(nil)
+                return m
+            }
+            @MainActor func target(_ m: AgentWindowModel, _ id: UUID) -> PaneTarget? { m.layout.panes.first { $0.id == id }?.target }
+            let key = AgentSessionKey(dir: "/tmp/dch-test", name: "last")
+            // One pane.
+            let st1 = store([]), s1 = SpawnCalls(), one = pane(paneLayout([nil]), s1, st1)
+            defer { one.close() }
+            let solo = try XCTUnwrap(try emptyPanePills(one, one.layout.focused).first { $0.title == "New shell" })
+            XCTAssertEqual(solo.icon, "apple.terminal")
+            XCTAssertTrue(solo.enabled)
+            solo.action()
+            XCTAssertTrue(one.newSession == nil, "no form")
+            XCTAssertEqual(s1.calls.count, 1)
+            XCTAssertEqual(s1.calls.last?.folder, "/Users/example/last")
+            XCTAssertEqual(s1.calls.last?.argv, ["/bin/fish", "-l"])
+            XCTAssertEqual(s1.calls.last?.name, "last")
+            s1.done[0](key, nil)
+            st1.sessions = [mapped("last")]
+            XCTAssertEqual(target(one, one.layout.focused), paneTarget("last"), "the single pane took the shell")
+            // Two panes, the unfocused b's card pressed: b is focused and takes the shell.
+            let two = paneLayout([nil, nil])
+            let a = try XCTUnwrap(two.order.first), b = try XCTUnwrap(two.order.last)
+            let st2 = store([]), s2 = SpawnCalls(), m = pane(two, s2, st2)
+            defer { m.close() }
+            XCTAssertEqual(m.layout.focused, a)
+            XCTAssertEqual(try emptyPanePills(m, a).map(\.title), ["Close Pane", "New shell", "New session"])
+            XCTAssertEqual(try emptyPanePills(m, b).map(\.title), ["Close Pane", "New shell"])
+            let other = try XCTUnwrap(try emptyPanePills(m, b).first { $0.title == "New shell" })
+            other.action()
+            XCTAssertEqual(m.layout.focused, b, "the press focused its own pane first")
+            XCTAssertEqual(s2.calls.count, 1)
+            s2.done[0](key, nil)
+            st2.sessions = [mapped("last")]
+            XCTAssertEqual(target(m, b), paneTarget("last"), "the unfocused pane's card: the shell landed in b")
+            XCTAssertTrue(target(m, a) == nil, "a stays empty")
+            // Gate off: disabled (the sidebar's refusal text).
+            st2.controlDch = nil
+            let off = try XCTUnwrap(try emptyPanePills(m, a).first { $0.title == "New shell" })
+            XCTAssertFalse(off.enabled)
+            XCTAssertNotNil(st2.resumeGate.refusal)
+        } }
     }
 
     /// #1906: the Close Pane pills of the History card pane `id` draws (the card's own body; the buttons are not pills here).

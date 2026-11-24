@@ -27,9 +27,9 @@ extension AgentWindowD1Tests {
 
     /// A visible model on a store whose gate is open, with every #847 seam faked.
     @MainActor
-    func newSessionModel(_ st: AgentIslandStore, _ spawns: SpawnCalls) -> AgentWindowModel {
+    func newSessionModel(_ st: AgentIslandStore, _ spawns: SpawnCalls, layouts: UserDefaults? = nil) -> AgentWindowModel {
         st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 46, 1])
-        let m = windowModel(st)
+        let m = windowModel(st, layouts: layouts)
         let island = AgentIslandController()
         island.historyDirs = { ["/tmp/dch-test"] }
         island.chooseFolder = { _ in XCTFail("no chooser here") }

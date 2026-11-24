@@ -37,6 +37,8 @@ tag from the now-released section and put it on the new top draft.
   nothing and the kit pane shows the line to add yourself. (#1918)
 - New session: New shell now starts without a Name and takes the folder's name
   (like Shift-Command-N); Start still needs one. (#1919)
+- The empty pane card has a New shell button that starts a login shell straight away, with no form,
+  in that pane. (#1920)
 
 ## v2.176.0
 
