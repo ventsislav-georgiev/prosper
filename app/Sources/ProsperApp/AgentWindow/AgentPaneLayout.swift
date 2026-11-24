@@ -781,8 +781,14 @@ extension PaneLayout {
     /// (the cap cannot refuse it: the close frees the slot; no room can) refuses the whole drop and changes nothing. Dropped
     /// on an edge of its own pane it only focuses it. Refused as `split` is. (Open to the Side, `show`, still only focuses.)
     func split(_ id: UUID, side: Direction, target: PaneTarget, minimum: CGSize, in area: CGRect) -> Result<PaneLayout, PaneRefusal> {
+        split(id, side: side, target: target, moving: pane(showing: target), minimum: minimum, in: area)
+    }
+
+    /// #1927: the same with the pane that moves named: the one showing `target`, or an empty pane dragged by its header
+    /// (`target` nil: the new pane is empty too).
+    func split(_ id: UUID, side: Direction, target: PaneTarget?, moving: UUID?, minimum: CGSize, in area: CGRect) -> Result<PaneLayout, PaneRefusal> {
         var rest = self
-        if let shown = pane(showing: target) {
+        if let shown = moving {
             if shown == id { return focus(id) }
             switch close(shown) {
             case let .success(closed): rest = closed

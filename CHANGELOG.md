@@ -34,6 +34,9 @@ tag from the now-released section and put it on the new top draft.
   minimum size once their content has loaded. (#1933)
 - The Agent Sessions window can no longer be narrowed past its title buttons (close, minimise, zoom).
   (#1932)
+- Empty panes now take part in pane drag and drop: a session dragged over an empty pane gets the
+  same drop zones (swap into its place or split on any edge), and an empty pane can itself be
+  dragged by its header to another place. (#1927)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

@@ -382,7 +382,7 @@ final class AgentWindowLayoutEditTests: XCTestCase {
             XCTAssertTrue(m.drop(try XCTUnwrap(m.paneDragToken(own)), into: own, at: CGPoint(x: 999, y: 500), in: size))
             XCTAssertEqual(m.layout.panes.map(\.target), before, "its own edge: no move")
             XCTAssertTrue(m.newLayout() == nil)
-            XCTAssertTrue(m.paneDragToken(m.layout.focused) == nil, "an empty pane does not drag")
+            XCTAssertTrue(m.paneDragToken(m.layout.focused) == nil, "a lone empty pane does not drag (#1927: one of several does)")
             XCTAssertEqual(AgentWindowControls.swapMenu(m, pane: m.layout.focused), [], "#1895: no Swap Session for an empty pane")
         }
         try withGate(false) {

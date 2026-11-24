@@ -2312,11 +2312,16 @@ final class AgentWindowModel: ObservableObject {
 
     /// #1895 (rule 4): a pane header's drag payload: its session's row token, so a drop on another pane's edge moves the
     /// pane there (PaneLayout.split closes the pane that showed it) and on its centre swaps the two (put); always on, no
-    /// mode. An empty pane, a row with no token (History) or the split gate off: nil, no drag.
+    /// mode. A row with no token (History) or the split gate off: nil, no drag.
+    /// #1927: an empty pane of several drags too: its own token (emptyPaneToken), never a row's.
     func paneDragToken(_ pane: UUID) -> String? {
-        guard AgentPaneLayout.splitsEnabled else { return nil }
-        return Self.rowID(layout.panes.first { $0.id == pane }?.target).flatMap(Self.dragToken)
+        guard AgentPaneLayout.splitsEnabled, let p = layout.panes.first(where: { $0.id == pane }) else { return nil }
+        guard let t = p.target else { return layout.panes.count > 1 ? Self.emptyPaneToken(pane) : nil }
+        return Self.rowID(t).flatMap(Self.dragToken)
     }
+
+    /// #1927: an empty pane's drag payload, matched only against this layout's empty panes (drop(_:into:at:in:)).
+    static func emptyPaneToken(_ pane: UUID) -> String { "pane:" + pane.uuidString }
 
     /// #1492: the zone at `p` in pane of `size`; the split gate off, only the centre.
     func dropZone(at p: CGPoint, in size: CGSize) -> PaneDropZone {
@@ -2339,8 +2344,40 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func drop(_ token: String, into pane: UUID, at p: CGPoint, in size: CGSize) -> Bool {
         dropExit(pane)
+        if let source = layout.panes.first(where: { $0.target == nil && Self.emptyPaneToken($0.id) == token })?.id {
+            return move(source, into: pane, zone: dropZone(at: p, in: size))   // #1927
+        }
         guard let id = rows.first(where: { Self.dragToken($0.id) == token })?.id else { return false }
         return drop(id, into: pane, zone: dropZone(at: p, in: size))
+    }
+
+    /// #1927: empty pane `source` dropped on pane `pane`, as a session pane's header drag: the centre swaps the two
+    /// (`pane`'s session goes into `source`, `pane` is left empty), an edge closes `source` and splits `pane` on that side
+    /// with a new empty pane. The pane the drop lands in takes the focus; a refusal is the split verbs' notice.
+    @discardableResult
+    func move(_ source: UUID, into pane: UUID, zone: PaneDropZone) -> Bool {
+        dropHover = nil
+        guard !closed, parked == nil, AgentPaneLayout.splitsEnabled, layout.order.contains(pane) else { return false }
+        let moved: Result<PaneLayout, PaneRefusal>
+        if case let .edge(side) = zone {
+            moved = layout.split(pane, side: side, target: nil, moving: source, minimum: paneMinimum,
+                                 in: CGRect(origin: .zero, size: paneArea.size))
+        } else if let t = layout.panes.first(where: { $0.id == pane })?.target, case let .success(put) = layout.put(t, in: source) {
+            moved = put.focus(pane)
+        } else {
+            moved = layout.focus(pane)   // two empty panes, or its own: nothing to swap
+        }
+        switch moved {
+        case let .failure(r):
+            paneRefusal = r
+        case let .success(l):
+            removing = nil; pendingSpawn = nil; newSession = nil
+            if paneRefusal != nil { paneRefusal = nil }
+            layout = l
+            follow()
+            focusSelection()
+        }
+        return true
     }
 
     /// #1492: row `id` dropped on pane `pane`. The centre (or any drop with the split gate off) is the title switcher's

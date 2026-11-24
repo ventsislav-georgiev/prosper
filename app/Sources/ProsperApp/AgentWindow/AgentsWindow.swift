@@ -2584,16 +2584,17 @@ struct AgentDetailView: View {
                     .overlay(alignment: .top) { paneRefusalLine }
             }
         } else {
-            titled("") { emptyPane.overlay(alignment: .top) { paneRefusalLine } }
+            titled("", drag: model.paneDragToken(model.layout.focused)) { emptyPane.overlay(alignment: .top) { paneRefusalLine } }   // #1927
         }
     }
 
     /// 9.2: with several panes, every content keeps the one-line header's height above it (table 4.2: only the body
     /// swaps); one pane: the body alone, as before.
-    @ViewBuilder func titled<B: View>(_ title: String, @ViewBuilder _ body: () -> B) -> some View {
+    /// #1927: `drag`, an empty pane's drag token (its header drags the pane as a session pane's does).
+    @ViewBuilder func titled<B: View>(_ title: String, drag: String? = nil, @ViewBuilder _ body: () -> B) -> some View {
         if compact {
             VStack(spacing: 0) {
-                AgentCompactHeader(title: title).modifier(AgentPaneProbe(kind: "header"))
+                AgentCompactHeader(title: title).modifier(AgentPaneProbe(kind: "header")).modifier(AgentRowDrag(token: drag))
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 body()
             }
@@ -2938,6 +2939,9 @@ struct AgentPaneArea: View {
                         .overlay(alignment: .top) { attentionBar(id, compact: compact) }
                         // #1492: a sidebar row dragged over the pane: the zone it would take; the drop goes to the model.
                         .overlay(alignment: .topLeading) { dropMark(id, f.size) }
+                        // #1927: the whole pane takes the drop; SwiftUI hit-tests only what is drawn, so an empty pane's
+                        // blank edge bands took none (a session pane's terminal takes its own, AgentTerminalHostView)
+                        .contentShape(Rectangle())
                         .onDrop(of: [.agentRow], delegate: AgentPaneDropDelegate(model: model, pane: id, size: f.size))
                         // 13: more than one pane shown: each pane one container, "<title>, pane i of n".
                         .modifier(AgentPaneContainer(label: label))
@@ -3383,6 +3387,7 @@ struct AgentUnfocusedPane: View {
             } else {
                 let title = AgentPanePlaceholder.title(runtime.content)
                 AgentCompactHeader(title: historyTitle ?? title ?? "").modifier(AgentPaneProbe(kind: "header"))
+                    .modifier(AgentRowDrag(token: runtime.content == nil ? model.paneDragToken(runtime.pane) : nil))   // #1927: an empty pane
                 Rectangle().fill(Neon.stroke).frame(height: 1)
                 if case .history(let r)? = runtime.content {
                     AgentHistoryDetail(row: model.row(.history(r.id)) ?? AgentSidebar.row(r, now: model.now()), record: r,
