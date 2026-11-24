@@ -1,0 +1,62 @@
+{
+ "entry": 1927,
+ "filter": "AgentWindowD1Tests/testPaneDropEmpty|AgentWindowLayoutEditTests/testAgentWindowLayoutEditPaneDragMovesAndSaves|AgentWindowD1Tests/testPaneDropEdge",
+ "mutants": [
+  {
+   "name": "pane-no-content-shape",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                        .contentShape(Rectangle())\n                        .onDrop(of: [.agentRow], delegate: AgentPaneDropDelegate(",
+   "new": "                        .onDrop(of: [.agentRow], delegate: AgentPaneDropDelegate(",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-pane-no-token",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let t = p.target else { return layout.panes.count > 1 ? Self.emptyPaneToken(pane) : nil }",
+   "new": "guard let t = p.target else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-lone-pane-drags",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let t = p.target else { return layout.panes.count > 1 ? Self.emptyPaneToken(pane) : nil }",
+   "new": "guard let t = p.target else { return layout.panes.count > 0 ? Self.emptyPaneToken(pane) : nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-drop-any-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let source = layout.panes.first(where: { $0.target == nil && Self.emptyPaneToken($0.id) == token })?.id {",
+   "new": "if let source = layout.panes.first(where: { Self.emptyPaneToken($0.id) == token })?.id {",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-move-centre-no-swap",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "case let .success(put) = layout.put(t, in: source) {\n            moved = put.focus(pane)",
+   "new": "case let .success(put) = layout.put(t, in: source) {\n            moved = layout.focus(pane); _ = put",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-move-edge-no-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentPaneLayout.swift",
+   "old": "        if let shown = moving {\n            if shown == id { return focus(id) }",
+   "new": "        if let shown = moving, shown == id {\n            if shown == id { return focus(id) }",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-focused-header-no-drag",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "titled(\"\", drag: model.paneDragToken(model.layout.focused))",
+   "new": "titled(\"\", drag: nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-unfocused-header-no-drag",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": ".modifier(AgentRowDrag(token: runtime.content == nil ? model.paneDragToken(runtime.pane) : nil))",
+   "new": ".modifier(AgentRowDrag(token: nil))",
+   "expect": "killed"
+  }
+ ]
+}

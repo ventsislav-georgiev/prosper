@@ -47,7 +47,7 @@
   {
    "name": "r4-no-pane-drag",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "        return Self.rowID(layout.panes.first { $0.id == pane }?.target).flatMap(Self.dragToken)",
+   "old": "        return Self.rowID(t).flatMap(Self.dragToken)",
    "new": "        return nil",
    "expect": "killed"
   },
