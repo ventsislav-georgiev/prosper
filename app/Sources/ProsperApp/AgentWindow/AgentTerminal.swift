@@ -1642,14 +1642,22 @@ struct AgentTerminalRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ slot: AgentTerminalHostSlot, context: Context) {
-        let v = controller.hostView()
-        slot.hold(v)
-        v.owner = controller
-        controller.view = v
+        let v = Self.mount(controller, in: slot)
         v.dropModel = context.environment.agentPaneModel   // #1492
         v.dropPane = context.environment.agentPaneID
         v.show(screen as? AgentGhosttyScreen)
         v.retheme()   // #891: no rebuild on a theme change: the live surface re-themes here
+    }
+
+    /// The controller's host view into the pane's slot. #1917: owner and view are set before the hold, so a fresh view
+    /// (a switch to a session the pane had not kept, #1782) finds its controller in viewDidMoveToWindow and takes the
+    /// focused pane's X-ray follow (marks, Cmd-click); set after it, that call found no owner and the view had none.
+    static func mount(_ controller: AgentTerminalController, in slot: AgentTerminalHostSlot) -> AgentTerminalHostView {
+        let v = controller.hostView()
+        v.owner = controller
+        controller.view = v
+        slot.hold(v)
+        return v
     }
 }
 

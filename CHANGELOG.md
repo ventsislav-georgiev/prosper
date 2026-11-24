@@ -28,6 +28,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a pane's "⋯" menu now shows the keyboard shortcuts of its items (Split Right ⌘D,
   Split Down ⇧⌘D, Zoom Pane ⇧⌘↩, Close Pane ⌘W, X-Ray… ⇧⌘X) on the focused pane, and Zoom no longer
   shows a wrong ⌘M. (#1916)
+- Agent Sessions: Command-click on an underlined X-ray ref opens its card again after you switch a
+  pane to another session (the new session's refs were not underlined until the list refreshed).
+  (#1917)
 
 ## v2.176.0
 

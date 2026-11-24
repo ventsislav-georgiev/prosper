@@ -283,6 +283,91 @@ final class XrayGridMarksTests: XCTestCase {
         }
     }
 
+    /// #1917 (operator 2026-11-24 on v2.176.0: "cmd + click seems to have stopped working"): the path end to end, through
+    /// the window model, the product's mount (AgentTerminalRepresentable.mount), the real follow wiring and a built
+    /// Command-down handed to the view (never posted). The focused pane's terminal switches to a session it had not kept,
+    /// so #1782's keepShown makes a fresh host view. Red at the parent: updateNSView ran `slot.hold(v)` before
+    /// `v.owner = controller`, so the fresh view's viewDidMoveToWindow asked no controller for the follow: no `--xray api
+    /// --follow`, no marks, the window's follow still the old session's, and the Command-click opened no card. Single
+    /// pane and a layout (another live pane, unfocused, in the same window: it never takes the follow).
+    func testCmdClickOpensTheCardAfterTheFocusedPaneSwitchesSession() throws {
+        for layout in [false, true] {
+            try withSeams { fake in
+                let w = AgentsNSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+                                       backing: .buffered, defer: true)
+                w.isReleasedWhenClosed = false
+                let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+                w.model = m
+                let slot = AgentTerminalHostSlot(frame: NSRect(x: 0, y: 0, width: 648, height: 410))
+                let t = AgentTerminalController()
+                t.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+                t.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+                t.paneFocused = { true }
+                var items: [DispatchWorkItem] = []
+                let other = layout ? rig(AgentSessionKey(dir: local.dir, name: "api-qa")) : nil
+                other?.t.paneFocused = { false }
+                if let o = other { w.contentView?.addSubview(o.v) }   // unfocused: takes nothing
+                let pane = m.layout.focused
+                defer {
+                    XrayPanels.shared.open[pane] = nil
+                    t.attach(nil)
+                    other?.t.attach(nil)
+                    slot.removeFromSuperview()
+                    other?.v.removeFromSuperview()
+                }
+                /// What the pane draws for `key`: the seams on the controller's view, then the product's mount, live.
+                @MainActor func show(_ key: AgentSessionKey) -> AgentTerminalHostView {
+                    t.attach(key)
+                    let v = t.hostView()
+                    v.gridMetrics = grid
+                    let text = Self.viewport
+                    v.viewportText = { text }
+                    v.marks.windowShown = { _ in true }
+                    v.marks.after = { _, item in items.append(item) }
+                    v.marks.hop = XrayGridMarksTests.inline
+                    v.passedClick = { _ in }
+                    XCTAssertTrue(AgentTerminalRepresentable.mount(t, in: slot) === v)
+                    t.gridChanged(cols: 80, rows: 24)
+                    t.gridChanged(cols: 80, rows: 24, generation: t.generation)
+                    XCTAssertEqual(t.phase, .live)
+                    return v
+                }
+                /// A Command-down and up on row 1, column 4 ("#12"): true when it pinned the card in the pane's panel.
+                @MainActor func cmdClick(_ v: AgentTerminalHostView, _ key: AgentSessionKey) throws -> Bool {
+                    let panel = XrayPanelModel(target: XrayTarget(name: key.name, dir: key.dir), tab: .refs)
+                    XrayPanels.shared.open[pane] = panel
+                    let s = w.backingScaleFactor, at = NSPoint(x: 4 + 16 / s * 4 + 1, y: 410 - (2 + 34 / s + 1))
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        let e = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: at, modifierFlags: .command, timestamp: 0,
+                                                                 windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                        if type == .leftMouseDown { v.mouseDown(with: e) } else { v.mouseUp(with: e) }
+                    }
+                    return panel.refCard?.key == "issue:#12"
+                }
+                let va = show(shell)
+                w.contentView?.addSubview(slot)   // as makeNSView's slot: mounted first, then in the window (worked at the parent)
+                fake.send(fake.args.count, Self.snapshot())
+                XCTAssertEqual(Self.keys(va), ["issue:#12", "issue:#1"], "layout \(layout)")
+                XCTAssertTrue(try cmdClick(va, shell), "layout \(layout): the first session's card")
+                let vb = show(local)
+                XCTAssertFalse(va === vb, "a fresh view (#1782): the shell session is kept")
+                XCTAssertTrue(va.window == nil && va.marks.follow == nil)
+                XCTAssertEqual(fake.args.last.map { Array($0.prefix(3)) }, ["--xray", "api", "--follow"],
+                               "layout \(layout): the new session's follow started on its view's mount")
+                fake.send(fake.args.count, Self.snapshot())
+                for i in items where !i.isCancelled { i.perform() }
+                XCTAssertTrue(vb.marks.follow != nil, "layout \(layout)")
+                XCTAssertEqual(Self.keys(vb), ["issue:#12", "issue:#1"], "layout \(layout): underlined")
+                XCTAssertTrue(XrayRefLink.terminalRefs(w, local) != nil, "layout \(layout): the window's follow is api's")
+                XCTAssertTrue(try cmdClick(vb, local), "layout \(layout): Command-click opens the card")
+                XCTAssertFalse(vb.pinnedDown, "its up ended the pin")
+                if let o = other {
+                    XCTAssertTrue(o.v.marks.follow == nil && o.v.marks.marks.isEmpty, "the unfocused pane takes no follow")
+                }
+            }
+        }
+    }
+
     /// #1900 (the cause): the hover card's panel on a pane with no X-ray panel open is a new one; it had the follow's refs
     /// but no chapters or anchors, so this session's mention (anchor f3a41c:0, the snapshot's chapter 1) opened nothing
     /// and its arrow did nothing. Red on the old XrayRefLink.panel (it set dch, run and refs only).
