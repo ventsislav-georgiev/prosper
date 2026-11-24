@@ -23,7 +23,6 @@ final class HostedWindowMinimumTests: XCTestCase {
         let want = win.contentMinSize
         XCTAssertTrue(want.width > 0 && want.height > 0, "\(name) sets a minimum", file: file, line: line)
         settle(win)
-        print("#1933 PROBE \(name) want=\(want) got=\(win.contentMinSize)")
         XCTAssertEqual(win.contentMinSize, want, "\(name): a layout pass leaves the minimum", file: file, line: line)
     }
 
@@ -57,7 +56,6 @@ final class HostedWindowMinimumTests: XCTestCase {
         win.contentMinSize = NSSize(width: 520, height: 460)
         let want = win.contentMinSize
         settle(win)
-        print("#1933 PROBE Marketplace-shape want=\(want) got=\(win.contentMinSize)")
         XCTAssertEqual(win.contentMinSize, want)
         win.contentViewController = nil
     }
