@@ -1,0 +1,13 @@
+{
+ "entry": 1938,
+ "filter": "AgentWindowD1Tests/testAgentWindowConfirmCardHeldEscapeNeverRepeatsIntoTheResponder",
+ "mutants": [
+  {
+   "name": "return-only-hold",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        heldConfirmKey = event.keyCode   // confirmKey answers only 36, 76 and 53",
+   "new": "        if event.keyCode == 36 || event.keyCode == 76 { heldConfirmKey = event.keyCode }",
+   "expect": "killed"
+  }
+ ]
+}

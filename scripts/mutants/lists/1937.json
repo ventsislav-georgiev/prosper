@@ -5,8 +5,8 @@
   {
    "name": "held-never-set",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "if event.keyCode == 36 || event.keyCode == 76 { heldConfirmKey = event.keyCode }",
-   "new": "if event.keyCode == 36 || event.keyCode == 76 { }",
+   "old": "        heldConfirmKey = event.keyCode   // confirmKey answers only 36, 76 and 53\n",
+   "new": "\n",
    "expect": "killed"
   },
   {
