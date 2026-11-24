@@ -247,6 +247,43 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #1938: the Escape that cancelled is held too: its repeats reach no responder (the terminal would take them: Claude
+    /// Code interrupts on Escape) and do not cancel a new question, until its keyUp; a fresh Escape then cancels, and with
+    /// no question passes. Red with the Return-only hold: the repeats reach the responder (downs 3).
+    @MainActor
+    func testAgentWindowConfirmCardHeldEscapeNeverRepeatsIntoTheResponder() throws {
+        try withModePref {
+            try withPaneMenu(true) {
+                let (m, _, _, stops) = try confirmCardModel()
+                defer { m.close() }
+                let (_, win, _) = confirmCardFrames(m)
+                defer { win.close() }
+                let rec = KeyRecorderView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+                win.contentView?.addSubview(rec)
+                XCTAssertTrue(win.makeFirstResponder(rec), "premise: the recorder has the keys")
+                let before = stops()
+                try confirmCardAsk(m)
+                win.sendEvent(confirmCardKey(.keyDown, 53, win))
+                XCTAssertTrue(m.confirming == nil, "cancelled")
+                XCTAssertEqual(win.heldConfirmKey, 53, "held")
+                try confirmCardAsk(m)
+                for _ in 0..<3 { win.sendEvent(confirmCardKey(.keyDown, 53, win, repeating: true)) }
+                XCTAssertEqual(rec.downs, 0, "the repeats reached no responder")
+                XCTAssertTrue(m.confirming != nil, "the repeats cancelled nothing")
+                win.sendEvent(confirmCardKey(.keyUp, 53, win))
+                XCTAssertEqual(rec.ups, 1, "the keyUp reached the responder")
+                XCTAssertTrue(win.heldConfirmKey == nil, "released")
+                win.sendEvent(confirmCardKey(.keyDown, 53, win))
+                XCTAssertTrue(m.confirming == nil, "a fresh Escape after the keyUp cancels")
+                win.sendEvent(confirmCardKey(.keyUp, 53, win))
+                win.sendEvent(confirmCardKey(.keyDown, 53, win))
+                XCTAssertEqual(rec.downs, 1, "no question: Escape passes")
+                XCTAssertEqual(stops(), before, "nothing was stopped")
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
+
     /// #1937 i1: Return while the first responder has marked text (an IME composition) commits the composition: it
     /// passes on (the recorder gets it), the question stays, nothing is held; keypad Enter the same. Escape still
     /// cancels, and with no marked text Return confirms. Red at base: Return confirmed under the composition.

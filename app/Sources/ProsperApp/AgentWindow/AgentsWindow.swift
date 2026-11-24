@@ -245,7 +245,7 @@ final class AgentsWindow {
 /// #845: a row click, Return and Right (on an unfolded section) move the keyboard into the session.
 final class AgentsNSWindow: NSWindow {
     weak var model: AgentWindowModel?
-    /// #1937: the Return (36) or keypad Enter (76) that answered the card and is still down: its auto-repeats are taken
+    /// #1937: the Return (36), keypad Enter (76) or Escape (53) that answered the card and is still down: its auto-repeats are taken
     /// (they would go into the terminal and submit its prompt) until its keyUp, a resign key, or the end of the window.
     var heldConfirmKey: UInt16?
     /// #1925: the window's minimum content size, AgentsWindow's alone. On its update pass the hosting controller writes
@@ -768,13 +768,13 @@ final class AgentsNSWindow: NSWindow {
         return true
     }
 
-    /// #1937: confirmKey plus the held Return: the repeats of the Return that answered are taken until its keyUp (the
+    /// #1937: confirmKey plus the held key (Return, keypad Enter, Escape): the repeats of the key that answered are taken until its keyUp (the
     /// keyUp itself goes on to the responders).
     @MainActor func takesConfirmKey(_ event: NSEvent, _ m: AgentWindowModel) -> Bool {
         if event.type == .keyUp { if event.keyCode == heldConfirmKey { heldConfirmKey = nil }; return false }
         if event.type == .keyDown, event.isARepeat, event.keyCode == heldConfirmKey { return true }
         guard Self.confirmKey(event, m, responder: firstResponder) else { return false }
-        if event.keyCode == 36 || event.keyCode == 76 { heldConfirmKey = event.keyCode }
+        heldConfirmKey = event.keyCode   // confirmKey answers only 36, 76 and 53
         return true
     }
 
