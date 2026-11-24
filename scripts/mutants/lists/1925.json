@@ -12,8 +12,8 @@
   {
    "name": "no-strip",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)",
-   "new": "return NSSize(width: column, height: 420 * scale)",
+   "old": "return NSSize(width: max(column + AgentSidebarWidth.strip * scale, floor), height: 420 * scale)",
+   "new": "return NSSize(width: max(column, floor), height: 420 * scale)",
    "expect": "killed"
   },
   {
@@ -33,15 +33,15 @@
   {
    "name": "old-min",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)",
-   "new": "return NSSize(width: 640 * scale + AgentWindowModel.digitColumnExtra(at: scale), height: 420 * scale)",
+   "old": "return NSSize(width: max(column + AgentSidebarWidth.strip * scale, floor), height: 420 * scale)",
+   "new": "return NSSize(width: max(640 * scale + AgentWindowModel.digitColumnExtra(at: scale), floor), height: 420 * scale)",
    "expect": "killed"
   },
   {
    "name": "no-grow",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)\n        win.clampToContentMinSize()\n",
-   "new": "        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)\n",
+   "old": "        win.minimum = minimum(for: win, scale: scale)\n        win.clampToContentMinSize()\n",
+   "new": "        win.minimum = minimum(for: win, scale: scale)\n",
    "expect": "killed"
   },
   {
@@ -68,7 +68,7 @@
   {
    "name": "theme-hook-no-model",
    "file": "app/Sources/ProsperApp/AppDelegate.swift",
-   "old": "win.minimum = AgentsWindow.contentMinSize(win.model, scale: scale)",
+   "old": "AgentsWindow.applyMinSize(win, scale: scale)",
    "new": "win.minimum = AgentsWindow.contentMinSize(nil, scale: scale)",
    "expect": "killed"
   },
