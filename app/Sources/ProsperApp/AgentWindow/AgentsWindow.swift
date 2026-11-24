@@ -809,12 +809,9 @@ struct AgentWindowRootView: View {
             // the width and nothing else moves (the column keeps its place in the stack, so its identity). Rider 1197 (a):
             // under the band's height while the band is shown, so the sidebar title sits on the session title's line.
             // #1379: Full sz(290), Mini its rail; Slide has no column (its sidebar is the overlay below).
+            // #1923: Full at the person's dragged width (AgentSidebarColumn).
             if model.sidebarShown && model.sidebarMode != .slide {
-                AgentSidebarView(model: model)
-                    .padding(.top, AgentWindowBand.shows(model) ? AgentWindowBand.height : 0)
-                    .frame(width: model.sidebarColumnWidth)
-                    .background(NeonSidebarSurface())
-                Rectangle().fill(Neon.stroke).frame(width: 1)
+                AgentSidebarColumn(model: model, width: model.sidebarWidth)
             }
             // #831 9.1: the band over the pane area, one whatever the number of panes, only while the split gate is on
             // (AgentWindowBand.shown; AgentWindowModel.paneAreaFrame mirrors this column for the 7.2 click rule).
@@ -835,6 +832,8 @@ struct AgentWindowRootView: View {
                 .background(SettingsBackground())
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // #1923: the content's width for the sidebar's 40% line (written on a change only)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { model.sidebarWidth.content = $0 }
         .overlay(alignment: .topLeading) { if model.sidebarMode == .slide { slideLayer } }
         // #1457: Mini's quick tooltip, over the panes beside its row (only Mini rows report bounds)
         .overlayPreferenceValue(AgentMiniTipAnchors.self) { AgentMiniTipLabel(tip: model.miniTip, anchors: $0) }
@@ -849,18 +848,54 @@ struct AgentWindowRootView: View {
                 .frame(maxHeight: .infinity)
                 .padding(.top, AgentSlideTracker.areaTop(model))
             if model.slideOpen {
-                HStack(spacing: 0) {
-                    AgentSidebarView(model: model)
-                        .padding(.top, AgentWindowBand.shows(model) ? AgentWindowBand.height : 0)
-                        .frame(width: AgentWindowModel.fullSidebarWidth)
-                        .background(NeonSidebarSurface())
-                    Rectangle().fill(Neon.stroke).frame(width: 1)
-                }
-                .background(AgentSlideTracker(edge: false, onMenu: { model.slideMenu($0) }) { model.slide($0) })
-                .transition(.move(edge: .leading))
+                AgentSidebarColumn(model: model, width: model.sidebarWidth)   // #1923: Full's width
+                    .background(AgentSlideTracker(edge: false, onMenu: { model.slideMenu($0) }) { model.slide($0) })
+                    .transition(.move(edge: .leading))
             }
         }
         .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// #1923: the sidebar and its 1 pt line: Full and Slide's overlay at AgentSidebarWidth's drawn width (observed here alone,
+/// so a drag redraws this column and the layout), Mini at its fixed rail. Full's line is the drag handle: a few points of
+/// hit area on the sidebar's side (never over a pane, so the window's first-click rule never takes it), the cursor set while
+/// the pointer moves over it, as the X-ray drawer's edge and the split dividers do.
+struct AgentSidebarColumn: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
+    @ObservedObject var model: AgentWindowModel
+    @ObservedObject var width: AgentSidebarWidth
+
+    var body: some View {
+        HStack(spacing: 0) {
+            AgentSidebarView(model: model)
+                .padding(.top, AgentWindowBand.shows(model) ? AgentWindowBand.height : 0)
+                .frame(width: model.sidebarMode == .mini ? AgentWindowModel.miniSidebarWidth : width.drawn)
+                .background(NeonSidebarSurface())
+            Rectangle().fill(Neon.stroke).frame(width: 1)
+                .overlay(alignment: .trailing) { if model.sidebarMode == .full { handle } }
+        }
+    }
+
+    var handle: some View {
+        Color.clear.frame(width: sz(5)).contentShape(Rectangle())
+            .onContinuousHover { phase in
+                if case .active = phase { NSCursor.resizeLeftRight.set() } else if !width.dragging { NSCursor.arrow.set() }
+            }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { model.sidebarDragged(by: $0.translation.width) }
+                .onEnded { _ in
+                    model.sidebarDragEnded()
+                    NSCursor.arrow.set()   // a drag can end off the handle: no later hover end to restore it
+                })
+            .accessibilityElement()
+            .accessibilityLabel("Sidebar width")
+            // the drawn width (clamped to the window), never the stored value: that is outside data and Int( could trap
+            .accessibilityValue("\(Int(width.drawn / ThemeRuntime.scale)) points")
+            .accessibilityAdjustableAction { d in
+                model.sidebarDragged(by: d == .increment ? sz(20) : -sz(20))
+                model.sidebarDragEnded()
+            }
     }
 }
 

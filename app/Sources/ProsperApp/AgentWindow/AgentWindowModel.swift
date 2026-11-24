@@ -624,10 +624,24 @@ final class AgentWindowModel: ObservableObject {
     private static var miniSidebarWidthByScale: [CGFloat: CGFloat] = [:]
     /// #1457: Mini's quick full-name tooltip (its rows report their hover to it).
     let miniTip = AgentMiniTip()
+    /// #1923: Full's (and Slide's overlay's) dragged width; fullSidebarWidth stays its minimum.
+    let sidebarWidth = AgentSidebarWidth()
+    /// #1923: a drag on the Full sidebar's line moved `dx` since it began: the terminals re-grid at its end only (as 7.5's
+    /// divider drag), so a tick is the layout alone.
+    func sidebarDragged(by dx: CGFloat) {
+        if !sidebarWidth.dragging { for t in allTerminals { t.liveResizeStarted() } }
+        sidebarWidth.dragged(by: dx)
+    }
+    /// #1923: the drag's mouse-up: the width is written once and each terminal pushes its grid once.
+    func sidebarDragEnded() {
+        guard sidebarWidth.dragging else { return }
+        sidebarWidth.ended()
+        for t in allTerminals { t.liveResizeEnded() }
+    }
     /// #1379: the width the sidebar column takes from the panes: Full, Mini's rail, Slide none (its sidebar is an overlay).
     var sidebarColumnWidth: CGFloat {
         switch sidebarMode {
-        case .full: return Self.fullSidebarWidth
+        case .full: return sidebarWidth.drawn
         case .mini: return Self.miniSidebarWidth
         case .slide: return 0
         }
@@ -886,10 +900,10 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// 7.2: the sidebar's frame in the root view's content of `size` (top-left origin; AgentWindowRootView.split: the
-    /// sidebar fullSidebarWidth wide, a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
+    /// sidebar sidebarWidth.drawn wide (#1923), a 1 pt line, the pane area). nil while no sidebar is drawn (the island off: one message;
     /// #900 B2 step 4: hidden by ⌃⌘S, so a click where it was is the pane area's).
     func sidebarFrame(in size: CGSize) -> CGRect? {
-        hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sidebarMode == .mini ? Self.miniSidebarWidth : Self.fullSidebarWidth,
+        hasStore && sidebarShown ? CGRect(x: 0, y: 0, width: sidebarMode == .mini ? Self.miniSidebarWidth : sidebarWidth.drawn,
                                            height: size.height) : nil   // #1379: Slide's overlay is the full width
     }
 
@@ -3403,3 +3417,47 @@ final class AgentWindowModel: ObservableObject {
     }
 }
 
+
+/// #1923 (operator 2026-11-24): the Full sidebar's width (Slide's overlay too), dragged at its 1 pt line. Remembered per Mac
+/// (Preferences.agentSidebarWidth) in points at UI scale 1.0 and drawn times the scale: never under TIP's width
+/// (AgentWindowModel.fullSidebarWidth), never over `share` of the window's content (the minimum wins), and in a window
+/// below its minimum never so wide that the panes lose their last `sliver`. Observed by the sidebar column alone, so a
+/// drag redraws that column and the layout, not the model's other views.
+@MainActor
+final class AgentSidebarWidth: ObservableObject {
+    static let share: CGFloat = 0.4
+    /// The panes' least visible width (·s units) when the window is narrower than its contentMinSize.
+    static let sliver: CGFloat = 24
+    @Published private(set) var points: CGFloat? = Preferences.agentSidebarWidth.map { CGFloat($0) }
+    /// The root view's content width (AgentWindowRootView writes it on a change; 0: not measured, the minimum is drawn).
+    /// Publishes only when the drawn width moves, so a window resize while under the 40% line redraws nothing here.
+    var content: CGFloat = 0 {
+        didSet { if Self.width(stored: points, content: content) != Self.width(stored: points, content: oldValue) { objectWillChange.send() } }
+    }
+    /// The drawn width when the drag began; nil between drags.
+    private var start: CGFloat?
+    var dragging: Bool { start != nil }
+    var drawn: CGFloat { Self.width(stored: points, content: content) }
+
+    /// The drawn width for `stored` points (nil: the minimum) in a content `content` wide, at the current UI scale.
+    static func width(stored: CGFloat?, content: CGFloat) -> CGFloat {
+        let least = AgentWindowModel.fullSidebarWidth
+        guard content > 0 else { return least }
+        let w = max(least, min((stored ?? 0) * ThemeRuntime.scale, content * share))
+        return max(0, min(w, content - 1 - sz(sliver)))
+    }
+
+    /// The line moved `dx` points since the drag began (right is positive: wider). Kept clamped; published only on a change.
+    func dragged(by dx: CGFloat) {
+        let from = start ?? drawn
+        start = from
+        let p = Self.width(stored: (from + dx) / ThemeRuntime.scale, content: content) / ThemeRuntime.scale
+        if p != points { points = p }
+    }
+
+    /// The drag is over: the width is written once (while dragging only the in-memory value moves).
+    func ended() {
+        start = nil
+        if let points { Preferences.agentSidebarWidth = Double(points) }
+    }
+}

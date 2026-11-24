@@ -491,6 +491,8 @@ enum Preferences {
         static let xrayLastTab = "xrayLastTab"
         // #1473: the X-ray drawer's width in points at UI scale 1.0, shared by every pane; per Mac, not in SyncedKeys.
         static let xrayDrawerWidth = "xrayDrawerWidth"
+        // #1923: the Agent Sessions Full sidebar's dragged width in points at UI scale 1.0; per Mac, not in SyncedKeys.
+        static let agentSidebarWidth = "agentSidebarWidth"
         // #1623: whether an X-ray ref read may look an issue or PR up through the user's gh login (dch 1.111.0+); on unless set off; per Mac, not in SyncedKeys.
         static let xrayGithubLookups = "xrayGithubLookups"
         // #1815: whether X-ray's Prompts hides other agent sessions' messages; on unless set off; per Mac, not in SyncedKeys.
@@ -1497,6 +1499,20 @@ enum Preferences {
     static var xrayGithubLookups: Bool {
         get { defaults.object(forKey: Keys.xrayGithubLookups) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.xrayGithubLookups) }
+    }
+
+    /// #1923: the Agent Sessions Full sidebar's width in points at UI scale 1.0, nil when unset (the minimum). Outside data:
+    /// anything but a finite positive number reads as unset; AgentSidebarWidth clamps the rest. nil removes the key.
+    static var agentSidebarWidth: Double? {
+        get {
+            guard let n = defaults.object(forKey: Keys.agentSidebarWidth) as? NSNumber,
+                  CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite, n.doubleValue > 0 else { return nil }
+            return n.doubleValue
+        }
+        set {
+            if let newValue { defaults.set(newValue, forKey: Keys.agentSidebarWidth) }
+            else { defaults.removeObject(forKey: Keys.agentSidebarWidth) }
+        }
     }
 
     /// #1473: the X-ray drawer's width in points at UI scale 1.0, nil when unset (the default). Outside data (another build
