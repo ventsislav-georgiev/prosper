@@ -1,0 +1,62 @@
+{
+  "entry": 1916,
+  "filter": "AgentMenuKeyHintTests|AgentWindowD1Tests/testMenuHintKeyPassedByTheRouteSkipsTheViewTree",
+  "mutants": [
+    {
+      "name": "two_pane_rule",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+      "old": "return AgentGoMenu.entries(splits: true, panes: keyPanes ?? 1)",
+      "new": "return AgentGoMenu.entries(splits: true, panes: max(keyPanes ?? 1, 2))",
+      "expect": "killed"
+    },
+    {
+      "name": "unfocused_hints",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+      "old": "case .pane(_, _, .action(let a)) where keyPanes != nil: action = .pane(a)",
+      "new": "case .pane(_, _, .action(let a)): action = .pane(a)",
+      "expect": "killed"
+    },
+    {
+      "name": "tie_xray_action",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+      "old": "case .xray: action = .key(.xray)",
+      "new": "case .xray: action = .key(.find)",
+      "expect": "killed"
+    },
+    {
+      "name": "tie_shortcut_shift",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentGoMenu.swift",
+      "old": "(.command, .command), (.shift, .shift), (.option, .option)",
+      "new": "(.command, .command), (.shift, .command), (.option, .option)",
+      "expect": "killed"
+    },
+    {
+      "name": "xray_typed_title",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+      "old": "static let xrayLabel = \"X-Ray\\u{2026}\"",
+      "new": "static let xrayLabel = \"X-Ray\\u{2026} \\u{21E7}\\u{2318}X\"",
+      "expect": "killed"
+    },
+    {
+      "name": "zoom_bare_title",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+      "old": "static let zoomLabel = \"Zoom Pane\"",
+      "new": "static let zoomLabel = \"Zoom\"",
+      "expect": "killed"
+    },
+    {
+      "name": "hint_key_to_tree",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+      "old": "if Self.menuHintKey(event) { return",
+      "new": "if false, Self.menuHintKey(event) { return",
+      "expect": "killed"
+    },
+    {
+      "name": "hint_key_no_xray",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+      "old": "terminalMode: true) == .xray",
+      "new": "terminalMode: true) == .find",
+      "expect": "killed"
+    }
+  ]
+}
