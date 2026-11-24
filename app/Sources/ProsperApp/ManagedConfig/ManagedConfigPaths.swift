@@ -43,7 +43,12 @@ struct ManagedConfigResolvedTarget: Sendable, Equatable {
 enum ManagedConfigPaths {
     static let kitMarkerFile = ".prosper-kit"
     /// #922 (OQ-4): the shell rc files a `shellrc:` block may go in, directly under the home.
-    static let shellRCFiles: Set<String> = [".zshrc", ".bashrc"]
+    static let shellRCFiles: Set<String> = [".zshrc", ".bashrc", ".bash_profile"]
+    static let shellRCRefusal = "shellrc: takes a block in .zshrc, .bashrc, .bash_profile or the kit's own .config/fish/conf.d/<slug>.fish only"
+    /// #1918: a fish user's block goes in the kit's own conf.d file, never another fish file.
+    static func fishRC(_ owner: ManagedConfigOwner) -> String? {
+        owner.kitSlug.flatMap { isValidSlug($0) ? ".config/fish/conf.d/\($0).fish" : nil }
+    }
     private static let slugChars = Set("abcdefghijklmnopqrstuvwxyz0123456789-")
     private static let idChars = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
@@ -102,7 +107,7 @@ enum ManagedConfigPaths {
             case .foreign: return .failure(.foreignDir)
             }
         case "shellrc":
-            guard kind == .block, shellRCFiles.contains(rel) else { return .failure(.wrongKind("shellrc: takes a block in .zshrc or .bashrc only")) }
+            guard kind == .block, shellRCFiles.contains(rel) || rel == fishRC(owner) else { return .failure(.wrongKind(shellRCRefusal)) }
             guard let home = roots.home else { return .failure(.unwritable("no home root")) }
             base = home
         case "ext":

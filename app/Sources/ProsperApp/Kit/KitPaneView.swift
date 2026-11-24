@@ -120,7 +120,7 @@ struct KitPaneView: View {
         var shellLine: String? = nil
     }
 
-    static func pieceRows(_ m: KitPaneModel) -> [PieceRow] {
+    static func pieceRows(_ m: KitPaneModel, shell: String = KitRender.userLoginShell) -> [PieceRow] {
         guard case .ok(let v)? = m.facts?.preview else { return [] }
         let off = m.facts?.status?.off ?? []
         return v.kit.pieces.map { p in
@@ -132,7 +132,8 @@ struct KitPaneView: View {
             return PieceRow(id: p.id, kind: p.kind.rawValue, state: state,
                             target: st.map { OutsideText.shown($0.target, max: 120) }, hook: hook.map { OutsideText.shown($0, max: 120) },
                             inUse: m.facts?.inUse[p.id], tools: (v.tools[p.id] ?? []).map(\.name).sorted(),
-                            shellLine: p.kind == .shellPath ? KitRender.shellPathLine(m.facts?.kitBin ?? "").map { "~/.zshrc gets: " + OutsideText.shown($0, max: 400) } : nil)
+                            shellLine: p.kind == .shellPath
+                                ? KitRender.shellPathNote(kitBin: m.facts?.kitBin ?? "", shell: shell, slug: v.slug).map { OutsideText.shown($0, max: 400) } : nil)
         }
     }
 

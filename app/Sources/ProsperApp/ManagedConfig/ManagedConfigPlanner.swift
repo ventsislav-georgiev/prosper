@@ -202,6 +202,12 @@ struct ManagedConfigPlanner {
         do throws(ManagedConfigRefusalReason) {
             guard ManagedConfigPaths.isValidID(piece.id) else { throw ManagedConfigRefusalReason.invalidPiece("id must be [A-Za-z0-9._-]") }
             let resolved = try ManagedConfigPaths.resolve(piece.target, kind: piece.kind, owner: owner, roots: roots).get()
+            // #1918: the piece's target changed (a kit's shell-path block, zsh -> fish): the old one leaves its file in this
+            // same plan, then the piece is written fresh. relocate below is for the same target behind a new symlink only.
+            if let r = record(piece.id), r.target != piece.target {
+                remove(r)
+                guard record(piece.id) == nil else { return } // the old one could not be removed: remove() refused it
+            }
             var movedFrom: String?
             if let r = record(piece.id) { movedFrom = relocate(from: r.path, to: resolved.url) }
             let existing = record(piece.id)
@@ -224,7 +230,7 @@ struct ManagedConfigPlanner {
     private mutating func applyBlock(_ piece: ManagedConfigPiece, _ existing: ManagedConfigRecord?, _ repair: Bool, _ w: inout Work) throws(ManagedConfigRefusalReason) -> ManagedConfigPieceAction.Kind {
         guard let body = piece.text, ManagedTextBlock.bodyIsValid(body) else { throw .invalidPiece("a block needs text without prosper markers") }
         guard let syntax = ManagedTextBlock.syntax(for: w.url) else {
-            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files, or .zshrc or .bashrc")
+            throw .wrongKind("blocks go in .md, .markdown, .sh, .bash, .zsh, .fish, .conf, .toml, .yaml or .yml files, or .zshrc, .bashrc or .bash_profile")
         }
         let block = ManagedTextBlock.render(owner: owner.id, piece: piece.id, version: owner.version, body: body, syntax: syntax)
         let record = newRecord(piece, w, written: block, hash: OrderedJSON.sha256(Array(block.utf8)))

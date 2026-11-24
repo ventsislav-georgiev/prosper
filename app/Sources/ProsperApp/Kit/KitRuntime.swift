@@ -143,6 +143,8 @@ final class KitRuntime: @unchecked Sendable {
     let store: KitStore
     let isTrusted: @Sendable (String) -> Bool
     let now: @Sendable () -> Date
+    /// #1918: the login shell's basename (KitRender.userLoginShell); it picks the shell-path piece's rc. Rows pass their own.
+    let loginShell: String
 
     private let lock = NSLock()
     // #1409: the machine state persists in kits/<ext-id>/runtime.json (written at the end of every drive that changes it);
@@ -160,8 +162,9 @@ final class KitRuntime: @unchecked Sendable {
     let restoreRefusal: String?
 
     init(provider: ManagedConfigProvider, store: KitStore, isTrusted: @escaping @Sendable (String) -> Bool,
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() }, loginShell: String = KitRender.userLoginShell) {
         self.provider = provider
+        self.loginShell = loginShell
         self.store = store
         self.isTrusted = isTrusted
         self.now = now
@@ -246,7 +249,7 @@ final class KitRuntime: @unchecked Sendable {
         // {{home}}: the parent of the kitconfig: root (~/.config in production, the row's own dir in a test)
         KitRenderContext.standard(extensionID: store.layout.root.components(separatedBy: "/").last ?? "", slug: kitSlug(slug),
                                   kitDir: URL(fileURLWithPath: store.layout.live, isDirectory: true),
-                                  home: configHome.deletingLastPathComponent(), configHome: configHome)
+                                  home: configHome.deletingLastPathComponent(), configHome: configHome, loginShell: loginShell)
     }
 
     private func owner(_ ext: LoadedExtension, _ v: KitValidated, dir: String) -> ManagedConfigOwner {

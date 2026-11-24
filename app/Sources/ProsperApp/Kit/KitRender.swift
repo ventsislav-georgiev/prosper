@@ -12,10 +12,14 @@ struct KitRenderContext: Equatable, Sendable {
     var kitConfig: String // {{kit_config}}
     var home: String // {{home}}
     var runner: String // prosper-kit-run
+    /// #1918: the basename of the user's login shell; it picks the shell-path piece's rc file (KitRender.shellRC).
+    var loginShell = "zsh"
+    /// #1918: the kitconfig: slug; names the fish conf.d file.
+    var slug = ""
 
     /// `configHome` is the `kitconfig:` parent (ManagedConfigRoots.configHome, `~/.config`), so the
     /// rendered `{{kit_config}}` is the dir the seeds land in.
-    static func standard(extensionID: String, slug: String, kitDir: URL, home: URL, configHome: URL) -> KitRenderContext {
+    static func standard(extensionID: String, slug: String, kitDir: URL, home: URL, configHome: URL, loginShell: String = "zsh") -> KitRenderContext {
         let prosper = configHome.appendingPathComponent("prosper", isDirectory: true)
         return KitRenderContext(
             extensionID: extensionID, kitDir: kitDir.standardizedFileURL.path,
@@ -23,7 +27,7 @@ struct KitRenderContext: Equatable, Sendable {
                 .appendingPathComponent("bin", isDirectory: true).path,
             kitConfig: configHome.appendingPathComponent(slug, isDirectory: true).path,
             home: home.path,
-            runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path)
+            runner: prosper.appendingPathComponent("kit-runtime/prosper-kit-run").path, loginShell: loginShell, slug: slug)
     }
 
     /// #919 S2: the Marketplace listing's context: the placeholders themselves, so a listing names no path of the publisher's Mac.
@@ -137,11 +141,54 @@ enum KitRender {
 
     /// #922 (OQ-4): the shell-path block's one line. Appends, never prepends (the user's own tools win), and only once,
     /// so a nested shell does not grow PATH. nil when the path holds a newline, carriage return or NUL.
+    /// shellRCTarget is the zsh target (#1918: shellRC picks the rc per login shell).
     static let shellRCTarget = "shellrc:.zshrc"
     static func shellPathLine(_ kitBin: String) -> String? {
         guard !kitBin.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) else { return nil }
         let q = shellQuote(kitBin)
         return "case \":$PATH:\" in *:\(q):*) ;; *) export PATH=\"$PATH\":\(q) ;; esac"
+    }
+
+    /// #1918: fish single quotes: only `\\` and `\'` are escapes inside them.
+    static func fishQuote(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'") + "'"
+    }
+
+    /// #1918: the fish twin of shellPathLine: appends, and only when the dir is not on PATH yet.
+    static func fishPathLine(_ kitBin: String) -> String? {
+        guard shellPathLine(kitBin) != nil else { return nil }
+        let q = fishQuote(kitBin)
+        return "contains -- \(q) $PATH; or set -gx PATH $PATH \(q)"
+    }
+
+    /// #1918: the user's login shell from the password database (not the app's $SHELL), read once.
+    static let userLoginShell: String = loginShellName(getpwuid(getuid())?.pointee.pw_shell.map { String(cString: $0) })
+    static func loginShellName(_ pwShell: String?) -> String { (pwShell ?? "").split(separator: "/").last.map(String.init) ?? "" }
+
+    /// #1918: the home-relative file the shell-path block goes in, by login shell; nil: a shell Prosper writes no block for.
+    static func shellRC(_ shell: String, slug: String) -> String? {
+        switch shell {
+        case "zsh": ".zshrc"
+        case "bash": ".bash_profile" // a macOS terminal starts bash as a login shell: it reads only this, and children inherit PATH
+        case "fish": ".config/fish/conf.d/\(slug).fish"
+        default: nil
+        }
+    }
+
+    /// #1918: the shell-path piece's (target, line) for this context; nil when the shell has no rc here or the path cannot be quoted.
+    static func shellPath(_ c: KitRenderContext) -> (target: String, line: String)? {
+        guard let rc = shellRC(c.loginShell, slug: c.slug),
+              let line = c.loginShell == "fish" ? fishPathLine(c.kitBin) : shellPathLine(c.kitBin) else { return nil }
+        return ("shellrc:" + rc, line)
+    }
+
+    /// #1918: what the kit pane shows under the shell-path piece: the file and its line, or the POSIX line to add by hand.
+    static func shellPathNote(kitBin: String, shell: String, slug: String) -> String? {
+        let c = KitRenderContext(extensionID: "", kitDir: "", kitBin: kitBin, kitConfig: "", home: "", runner: "", loginShell: shell, slug: slug)
+        if case let (target, line)? = shellPath(c) { return "~/\(target.dropFirst("shellrc:".count)) gets: " + line }
+        guard let line = shellPathLine(kitBin) else { return nil }
+        let shell = shell.isEmpty ? "unknown" : shell
+        return "your login shell (\(shell)) is not zsh, bash or fish, so Prosper writes no block; add this line to its startup file yourself: " + line
     }
 
     // MARK: (d) managed pieces
@@ -218,8 +265,10 @@ enum KitRender {
             case .agents:
                 plan.agents += (v.agents[p.id] ?? []).map { KitAgentPlan(pieceID: p.id, name: $0.name, path: $0.path) }
             case .shellPath:
-                guard let line = shellPathLine(c.kitBin) else { plan.refusals.append(.init(subject: p.id, reason: .notImportable)); continue }
-                wiring.append(ManagedConfigPiece(id: p.id, kind: .block, target: shellRCTarget, text: line))
+                guard shellPathLine(c.kitBin) != nil else { plan.refusals.append(.init(subject: p.id, reason: .notImportable)); continue }
+                // #1918: a shell with no rc here plans no block (a recorded one from an earlier shell is then removed)
+                guard case let (target, line)? = shellPath(c) else { continue }
+                wiring.append(ManagedConfigPiece(id: p.id, kind: .block, target: target, text: line))
             }
         }
         if needsLocalSeed(v, off: off) {
@@ -284,7 +333,11 @@ enum KitRender {
                 let names = (v.agents[p.id] ?? []).map { $0.name + ".md" }.joined(separator: ", ")
                 lines.append("\(p.id): installs agents \(names.isEmpty ? "(none)" : names) into \(c.home)/.claude/agents; a file you already have is never overwritten")
             case .shellPath:
-                lines.append("\(p.id): only when you switch it on, a block at the bottom of \(c.home)/.zshrc appends \(c.kitBin) to PATH")
+                if let rc = shellRC(c.loginShell, slug: c.slug) {
+                    lines.append("\(p.id): only when you switch it on, a block at the bottom of \(c.home)/\(rc) appends \(c.kitBin) to PATH")
+                } else {
+                    lines.append("\(p.id): your login shell (\(c.loginShell.isEmpty ? "unknown" : c.loginShell)) is not zsh, bash or fish: nothing is written; add \(c.kitBin) to PATH yourself")
+                }
             }
         }
         if needsLocalSeed(v, off: off) {

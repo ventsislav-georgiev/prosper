@@ -173,7 +173,7 @@ struct KitManifest: Sendable, Equatable {
     struct Piece: Sendable, Equatable {
         enum Kind: String, Sendable, CaseIterable {
             case claudeMD = "claude-md", tools, hook, statusline, permissions, seed, agents
-            /// #922 (OQ-4): opt-in; a block in ~/.zshrc appends {{kit_bin}} to PATH
+            /// #922 (OQ-4): opt-in; a block in the login shell's rc (#1918: ~/.zshrc, ~/.bash_profile or the kit's fish conf.d file) appends {{kit_bin}} to PATH
             case shellPath = "shell-path"
             /// OQ-193: env.<key> in settings.json, for ManagedConfigPlanner.envKeys only, string values
             case env
