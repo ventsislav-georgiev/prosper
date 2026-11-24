@@ -1,0 +1,118 @@
+{
+  "entry": 1918,
+  "filter": "KitShellPathTests|KitRenderTests",
+  "mutants": [
+    {
+      "name": "bash-to-zshrc",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "case \"bash\": \".bash_profile\"",
+      "new": "case \"bash\": \".zshrc\"",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-to-bashrc",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "case \"bash\": \".bash_profile\"",
+      "new": "case \"bash\": \".bashrc\"",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-profile-not-allowed",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+      "old": "[\".zshrc\", \".bashrc\", \".bash_profile\"]",
+      "new": "[\".zshrc\", \".bashrc\"]",
+      "expect": "killed"
+    },
+    {
+      "name": "bash-profile-no-hash-syntax",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedTextBlock.swift",
+      "old": "\".bash_profile\", \"zshrc\"",
+      "new": "\"zshrc\"",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-unmapped",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "case \"fish\": \".config/fish/conf.d/\\(slug).fish\"",
+      "new": "case \"fish-x\": \".config/fish/conf.d/\\(slug).fish\"",
+      "expect": "killed"
+    },
+    {
+      "name": "unknown-gets-zshrc",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "        default: nil\n        }\n    }",
+      "new": "        default: \".zshrc\"\n        }\n    }",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-gets-posix-line",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "c.loginShell == \"fish\" ? fishPathLine(c.kitBin)",
+      "new": "c.loginShell == \"fish-x\" ? fishPathLine(c.kitBin)",
+      "expect": "killed"
+    },
+    {
+      "name": "shellname-not-basename",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": ".split(separator: \"/\").last.map(String.init) ?? \"\"",
+      "new": ".split(separator: \"/\").first.map(String.init) ?? \"\"",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-quote-no-quote-escape",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": ".replacingOccurrences(of: \"'\", with: \"\\\\'\")",
+      "new": "",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-quote-no-backslash-escape",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": ".replacingOccurrences(of: \"\\\\\", with: \"\\\\\\\\\")",
+      "new": "",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-prepends",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "or set -gx PATH $PATH \\(q)",
+      "new": "or set -gx PATH \\(q) $PATH",
+      "expect": "killed"
+    },
+    {
+      "name": "zsh-context-default-bash",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "configHome: URL, loginShell: String = \"zsh\")",
+      "new": "configHome: URL, loginShell: String = \"bash\")",
+      "expect": "killed"
+    },
+    {
+      "name": "zsh-summary-text",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "a block at the bottom of \\(c.home)/\\(rc) appends",
+      "new": "a block at the end of \\(c.home)/\\(rc) appends",
+      "expect": "killed"
+    },
+    {
+      "name": "pane-note-generic-file",
+      "file": "app/Sources/ProsperApp/Kit/KitRender.swift",
+      "old": "return \"~/\\(target.dropFirst(\"shellrc:\".count)) gets: \" + line",
+      "new": "return \"~/.zshrc gets: \" + line",
+      "expect": "killed"
+    },
+    {
+      "name": "fish-any-file",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPaths.swift",
+      "old": "shellRCFiles.contains(rel) || rel == fishRC(owner)",
+      "new": "shellRCFiles.contains(rel) || rel.hasSuffix(\".fish\")",
+      "expect": "killed"
+    },
+    {
+      "name": "target-change-not-gone",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigPlanner.swift",
+      "old": "if let r = record(piece.id), r.target != piece.target {",
+      "new": "if let r = record(piece.id), r.target == \"#none\" {",
+      "expect": "killed"
+    }
+  ]
+}
