@@ -1,0 +1,41 @@
+{
+  "entry": 1919,
+  "filter": "AgentWindowD1Tests/testAgentWindowNewSessionEmptyName|AgentWindowD1Tests/testAgentWindowNewSessionNameFieldIsEmptyOnAFreshForm",
+  "mutants": [
+    {
+      "name": "shell-needs-name",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "guard canStartNewShell, newSessionShellRefusal == nil",
+      "new": "guard canStartNewSession, newSessionShellRefusal == nil",
+      "expect": "killed"
+    },
+    {
+      "name": "start-without-name",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "var canStartNewSession: Bool { !newSessionName.isEmpty && canStartNewShell }",
+      "new": "var canStartNewSession: Bool { canStartNewShell }",
+      "expect": "killed"
+    },
+    {
+      "name": "name-error-ignored",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "return e.folder == nil && e.name == nil\n    }\n\n    /// Start or Return",
+      "new": "return e.folder == nil\n    }\n\n    /// Start or Return",
+      "expect": "killed"
+    },
+    {
+      "name": "local-name-autoName",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "taken: spawnTaken, dir: dir) : typed\n            return spawn",
+      "new": "taken: [], dir: dir) : typed\n            return spawn",
+      "expect": "killed"
+    },
+    {
+      "name": "local-name-typed-ignored",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "let name = typed.isEmpty ? AgentNewSession.shellName(folder: folder",
+      "new": "let name = true ? AgentNewSession.shellName(folder: folder",
+      "expect": "killed"
+    }
+  ]
+}
