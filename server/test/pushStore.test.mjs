@@ -397,6 +397,20 @@ test("#1939: restart with an offline post: the old card is ended again when the 
   assert.deepEqual(sentLA(t), [["4", "update"]]);
 });
 
+test("#1941: a rotating re-post leaves an older la_ended row alone; the next registration ends it", async () => {
+  const t = setup();
+  await waiting(t); // act-<PHONE>-<MAC> is rotating out: its la_expired row waits
+  insertCard(t, [ALICE, PHONE, "la_ended", "act-frozen", MAC, "6", HASH[ALICE]]);
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "9"), env: "sandbox" }); // the rotating card re-posts with a new token
+  await t.settle();
+  assert.deepEqual(sent(t), [], "no end yet, no catch-up");
+  assert.deepEqual(t.rows(`SELECT activity_id FROM push_tokens WHERE kind = 'la_ended'`), [{ activity_id: "act-frozen" }], "the row is kept, not dropped unended");
+  await putToken(t.deps, ALICE, { ...cardBody(PHONE, MAC, "5"), activity_id: "act-new" }); // the new card registers
+  await t.settle();
+  assert.deepEqual(sent(t).sort(), [[tok("5"), "update"], [tok("6"), "end"]].sort(), "the frozen card ends now");
+  assert.equal(t.rows(`SELECT * FROM push_tokens WHERE kind = 'la_ended'`).length, 0);
+});
+
 test("#1939: quick relaunch with no offline post (Sparkle): the card just stays, no start, no end", async () => {
   const t = setup();
   await registerPhone(t);
