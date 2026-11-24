@@ -495,6 +495,7 @@ final class AgentsNSWindow: NSWindow {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if style != .standard, Self.isMinimizeChord(event) { minimize(self); return true }
+        if let model, Self.confirmKey(event, model) { return true }   // #1930
         guard let model else {
             if event.modifierFlags.contains(.command), Self.chordLetter(event) == "w" {
                 performClose(nil)
@@ -705,6 +706,7 @@ final class AgentsNSWindow: NSWindow {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if let model, Self.confirmKey(event, model) { return }   // #1930: before the dividers, the routes and the responder
         // #900 B2 step 5a (7.5): a divider's down, drags and up go to the model before the first-click rule (gate on only).
         if AgentPaneLayout.splitsEnabled, let model, [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .keyDown].contains(event.type) {
             let r = contentLayoutRect, at = event.type == .keyDown ? CGPoint.zero : event.locationInWindow
@@ -757,6 +759,21 @@ final class AgentsNSWindow: NSWindow {
         case .layout(let n)?: m.switchLayout(number: n)   // a held digit repeats onto the active layout: a no-op
         case .previousLayout? where event.isARepeat: break   // R901-s3-a: a held ⌃Tab is consumed, nothing flips or writes
         case .previousLayout?: m.previousLayout()
+        default: return false
+        }
+        return true
+    }
+
+    /// #1930: while the window's confirmation card shows, Return (keypad Enter too) confirms and Escape cancels, whatever
+    /// has the keys (the terminal, the sidebar, the composer): taken here, before any responder sees it. The first
+    /// responder is never moved, so the keys are back where they were once the card closes. Command, Option or Control
+    /// held: not the card's (it passes on). Nothing taken while no card shows.
+    @MainActor static func confirmKey(_ event: NSEvent, _ m: AgentWindowModel) -> Bool {
+        guard event.type == .keyDown, m.confirmQuestion != nil,
+              event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return false }
+        switch event.keyCode {
+        case 36, 76: m.confirm(true)
+        case 53: m.confirm(false)
         default: return false
         }
         return true
@@ -2570,9 +2587,8 @@ struct AgentDetailView: View {
                                    refusal: model.refusalText(row.id) ?? model.remoteResumeText[r.id],
                                    act: { model.actInPane($0, r) },   // #1924: its Resume follows the session
                                    close: AgentPanePlaceholder.close(model, pane: model.layout.focused))   // #1906
-                    // #829 G8: Remove asks, over the pane's top. #900 6b2d (fixed slots): one slot, the question wins it, so
-                    // the strip never moves; the refusal line takes it once the question is gone.
-                    .overlay(alignment: .top) { VStack(spacing: 0) { if model.confirming == nil { paneRefusalLine }; confirmStrip } }
+                    // #900 6b2d: the refusal line waits while a question is open; #1930: the question is the pane area's card.
+                    .overlay(alignment: .top) { if model.confirming == nil { paneRefusalLine } }
             }
         } else if let title = AgentPanePlaceholder.title(model.content) {
             // 4.2 (QA 956 R1217-a): a pane that holds a target whose session is gone says so by name; the list (and Pick
@@ -2682,7 +2698,6 @@ struct AgentDetailView: View {
                 AgentNoticeLine(store: store, key: s.key, refusal: paneRefusalText ?? model.refusalText(row.id),
                                 open: { model.openSelected() }, ended: model.focusedEnded)
             }
-            confirmStrip
         }
     }
 
@@ -2704,17 +2719,6 @@ struct AgentDetailView: View {
         Binding(get: { false }, set: { [transcript] _ in transcript.todosOpen.toggle() })
     }
 
-    /// R5: the question, re-read from the store each draw (a gone session or record draws none).
-    @ViewBuilder var confirmStrip: some View {
-        if let c = model.confirming {
-            let text = model.confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
-                ?? model.confirmingRecord.map { AgentWindowControls.removeQuestion($0, in: model.store?.history ?? []) }
-            if let text {
-                AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),
-                                  confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
-            }
-        }
-    }
 }
 
 // MARK: - #831 B1 step 5b: the band (9.1)
@@ -2976,6 +2980,7 @@ struct AgentPaneArea: View {
                         .environment(\.agentPaneID, model.layout.focused)   // its links and probe: the focused pane's, as in the pane
                 }
             }
+            .overlay(alignment: .topLeading) { confirmCard(frames, in: area) }   // #1930: over everything in the area
             .onChange(of: model.layout.focused) { old, new in
                 (AgentsNSWindow.window(of: old) ?? AgentsNSWindow.window(of: new))?.xrayFollow(from: old)
             }
@@ -2996,6 +3001,38 @@ struct AgentPaneArea: View {
         let frames = m.paneFrames(in: area)
         guard frames.count > 1, let z = m.layout.zoomed, m.shownPanes == [z] else { return frames }
         return [z: area]
+    }
+
+    /// #1930: the window's open question (Remove from History, Stop, Kill, Restart) as a card centred over its subject's
+    /// pane, that pane dimmed and lightly blurred behind it, and a clear layer over the whole area, under the card, that
+    /// cancels on a click outside it. Return and Escape: AgentsNSWindow.confirmKey. Nothing at all while none is open or its
+    /// subject is gone (R5: the question re-read each draw). The blur is a material over that pane alone (the compositor's,
+    /// no view work per frame).
+    @ViewBuilder func confirmCard(_ frames: [UUID: CGRect], in area: CGRect) -> some View {
+        if let c = model.confirming, let text = model.confirmQuestion {
+            let id = model.confirmPane(among: model.layout.order.filter { frames[$0] != nil }), f = frames[id] ?? area
+            ZStack(alignment: .topLeading) {
+                Color.clear.contentShape(Rectangle()).onTapGesture { model.confirm(false) }.accessibilityHidden(true)
+                    .modifier(AgentPaneProbe(kind: "confirmOutside"))
+                Rectangle().fill(.ultraThinMaterial).overlay(Neon.bgBottom.opacity(0.35))
+                    .frame(width: f.width, height: f.height)
+                    .allowsHitTesting(false).accessibilityHidden(true)
+                    .modifier(AgentPaneProbe(kind: "confirmDim"))
+                    .position(x: f.midX, y: f.midY)
+                // VoiceOver: the question, Cancel, the verb (the strip's own order)
+                AgentConfirmStrip(text: text, action: AgentWindowControls.confirmTitle(c.verb),
+                                  confirm: { model.confirm(true) }, cancel: { model.confirm(false) })
+                    .frame(width: max(0, min(f.width - sz(32), sz(460))))
+                    .clipShape(RoundedRectangle(cornerRadius: sz(10)))
+                    .overlay(RoundedRectangle(cornerRadius: sz(10)).strokeBorder(Neon.stroke))
+                    .contentShape(Rectangle())   // a click on the card is never the outside layer's
+                    .shadow(color: .black.opacity(0.3), radius: sz(12), y: sz(4))
+                    .modifier(AgentPaneProbe(kind: "confirm"))
+                    .position(x: f.midX, y: f.midY)
+            }
+            .frame(width: area.width, height: area.height, alignment: .topLeading)
+            .environment(\.agentPaneID, id)
+        }
     }
 
     /// R1193-4: the area's size reaches the model, once per size.

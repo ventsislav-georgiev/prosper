@@ -580,7 +580,8 @@ extension AgentWindowD1Tests {
                                    "AgentWindowPaneFocusTests.swift", "AgentWindowPaneRefusalTests.swift",
                                    "AgentWindowGroupChordTests.swift",   // #1111: Control-Tab through sendEvent, gate on
                                    "AgentWindowHeaderFirstClickTests.swift",   // #1707: header clicks through sendEvent, gate on
-                                   "AgentWindowCardResumeTests.swift"]   // #1924: a typed key through sendEvent; a two-pane row turns the gate on
+                                   "AgentWindowCardResumeTests.swift",   // #1924: a typed key through sendEvent; a two-pane row turns the gate on
+                                   "AgentWindowConfirmCardTests.swift"]   // #1930: Return, Escape and a pane click through sendEvent, gate on
         let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let enumerator = FileManager.default.enumerator(at: tests, includingPropertiesForKeys: nil)
         var found: Set<String> = [], raises: [String: Bool] = [:], read = 0

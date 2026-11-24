@@ -43,6 +43,9 @@ tag from the now-released section and put it on the new top draft.
   pane. (#1928)
 - Agents window: Remove from History on the session a pane shows now closes that pane (or leaves the
   only pane empty) instead of showing another ended session in it. (#1929)
+- Agent Sessions: Stop, Kill, Restart and Remove from History now ask in a card centred over the
+  session's pane, which dims and blurs behind it; Return confirms and Escape cancels even while the
+  terminal has the keys, and a click outside the card cancels. (#1930)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

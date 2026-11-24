@@ -3240,6 +3240,25 @@ final class AgentWindowModel: ObservableObject {
         confirming.flatMap { c in c.verb == .remove ? store?.history.first { $0.id == c.key } : nil }
     }
 
+    /// R5: the open question's text, re-read from the store each draw (a gone session or record: none, no card).
+    var confirmQuestion: String? {
+        guard let c = confirming else { return nil }
+        return confirmingSession.map { AgentWindowControls.question(c.verb, $0) }
+            ?? confirmingRecord.map { AgentWindowControls.removeQuestion($0, in: store?.history ?? []) }
+    }
+
+    /// #1930: the pane the confirmation card sits over: among `shown` (tiling order), the first whose content is the
+    /// asked session or record, else the focused pane.
+    func confirmPane(among shown: [UUID]) -> UUID {
+        guard let c = confirming else { return layout.focused }
+        let row: AgentSidebar.RowID = c.verb == .remove ? .history(c.key) : .live(c.key)
+        return Self.confirmPane(row, focused: layout.focused, panes: shown.map { ($0, runtimes[$0]?.content) })
+    }
+
+    nonisolated static func confirmPane(_ row: AgentSidebar.RowID, focused: UUID, panes: [(UUID, PaneContent?)]) -> UUID {
+        panes.first { resolvedRow($0.1) == row }?.0 ?? focused
+    }
+
     /// The strip's answer. The session (or record) is re-resolved by key now: gone, nothing runs;
     /// QA #665 INFO-6: its gate closed since the question, nothing runs and the row says why.
     func confirm(_ yes: Bool) {

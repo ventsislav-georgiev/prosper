@@ -110,7 +110,7 @@ final class AgentConfirmStripTests: XCTestCase {
     }
 
     /// (d) The three callers draw the same layout: each caller's frames are the bare strip's for its own text, at a wide
-    /// and a narrow pane. The per-session caller (AgentsWindow.confirmStrip) is a plain AgentConfirmStrip call: its
+    /// and a narrow pane. The per-session caller (AgentPaneArea.confirmCard, #1930) is a plain AgentConfirmStrip call: its
     /// question and verb are the controls' own.
     @MainActor
     func testEveryCallerDrawsTheSameLayout() {

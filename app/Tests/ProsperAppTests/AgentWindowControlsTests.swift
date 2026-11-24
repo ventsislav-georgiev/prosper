@@ -390,7 +390,7 @@ extension AgentWindowD1Tests {
                 let plain = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                 try save(plain, "829-window-\(label)-\(scale)")
                 XCTAssertEqual(overflow(plain, content: size, canvas: canvas), 0, "\(label) \(scale)")
-                // The confirm strip: drawn over the conversation's top only.
+                // #1930: the question is a card over the pane, the pane dimmed behind it: drawn in the pane area only.
                 m.ask(.restart, s)
                 let asked = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
                 try save(asked, "829-window-confirm-\(label)-\(scale)")
@@ -398,12 +398,14 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(overflow(asked, content: size, canvas: canvas), 0, "\(label) \(scale)")
                 let k = CGFloat(asked.pixelsWide) / canvas.width
                 let rows = diffRows(plain, asked)
-                XCTAssertFalse(rows.isEmpty, "the strip shows (\(label) \(scale))")
-                XCTAssertLessThan(CGFloat((rows.max() ?? 0) - (rows.min() ?? 0)) / k, size.height * 0.6,
-                                  "only a band changed (\(label) \(scale))")
-                XCTAssertGreaterThanOrEqual(CGFloat(rows.min() ?? 0) / k, AgentSessionHeader.height, "the header stays put (\(label) \(scale))")
-                XCTAssertLessThan(CGFloat(rows.max() ?? 0) / k, size.height - 120 * scale,
-                                  "the input box stays put (\(label) \(scale))")
+                XCTAssertFalse(rows.isEmpty, "the card shows (\(label) \(scale))")
+                let area = try XCTUnwrap(m.paneAreaFrame(in: size), "premise: a pane area")
+                let left = (0..<asked.pixelsHigh).contains { y in
+                    autoreleasepool {
+                        stride(from: 0, to: Int((area.minX - 1) * k), by: 2).contains { x in plain.colorAt(x: x, y: y) != asked.colorAt(x: x, y: y) }
+                    }
+                }
+                XCTAssertFalse(left, "the sidebar stays put (\(label) \(scale))")
                 // The dir strip: over the sidebar's reserved bottom, so no row moves.
                 st.actions[AgentSessionKey(dir: "/tmp/dch-test", name: "")] = "Restart all: 2 restarted"
                 let dir = try render(AgentWindowRootView(model: m, scrolls: false), size: size, dark: true)
@@ -1077,7 +1079,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(overflow(ask, content: size, canvas: canvas), 0, tag)
                 let arow = diffRows(plain, ask, from: x0)
                 XCTAssertFalse(arow.isEmpty)
-                XCTAssertLessThan(CGFloat(arow.max() ?? 0) / k, size.height * 0.5, "the strip is over the pane's top only (\(tag))")
+                XCTAssertGreaterThan(CGFloat(arow.max() ?? 0) / k, size.height * 0.5, "#1930: the card and its dim cover the pane, not its top (\(tag))")
             }
         }
         XCTAssertTrue(calls.records.isEmpty, "rendering and Cancel ran nothing")
