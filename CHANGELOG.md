@@ -32,6 +32,8 @@ tag from the now-released section and put it on the new top draft.
   sidebar row's right-click menu still leaves your focus where it is. (#1924)
 - Settings, Chat and text viewer windows can no longer be dragged smaller than their minimum size
   once their content has loaded. (#1933)
+- Make the Agent Sessions window's narrowest width keep its title buttons (close, minimise, zoom) in
+  view instead of clipping them. (#1932)
 
 ## v2.177.0
 - Agent window layouts: drag a pane from anywhere on its header bar, not just its state label.

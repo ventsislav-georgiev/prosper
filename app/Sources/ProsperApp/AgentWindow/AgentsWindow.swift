@@ -30,19 +30,33 @@ final class AgentsWindow {
     /// #1925 (operator 2026-11-24, "just a smidge"): as narrow as the sidebar column and its 1 pt line (none in Slide,
     /// hidden or without a store) plus the panes' `AgentSidebarWidth.strip`, at `scale`. Full's column is its least width
     /// whatever the drag: at this window width the 40% line draws it so (AgentSidebarWidth.width). The height is as before.
-    static func contentMinSize(_ model: AgentWindowModel?, scale: CGFloat) -> NSSize {
+    /// #1932: never under `floor`, the content width its title buttons need (`titleFloor`).
+    static func contentMinSize(_ model: AgentWindowModel?, scale: CGFloat, floor: CGFloat = 0) -> NSSize {
         var column: CGFloat = 0
         if let model, model.hasStore, model.sidebarShown, model.sidebarMode != .slide {
             column = (model.sidebarMode == .mini ? AgentWindowModel.miniSidebarWidth(at: scale)
                                                  : AgentWindowModel.fullSidebarWidth(at: scale)) + 1
         }
-        return NSSize(width: column + AgentSidebarWidth.strip * scale, height: 420 * scale)
+        return NSSize(width: max(column + AgentSidebarWidth.strip * scale, floor), height: 420 * scale)
+    }
+
+    /// #1932: the content width at which the window's own title buttons fit, for its current style mask (Standard and No
+    /// title bar are titled; Borderless has none): AppKit's least frame width converted to content width.
+    static func titleFloor(_ win: NSWindow) -> CGFloat {
+        guard win.styleMask.contains(.titled) else { return 0 }   // AppKit answers 90 for a borderless mask: no buttons there
+        let frameWidth = NSWindow.minFrameWidth(withTitle: "", styleMask: win.styleMask)
+        return win.contentRect(forFrameRect: NSRect(x: 0, y: 0, width: frameWidth, height: 100)).width
+    }
+
+    /// #1932: the minimum for `win` as it is now: its model's column at `scale`, floored at its title buttons' width.
+    static func minimum(for win: AgentsNSWindow, scale: CGFloat) -> NSSize {
+        contentMinSize(win.model, scale: scale, floor: titleFloor(win))
     }
 
     /// #1925: the open window's minimum re-read (a mode switch, the sidebar hidden or shown, a store); a window now under
     /// it grows to it.
-    static func applyMinSize(_ win: AgentsNSWindow) {
-        win.minimum = contentMinSize(win.model, scale: ThemeRuntime.scale)
+    static func applyMinSize(_ win: AgentsNSWindow, scale: CGFloat = ThemeRuntime.scale) {
+        win.minimum = minimum(for: win, scale: scale)
         win.clampToContentMinSize()
     }
 
@@ -144,7 +158,7 @@ final class AgentsWindow {
         win.identifier = themedIdentifier
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
-        win.minimum = contentMinSize(model, scale: s)
+        win.minimum = minimum(for: win, scale: s)
         SettingsWindow.applyWindowOpacity(win)
         if Preferences.agentWindowStyle != .standard { applyStyle(win) }   // #1378: Standard is built as before
         win.isReleasedWhenClosed = false
@@ -188,6 +202,7 @@ final class AgentsWindow {
             cv.layer?.masksToBounds = mask
         }
         SettingsWindow.applyWindowOpacity(win)   // the fill through AgentsNSWindow's setters, then the shadow again
+        applyMinSize(win)   // #1932: the new mask's title buttons need another width
     }
 
     /// #1378: the rounded Borderless window's corner radius, near the system's for a window without a toolbar.

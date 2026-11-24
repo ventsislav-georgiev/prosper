@@ -17,6 +17,11 @@ final class AgentWindowMinWidthTests: XCTestCase {
     func content(_ win: NSWindow) -> CGSize { win.contentRect(forFrameRect: win.frame).size }
     /// Literal widths, not the helper under test: Full's least width (TIP's 290 plus #1470's chip growth) and Mini's rail.
     func full(_ s: CGFloat) -> CGFloat { 290 * s + AgentWindowModel.digitColumnExtra(at: s) }
+    /// #1932: with no column the strip, but never under the title buttons' width (a literal frame-to-content conversion).
+    func least(_ win: NSWindow, _ s: CGFloat) -> CGFloat {
+        guard win.styleMask.contains(.titled) else { return 40 * s }
+        return max(40 * s, win.contentRect(forFrameRect: NSRect(x: 0, y: 0, width: NSWindow.minFrameWidth(withTitle: "", styleMask: win.styleMask), height: 100)).width)
+    }
 
     /// Red when the minimum is not sidebar + line + strip per mode (today's 640·s, or the strip forgotten), when a mode
     /// switch or ⌃⌘S does not reach the open window, or when a window under a new minimum is not grown to it.
@@ -36,9 +41,9 @@ final class AgentWindowMinWidthTests: XCTestCase {
                 m.setSidebarMode(.mini)
                 XCTAssertEqual(win.contentMinSize.width, AgentWindowModel.miniSidebarWidth(at: s) + 1 + 40 * s, accuracy: 0.001, "Mini at \(s)")
                 m.setSidebarMode(.slide)
-                XCTAssertEqual(win.contentMinSize.width, 40 * s, accuracy: 0.001, "Slide: no column, no line at \(s)")
+                XCTAssertEqual(win.contentMinSize.width, least(win, s), accuracy: 0.001, "Slide: no column, no line, the title buttons at \(s)")
                 m.toggleSidebar()   // Slide pinned in: an overlay over the panes, the minimum stays
-                XCTAssertEqual(win.contentMinSize.width, 40 * s, accuracy: 0.001, "Slide pinned at \(s)")
+                XCTAssertEqual(win.contentMinSize.width, least(win, s), accuracy: 0.001, "Slide pinned at \(s)")
                 win.setContentSize(NSSize(width: 60 * s, height: 500 * s))   // narrow, as the person may leave it in Slide
                 m.setSidebarMode(.full)
                 XCTAssertEqual(content(win).width, full(s) + 1 + 40 * s, accuracy: 0.5, "a new, larger minimum grows the window at \(s)")
@@ -46,7 +51,7 @@ final class AgentWindowMinWidthTests: XCTestCase {
                 AgentPaneLayout.splitsEnabled = true
                 m.toggleSidebar()   // ⌃⌘S hides Full's column
                 XCTAssertFalse(m.sidebarShown)
-                XCTAssertEqual(win.contentMinSize.width, 40 * s, accuracy: 0.001, "hidden: no column at \(s)")
+                XCTAssertEqual(win.contentMinSize.width, least(win, s), accuracy: 0.001, "hidden: no column at \(s)")
                 m.toggleSidebar()
                 XCTAssertEqual(win.contentMinSize.width, full(s) + 1 + 40 * s, accuracy: 0.001, "shown again at \(s)")
                 AgentPaneLayout.splitsEnabled = false
@@ -100,7 +105,7 @@ final class AgentWindowMinWidthTests: XCTestCase {
     }
 
     /// Red when the hosting controller keeps its default sizing: on SwiftUI's update pass (a run loop turn) it writes its
-    /// own minimum (the sidebar + line, the panes' is 0) over the window's. The probes print what the default does.
+    /// own minimum (the sidebar + line, the panes' is 0) over the window's.
     func testSwiftUIContentCannotLowerTheMinimum() throws {
         try widths.withClearedWidth {
             let m = model()
@@ -119,35 +124,6 @@ final class AgentWindowMinWidthTests: XCTestCase {
             XCTAssertEqual(win.contentMinSize, want, "SwiftUI's update pass and a layout leave the minimum")
             win.contentMinSize = NSSize(width: 0, height: 0)   // what the hosting controller writes with no sizing options
             XCTAssertEqual(win.contentMinSize, want, "a write from outside AgentsWindow is put back")
-
-            // Probe: the same content with the default options, the minimum set to 640 before a layout.
-            let probeModel = model()
-            defer { probeModel.close() }
-            let probe = NSHostingController(rootView: AgentWindowRootView(model: probeModel))
-            let pw = NSWindow(contentViewController: probe)
-            pw.isReleasedWhenClosed = false
-            defer { pw.contentViewController = nil }
-            pw.setContentSize(NSSize(width: 1000, height: 680))
-            pw.contentMinSize = NSSize(width: 640, height: 420)
-            pw.contentView?.layoutSubtreeIfNeeded()
-            pw.layoutIfNeeded()
-            XCTAssertFalse(pw.isVisible, "never on screen")
-            print("#1925 PROBE default sizingOptions=\(probe.sizingOptions.rawValue) contentMinSize after layout=\(pw.contentMinSize) minSize=\(pw.minSize)")
-            RunLoop.main.run(until: Date().addingTimeInterval(0.5))   // SwiftUI's own update pass
-            probe.view.needsLayout = true
-            pw.layoutIfNeeded()
-            print("#1925 PROBE after run loop contentMinSize=\(pw.contentMinSize) fitting=\(probe.view.fittingSize)")
-            // A SwiftUI minimum under the window's: does the default write it over contentMinSize?
-            let small = NSHostingController(rootView: Color.clear.frame(minWidth: 100, minHeight: 100))
-            let sw = NSWindow(contentViewController: small)
-            sw.isReleasedWhenClosed = false
-            defer { sw.contentViewController = nil }
-            sw.setContentSize(NSSize(width: 1000, height: 680))
-            sw.contentMinSize = NSSize(width: 640, height: 420)
-            sw.layoutIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-            sw.layoutIfNeeded()
-            print("#1925 PROBE small min: contentMinSize=\(sw.contentMinSize) minSize=\(sw.minSize) fitting=\(small.view.fittingSize)")
         }
     }
 
@@ -170,6 +146,55 @@ final class AgentWindowMinWidthTests: XCTestCase {
                 }
                 XCTAssertFalse(win.isVisible, "never on screen")
             }
+        }
+    }
+
+    /// #1932 (i1). Red when the narrowest window (Slide, or the sidebar hidden) is under its title buttons' width: Standard
+    /// and No title bar are titled (the three buttons, hidden in No title bar but their band stays), Borderless has none.
+    /// Built in each style and restyled to each, the minimum re-read each time; a window narrower is grown to it.
+    func testTitleButtonsKeepTheirWidthInEveryStyle() {
+        widths.withClearedWidth {
+            let d = Preferences.defaults, saved = d.object(forKey: "agentWindowStyle")
+            defer { if let saved { d.set(saved, forKey: "agentWindowStyle") } else { d.removeObject(forKey: "agentWindowStyle") } }
+            ThemeRuntime.scale = 0.7   // 40·s is 28 pt: the strip alone is far under the buttons
+            defer { ThemeRuntime.scale = 1 }
+            Preferences.agentWindowStyle = .standard
+            let m = model()
+            defer { m.close() }
+            m.setSidebarMode(.slide)
+            let win = AgentsWindow.makeWindow(m, autosave: nil)
+            defer { win.contentViewController = nil }
+            let titled = NSWindow.minFrameWidth(withTitle: "", styleMask: [.titled, .closable, .miniaturizable, .resizable])
+            XCTAssertGreaterThan(titled, 60, "a titled window's frame needs its traffic lights")
+            for style in AgentWindowStyle.allCases {
+                AgentsWindow.applyStyle(win, style: style, rounded: true)
+                XCTAssertEqual(win.contentMinSize.width, least(win, 0.7), accuracy: 0.001, "\(style): the floor or the strip")
+                if style == .borderless { XCTAssertEqual(win.contentMinSize.width, 28, accuracy: 0.001, "Borderless has no buttons: the strip") }
+                if style != .borderless { XCTAssertGreaterThan(win.contentMinSize.width, 60, "\(style) keeps its title buttons") }
+                win.setContentSize(NSSize(width: 10, height: 500))
+                win.clampToContentMinSize()
+                XCTAssertGreaterThanOrEqual(content(win).width, win.contentMinSize.width - 0.5, "\(style): a narrower window is grown")
+            }
+        }
+    }
+
+    /// #1932 (i3). Red when the scale hook only writes the minimum: a window under its new minimum is grown right away
+    /// (the hook's own call, AgentsWindow.applyMinSize), and the new minimum keeps the title floor at the new scale.
+    func testScaleHookClampsAndKeepsTheTitleFloor() {
+        widths.withClearedWidth {
+            ThemeRuntime.scale = 1
+            let m = model()
+            defer { m.close() }
+            m.setSidebarMode(.slide)
+            let win = AgentWindowStyleTests.makeStandardWindow(m)
+            defer { win.contentViewController = nil }
+            win.setContentSize(NSSize(width: 10, height: 500))
+            ThemeRuntime.scale = 0.7
+            AppDelegate.applyThemedWindowSizing([win], scale: 0.7)
+            XCTAssertEqual(win.contentMinSize.width, least(win, 0.7), accuracy: 0.001, "the floor at the new scale")
+            XCTAssertGreaterThan(win.contentMinSize.width, 28, "the floor, not the strip")
+            XCTAssertGreaterThanOrEqual(content(win).width, win.contentMinSize.width - 0.5, "grown by the hook")
+            ThemeRuntime.scale = 1
         }
     }
 
