@@ -1,0 +1,20 @@
+{
+  "entry": 1914,
+  "filter": "AgentWindowD1Tests/testPaneDropRoutingHeaderGap|AgentWindowD1Tests/testPaneDropRoutingSinglePaneHeaderGap",
+  "mutants": [
+    {
+      "name": "compact-header-no-content-shape",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+      "old": "        .contentShape(Rectangle())   // #1914: the gap between the title and the \"⋯\" takes the pane drag too\n",
+      "new": "",
+      "expect": "killed"
+    },
+    {
+      "name": "session-header-content-shape",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+      "old": "        .background(AgentWindowDragArea())   // #1378: the header's empty parts move the window\n",
+      "new": "        .background(AgentWindowDragArea())   // #1378: the header's empty parts move the window\n        .contentShape(Rectangle())\n",
+      "expect": "killed"
+    }
+  ]
+}
