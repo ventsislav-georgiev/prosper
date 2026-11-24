@@ -710,7 +710,7 @@ extension AgentWindowD1Tests {
                 XCTAssertEqual(m.newSessionName, "", "no generated name")
                 XCTAssertFalse(m.canStartNewSession, "Start is disabled while the name is empty")
                 XCTAssertFalse(m.startNewSession(), "the submit path refuses")
-                XCTAssertFalse(m.startShell(), "New shell uses the form's name: refused too")
+                XCTAssertTrue(m.canStartNewShell, "#1919: New shell takes the folder's name when the Name is empty")
                 m.cancelNewSession()
             }
             XCTAssertTrue(spawns.calls.isEmpty, "nothing started")
@@ -757,5 +757,54 @@ extension AgentWindowModel {
         guard let f = newSession, newSessionName.isEmpty else { return }
         setNewSessionName(AgentNewSession.autoName(folder: AgentNewSession.expand(f.folder, home: home), taken: spawnTaken,
                                                    dir: island().spawnDir()))
+    }
+}
+
+/// #1919: the form's New shell with an empty Name is named from the folder, as ⇧⌘N would.
+extension AgentWindowD1Tests {
+
+    @MainActor
+    func testAgentWindowNewSessionEmptyNameEnablesNewShellButNotStart() throws {
+        try withNewSessionPrefs {
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertFalse(m.canStartNewSession, "Start still needs a name")
+            XCTAssertTrue(m.canStartNewShell)
+            m.setNewSessionName("  ")
+            XCTAssertTrue(m.canStartNewShell, "spaces only: empty")
+            m.setNewSessionFolder("/Users/example/missing")
+            XCTAssertFalse(m.canStartNewShell, "a bad folder still disables it")
+            m.setNewSessionFolder("/Users/example/api")
+            m.setNewSessionName("bad name")
+            XCTAssertFalse(m.canStartNewShell, "a typed invalid name still disables it")
+            XCTAssertFalse(m.startShell())
+            XCTAssertTrue(spawns.calls.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testAgentWindowNewSessionEmptyNameShellSpawnsWithTheFoldersName() throws {
+        try withNewSessionPrefs {
+            let st = store([session("api", .idle)]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
+            defer { m.close() }
+            m.openNewSession(folder: "/Users/example/web")
+            XCTAssertTrue(m.startShell())
+            XCTAssertEqual(spawns.calls.last?.name, "web")
+            XCTAssertEqual(spawns.calls.last?.folder, "/Users/example/web")
+            m.cancelNewSession()
+            m.openNewSession(folder: "/Users/example/api")
+            XCTAssertTrue(m.startShell())
+            XCTAssertEqual(spawns.calls.last?.name, "api-2", "the folder's name is taken: next free")
+            m.cancelNewSession()
+            m.openNewSession(folder: "/Users/example/m0123456789abcdef")
+            XCTAssertTrue(m.startShell())
+            XCTAssertEqual(spawns.calls.last?.name, "shell", "an id-shaped folder name gives way to shell")
+            m.cancelNewSession()
+            m.openNewSession(folder: "/Users/example/web")
+            m.setNewSessionName(" mine ")
+            XCTAssertTrue(m.startShell())
+            XCTAssertEqual(spawns.calls.last?.name, "mine", "a typed name is used as typed")
+        }
     }
 }

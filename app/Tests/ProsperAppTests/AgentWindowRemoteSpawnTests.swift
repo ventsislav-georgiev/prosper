@@ -111,6 +111,21 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
         }
     }
 
+    /// #1919: an empty Name on another Mac: New shell takes the folder's free name there.
+    @MainActor
+    func testAnEmptyNameShellOnAnotherMacTakesTheFoldersName() throws {
+        try withPrefs {
+            let (m, _, calls) = model()
+            defer { m.close() }
+            m.setNewSessionHost("host-a")
+            m.setNewSessionFolder("/Users/example/zzz")
+            m.setNewSessionName("")
+            XCTAssertTrue(m.startShell())
+            XCTAssertEqual(calls.verbs.last?.args.prefix(4).map { $0 }, ["--host", "host-a", "--spawn", "zzz"])
+            XCTAssertEqual(calls.local.count, 0)
+        }
+    }
+
     /// r1: dch keeps `--spawn host-a:site` local when a local session or record has that exact name; --host never does.
     @MainActor
     func testALocalSessionNamedHostColonNameNeverTurnsTheRemoteStartLocal() throws {

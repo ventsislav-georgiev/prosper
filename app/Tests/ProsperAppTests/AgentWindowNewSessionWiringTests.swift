@@ -191,7 +191,7 @@ extension AgentWindowD1Tests {
             guard fields.count == 3 else { return }
             XCTAssertEqual(fields[1].stringValue, "", "#1265: the field text is what was typed: empty")
             XCTAssertEqual(m.newSessionName, "", "#1731: no generated name (was: api, the placeholder)")
-            XCTAssertTrue((fields[1].placeholderString ?? fields[1].placeholderAttributedString?.string ?? "").isEmpty, "no placeholder as hosted")
+            XCTAssertEqual(fields[1].placeholderString ?? fields[1].placeholderAttributedString?.string, "Optional for a shell: the folder's name", "#1919: the shell's hint as hosted")
             XCTAssertTrue(hasKeys(fields[1], win), "Name has the keys on open")
             XCTAssertTrue(win.makeFirstResponder(fields[2]))
             settle(host)

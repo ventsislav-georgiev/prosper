@@ -2771,11 +2771,15 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// Every check, against the store as it is now.
-    var canStartNewSession: Bool {
+    var canStartNewSession: Bool { !newSessionName.isEmpty && canStartNewShell }
+
+    /// #1919: Start's checks without the Name's presence: New shell takes the folder's free name when none is typed.
+    /// A typed name keeps its errors.
+    var canStartNewShell: Bool {
         guard newSession?.starting == nil, (newSession?.pasting ?? 0) == 0, store?.resumeGate.isOK == true else { return false }   // #1836
         if let host = newSession?.host, !newSessionHosts.contains(host) { return false }   // #1323: gone, or dch too old
         let e = newSessionErrors
-        return !newSessionName.isEmpty && e.folder == nil && e.name == nil
+        return e.folder == nil && e.name == nil
     }
 
     /// Start or Return: nothing runs unless every check passes now. #1846 n132: `persist` false (an agent's start over the
@@ -2797,9 +2801,15 @@ final class AgentWindowModel: ObservableObject {
     func startShell() -> Bool {
         let argv = [AgentNewSession.loginShell(shell), "-l"]
         if let f = newSession {
-            guard canStartNewSession, newSessionShellRefusal == nil else { return false }
-            if let host = f.host { return spawnRemote(host, [AgentNewSession.loginShell(nil), "-l"], name: newSessionName) }
-            return spawn(AgentNewSession.expand(f.folder, home: home), argv, name: newSessionName, command: nil)
+            guard canStartNewShell, newSessionShellRefusal == nil else { return false }
+            let dir = island().spawnDir(), typed = newSessionName
+            if let host = f.host {
+                let name = typed.isEmpty ? AgentNewSession.shellName(folder: newSessionFolder, taken: remoteTaken(host), dir: dir) : typed
+                return spawnRemote(host, [AgentNewSession.loginShell(nil), "-l"], name: name)
+            }
+            let folder = AgentNewSession.expand(f.folder, home: home)   // #1919: empty Name: what ⇧⌘N would pick for it
+            let name = typed.isEmpty ? AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: dir) : typed
+            return spawn(folder, argv, name: name, command: nil)
         }
         guard store?.resumeGate.isOK == true else {
             store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887 (QA #747 INFO-3): Shift-Command-N says why

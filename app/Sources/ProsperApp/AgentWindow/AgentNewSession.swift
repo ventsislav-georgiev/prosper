@@ -478,7 +478,7 @@ struct AgentNewSessionView: View {
                 }
             }
             field("Name", error: errors.name) {
-                TextField("", text: Binding(get: { form.nameFieldText }, set: { model.setNewSessionName($0) }))
+                TextField("Optional for a shell: the folder's name", text: Binding(get: { form.nameFieldText }, set: { model.setNewSessionName($0) }))
                     .focused($focus, equals: .name)
                     .accessibilityLabel("Name")
             }
@@ -505,8 +505,8 @@ struct AgentNewSessionView: View {
                 // QA #736 INFO-3: Start's condition; it dims in place. #847 D6.2: also while the prompt holds.
                 let shellWhy = model.newSessionShellRefusal
                 AgentPillButton(title: "New shell", icon: "apple.terminal", tint: Neon.terminal,
-                                enabled: model.canStartNewSession && shellWhy == nil) { model.startShell() }
-                    .help(shellWhy ?? "")
+                                enabled: model.canStartNewShell && shellWhy == nil) { model.startShell() }
+                    .help(shellWhy ?? "With no Name, the shell takes the folder's name")
                 Spacer(minLength: 0)
                 AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary) { model.cancelNewSession() }
                     .keyboardShortcut(.cancelAction)

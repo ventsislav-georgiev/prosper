@@ -377,10 +377,10 @@ extension AgentWindowD1Tests {
             }
             let name = try XCTUnwrap(formFields(host).dropFirst().first, "the Name field")
             XCTAssertEqual(name.stringValue, "", "no generated text")
-            XCTAssertTrue((name.placeholderString ?? name.placeholderAttributedString?.string ?? "").isEmpty, "no placeholder")
+            XCTAssertEqual(name.placeholderString ?? name.placeholderAttributedString?.string, "Optional for a shell: the folder's name", "#1919: the shell's hint")
             XCTAssertFalse(try start().enabled, "Start is dimmed while the name is empty")
             XCTAssertFalse(m.startNewSession(), "the submit path refuses")
-            XCTAssertFalse(m.startShell(), "the form's New shell uses the name: refused")
+            XCTAssertTrue(m.canStartNewShell, "#1919: the form's New shell does not need the name")
             m.setNewSessionName("   ")
             XCTAssertFalse(m.startNewSession(), "spaces only")
             XCTAssertTrue(spawns.calls.isEmpty, "nothing started")

@@ -35,6 +35,8 @@ tag from the now-released section and put it on the new top draft.
   ~/.bash_profile, ~/.bash_login and ~/.profile that exists (the one bash reads), a file in
   ~/.config/fish/conf.d for fish, and ~/.zshrc for zsh as before; for any other shell Prosper writes
   nothing and the kit pane shows the line to add yourself. (#1918)
+- New session: New shell now starts without a Name and takes the folder's name (like Shift-
+  Command-N); Start still needs one. (#1919)
 
 ## v2.176.0
 
