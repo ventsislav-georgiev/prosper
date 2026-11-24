@@ -1,0 +1,62 @@
+{
+  "entry": 1915,
+  "filter": "AgentIslandPlanLimitsTests",
+  "mutants": [
+    {
+      "name": "danger_gt",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+      "old": "u >= 0.9 ? Neon.magenta",
+      "new": "u > 0.9 ? Neon.magenta",
+      "expect": "killed"
+    },
+    {
+      "name": "stroke_all",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+      "old": "a.isCurrent ? 1 : 0 }",
+      "new": "1 }",
+      "expect": "killed"
+    },
+    {
+      "name": "bench_is_card",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+      "old": "guard a.limits.isEmpty else { return nil }",
+      "new": "guard a.limits.isEmpty, a.benchedUntil == nil else { return nil }",
+      "expect": "killed"
+    },
+    {
+      "name": "split_all_cards",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+      "old": "{ compact.append((a, s)) }",
+      "new": "{ _ = s; cards.append(a) }",
+      "expect": "killed"
+    },
+    {
+      "name": "reset_old_words",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+      "old": "{ \"\\(duration(Double($0) - now)) \\u{00B7} ",
+      "new": "{ \"resets in \\(duration(Double($0) - now)) \\u{00B7} ",
+      "expect": "killed"
+    },
+    {
+      "name": "pool_keeps_paren",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+      "old": "part[r.upperBound...].dropLast()",
+      "new": "part[r.upperBound...]",
+      "expect": "killed"
+    },
+    {
+      "name": "pane_more_by",
+      "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+      "old": "\" (more at \\(timeText(",
+      "new": "\" (more by \\(timeText(",
+      "expect": "killed"
+    },
+    {
+      "name": "compact_speaks_status",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+      "old": ".padding(.horizontal, 10)\n        .accessibilityElement(children: .ignore)\n        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))",
+      "new": ".padding(.horizontal, 10)\n        .accessibilityElement(children: .ignore)\n        .accessibilityLabel(Text(verbatim: \"\\(a.label), \\(status)\"))",
+      "expect": "killed"
+    }
+  ]
+}
