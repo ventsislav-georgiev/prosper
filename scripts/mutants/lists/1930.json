@@ -12,8 +12,8 @@
   {
    "name": "return-not-taken",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "case 36, 76: m.confirm(true)",
-   "new": "case 36: m.confirm(true)",
+   "old": "        case 36, 76:\n            if (responder as? NSTextInputClient)",
+   "new": "        case 36:\n            if (responder as? NSTextInputClient)",
    "expect": "killed"
   },
   {
