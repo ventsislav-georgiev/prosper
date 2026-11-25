@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.180.0 *(unreleased)*
+- Ships dch 1.163.0: in X-ray terms, a one-word bold the prose also says plain is emphasis again (not
+  listed) unless the session uses the word as code. (#1967)
 - Ships dch 1.162.0: a "!" message dch could not take back out says it may be left in Claude's input in
   shell mode; X-ray terms read better (a spread rule over all turns, emphasis words are never terms);
   with DCH_DEBUG set, the trace no longer records typed text and only you can read it. (#1966)
