@@ -205,6 +205,25 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertTrue(m.pill.isHidden, "left of the block's column, outside the block")
     }
 
+    /// QA R1954 f1: red if a corridor slack row that is another command's row keeps the first command (no read), so the
+    /// pill and Copy stay on it while the pointer is on the next, in either direction, at column 0 or indented.
+    func testAnAdjacentCommandIsNotSlack() throws {
+        for (pair, texts) in [(["$ npm install", "$ npm test"], ["npm install", "npm test"]), (["  $ a", "  $ b"], ["a", "b"])] {
+            let r = try rig(pair + ["", "prose"]), m = r.marks
+            let pb = NSPasteboard(name: .init("eu.illegible.prosper.test.1954.\(UUID().uuidString)"))
+            defer { pb.releaseGlobally() }
+            r.v.pasteboard = { pb }
+            for (row, i) in [(0, 0), (1, 1), (0, 0)] {
+                m.commandHover(Self.at(row: row))
+                XCTAssertFalse(m.pill.isHidden, "\(pair) row \(row)")
+                XCTAssertEqual(m.hoveredCommand?.row, row, "\(pair)")
+                m.copyCommand()
+                XCTAssertEqual(pb.string(forType: .string), texts[i], "\(pair) row \(row)")
+            }
+            XCTAssertEqual(m.commandReads, 3, "each new command row reads once")
+        }
+    }
+
     /// #1954: red if the pill is one cell high, leaves the overlay's bounds, or its width does not scale with its height.
     func testThePillIsTallerThanACellAndInsideBounds() throws {
         // row 23's padded pill would end at 2 + 23 * 17 + 19 = 412, past the 410 pt overlay: it is moved up

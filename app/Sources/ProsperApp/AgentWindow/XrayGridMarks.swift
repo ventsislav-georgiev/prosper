@@ -353,7 +353,12 @@ final class XrayGridMarksView: NSView {
         let ph = min(h + 4, bounds.height), w = max(2 * ph, 24)
         pill.frame = CGRect(x: bounds.width - w - 4, y: min(max(head - 2, 0), bounds.height - ph), width: w, height: ph)
         let left = o.x + CGFloat(cmd.col) * CGFloat(g.cellWidthPixels) / scale
-        commandCorridor = CGRect(x: left, y: head - h, width: bounds.width - left, height: CGFloat(cmd.last - cmd.row + 3) * h)
+        // a slack row that is itself another command's row stays out (QA R1954 f1: Copy would write the wrong one)
+        let cols = Int(g.columns)
+        let above = Self.commandBlock(lines, at: cmd.row - 1, cols: cols) == nil ? 1 : 0
+        let below = Self.commandBlock(lines, at: cmd.last + 1, cols: cols) == nil ? 1 : 0
+        commandCorridor = CGRect(x: left, y: head - CGFloat(above) * h, width: bounds.width - left,
+                                 height: CGFloat(cmd.last - cmd.row + 1 + above + below) * h)
         pill.isHidden = false
     }
 
