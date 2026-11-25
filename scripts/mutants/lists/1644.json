@@ -5,15 +5,15 @@
   {
    "name": "no-point-first",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n",
-   "new": "    override func scrollWheel(with event: NSEvent) {\n",
+   "old": "    override func scrollWheel(with event: NSEvent) {\n        marks.hideCommand()   // #1952: a scroll moves the rows under the command pill\n        super.mouseMoved(with: event)\n",
+   "new": "    override func scrollWheel(with event: NSEvent) {\n        marks.hideCommand()   // #1952: a scroll moves the rows under the command pill\n",
    "expect": "killed"
   },
   {
    "name": "unfocused-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n",
-   "new": "    override func scrollWheel(with event: NSEvent) {\n        super.mouseMoved(with: event)\n        if let owner, !owner.paneFocused() { return }\n",
+   "old": "    override func scrollWheel(with event: NSEvent) {\n        marks.hideCommand()   // #1952: a scroll moves the rows under the command pill\n        super.mouseMoved(with: event)\n",
+   "new": "    override func scrollWheel(with event: NSEvent) {\n        marks.hideCommand()   // #1952: a scroll moves the rows under the command pill\n        super.mouseMoved(with: event)\n        if let owner, !owner.paneFocused() { return }\n",
    "expect": "killed"
   },
   {

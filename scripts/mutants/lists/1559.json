@@ -5,8 +5,8 @@
   {
    "name": "m2-shown-window",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "return windowShown(host.window)",
-   "new": "return true",
+   "old": "owner.paneFocused(), !host.isHiddenOrHasHiddenAncestor else { return false }\n        return windowShown(host.window)",
+   "new": "owner.paneFocused(), !host.isHiddenOrHasHiddenAncestor else { return false }\n        return true",
    "expect": "killed"
   },
   {
@@ -33,8 +33,8 @@
   {
    "name": "m7-hittest",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "override func hitTest(_ point: NSPoint) -> NSView? { nil }",
-   "new": "override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) }",
+   "old": "guard !pill.isHidden, pill.frame.contains(convert(point, from: superview)) else { return nil }",
+   "new": "guard true else { return nil }",
    "expect": "killed"
   },
   {
