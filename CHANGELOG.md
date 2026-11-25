@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.179.0 *(unreleased)*
+- X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier
+  prompt's card at "No response yet": both prompts show the reply (dch 1.152.0). (#1946)
 - X-ray: a prompt card opened from a ref card (or a ref card opened from a prompt card) has a Back
   button, and Escape goes back to the card under it. (#1944)
 - Plan usage popover: no "current" mark on the account any more, and every reset time is drawn at
