@@ -1,0 +1,38 @@
+{
+ "entry": 1959,
+ "filter": "AgentIslandMessageTests|AgentWindowD1Tests",
+ "mutants": [
+  {
+   "name": "bang-rows-count-arm",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let shell = text.hasPrefix(\"!\") && (all || rows.count > 1)",
+   "new": "let shell = text.hasPrefix(\"!\") && all",
+   "expect": "killed",
+   "filter": "AgentIslandMessageTests/testALeadingBangToSeveralPickedRowsIsRefusedWithoutMessageAll"
+  },
+  {
+   "name": "live-session-ignores-closed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        guard !closed, let key else { return nil }\n        return store?.sessions.first { $0.key == key }",
+   "new": "        guard let key else { return nil }\n        return store?.sessions.first { $0.key == key }",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testRunWiringReadsTheLiveRowAndIsOffForAMissingRowOrAClosedWindow"
+  },
+  {
+   "name": "live-session-any-key",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        return store?.sessions.first { $0.key == key }\n    }\n\n    /// #896",
+   "new": "        return store?.sessions.first\n    }\n\n    /// #896",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testRunWiringReadsTheLiveRowAndIsOffForAMissingRowOrAClosedWindow"
+  },
+  {
+   "name": "run-off-ignores-row",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            return interaction.runOff(liveSession(key))",
+   "new": "            return interaction.runOff(store?.sessions.first)",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testRunWiringReadsTheLiveRowAndIsOffForAMissingRowOrAClosedWindow"
+  }
+ ]
+}
