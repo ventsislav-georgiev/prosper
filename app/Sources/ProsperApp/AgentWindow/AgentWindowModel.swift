@@ -1419,6 +1419,21 @@ final class AgentWindowModel: ObservableObject {
         terminal.isSelected = { [weak self] key in self?.focusedLive?.key == key }
         // #1480: a relative file link resolves against the live session's folder (a remote key is in no store row).
         terminal.cwd = { [weak self] key in self?.store?.sessions.first { $0.key == key }?.cwd }
+        // #1953: the command pill's Run goes the composer's way, on the pane's own session (its live row, any pane)
+        terminal.runOff = { [weak self] key in
+            guard let self else { return AgentWindowText.notRunning }
+            return interaction.runOff(liveSession(key))
+        }
+        terminal.run = { [weak self] key, command, tell in
+            guard let self else { return }
+            interaction.run(command, session: liveSession(key), tell: tell)
+        }
+    }
+
+    /// #1953: a pane's session by key, live rows only (focusedLive's rule: listed in the store now, the window open).
+    func liveSession(_ key: AgentSessionKey?) -> AgentSession? {
+        guard !closed, let key else { return nil }
+        return store?.sessions.first { $0.key == key }
     }
 
     /// #896: each terminal's session pty size and clients from this list (the Fit here chip); a remote key has no row.

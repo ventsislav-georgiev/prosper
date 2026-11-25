@@ -346,6 +346,10 @@ final class AgentTerminalController: ObservableObject {
     var clearAction: @MainActor (AgentTerminalHostView?) -> Void = { _ = $0?.surface?.performBindingAction("clear_screen") }
     /// #1477 (7.6): this terminal is its window's focused pane (the window model answers for a pane's; the window's is).
     var paneFocused: () -> Bool = { true }
+    /// #1953: the command pill's Run for session `key`: why it is off now (nil: it may run), and the run, which hands each
+    /// notice back. The window model answers (AgentWindowInteraction.runOff / run); until it does, Run is off.
+    var runOff: (AgentSessionKey?) -> String? = { _ in AgentWindowText.notRunning }
+    var run: (AgentSessionKey?, String, @escaping @MainActor (String) -> Void) -> Void = { _, _, _ in }
     /// #1656 rows: every focus the wrapper hands libghostty for this terminal's surface (core.setFocus tells the view).
     var focusSent: ((Bool) -> Void)?
     /// #1559 (X-T a): the window's focused pane's follow for `target` (nil: none held); rows hand in a fake.

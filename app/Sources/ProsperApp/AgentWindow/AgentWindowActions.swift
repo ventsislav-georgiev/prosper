@@ -290,6 +290,13 @@ enum AgentWindowText {
     static let blocked = "A prompt is waiting. Answer it first"
     static let noStatus = "dch didn't say what the session is doing. Open in terminal"
     static let draft = "Claude's input already holds a draft. Open in terminal"
+    /// #1953 (dch #629): a "!" message skipped with reason "draft": Claude's box is already in shell mode.
+    static let shellMode = "Claude's input is already in shell mode. Open in terminal"
+    /// #1953: the command pill's Run: a command over more than one line or with a hidden character.
+    static let runOneLine = "Only a one-line command with no hidden characters can run from here"
+    static let ran = "Sent"
+    /// #1953: the pane's key has no live row in the list.
+    static let notRunning = "This session isn't running"
     static let noScreen = "This dch can't confirm a message. Open in terminal"
     /// QA #651 INFO-2: no terminal mirror (dch-lite), so no screen to check before the Esc.
     static let noScreenInterrupt = "This dch can't confirm an interrupt. Open in terminal"
@@ -580,7 +587,7 @@ struct AgentWindowDriver: Sendable {
         let shown = io.read(key)
         if let why = refusal(shown, lite: AgentWindowText.noScreen) { return .failed(why) }
         let head = Self.head(text), before = Self.count(head, in: shown)
-        if let why = Self.sayFailure(Self.sayReply(io.say(key, text))) { return .failed(why) }
+        if let why = Self.sayFailure(Self.sayReply(io.say(key, text)), shell: text.hasPrefix("!")) { return .failed(why) }
         for _ in 0..<confirmReads {
             pause(confirmStep)
             let st = status()
@@ -604,12 +611,13 @@ struct AgentWindowDriver: Sendable {
 
     /// Why a `--say` reply sent nothing (or nothing confirmed), as the window says it; nil for ok.
     /// #1369: one mapping for the composer's send and the controller's sayFirst.
-    static func sayFailure(_ reply: (result: String, reason: String?)?) -> String? {
+    /// #1953: `shell`: the text starts with "!" (dch #629 types it as a key), so a "draft" skip is Claude's shell mode.
+    static func sayFailure(_ reply: (result: String, reason: String?)?, shell: Bool = false) -> String? {
         switch (reply?.result, reply?.reason) {
         case ("ok"?, _): return nil
         case (nil, _): return AgentWindowText.unconfirmed
         case ("skipped"?, "prompt"?): return AgentWindowText.blocked
-        case ("skipped"?, "draft"?): return AgentWindowText.draft
+        case ("skipped"?, "draft"?): return shell ? AgentWindowText.shellMode : AgentWindowText.draft
         case ("skipped"?, "no_screen"?): return AgentWindowText.noScreen
         case ("skipped"?, "not_claude"?): return AgentWindowText.notClaude
         case ("failed"?, "not_foreground"?): return AgentWindowText.notForeground
@@ -1240,6 +1248,34 @@ final class AgentWindowInteraction: ObservableObject {
         act(s, prompt: nil, run: { io in d(io).send(text) }) { [weak self] in
             if self?.drafts[key] == typed { self?.drafts[key] = nil }
         }
+    }
+
+    // MARK: The command pill's Run (#1953)
+
+    /// Why Run is off for the pane's own session `s` (its live row now, any pane, focused or not; nil: no live row), nil
+    /// while it may run: idle or done only.
+    func runOff(_ s: AgentSession?) -> String? {
+        guard let s else { return AgentWindowText.notRunning }
+        if s.state == .idle || s.state == .done { return nil }
+        return s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working
+    }
+
+    /// "! <command>" for Run: one line, nothing hidden (sessions.say's check, LF and tab refused too); nil: refused whole.
+    static func runText(_ command: String) -> String? {
+        guard !ControlSessionsTalk.hasUnseen(command), let t = AgentWindowDriver.message(command) else { return nil }
+        return "! " + t
+    }
+
+    /// Run: "! <command>" as one message to the pane's own session `session`, the way send() does (the row lock, not-in-front, busy,
+    /// then the driver's idle/done gate, screen refusal and confirm reads). Every outcome goes to `tell` ("Sent" on success).
+    func run(_ command: String, session: AgentSession?, tell: @escaping @MainActor (String) -> Void) {
+        if let why = runOff(session) { return tell(why) }
+        guard let s = session else { return }
+        guard let text = Self.runText(command) else { return tell(AgentWindowText.runOneLine) }
+        let d = driver(s)
+        act(s, prompt: nil, run: { io in d(io).send(text) }, tell: { r in
+            if case .failed(let why) = r { tell(why) } else { tell(AgentWindowText.ran) }
+        })
     }
 
     // MARK: Model and effort switch (#1469)

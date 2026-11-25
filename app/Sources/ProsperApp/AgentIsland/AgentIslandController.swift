@@ -867,8 +867,11 @@ final class AgentIslandController {
         store.dropQuestions()
         // #1104 (QA #836 INFO-5): a text past the cap closes the composer and says so, as a fallen gate does.
         let long = text.utf8.count > AgentIsland.messageCap
-        guard !long, case .ok(let dch) = store.resumeGate else {
-            let why = long ? AgentIsland.messageTooLongText : "Controls \(store.resumeGate.refusal ?? "")"
+        // #1953 (dch #629): a leading "!" runs a shell command; one session at a time, never a group (dch refuses it with --all)
+        let shell = text.hasPrefix("!") && (all || rows.count > 1)
+        guard !long, !shell, case .ok(let dch) = store.resumeGate else {
+            let why = long ? AgentIsland.messageTooLongText : shell ? AgentIsland.messageShellGroupText
+                : "Controls \(store.resumeGate.refusal ?? "")"
             for s in rows { store.actions[all ? AgentSessionKey(dir: s.key.dir, name: "") : s.key] = why }
             return layout()
         }

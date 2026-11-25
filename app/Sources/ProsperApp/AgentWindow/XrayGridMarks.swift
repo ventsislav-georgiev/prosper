@@ -25,6 +25,8 @@ import SwiftUI
 // the pane's right edge on the block's first row, only while the grid is settled (`settle` nil); output, a scroll, a resize,
 // a focus change and the pointer leaving hide it at once, and the next move after the settle shows it again. One viewport
 // read per row the pointer enters (`commandReads`), never per move. Only the pill's rect takes clicks (hitTest).
+// #1953: the pill's second button, Run, sends "! <command>" to the pane's session (dch --say types the "!" as a key, so
+// Claude Code runs it in shell mode) through the window's composer path, only while the list says idle or done.
 
 @MainActor
 final class XrayGridMarksView: NSView {
@@ -105,6 +107,8 @@ final class XrayGridMarksView: NSView {
         }
         pill.copy.target = self   // #1952
         pill.copy.action = #selector(copyCommand)
+        pill.run.target = self   // #1953
+        pill.run.action = #selector(runCommand)
         addSubview(pill)
     }
 
@@ -350,7 +354,7 @@ final class XrayGridMarksView: NSView {
         let scale = max(window?.backingScaleFactor ?? 2, 1), h = CGFloat(g.cellHeightPixels) / scale
         let o = AgentTerminalHostView.gridOrigin, head = o.y + CGFloat(cmd.row) * h
         // #1954: 2 pt above and below the head row, kept inside the overlay
-        let ph = min(h + 4, bounds.height), w = max(2 * ph, 24)
+        let ph = min(h + 4, bounds.height), w = max(3 * ph, 36)   // #1953: Copy and Run, each 1.5 ph wide
         pill.frame = CGRect(x: bounds.width - w - 4, y: min(max(head - 2, 0), bounds.height - ph), width: w, height: ph)
         let left = o.x + CGFloat(cmd.col) * CGFloat(g.cellWidthPixels) / scale
         // a slack row that is itself another command's row stays out (QA R1954 f1: Copy would write the wrong one)
@@ -359,6 +363,7 @@ final class XrayGridMarksView: NSView {
         let below = Self.commandBlock(lines, at: cmd.last + 1, cols: cols) == nil ? 1 : 0
         commandCorridor = CGRect(x: left, y: head - CGFloat(above) * h, width: bounds.width - left,
                                  height: CGFloat(cmd.last - cmd.row + 1 + above + below) * h)
+        pill.runOff(host?.owner.flatMap { $0.runOff($0.key) })   // #1953: read once per show; the click asks again
         pill.isHidden = false
     }
 
@@ -379,6 +384,12 @@ final class XrayGridMarksView: NSView {
         host.owner?.show(Self.copiedText)
     }
     static let copiedText = "Copied"
+
+    /// #1953: Run: the command to the pane's session (AgentWindowInteraction.run, the composer's path); its outcome in the pane.
+    @objc func runCommand() {
+        guard let text = hoveredCommand?.text, let owner = host?.owner else { return }
+        owner.run(owner.key, text) { [weak owner] in owner?.show($0) }
+    }
 
     /// The command block row `row` is in: a head row whose text (after its indent and a Claude Code ⏺/● marker) starts
     /// with "! " or "$ ", then the rows under it indented at least as far and not at column 0 (Claude Code's hard wrap),
@@ -550,9 +561,12 @@ final class XrayHover {
     func close() { model?.dismiss() }
 }
 
-/// #1952: the command pill: one small opaque capsule (the window's card fill and stroke) holding the Copy button.
+/// #1952: the command pill: one small opaque capsule (the window's card fill and stroke) holding the Copy button;
+/// #1953: and Run right of it, the same size, off with its reason as the tooltip while the session cannot take it.
 final class XrayCommandPill: NSView {
     let copy = NSButton(title: "", target: nil, action: nil)
+    let run = NSButton(title: "", target: nil, action: nil)
+    static let runTip = "Run command"
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -563,6 +577,18 @@ final class XrayCommandPill: NSView {
         copy.toolTip = "Copy command"
         copy.setAccessibilityLabel("Copy command")
         addSubview(copy)
+        run.image = NSImage(systemSymbolName: "play.fill", accessibilityDescription: Self.runTip)
+        run.imagePosition = .imageOnly
+        run.isBordered = false
+        run.toolTip = Self.runTip
+        run.setAccessibilityLabel(Self.runTip)
+        addSubview(run)
+    }
+
+    /// #1953: Run on (nil) or off with why (the tooltip names it).
+    func runOff(_ why: String?) {
+        run.isEnabled = why == nil
+        run.toolTip = why.map { "\(Self.runTip): \($0)" } ?? Self.runTip
     }
 
     @available(*, unavailable)
@@ -570,8 +596,10 @@ final class XrayCommandPill: NSView {
 
     override func layout() {
         super.layout()
-        copy.frame = bounds
-        copy.symbolConfiguration = .init(pointSize: max(bounds.height * 0.5, 8), weight: .medium)
+        let (left, right) = bounds.divided(atDistance: bounds.width / 2, from: .minXEdge)
+        copy.frame = left
+        run.frame = right
+        for b in [copy, run] { b.symbolConfiguration = .init(pointSize: max(bounds.height * 0.5, 8), weight: .medium) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -581,5 +609,6 @@ final class XrayCommandPill: NSView {
         NSColor(Neon.stroke).setStroke()
         path.stroke()
         copy.contentTintColor = NSColor(Neon.textSecondary)
+        run.contentTintColor = NSColor(Neon.textSecondary)
     }
 }

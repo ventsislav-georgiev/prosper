@@ -534,6 +534,30 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(ds.actions[AgentSessionKey(dir: "/d", name: "a")], "Couldn't confirm. Open in terminal")
     }
 
+    /// #1953 (QA R1958 n1): dch 1.157 types a leading "!" as a key (shell mode). Red if Message all with a leading "!"
+    /// reaches --say (or says nothing), or a one-row message with one no longer goes as typed.
+    @MainActor
+    func testALeadingBangGoesToOneSessionNeverToAGroup() throws {
+        let p = Proc()
+        p.out["/d"] = (Self.say("a", "ok"), 0)
+        let c = controller(p, [session("a"), session("b")])
+        let store = try XCTUnwrap(c.store)
+        let a = AgentSessionKey(dir: "/d", name: "a"), dir = AgentSessionKey(dir: "/d", name: "")
+        c.askMessageAll()
+        store.typeMessage("! ls -la")
+        c.sendMessage()
+        XCTAssertTrue(store.messageDraft == nil, "the composer closes")
+        XCTAssertEqual(store.actions[dir], AgentIsland.messageShellGroupText)
+        XCTAssertEqual(p.args, [], "nothing spawned, no --say")
+        c.askMessage(session("a"))
+        store.typeMessage("! ls -la")
+        c.sendMessage()
+        settle { store.actions[a] != "Sending\u{2026}" }
+        XCTAssertEqual(store.actions[a], "Sent")
+        XCTAssertEqual(p.says.count, 1)
+        XCTAssertEqual(p.says.last?.last, "! ls -la", "one session: the person's \"!\" goes as typed")
+    }
+
     /// #1104 (QA #836 INFO-5): a text past 256 KB (UTF-8 bytes) is never spawned: its argv would pass ARG_MAX and
     /// read "Message failed (exit -1)". The composer closes and the row, or Message all's dir line, says why; at the
     /// cap it goes, one argv element, whole.

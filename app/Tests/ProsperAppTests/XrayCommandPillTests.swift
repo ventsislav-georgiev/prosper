@@ -105,15 +105,21 @@ final class XrayCommandPillTests: XCTestCase {
     }
 
     /// Red if any point outside the shown pill takes a click, the pill's button does not, or a hidden pill takes one.
+    /// #1953: the pill is 3 x 21 = 63 pt wide: Copy on its left half, Run on its right half, both take their clicks.
     func testHitTestIsNilOutsideThePill() throws {
         let r = try rig(), m = r.marks
         let centre = CGPoint(x: m.bounds.width - 4 - 17, y: AgentTerminalHostView.gridOrigin.y + 2 * 17 + 8)
+        let left = CGPoint(x: m.bounds.width - 4 - 63 + 10, y: centre.y)
         let inHost = { (p: CGPoint) in r.v.convert(p, from: m) }
         XCTAssertTrue(m.hitTest(inHost(centre)) == nil, "hidden pill")
         m.commandHover(Self.at(row: 2))
         XCTAssertFalse(m.pill.isHidden)
-        XCTAssertTrue(m.hitTest(inHost(centre)) === m.pill.copy)
-        XCTAssertTrue(r.v.hitTest(inHost(centre)) === m.pill.copy, "through the terminal's own hitTest")
+        m.pill.layoutSubtreeIfNeeded()
+        XCTAssertTrue(m.hitTest(inHost(centre)) === m.pill.run, "#1953: the right half is Run")
+        XCTAssertTrue(r.v.hitTest(inHost(centre)) === m.pill.run, "through the terminal's own hitTest")
+        XCTAssertTrue(m.hitTest(inHost(left)) === m.pill.copy, "#1953: the left half is Copy, inside the wider pill")
+        XCTAssertTrue(r.v.hitTest(inHost(left)) === m.pill.copy)
+        XCTAssertEqual(m.pill.copy.frame.width, m.pill.run.frame.width, accuracy: 0.01, "both the same size")
         for p in [CGPoint(x: 10, y: 10), CGPoint(x: 40, y: AgentTerminalHostView.gridOrigin.y + 2 * 17 + 8),
                   CGPoint(x: centre.x, y: centre.y + 17)] {
             XCTAssertTrue(m.hitTest(inHost(p)) == nil, "\(p)")
@@ -233,7 +239,7 @@ final class XrayCommandPillTests: XCTestCase {
             m.commandHover(Self.at(row: row))
             XCTAssertFalse(m.pill.isHidden)
             XCTAssertEqual(m.pill.frame.height, 17 + 4, accuracy: 0.01)
-            XCTAssertEqual(m.pill.frame.width, 2 * (17 + 4), accuracy: 0.01)
+            XCTAssertEqual(m.pill.frame.width, 3 * (17 + 4), accuracy: 0.01, "#1953: two buttons, each 1.5 x its height")
             XCTAssertTrue(m.bounds.contains(m.pill.frame), "\(m.pill.frame) in \(m.bounds)")
         }
     }
@@ -249,5 +255,149 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertTrue(m.pill.isHidden)
         XCTAssertEqual(m.commandReads, 2)
     }
-}
 
+    // MARK: #1953: Run
+
+    /// Red if Run is not wired, sends anything but the hovered command (prefix stripped) to the pane's own session, or its
+    /// outcome does not show in the pane; or a click with no block sends.
+    func testRunSendsTheHoveredCommandToThePanesSession() throws {
+        let r = try rig(), m = r.marks
+        var sent: [(AgentSessionKey?, String)] = []
+        r.t.runOff = { _ in nil }
+        r.t.run = { key, text, tell in sent.append((key, text)); tell(AgentWindowText.ran) }
+        XCTAssertTrue(m.pill.run.target === m)
+        XCTAssertEqual(m.pill.run.action, #selector(XrayGridMarksView.runCommand))
+        m.commandHover(Self.at(row: 3))
+        m.runCommand()
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.last?.0, AgentSessionKey(dir: "/Users/example/dch", name: "api"))
+        XCTAssertEqual(sent.last?.1, "gcloud sql backups create --instance=canary --project=example --description=probe")
+        XCTAssertEqual(r.t.notice, AgentWindowText.ran)
+        m.commandHover(Self.at(row: 5))
+        m.runCommand()
+        XCTAssertEqual(sent.count, 1, "no block: nothing sent")
+    }
+
+    /// Red if Run stays on while the session cannot take it (working, blocked, unknown), its tooltip does not say why, it
+    /// stays off once the session is idle again, or either button lacks its label.
+    func testRunIsOffWithItsReasonUnlessIdleOrDone() throws {
+        let r = try rig(), m = r.marks
+        var off: String? = AgentWindowText.working
+        r.t.runOff = { _ in off }
+        m.commandHover(Self.at(row: 6))
+        XCTAssertFalse(m.pill.run.isEnabled)
+        XCTAssertEqual(m.pill.run.toolTip, "Run command: " + AgentWindowText.working)
+        XCTAssertTrue(m.pill.copy.isEnabled, "Copy is never off")
+        m.hideCommand()
+        off = AgentWindowText.blocked
+        m.commandHover(Self.at(row: 6))
+        XCTAssertFalse(m.pill.run.isEnabled)
+        XCTAssertEqual(m.pill.run.toolTip, "Run command: " + AgentWindowText.blocked)
+        m.hideCommand()
+        off = nil
+        m.commandHover(Self.at(row: 6))
+        XCTAssertTrue(m.pill.run.isEnabled)
+        XCTAssertEqual(m.pill.run.toolTip, "Run command")
+        XCTAssertEqual(m.pill.run.accessibilityLabel(), "Run command")
+        XCTAssertEqual(m.pill.copy.accessibilityLabel(), "Copy command")
+        XCTAssertEqual(AgentTerminalController().runOff(nil), AgentWindowText.notRunning, "unwired: off")
+    }
+
+    /// Red if a move onto the wider pill's Run half hides it or reads the viewport.
+    func testTheWiderPillKeepsItselfUnderThePointer() throws {
+        let r = try rig(), m = r.marks
+        m.commandHover(Self.at(row: 3))
+        let onRun = CGPoint(x: m.pill.frame.maxX - 5, y: m.pill.frame.midY)
+        let onCopy = CGPoint(x: m.pill.frame.minX + 5, y: m.pill.frame.midY)
+        for p in [onCopy, onRun] {
+            m.commandHover(p)
+            XCTAssertFalse(m.pill.isHidden, "\(p)")
+            XCTAssertEqual(m.commandReads, 1, "\(p)")
+        }
+    }
+
+    // Through the window's interaction: the composer's path, a fake dch IO (never a real dch).
+
+    static let key = AgentWindowInteractionTests.key
+    typealias Fake = AgentWindowInteractionTests.MessageFake
+
+    func interaction(_ f: Fake) -> AgentWindowInteraction {
+        let c = AgentIslandController()
+        c.io = f.io
+        c.showsPanel = false
+        c.store = AgentIslandStore(geometry: AgentWindowD1Tests.geometry)
+        c.autoAllowOn = { false }
+        c.after = { _, _ in }
+        c.onSessions = { _ in }
+        let i = AgentWindowInteraction()
+        i.controller = c
+        i.pause = { _ in }
+        i.readQueue = { $0() }
+        return i
+    }
+
+    func session(_ state: AgentState) -> AgentSession { AgentSession(key: Self.key, alias: "", activity: 1, state: state, agents: 0) }
+
+    func until(_ what: String, _ cond: () -> Bool) {
+        let deadline = Date().addingTimeInterval(5)
+        while !cond(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertTrue(cond(), what)
+    }
+
+    /// Red if Run sends without the "! " prefix, through anything but one --say, while working or blocked, with no live
+    /// row, only for the followed session (R1: a side-by-side pane's own idle session runs too), or says nothing on success.
+    func testRunSendsBangCommandOnlyWhileIdleOrDone() {
+        let f = Fake(statuses: ["idle", "working"])
+        let i = interaction(f)
+        var told: [String] = []
+        for (state, why) in [(AgentState.working, AgentWindowText.working), (.blocked, AgentWindowText.blocked)] {
+            XCTAssertEqual(i.runOff(session(state)), why)
+            i.run("ls -la", session: session(state)) { told.append($0) }
+            XCTAssertFalse(i.busy)
+            XCTAssertEqual(told.last, why)
+        }
+        XCTAssertEqual(i.runOff(nil), AgentWindowText.notRunning, "no live row: off")
+        i.run("ls -la", session: nil) { told.append($0) }
+        XCTAssertEqual(told.last, AgentWindowText.notRunning)
+        XCTAssertEqual(f.lock.withLock { f.says }, [], "nothing typed while working, blocked or with no live row")
+        // the followed (focused) session is another one: the pane's own idle session still runs
+        i.follow(AgentSession(key: AgentSessionKey(dir: Self.key.dir, name: "focused"), alias: "", activity: 1, state: .idle, agents: 0))
+        XCTAssertTrue(i.runOff(session(.idle)) == nil)
+        i.run("ls -la", session: session(.idle)) { told.append($0) }
+        until("ran") { !i.busy }
+        XCTAssertEqual(f.lock.withLock { f.says }, ["! ls -la"])
+        XCTAssertEqual(told.last, AgentWindowText.ran)
+        XCTAssertTrue(i.runOff(session(.done)) == nil, "done too")
+    }
+
+    /// Red if a command over two lines, or with a tab or a hidden character, is cleaned and sent instead of refused whole.
+    func testRunRefusesAMultiLineOrHiddenCharacterCommand() {
+        let f = Fake(statuses: ["idle", "working"])
+        let i = interaction(f)
+        var told: [String] = []
+        for cmd in ["ls\nrm -rf x", "ls\r", "ls\tx", "ls\u{200B}x", "ls\u{1B}[201~", "ls\u{2028}x", "  "] {
+            i.run(cmd, session: session(.idle)) { told.append($0) }
+            XCTAssertEqual(told.last, AgentWindowText.runOneLine, cmd.debugDescription)
+            XCTAssertFalse(i.busy)
+        }
+        XCTAssertEqual(f.lock.withLock { f.says }, [])
+        XCTAssertEqual(AgentWindowInteraction.runText(" make all "), "! make all")
+    }
+
+    /// Red if dch's "draft" skip of a "!" text reads as a draft in the composer instead of Claude's shell mode, or a plain
+    /// message's draft notice changed.
+    func testADraftSkipOfARunIsShellMode() {
+        let draft = #"{"name":"s","result":"skipped","reason":"draft","detail":""}"#
+        let f = Fake(statuses: ["idle"], reply: draft)
+        let d = AgentWindowDriver(key: Self.key, io: f.io, pause: { _ in })
+        XCTAssertEqual(d.send("! ls"), .failed(AgentWindowText.shellMode))
+        XCTAssertEqual(d.send("hi"), .failed(AgentWindowText.draft), "a plain message keeps its draft notice")
+        XCTAssertEqual(AgentWindowDriver.sayFailure(("skipped", "draft")), AgentWindowText.draft, "the card reply's mapping is unchanged")
+        let g = Fake(statuses: ["idle"], reply: draft)
+        let i = interaction(g)
+        var told: [String] = []
+        i.run("ls", session: session(.idle)) { told.append($0) }
+        until("refused") { !i.busy }
+        XCTAssertEqual(told, [AgentWindowText.shellMode])
+    }
+}

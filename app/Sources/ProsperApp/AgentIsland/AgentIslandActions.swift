@@ -773,6 +773,8 @@ extension AgentIsland {
     /// ARG_MAX (1 MiB) holds the argv and the env together: past it the spawn failed as "Message failed (exit -1)".
     static let messageCap = 256 * 1024
     static let messageTooLongText = "Message not sent: longer than 256 KB"
+    /// #1953: a group message (Message all, or more than one row) that starts with "!".
+    static let messageShellGroupText = "Message not sent: a shell command (!) goes to one session at a time"
     /// #1135: dch 1.63's not_foreground (--say, --stop) and a click refused on claude_foreground false: Claude is
     /// suspended or in the background, so a shell would read the keys.
     static let notInFrontText = "Claude is not in front in that session; nothing was typed"

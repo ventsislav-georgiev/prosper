@@ -43,6 +43,11 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.158.0: X-ray hides a recurring name only when it is in more than 35% of turns; bold
   emphasis words are no longer listed as terms; very long sessions keep each prompt's own response
   in X-ray. (#1958)
+- Agent Sessions: the command Copy button has a Run button beside it that runs the command in that
+  pane's session (as "! <command>", Claude Code's shell mode) while the session is idle or done;
+  otherwise it is off, with the reason in its tooltip. A message starting with "!" sent to one
+  session from the island also runs as a shell command; a message to a whole group that starts with
+  "!" is refused. (#1953)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
