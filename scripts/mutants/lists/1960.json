@@ -1,0 +1,54 @@
+{
+ "entry": 1960,
+ "filter": "XrayCardPresenterTests",
+ "mutants": [
+  {
+   "name": "no-sendevent-hook",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "if event.type == .keyDown, takesEscape(event.keyCode, event.modifierFlags) { return cancelOperation(nil) }",
+   "new": "if false, takesEscape(event.keyCode, event.modifierFlags) { return cancelOperation(nil) }",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testEscapeWithTheCardTextFocusedClosesTheFirstCard|XrayCardPresenterTests/testEscapeWithTheCardTextFocusedGoesBackFromAPushedCard"
+  },
+  {
+   "name": "field-editor-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "&& (firstResponder as? NSTextView)?.isFieldEditor != true",
+   "new": "&& true",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testOnlyAPlainEscapeOutsideATextFieldIsTheCards"
+  },
+  {
+   "name": "any-modifier",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "keyCode == 53 && flags.intersection([.command, .option, .control, .shift]).isEmpty",
+   "new": "keyCode == 53",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testOnlyAPlainEscapeOutsideATextFieldIsTheCards"
+  },
+  {
+   "name": "any-key",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "keyCode == 53 && flags.intersection",
+   "new": "true && flags.intersection",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testOnlyAPlainEscapeOutsideATextFieldIsTheCards"
+  },
+  {
+   "name": "marks-own-card-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard cardShown(window) else { return false }",
+   "new": "guard hover.model != nil && cardShown(window) else { return false }",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testTerminalEscapeClosesAnyShownCard"
+  },
+  {
+   "name": "marks-no-close",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if hover.model != nil { hover.close() } else { closeCards(window) }",
+   "new": "if hover.model != nil { hover.close() }",
+   "expect": "killed",
+   "filter": "XrayCardPresenterTests/testTerminalEscapeClosesAnyShownCard"
+  }
+ ]
+}
