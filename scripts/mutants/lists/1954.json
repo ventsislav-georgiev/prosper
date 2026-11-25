@@ -21,8 +21,8 @@
   {
    "name": "corridor-no-extra-rows",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "height: CGFloat(cmd.last - cmd.row + 3) * h)",
-   "new": "height: CGFloat(cmd.last - cmd.row + 5) * h)",
+   "old": "height: CGFloat(cmd.last - cmd.row + 1 + above + below) * h)",
+   "new": "height: CGFloat(cmd.last - cmd.row + 3 + above + below) * h)",
    "expect": "killed",
    "filter": "XrayCommandPillTests/testTheCorridorKeepsThePillOnTheWayToIt"
   },
@@ -57,6 +57,22 @@
    "new": "",
    "expect": "killed",
    "filter": "XrayCommandPillTests/testAHideDropsTheCorridor"
+  },
+  {
+   "name": "slack-above-unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let above = Self.commandBlock(lines, at: cmd.row - 1, cols: cols) == nil ? 1 : 0",
+   "new": "let above = 1",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testAnAdjacentCommandIsNotSlack"
+  },
+  {
+   "name": "slack-below-unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let below = Self.commandBlock(lines, at: cmd.last + 1, cols: cols) == nil ? 1 : 0",
+   "new": "let below = 1",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testAnAdjacentCommandIsNotSlack"
   }
  ]
 }
