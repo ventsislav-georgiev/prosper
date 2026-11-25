@@ -1866,6 +1866,9 @@ struct AgentPlanLimitsView: View {
     /// #1947: the reset text's column at its one size (10 pt, no scaling): "23 h 59 min · Wed 23:59" must fit it.
     static let resetWidth: CGFloat = width - 2 * (padding + cardPadding) - nameWidth - barWidth - percentWidth - 3 * gap
 
+    /// #1957: the pace line's width: the card's inner width past the name column and its gap, drawn at 10 pt with no scaling.
+    static let paceWidth: CGFloat = width - 2 * (padding + cardPadding) - nameWidth - gap
+
     /// #1915: the cards (accounts with limits) and the compact rows (with their status), each in AgentPlanLimits' order.
     static func split(_ limits: AgentPlanLimits, timeZone: TimeZone)
         -> (cards: [AgentPlanLimits.Account], compact: [(account: AgentPlanLimits.Account, status: String)]) {
@@ -1937,10 +1940,10 @@ struct AgentPlanLimitsView: View {
                             .lineLimit(1).frame(width: Self.percentWidth, alignment: .trailing)
                         if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r).lineLimit(1) }
                     }
-                    if let o = AgentPlanLimits.runsOutText(l, timeZone: timeZone) {
+                    if let o = AgentPlanLimits.runsOutText(l, now: now, timeZone: timeZone) {
                         // The alert: under its window's row, past the name column, in the warning colour.
                         Text(verbatim: o).font(.system(size: 10, weight: .medium).monospacedDigit())
-                            .foregroundStyle(AgentIslandInk.glyph(.blocked)).padding(.leading, Self.nameWidth + 6)
+                            .foregroundStyle(AgentIslandInk.glyph(.blocked)).padding(.leading, Self.nameWidth + Self.gap)
                     }
                 }
             }

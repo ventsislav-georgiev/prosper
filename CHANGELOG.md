@@ -38,6 +38,8 @@ tag from the now-released section and put it on the new top draft.
   blockers in the tooltip. (#1956)
 - Ships dch 1.156.0: X-ray no longer underlines names that are everywhere in a project (its own name,
   names in more than 3% of turns, and a few noisy words); fixes a memory bug in the X-ray live feed. (#1949)
+- Plan usage: the "at this pace" warning names its limit (5h or week) and shows the day and how long
+  until it runs out. (#1957)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

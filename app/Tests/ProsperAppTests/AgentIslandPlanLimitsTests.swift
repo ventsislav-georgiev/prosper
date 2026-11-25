@@ -147,6 +147,30 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertEqual(AgentPlanLimitsView.resetWidth, expected)
     }
 
+    /// #1957: a weekly crossing days away names the limit, the distance and the weekday.
+    func testWeeklyPaceTextNamesTheWeekAndTheDay() {
+        let l = AgentPlanLimits.Limit(claim: "seven_day", name: "week", util: 0.5, reset: Int(now) + 5 * 86400, runsOut: Int(now) + 86400 + 3 * 3600)
+        XCTAssertEqual(AgentPlanLimits.runsOutText(l, now: now, timeZone: utc), "week runs out in ~1 d 3 h \u{00B7} Sat 11:00 at this pace")
+        let a = AgentPlanLimits.Account(label: "alpha", isCurrent: false, util: [:], at: nil, reset: [:], cooldown: [:], claims: claims, now: now)
+        var b = a; b.limits = [l]
+        XCTAssertTrue(AgentPlanLimits.spoken(b, now: now, timeZone: utc).contains("week runs out at this pace in about 1 day 3 hours, Saturday 11:00"))
+    }
+
+    /// #1957: the widest real pace line (a 6 d 23 h week crossing, a 4 h 59 min 5h crossing, each at 23:59) fits its line at 10 pt, no scaling.
+    @MainActor func testWidestPaceTextFitsItsLineAtTenPoints() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+        var widest: CGFloat = 0
+        for k in 0..<7 {
+            let target = Int(now) - 8 * 3600 + k * 86400 + 23 * 3600 + 59 * 60
+            for (name, span) in [("week", 6 * 86400 + 23 * 3600), ("5h", 4 * 3600 + 59 * 60)] {
+                let l = AgentPlanLimits.Limit(claim: "x", name: name, util: 0.5, reset: target + 3600, runsOut: target)
+                let t = AgentPlanLimits.runsOutText(l, now: Double(target - span), timeZone: utc) ?? ""
+                widest = max(widest, ceil((t as NSString).size(withAttributes: [.font: font]).width))
+            }
+        }
+        XCTAssertLessThanOrEqual(widest, AgentPlanLimitsView.paceWidth, "widest \(widest)")
+    }
+
     @MainActor func testBarIsDangerFromNinetyPercent() {
         XCTAssertNotEqual(Neon.magenta, Neon.blue, "the row needs two colours")
         XCTAssertEqual(AgentPlanLimitsView.barColor(0.9), Neon.magenta)
@@ -167,7 +191,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertTrue(tree.contains { $0.reads("Free across all accounts: 5h 85% (more at Fri 09:00)") }, "the pool speaks one sentence")
     }
 
-    // MARK: - #1899: the pace, "at this pace runs out ~HH:mm" before the reset
+    // MARK: - #1899: the pace, "<name> runs out in ~<time> · <day> at this pace" before the reset
 
     private func pace(_ points: [(dt: Double, u: Double)], r: Int? = nil) -> [AgentPlanLimits.PaceSample] {
         let reset = Double(r ?? Int(now) + 7200)
@@ -222,9 +246,10 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
                                                                          "other": ["five_hour": pace(rising)]], now: now)
         let row = try XCTUnwrap(limits.accounts.first)
         XCTAssertEqual(row.limits.map(\.runsOut), [Int(now) + 3000, nil])
-        XCTAssertEqual(row.limits.first.flatMap { AgentPlanLimits.runsOutText($0, timeZone: utc) }, "at this pace runs out ~08:50")
+        XCTAssertEqual(row.limits.first.flatMap { AgentPlanLimits.runsOutText($0, now: now, timeZone: utc) },
+                       "5h runs out in ~50 min \u{00B7} Fri 08:50 at this pace")
         let spoken = AgentPlanLimits.spoken(row, now: now, timeZone: utc)
-        XCTAssertEqual(spoken, "alpha, 5 hour 75 percent, resets in 2 hours, Friday 10:00, at this pace runs out around 08:50; "
+        XCTAssertEqual(spoken, "alpha, 5 hour 75 percent, resets in 2 hours, Friday 10:00, 5 hour runs out at this pace in about 50 minutes, Friday 08:50; "
                        + "week 20 percent, resets in 3 days, Monday 08:00, updated 1 min ago")
         let tree = AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 340, height: 300)) { t in
             t.contains { $0.reads(spoken) }

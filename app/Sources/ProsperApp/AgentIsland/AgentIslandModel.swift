@@ -1436,9 +1436,9 @@ struct AgentPlanLimits: Equatable, Sendable {
         return Int(cross.rounded())
     }
 
-    /// "at this pace runs out ~14:30"; nil: no crossing before the reset.
-    static func runsOutText(_ l: Limit, timeZone: TimeZone) -> String? {
-        l.runsOut.map { "at this pace runs out ~\(clock($0, format: "HH:mm", timeZone: timeZone))" }
+    /// #1957: "week runs out in ~1 d 3 h \u{00B7} Thu 18:28 at this pace" (the limit's name, the distance and the day, as resetText); nil: no crossing before the reset.
+    static func runsOutText(_ l: Limit, now: Double, timeZone: TimeZone) -> String? {
+        l.runsOut.map { "\(l.name) runs out in ~\(duration(Double($0) - now)) \u{00B7} \(clock($0, format: "EEE HH:mm", timeZone: timeZone)) at this pace" }
     }
 
     /// Most urgent first; ties by the earliest reset, then by label (a stable order).
@@ -1518,7 +1518,7 @@ struct AgentPlanLimits: Equatable, Sendable {
         let limits = a.limits.map { l in
             "\(l.name == "5h" ? "5 hour" : l.name) \(Int((l.util * 100).rounded())) percent"
                 + (l.reset.map { ", resets in \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
-                + (l.runsOut.map { ", at this pace runs out around \(clock($0, format: "HH:mm", timeZone: timeZone))" } ?? "")
+                + (l.runsOut.map { ", \(l.name == "5h" ? "5 hour" : l.name) runs out at this pace in about \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
         }
         let head = [OutsideText.shown(a.label, max: 40)]
         let tail = (a.limits.isEmpty ? [noData] : [limits.joined(separator: "; ")])
