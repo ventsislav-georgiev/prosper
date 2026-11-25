@@ -40,9 +40,9 @@ tag from the now-released section and put it on the new top draft.
   and a few noisy words); fixes a memory bug in the X-ray live feed. (#1949)
 - Plan usage: the "at this pace" warning names its limit (5h or week) and shows the day and how long
   until it runs out. (#1957)
-- Ships dch 1.158.0: X-ray hides a recurring name only when it is in more than 35% of turns; bold
+- Ships dch 1.159.0: X-ray hides a recurring name only when it is in more than 35% of turns; bold
   emphasis words are no longer listed as terms; very long sessions keep each prompt's own response
-  in X-ray. (#1958)
+  in X-ray; a message that was pasted but never sent is no longer reported as sent. (#1958)
 - Agent Sessions: the command Copy button has a Run button beside it that runs the command in that
   pane's session (as "! <command>", Claude Code's shell mode) while the session is idle or done;
   otherwise it is off, with the reason in its tooltip. A message starting with "!" sent to one
