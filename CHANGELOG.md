@@ -36,10 +36,13 @@ tag from the now-released section and put it on the new top draft.
   filters. (#1955)
 - X-ray Tasks: every row is one line at one height; a blocked task shows a link mark, with its
   blockers in the tooltip. (#1956)
-- Ships dch 1.156.0: X-ray no longer underlines names that are everywhere in a project (its own name,
-  names in more than 3% of turns, and a few noisy words); fixes a memory bug in the X-ray live feed. (#1949)
+- Ships dch 1.156.0: X-ray no longer underlines names that are everywhere in a project (its own name
+  and a few noisy words); fixes a memory bug in the X-ray live feed. (#1949)
 - Plan usage: the "at this pace" warning names its limit (5h or week) and shows the day and how long
   until it runs out. (#1957)
+- Ships dch 1.158.0: X-ray hides a recurring name only when it is in more than 35% of turns; bold
+  emphasis words are no longer listed as terms; very long sessions keep each prompt's own response
+  in X-ray. (#1958)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
