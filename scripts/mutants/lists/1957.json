@@ -1,0 +1,30 @@
+{
+ "entry": 1957,
+ "filter": "AgentIslandPlanLimitsTests",
+ "mutants": [
+  {
+   "name": "name",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "l.runsOut.map { \"\\(l.name) runs out in",
+   "new": "l.runsOut.map { \"runs out in",
+   "expect": "killed",
+   "filter": "AgentIslandPlanLimitsTests"
+  },
+  {
+   "name": "day",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "format: \"EEE HH:mm\", timeZone: timeZone)) at this pace",
+   "new": "format: \"HH:mm\", timeZone: timeZone)) at this pace",
+   "expect": "killed",
+   "filter": "AgentIslandPlanLimitsTests"
+  },
+  {
+   "name": "spoken",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "in about \\(duration(Double($0) - now, spoken: true)), \\(clock($0, format: \"EEEE HH:mm\"",
+   "new": "in about \\(duration(Double($0) - now, spoken: true)), \\(clock($0, format: \"HH:mm\"",
+   "expect": "killed",
+   "filter": "AgentIslandPlanLimitsTests"
+  }
+ ]
+}
