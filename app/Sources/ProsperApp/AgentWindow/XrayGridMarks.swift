@@ -305,10 +305,13 @@ final class XrayGridMarksView: NSView {
 
     // MARK: #1952: the command pill
 
-    /// A command block: its first row and its text as one line, without the "! " / "$ ".
+    /// A command block: its first row and its text as one line, without the "! " / "$ "; #1954: its last row and the
+    /// head's "!"/"$" column (the pointer corridor's rows and left edge).
     struct HoverCommand: Equatable {
         let row: Int
         let text: String
+        let last: Int
+        let col: Int
     }
     /// The block under the pointer while its pill shows; nil: none.
     private(set) var hoveredCommand: HoverCommand?
@@ -316,6 +319,9 @@ final class XrayGridMarksView: NSView {
     private var commandRow: Int?
     /// Rows count the work: viewport reads for the pill (one per row the pointer enters while settled).
     private(set) var commandReads = 0
+    /// #1954: while the pill shows, a move inside this rect (the block's rows plus one above and one below, from its left
+    /// column to the right edge) keeps it and reads nothing; .null: none.
+    private(set) var commandCorridor = CGRect.null
     let pill = XrayCommandPill()
 
     /// A live local session in the window's focused pane, the pane and its window on screen (Gate B plays no part).
@@ -328,6 +334,7 @@ final class XrayGridMarksView: NSView {
     /// The pointer moved to top-left point `p`: the pill for the block under it, read once per row entered.
     func commandHover(_ p: CGPoint?) {
         if let p, !pill.isHidden, pill.frame.contains(p) { return }   // on the pill: keep it (it may sit past the grid)
+        if let p, !pill.isHidden, commandCorridor.contains(p), settle == nil, commandsShown() { return }   // #1954: on the way
         guard settle == nil, let p, commandsShown(), let g = host?.gridMetrics, let c = host?.gridCell(at: p) else {
             return hideCommand()
         }
@@ -340,8 +347,13 @@ final class XrayGridMarksView: NSView {
             pill.isHidden = true
             return
         }
-        let h = CGFloat(g.cellHeightPixels) / max(window?.backingScaleFactor ?? 2, 1), w = max(2 * h, 24)
-        pill.frame = CGRect(x: bounds.width - w - 4, y: AgentTerminalHostView.gridOrigin.y + CGFloat(cmd.row) * h, width: w, height: h)
+        let scale = max(window?.backingScaleFactor ?? 2, 1), h = CGFloat(g.cellHeightPixels) / scale
+        let o = AgentTerminalHostView.gridOrigin, head = o.y + CGFloat(cmd.row) * h
+        // #1954: 2 pt above and below the head row, kept inside the overlay
+        let ph = min(h + 4, bounds.height), w = max(2 * ph, 24)
+        pill.frame = CGRect(x: bounds.width - w - 4, y: min(max(head - 2, 0), bounds.height - ph), width: w, height: ph)
+        let left = o.x + CGFloat(cmd.col) * CGFloat(g.cellWidthPixels) / scale
+        commandCorridor = CGRect(x: left, y: head - h, width: bounds.width - left, height: CGFloat(cmd.last - cmd.row + 3) * h)
         pill.isHidden = false
     }
 
@@ -349,6 +361,7 @@ final class XrayGridMarksView: NSView {
     func hideCommand() {
         commandRow = nil
         hoveredCommand = nil
+        commandCorridor = .null
         if !pill.isHidden { pill.isHidden = true }
     }
 
@@ -396,7 +409,7 @@ final class XrayGridMarksView: NSView {
         var first = lines[top]
         first = String(repeating: " ", count: col + 2) + first.dropFirst(col + 2)
         let text = joined([first] + lines[(top + 1)..<(bottom + 1)], cols: cols)
-        return text.isEmpty ? nil : HoverCommand(row: top, text: text)
+        return text.isEmpty ? nil : HoverCommand(row: top, text: text, last: bottom, col: col)
     }
 
     /// Wrapped rows as the one line they were (prosper-ios TerminalMath.oneLine, cols only): each row trimmed, joined with
