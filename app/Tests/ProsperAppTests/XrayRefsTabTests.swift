@@ -94,15 +94,16 @@ final class XrayRefsTabTests: XCTestCase {
         XrayPanels.refsTab = { true }
         let p = applied(XrayRefsParseTests.six, dropped: 5)
         XCTAssertEqual(p.shownRefs.map(\.text), ["acme/api#7", "API-12", "#831"], "issues, pulls and tickets, dch's order")
-        let t = try XCTUnwrap(p.refsToggle)
-        XCTAssertEqual(t.text, "3 files, commits and links hidden")
-        XCTAssertEqual(t.button, "Show all kinds")
+        let t = try XCTUnwrap(p.refsChips.first)
+        XCTAssertEqual(t.label, "Files, commits and links")
+        XCTAssertEqual(t.count, 3)
+        XCTAssertFalse(t.shown)
         XCTAssertEqual(p.refsFooter, ["5 more refs not indexed"])
         p.showAllRefs = true
         XCTAssertEqual(p.shownRefs.map(\.text),
                        ["acme/api#7", "API-12", "#831", "src/main.c:12", "abc1234", "https://example.org/acme/api"])
-        XCTAssertTrue(p.refsToggle?.text == nil)
-        XCTAssertEqual(p.refsToggle?.button, "Hide files, commits and links")
+        XCTAssertEqual(p.refsChips.first?.shown, true)
+        XCTAssertEqual(p.refsChips.first?.count, 3, "the count stays when shown")
         XCTAssertEqual(applied().refsFooter, [], "no dropped keys: no line")
     }
 
@@ -117,7 +118,27 @@ final class XrayRefsTabTests: XCTestCase {
         XCTAssertEqual(p.shownRefs.map(\.text), ["API-12"], "by its text")
         p.filter = "main.c"
         XCTAssertEqual(p.shownRefs.map(\.text), [], "a hidden kind stays hidden")
-        XCTAssertEqual(p.refsToggle?.text, "1 files, commits and links hidden")
+        XCTAssertEqual(p.refsChips.first?.count, 1)
+    }
+
+    /// #1955: the Refs chip: label, count, shown, toggle and spoken label. Red at TIP: refsToggle is (text, button), no chip.
+    func testRefsChipCarriesCountAndToggles() throws {
+        let gate = XrayPanels.refsTab
+        defer { XrayPanels.refsTab = gate }
+        XrayPanels.refsTab = { true }
+        let p = applied(XrayRefsParseTests.six)
+        let chip = try XCTUnwrap(p.refsChips.first)
+        XCTAssertEqual(p.refsChips.count, 1)
+        XCTAssertEqual(chip.label, "Files, commits and links")
+        XCTAssertEqual(chip.count, 3)
+        XCTAssertFalse(chip.shown)
+        XCTAssertEqual(chip.spoken, "Files, commits and links, 3 rows")
+        chip.toggle()
+        XCTAssertTrue(p.showAllRefs)
+        XCTAssertEqual(p.shownRefs.count, 6)
+        XCTAssertEqual(p.refsChips.first?.shown, true)
+        p.refsChips.first?.toggle()
+        XCTAssertFalse(p.showAllRefs)
     }
 
     func testBoldWhenDefinedOrTwoMentions() throws {
@@ -145,7 +166,7 @@ final class XrayRefsTabTests: XCTestCase {
         XrayPanels.refsTab = { true }
         let p = applied(XrayRefTermTests.refs)
         XCTAssertEqual(p.shownRefs.map(\.text), ["#831", "API-12", "E-1", "ERR_LEDGER_SKEW", "test_retry_timeout", "dryRun", "--ref"])
-        XCTAssertTrue(p.refsToggle == nil, "no file, commit or link here: nothing hidden")
+        XCTAssertTrue(p.refsChips.isEmpty, "no file, commit or link here: nothing hidden")
     }
 
     func testRowIsAButtonWithASpokenLabel() throws {

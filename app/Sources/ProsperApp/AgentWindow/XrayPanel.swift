@@ -733,11 +733,12 @@ final class XrayPanelModel: ObservableObject {
         (refs?.ordered ?? []).filter { Self.matches($0, filter) && (showAllRefs || XrayRefs.byDefault($0)) }
     }
 
-    /// The footer's toggle (dch `a`): "2 files, commits and links hidden" + Show all kinds, or Hide; none without such a row.
-    var refsToggle: (text: String?, button: String)? {
+    /// #1955: the filter bar's chip (dch `a`): "Files, commits and links" with the number of such refs (filter applied,
+    /// shown or hidden); none without such a row.
+    var refsChips: [XrayFilterChip] {
         let n = (refs?.entries ?? []).filter { Self.matches($0, filter) && !XrayRefs.byDefault($0) }.count
-        guard n > 0 else { return nil }
-        return showAllRefs ? (nil, "Hide files, commits and links") : ("\(n) files, commits and links hidden", "Show all kinds")
+        guard n > 0 else { return [] }
+        return [XrayFilterChip(label: "Files, commits and links", count: n, shown: showAllRefs) { [weak self] in self?.showAllRefs.toggle() }]
     }
 
     /// R1415-i1 (b): a filter that leaves no row says so (a list of hidden kinds alone has the toggle's line instead).
@@ -1096,16 +1097,15 @@ struct XrayPanelView: View {
                     }
                 }
             }
-            promptFilterBar
+            filterBar(panel.promptFooter(.prompts))
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
         .padding(sz(10))
     }
 
-    /// #1950: the Automatic / Agent messages filters, a bar of its own under the list (hairline above, chips with
-    /// their counts inside, so no number sits in the ordinal column).
-    @ViewBuilder var promptFilterBar: some View {
-        let chips = panel.promptFooter(.prompts)
+    /// #1950: a tab's filters (Prompts: Automatic / Agent messages; #1955 Refs: files, commits and links), a bar of
+    /// its own under the list (hairline above, chips with their counts inside, so no number sits in the ordinal column).
+    @ViewBuilder func filterBar(_ chips: [XrayFilterChip]) -> some View {
         if !chips.isEmpty {
             Divider().overlay(Neon.stroke)
             HStack(spacing: sz(6)) {
@@ -1178,12 +1178,7 @@ struct XrayPanelView: View {
                 }
             }
             if let n = panel.refsEmpty { faint(n) }
-            if let f = panel.refsToggle {
-                HStack(spacing: sz(6)) {
-                    if let t = f.text { faint(t) }
-                    Button(f.button) { panel.showAllRefs.toggle() }.buttonStyle(.link).font(Neon.font(XrayText.small, weight: .medium))
-                }
-            }
+            filterBar(panel.refsChips)
             ForEach(panel.refsFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))

@@ -33,6 +33,8 @@ tag from the now-released section and put it on the new top draft.
   header anchor, out of the window, was the one remembered. (#1951)
 - Agent Sessions: hovering a command line ("! …" or "$ …") in the terminal shows a Copy button at
   the pane's right edge; it copies the command without its "! " or "$ ". (#1952)
+- X-ray: the Refs tab's "files, commits and links" filter is the same outlined chip as the Prompts
+  filters. (#1955)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
