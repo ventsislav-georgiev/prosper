@@ -1320,11 +1320,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
                 owner?.open(link.text)
                 return
             }
-            let grid = refClick(at: q)
-            // #1940: a Command-down that opened no mark card (its click logged why when there was a mark)
-            XrayCardLog.note("cmd-down: mark \(marks.mark(at: q) != nil) of \(marks.marks.count), grid ref card \(grid)")
-        } else if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift) {
-            XrayCardLog.note("cmd-down: the pane is not the focused one")
+            refClick(at: q)
         }
         passedClick?(event)
         super.mouseDown(with: event)

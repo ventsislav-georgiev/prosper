@@ -1,5 +1,4 @@
 import AppKit
-import os
 import SwiftUI
 
 // #1319 (#832 X1 step B, spec v2.1 8.3): the popover seam the Command-L list uses (and the X2 card later). The window
@@ -25,15 +24,6 @@ final class XrayCardPanel: NSPanel {
 /// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
 /// corners) in its own panel, replacing the dropdown-like NSPopover. Placed by `frame` (below the anchor; beside the
 /// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it.
-/// #1940: the Command-click card's path, one .notice line per step (kept: `log show` finds it later), so a live
-/// build says where a card went missing:
-/// `/usr/bin/log show --last 1h --predicate 'subsystem == "eu.illegible.prosper" AND category == "xray-card"'`.
-/// Reasons and flags only: never a ref's text, a path or a session name.
-enum XrayCardLog {
-    static let log = Logger(subsystem: "eu.illegible.prosper", category: "xray-card")
-    static func note(_ s: String) { log.notice("\(s, privacy: .public)") }
-}
-
 @MainActor
 final class XrayCardPanelPresenter: XrayCardPresenter {
     // Internal, not private: rows read the panel and post its resign-key without ever showing one.
@@ -58,7 +48,7 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
     var isShown: Bool { panel != nil }
 
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
-        close("replaced")   // one card at a time: the old card's closed runs before the new one is installed (#1432)
+        close()   // one card at a time: the old card's closed runs before the new one is installed (#1432)
         let win = anchor.window
         let screen = (win?.screen ?? NSScreen.main)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let at = win.map { $0.convertToScreen(anchor.convert(anchor.bounds, to: nil)) } ?? .zero
@@ -81,22 +71,16 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         })
         host.frame = CGRect(origin: .zero, size: f.size)
         p.contentView = host
-        p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close("escape") } }
+        p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close() } }
         resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
-            [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close("resign-key") } }
+            [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
         }
         (panel, self.closed) = (p, closed)
         order(p, win, .showKey)
-        XrayCardLog.note("present: key \(p.isKeyWindow) visible \(p.isVisible) parent \(win != nil) parent visible \(win?.isVisible == true) "
-                         + "parent key \(win?.isKeyWindow == true) app active \(NSRunningApplication.current.isActive)")
     }
 
-    func close() { close("dismiss") }
-
-    /// #1940: `why` names the closer in the card log (dismiss: the panel's own, from Esc in the terminal, blur or hide).
-    private func close(_ why: String) {
+    func close() {
         guard let p = panel else { return }
-        XrayCardLog.note("close: \(why)")
         let f = closed
         resign.map { NotificationCenter.default.removeObserver($0) }
         (panel, self.closed, resign) = (nil, nil, nil)
@@ -178,12 +162,5 @@ struct XrayCardAnchor: NSViewRepresentable {
     /// The anchor of `pane`'s header in `window` (the gate-off single pane registers as nil), if drawn there.
     @MainActor static func view(for pane: UUID, in window: NSWindow) -> NSView? {
         [pane, nil].lazy.compactMap { views[$0]?.view }.first { $0.window === window }
-    }
-
-    /// #1940: the card log's word for `pane`'s anchor (nil: the shared one): none, gone, out of a window, or in one.
-    @MainActor static func state(_ pane: UUID?) -> String {
-        guard let a = views[pane] else { return "none" }
-        guard let v = a.view else { return "gone" }
-        return v.window == nil ? "out of a window" : v.window is AgentsNSWindow ? "in a window" : "in another window"
     }
 }

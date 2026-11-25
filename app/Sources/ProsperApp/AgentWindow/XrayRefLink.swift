@@ -77,18 +77,6 @@ enum XrayRefLink {
         return (refs, f.target, m.layout.focused, state)
     }
 
-    /// #1940: the first terminalRefs rule that fails, in its order, for the card log; nil: none fails (refs are there).
-    static func missing(_ w: AgentsNSWindow?, _ key: AgentSessionKey?) -> String? {
-        guard decorate() else { return "gate B off" }
-        guard let w else { return "not an Agent Sessions window" }
-        guard let key else { return "no session" }
-        guard w.model != nil else { return "no window model" }
-        guard let f = XrayPanels.shared.follows.focused(in: ObjectIdentifier(w)) else { return "the window holds no follow" }
-        guard let state = f.state else { return "the follow has no snapshot" }
-        guard f.target == target(key) else { return "the window's follow is another session's" }
-        return state.refs == nil ? "the snapshot has no refs" : nil
-    }
-
     /// #1568 (X-R a): a terminal session's X-ray target: a remote row's "host:name" with no dir (dch dials the host), a
     /// local one's name and socket dir. Nil: no name, or a host or name dch would read as a flag (XrayTarget.of's rule).
     static func target(_ key: AgentSessionKey) -> XrayTarget? {

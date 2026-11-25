@@ -50,7 +50,7 @@ final class XrayGridMarksView: NSView {
         didSet {
             guard follow !== oldValue else { return }
             sink = follow?.$state.sink { [weak self] s in self?.take(s?.refs) }   // @Published: the new value, now
-            if follow == nil { take(nil); hover.close("blur") }   // #1565: blur (another pane's focus) closes any card
+            if follow == nil { take(nil); hover.close() }   // #1565: blur (another pane's focus) closes any card
         }
     }
     private(set) var refs: XrayRefs?
@@ -95,13 +95,8 @@ final class XrayGridMarksView: NSView {
         hover.ext = { [weak self] k in self?.extMatches[k] }   // #1569
         hover.calls = { [weak self] in XrayExtensionCalls.of(self?.window) }
         hover.panel = { [weak self] in
-            guard let self, let key = host?.owner?.key else { XrayCardLog.note("click: no session"); return nil }
-            let w = window as? AgentsNSWindow
-            if let p = XrayRefLink.hoverPanel(w, key: key) { return p }
-            // #1940: the marks' follow against the one the click reads (XrayFollows.focused): they can differ
-            let same = w.map { follow === XrayPanels.shared.follows.focused(in: ObjectIdentifier($0)) } ?? false
-            XrayCardLog.note("click: no refs: \(XrayRefLink.missing(w, key) ?? "none missing"); the marks' follow is the window's \(same)")
-            return nil
+            guard let self, let key = host?.owner?.key else { return nil }
+            return XrayRefLink.hoverPanel(window as? AgentsNSWindow, key: key)
         }
     }
 
@@ -263,14 +258,14 @@ final class XrayGridMarksView: NSView {
     @discardableResult
     func escape() -> Bool {
         guard hover.model != nil && cardShown(window) else { return false }
-        hover.close("escape")
+        hover.close()
         return true
     }
 
     /// #1565: pane hide closes any card.
     override func viewDidHide() {
         super.viewDidHide()
-        hover.close("pane hidden")
+        hover.close()
     }
 
     /// #1565: window hide (miniaturize, close, ordered out) and focus loss (the window resigns main) close any card.
@@ -278,7 +273,7 @@ final class XrayGridMarksView: NSView {
         super.viewDidMoveToWindow()
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers = []
-        guard let w = window else { return hover.close("left the window") }
+        guard let w = window else { return hover.close() }
         let gone: [Notification.Name] = [NSWindow.didResignMainNotification, NSWindow.didMiniaturizeNotification,
                                          NSWindow.willCloseNotification, NSWindow.didChangeOcclusionStateNotification]
         observers = gone.map { name in
@@ -286,7 +281,7 @@ final class XrayGridMarksView: NSView {
             return NotificationCenter.default.addObserver(forName: name, object: w, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, !occlusion || !self.windowShown(self.window) else { return }
-                    self.hover.close(name.rawValue)
+                    self.hover.close()
                 }
             }
         }
@@ -388,21 +383,13 @@ final class XrayHover {
     /// #1701: a Command-click on mark `key`: its card, pinned. False: no card for it.
     func click(_ key: String) -> Bool {
         let x = ext(key)   // #1569
-        guard let p = panel() else { return false }   // #1940: the product's panel logs why
-        guard let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key })
-                ?? XrayRefSpans.listed(key, in: p.refs.entries) else {   // #1701: a list number's
-            XrayCardLog.note("click: the mark is not in the refs")
-            return false
-        }
-        XrayCardLog.note(x == nil ? "click: opens the ref card" : "click: opens the extension card")
+        guard let p = panel(), let e = x.map(XrayExtensionRefs.entry) ?? p.refs.entries.first(where: { $0.key == key })
+                ?? XrayRefSpans.listed(key, in: p.refs.entries) else { return false }   // #1701: a list number's
         model = p.panel
         if let x { p.panel.extRef(e, x, calls: calls()) } else { p.panel.openRef(e) }
         return true
     }
 
-    /// Closes the card of the panel (its close kills its read). #1940: `why` goes to the card log while a card was opened.
-    func close(_ why: String = "other") {
-        if model != nil { XrayCardLog.note("hover close: \(why)") }
-        model?.dismiss()
-    }
+    /// Closes the card of the panel (its close kills its read).
+    func close() { model?.dismiss() }
 }
