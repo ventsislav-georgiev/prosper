@@ -3,13 +3,6 @@
  "filter": "XrayRemoteMarksTests/testEscClosesACardElseReachesThePty|XrayHoverTests/testEveryRefKindOpensItsCardOnCommandClick|XrayHoverTests/testExtensionCardArgHasNoTranscriptAndSpawnsNoDch|XrayHoverTests/testEscHideAndBlurCloseAnyCard|XrayHoverTests/testACachedLightAnswerMakesTheClickACacheHit|XrayRefStagedOpenTests/testACachedLightAnswerOpensTheCardWithNoWait|XrayRefResultsTests/testALightAnswerNeverServesAFullAskAFullOneServesTheNext|AgentTerminalFileLinkTests/testTheCommandHoverUnderlinesALinkByShapeOnly",
  "mutants": [
   {
-   "name": "escNoShownCheck",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard hover.model != nil && cardShown(window) else { return false }",
-   "new": "guard hover.model != nil else { return false }",
-   "expect": "killed"
-  },
-  {
    "name": "listNumberDropped",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
    "old": "                ?? XrayRefSpans.listed(key, in: p.refs.entries) else { return false }   // #1701: a list number's",

@@ -117,7 +117,7 @@
   {
    "name": "escape_always",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard hover.model != nil && cardShown(window) else { return false }",
+   "old": "guard cardShown(window) else { return false }",
    "new": "guard true else { return false }",
    "expect": "killed"
   }
