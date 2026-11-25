@@ -1,0 +1,94 @@
+{
+ "entry": 1952,
+ "filter": "XrayCommandPillTests",
+ "mutants": [
+  {
+   "name": "hit-any-point",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard !pill.isHidden, pill.frame.contains(convert(point, from: superview)) else { return nil }",
+   "new": "guard !pill.isHidden else { return nil }",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testHitTestIsNilOutsideThePill"
+  },
+  {
+   "name": "hit-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard !pill.isHidden, pill.frame.contains(convert(point, from: superview)) else { return nil }",
+   "new": "guard pill.frame.contains(convert(point, from: superview)) else { return nil }",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testHitTestIsNilOutsideThePill"
+  },
+  {
+   "name": "no-settle-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "guard settle == nil, let p, commandsShown(),",
+   "new": "guard let p, commandsShown(),",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testOutputHidesItUntilTheSettle"
+  },
+  {
+   "name": "output-keeps-pill",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        hideCommand()   // #1952: shown only while the grid is settled\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testOutputHidesItUntilTheSettle"
+  },
+  {
+   "name": "keep-prefix",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "first = String(repeating: \" \", count: col + 2) + first.dropFirst(col + 2)",
+   "new": "first = String(repeating: \" \", count: col) + first.dropFirst(col)",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "col0-continues",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "while col > 0, bottom + 1 < lines.count,",
+   "new": "while bottom + 1 < lines.count,",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheBlockRule"
+  },
+  {
+   "name": "always-space",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "out += full.map { $0.tail + head > $0.box } == true ? \"\" : \" \"",
+   "new": "out += \" \"",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheJoinRule"
+  },
+  {
+   "name": "keep-backslash",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if right.hasSuffix(\" \\\\\") {",
+   "new": "if right.hasSuffix(\"\\u{0}\") {",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheJoinRule"
+  },
+  {
+   "name": "read-per-move",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        if c.row == commandRow { return }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testHoverShowsThePillOnTheHeadRowAtTheRightEdge"
+  },
+  {
+   "name": "any-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "owner.remoteHost == nil, owner.paneFocused(),",
+   "new": "owner.remoteHost == nil,",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testOnlyALiveLocalFocusedPane"
+  },
+  {
+   "name": "no-notice",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        host.owner?.show(Self.copiedText)\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testCopyStripsThePrefixAndSaysCopied"
+  }
+ ]
+}
