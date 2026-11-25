@@ -237,20 +237,32 @@ struct XrayCardAnchor: NSViewRepresentable {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @Environment(\.agentPaneID) private var pane
 
-    /// The anchors by pane; weak, so a closed pane's goes with its view.
-    @MainActor static var views: [UUID?: WeakAnchor] = [:]
+    /// The anchors by pane, oldest registered first; weak, so a closed pane's goes with its view. #1951: every live one
+    /// is kept, not only the last registered, so an instance SwiftUI updated last and then took out of the window (or
+    /// freed) never hides the pane's anchor that is still drawn.
+    @MainActor static var views: [UUID?: [WeakAnchor]] = [:]
     final class WeakAnchor { weak var view: NSView?; init(_ v: NSView) { view = v } }
+
+    /// `v` becomes `pane`'s newest anchor; freed ones and an earlier entry for `v` go, so the list holds live views only.
+    @MainActor static func register(_ v: NSView, _ pane: UUID?) {
+        views[pane] = (views[pane] ?? []).filter { $0.view != nil && $0.view !== v } + [WeakAnchor(v)]
+    }
+
+    /// `pane`'s anchors, then the shared (nil) ones, each newest first.
+    @MainActor static func candidates(_ pane: UUID) -> [NSView] {
+        [pane, nil].flatMap { (views[$0] ?? []).reversed().compactMap(\.view) }
+    }
 
     func makeNSView(context: Context) -> NSView {
         let v = NSView()
-        Self.views[pane] = WeakAnchor(v)
+        Self.register(v, pane)
         return v
     }
 
-    func updateNSView(_ v: NSView, context: Context) { Self.views[pane] = WeakAnchor(v) }
+    func updateNSView(_ v: NSView, context: Context) { Self.register(v, pane) }
 
     /// The anchor of `pane`'s header in `window` (the gate-off single pane registers as nil), if drawn there.
     @MainActor static func view(for pane: UUID, in window: NSWindow) -> NSView? {
-        [pane, nil].lazy.compactMap { views[$0]?.view }.first { $0.window === window }
+        candidates(pane).first { $0.window === window }
     }
 }

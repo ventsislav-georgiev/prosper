@@ -204,6 +204,34 @@ final class XrayChaptersTests: XCTestCase {
         }
     }
 
+    /// #1951. Red at TIP (AgentsWindow.swift:672 under XrayPoller.swift:179 and XrayPanel.swift:96: the pane's newest
+    /// anchor is out of any window, so window(of:) was nil, fromDch false, and the open read refs only: no chapters read,
+    /// no Prompts tab): with the product's model lookup, the drawn anchor in the window still makes the pane read dch's
+    /// chapters, and the Prompts tab is there.
+    func testThePromptsTabStaysWhenThePanesNewestAnchorIsOutOfTheWindow() async throws {
+        let run = Run()
+        let (dch, prun, read, saved) = (XrayPanels.dch, XrayPanels.run, XrayPanels.chaptersRead, XrayCardAnchor.views)
+        defer { (XrayPanels.dch, XrayPanels.run, XrayPanels.chaptersRead, XrayCardAnchor.views) = (dch, prun, read, saved)
+                XrayPanels.shared.open = [:] }
+        XrayPanels.dch = XrayPanelTasksTests.gate([1, 78, 0])
+        XrayPanels.run = run.run
+        XrayPanels.chaptersRead = XrayPanels.fromDch
+        XrayCardAnchor.views = [:]
+        try await window { win, m in
+            let pane = m.layout.focused
+            let drawn = XrayRemoteChipTests.anchorHost(pane, in: try XCTUnwrap(win.contentView))
+            defer { drawn.removeFromSuperview() }
+            let stale = XrayRemoteChipTests.staleAnchor(pane)
+            XCTAssertTrue(XrayCardAnchor.views[pane]?.last?.view?.isDescendant(of: stale) == true, "the newest anchor is the stale one")
+            XCTAssertTrue(win.toggleXray())
+            let p = try XCTUnwrap(XrayPanels.shared.open[pane])
+            await p.reading?.value
+            XCTAssertEqual(run.chapterReads, 1, "the chapters read ran")
+            XCTAssertEqual(p.tabs, [.prompts, .tasks, .memory])
+            XCTAssertTrue(win.toggleXray(), "closes")
+        }
+    }
+
     /// Exit 1 (the host's dch does not know the form) and 6 (refused): no Prompts or Responses tab, on the open read and
     /// on a poll, and no more chapters reads; exit 4 and 7 keep the rows with "host unreachable" (P5's labels).
     func testExitOneAndSixGiveNoPromptsTab() async throws {

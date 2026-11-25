@@ -667,9 +667,10 @@ final class AgentsNSWindow: NSWindow {
         XrayPanels.dch() != nil && XrayTarget.of(m.selectedRow) != nil ? .xray(pane: m.layout.focused) : nil
     }
 
-    /// The window that draws `pane`'s header.
+    /// The window that draws `pane`'s header: its newest anchor that is in an Agents window (#1951: one out of any window,
+    /// or freed, is skipped), else the shared (nil) one's.
     @MainActor static func window(of pane: UUID) -> AgentsNSWindow? {
-        (XrayCardAnchor.views[pane]?.view ?? XrayCardAnchor.views[nil]?.view).flatMap { $0.window as? AgentsNSWindow }
+        XrayCardAnchor.candidates(pane).lazy.compactMap { $0.window as? AgentsNSWindow }.first
     }
 
     @MainActor static func xrayChosen(pane: UUID) { window(of: pane)?.toggleXray() }

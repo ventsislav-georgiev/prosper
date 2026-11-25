@@ -29,6 +29,8 @@ tag from the now-released section and put it on the new top draft.
   sit under the title instead of being cut off at the edge. (#1945)
 - X-ray: the Prompts filters (Automatic, Agent messages) are outlined toggle chips with their
   counts, set apart from the prompt list. (#1950)
+- X-ray: the Prompts tab and Command-click cards no longer go missing when an older copy of a pane's
+  header anchor, out of the window, was the one remembered. (#1951)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

@@ -120,7 +120,7 @@ final class XrayRemoteChipTests: XCTestCase {
             let anchor = NSView()   // the header's anchor, registered as the drawn one would be
             win.contentView?.addSubview(anchor)
             let saved = XrayCardAnchor.views
-            XrayCardAnchor.views[m.layout.focused] = XrayCardAnchor.WeakAnchor(anchor)
+            XrayCardAnchor.register(anchor, m.layout.focused)
             defer { XrayCardAnchor.views = saved }
             XCTAssertTrue(AgentsNSWindow.window(of: m.layout.focused) === win, "the pane's header window is the window")
         }
@@ -133,6 +133,91 @@ final class XrayRemoteChipTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.02))
         }
+    }
+
+    /// #1951: a real XrayCardAnchor for `pane` (nil: the environment's default, the shared key) in a hosting view added to
+    /// `parent`, laid out until its anchor is `pane`'s newest one.
+    static func anchorHost(_ pane: UUID?, in parent: NSView) -> NSView {
+        let host = NSHostingView(rootView: XrayCardAnchor().environment(\.agentPaneID, pane).frame(width: 20, height: 20))
+        host.frame = CGRect(x: 0, y: 0, width: 20, height: 20)
+        parent.addSubview(host)
+        layOut(host, until: { XrayCardAnchor.views[pane]?.last?.view?.isDescendant(of: host) == true })
+        return host
+    }
+
+    /// #1951: an anchor for `pane` made and laid out in a never-shown plain window, then taken out of it (as SwiftUI leaves
+    /// a header instance it updated last and then removed); the caller holds the returned host, so the anchor stays alive.
+    static func staleAnchor(_ pane: UUID?) -> NSView {
+        let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        let host = anchorHost(pane, in: other.contentView ?? NSView())
+        host.removeFromSuperview()
+        return host
+    }
+
+    /// #1951. Red at TIP (AgentsWindow.swift:672, `views[pane]?.view ?? views[nil]?.view`: one entry per pane, the last
+    /// registered, and a view that is there but in no Agents window ends the lookup at nil): a second XrayCardAnchor for
+    /// the pane, made after the drawn one, in another window, then out of any window, then freed, never hides the window
+    /// that draws the pane; the pane reads dch (fromDch: the Prompts tab) and a card hangs from the drawn anchor.
+    func testAnAnchorRegisteredLaterOutsideTheWindowNeverHidesIt() async throws {
+        try await window { win, m in
+            let saved = XrayCardAnchor.views
+            XrayCardAnchor.views = [:]
+            defer { XrayCardAnchor.views = saved }
+            let pane = m.layout.focused, target = XrayTarget(name: "example-host:api", dir: nil)
+            let drawn = Self.anchorHost(pane, in: try XCTUnwrap(win.contentView))
+            defer { drawn.removeFromSuperview() }
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "the drawn anchor names the window")
+            let other = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 100, height: 100), styleMask: [.titled], backing: .buffered, defer: true)
+            other.isReleasedWhenClosed = false
+            defer { other.close() }
+            var stale: NSView? = Self.anchorHost(pane, in: try XCTUnwrap(other.contentView))
+            XCTAssertTrue(XrayCardAnchor.views[pane]?.last?.view?.window === other, "the newest anchor is in a plain window")
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "in another window: skipped")
+            XCTAssertTrue(XrayPanels.fromDch(pane, target), "the pane reads dch")
+            stale?.removeFromSuperview()
+            XCTAssertTrue(XrayCardAnchor.views[pane]?.last?.view.map { $0.window == nil } == true, "the newest anchor is out of any window")
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "out of any window: skipped")
+            XCTAssertTrue(XrayPanels.fromDch(pane, target))
+            XCTAssertTrue(XrayCardAnchor.view(for: pane, in: win)?.isDescendant(of: drawn) == true, "the card hangs from the drawn anchor")
+            stale = nil
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "freed: skipped")
+        }
+    }
+
+    /// #1951. Red at TIP (AgentsWindow.swift:672: the `??` falls back only on a freed view, never on one out of a window):
+    /// the header drawn with no pane id registers under the shared key; a pane-keyed anchor out of any window, registered
+    /// later, does not hide it.
+    func testAPaneAnchorOutOfAWindowFallsBackToTheSharedOne() async throws {
+        try await window { win, m in
+            let saved = XrayCardAnchor.views
+            XrayCardAnchor.views = [:]
+            defer { XrayCardAnchor.views = saved }
+            let pane = m.layout.focused
+            let drawn = Self.anchorHost(nil, in: try XCTUnwrap(win.contentView))
+            defer { drawn.removeFromSuperview() }
+            let stale = Self.staleAnchor(pane)
+            XCTAssertTrue(XrayCardAnchor.views[pane]?.last?.view?.isDescendant(of: stale) == true)
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "the shared anchor's window")
+            XCTAssertTrue(XrayCardAnchor.view(for: pane, in: win)?.isDescendant(of: drawn) == true)
+        }
+    }
+
+    /// #1951: the registry holds live anchors, each once: an anchor SwiftUI updates 100 times is one entry, and a freed one
+    /// goes at the next registration (the list never grows with header updates).
+    func testTheRegistryKeepsEachLiveAnchorOnce() {
+        let saved = XrayCardAnchor.views
+        XrayCardAnchor.views = [:]
+        defer { XrayCardAnchor.views = saved }
+        let pane = UUID(), kept = NSView()
+        for _ in 0..<100 { XrayCardAnchor.register(kept, pane) }
+        XCTAssertEqual(XrayCardAnchor.views[pane]?.count, 1, "one entry for 100 updates")
+        autoreleasepool { XrayCardAnchor.register(NSView(), pane) }
+        XrayCardAnchor.register(kept, pane)
+        XCTAssertEqual(XrayCardAnchor.views[pane]?.count, 1, "the freed one went")
+        XCTAssertTrue(XrayCardAnchor.views[pane]?.last?.view === kept)
+        XCTAssertTrue(XrayCardAnchor.views[nil] == nil, "no other key touched")
     }
 
     /// Red at TIP (AgentsWindow.swift:1675-1690, AgentRemoteHeader draws no XrayCardAnchor): the real remote branch of
