@@ -1,0 +1,14 @@
+{
+  "entry": 1963,
+  "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysShellNotRun",
+  "mutants": [
+    {
+      "name": "first_drop_shell",
+      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+      "old": "if let why = AgentWindowDriver.sayFailure(reply, shell: text.hasPrefix(\"!\")) {",
+      "new": "if let why = AgentWindowDriver.sayFailure(reply) {",
+      "expect": "killed",
+      "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysShellNotRun"
+    }
+  ]
+}
