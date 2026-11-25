@@ -1,0 +1,46 @@
+{
+ "entry": 1951,
+ "filter": "XrayRemoteChipTests|XrayChaptersTests/testThePromptsTabStaysWhenThePanesNewestAnchorIsOutOfTheWindow",
+ "mutants": [
+  {
+   "name": "lookup-last-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "XrayCardAnchor.candidates(pane).lazy.compactMap { $0.window as? AgentsNSWindow }.first",
+   "new": "(XrayCardAnchor.views[pane]?.last?.view ?? XrayCardAnchor.views[nil]?.last?.view).flatMap { $0.window as? AgentsNSWindow }",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testAnAnchorRegisteredLaterOutsideTheWindowNeverHidesIt|XrayRemoteChipTests/testAPaneAnchorOutOfAWindowFallsBackToTheSharedOne|XrayChaptersTests/testThePromptsTabStaysWhenThePanesNewestAnchorIsOutOfTheWindow"
+  },
+  {
+   "name": "lookup-no-window-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "XrayCardAnchor.candidates(pane).lazy.compactMap { $0.window as? AgentsNSWindow }.first",
+   "new": "XrayCardAnchor.candidates(pane).first.flatMap { $0.window as? AgentsNSWindow }",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testAnAnchorRegisteredLaterOutsideTheWindowNeverHidesIt|XrayRemoteChipTests/testAPaneAnchorOutOfAWindowFallsBackToTheSharedOne|XrayChaptersTests/testThePromptsTabStaysWhenThePanesNewestAnchorIsOutOfTheWindow"
+  },
+  {
+   "name": "register-replaces",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "views[pane] = (views[pane] ?? []).filter { $0.view != nil && $0.view !== v } + [WeakAnchor(v)]",
+   "new": "views[pane] = [WeakAnchor(v)]",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testAnAnchorRegisteredLaterOutsideTheWindowNeverHidesIt|XrayChaptersTests/testThePromptsTabStaysWhenThePanesNewestAnchorIsOutOfTheWindow"
+  },
+  {
+   "name": "register-no-dedupe",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "views[pane] = (views[pane] ?? []).filter { $0.view != nil && $0.view !== v } + [WeakAnchor(v)]",
+   "new": "views[pane] = (views[pane] ?? []) + [WeakAnchor(v)]",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testTheRegistryKeepsEachLiveAnchorOnce"
+  },
+  {
+   "name": "candidates-no-shared",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayCardPresenter.swift",
+   "old": "[pane, nil].flatMap { (views[$0] ?? []).reversed().compactMap(\\.view) }",
+   "new": "[pane].flatMap { (views[$0] ?? []).reversed().compactMap(\\.view) }",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testAPaneAnchorOutOfAWindowFallsBackToTheSharedOne"
+  }
+ ]
+}
