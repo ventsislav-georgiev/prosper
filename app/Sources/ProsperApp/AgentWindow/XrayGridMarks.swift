@@ -21,6 +21,10 @@ import SwiftUI
 // #1655: place() only snapshots on main (lines, refs, rules); marks() and extMarks() run on a serial utility queue
 // through a per-line memo (XrayMarksMemo, the refs prepared once per refs change) and the result is applied on main only
 // if no output, refs change or newer place() came in meanwhile (`generation`). A focus switch costs the snapshot.
+// #1952: a command block ("! cmd" / "$ cmd", XrayGridMarksView.commandBlock) under the pointer shows a Copy pill pinned to
+// the pane's right edge on the block's first row, only while the grid is settled (`settle` nil); output, a scroll, a resize,
+// a focus change and the pointer leaving hide it at once, and the next move after the settle shows it again. One viewport
+// read per row the pointer enters (`commandReads`), never per move. Only the pill's rect takes clicks (hitTest).
 
 @MainActor
 final class XrayGridMarksView: NSView {
@@ -51,6 +55,7 @@ final class XrayGridMarksView: NSView {
             guard follow !== oldValue else { return }
             sink = follow?.$state.sink { [weak self] s in self?.take(s?.refs) }   // @Published: the new value, now
             if follow == nil { take(nil); hover.close() }   // #1565: blur (another pane's focus) closes any card
+            hideCommand()   // #1952: a focus change
         }
     }
     private(set) var refs: XrayRefs?
@@ -98,18 +103,25 @@ final class XrayGridMarksView: NSView {
             guard let self, let key = host?.owner?.key else { return nil }
             return XrayRefLink.hoverPanel(window as? AgentsNSWindow, key: key)
         }
+        pill.copy.target = self   // #1952
+        pill.copy.action = #selector(copyCommand)
+        addSubview(pill)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var isFlipped: Bool { true }
-    /// Clicks, drags and the wheel go to the terminal under it.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    /// Clicks, drags and the wheel go to the terminal under it; #1952: but those in the shown command pill's rect.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !pill.isHidden, pill.frame.contains(convert(point, from: superview)) else { return nil }
+        return super.hitTest(point)
+    }
 
     /// The pty wrote: a mark whose cells changed (or moved: a scroll) goes now, the rest stay; all are placed again once
     /// output rests. `resized`: the grid's cells changed, every mark goes.
     func output(resized: Bool = false) {
+        hideCommand()   // #1952: shown only while the grid is settled
         // #1724: the text under a Command hover may have changed: one re-read per drain, only while one is on the grid
         if link != nil || linkCell != nil { linkCell = nil; linkHover(pointer) }
         // #1628: one viewport read per drain, only while marks are drawn (drains are coalesced, one per main-loop turn)
@@ -223,11 +235,13 @@ final class XrayGridMarksView: NSView {
     override func mouseMoved(with event: NSEvent) {
         pointer = convert(event.locationInWindow, from: nil)
         command(event.modifierFlags.contains(.command))
+        commandHover(pointer)
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) {
         pointer = nil
         linkHover(nil)
+        hideCommand()
     }
 
     /// #1701: the pointer's last point over this view (top-left); nil once it left.
@@ -266,6 +280,7 @@ final class XrayGridMarksView: NSView {
     override func viewDidHide() {
         super.viewDidHide()
         hover.close()
+        hideCommand()
     }
 
     /// #1565: window hide (miniaturize, close, ordered out) and focus loss (the window resigns main) close any card.
@@ -282,9 +297,132 @@ final class XrayGridMarksView: NSView {
                 MainActor.assumeIsolated {
                     guard let self, !occlusion || !self.windowShown(self.window) else { return }
                     self.hover.close()
+                    self.hideCommand()   // #1952
                 }
             }
         }
+    }
+
+    // MARK: #1952: the command pill
+
+    /// A command block: its first row and its text as one line, without the "! " / "$ ".
+    struct HoverCommand: Equatable {
+        let row: Int
+        let text: String
+    }
+    /// The block under the pointer while its pill shows; nil: none.
+    private(set) var hoveredCommand: HoverCommand?
+    /// The row `hoveredCommand` was read for: a move inside the same row reads no viewport text.
+    private var commandRow: Int?
+    /// Rows count the work: viewport reads for the pill (one per row the pointer enters while settled).
+    private(set) var commandReads = 0
+    let pill = XrayCommandPill()
+
+    /// A live local session in the window's focused pane, the pane and its window on screen (Gate B plays no part).
+    func commandsShown() -> Bool {
+        guard let host, let owner = host.owner, owner.phase == .live, owner.remoteHost == nil, owner.paneFocused(),
+              !host.isHiddenOrHasHiddenAncestor else { return false }
+        return windowShown(host.window)
+    }
+
+    /// The pointer moved to top-left point `p`: the pill for the block under it, read once per row entered.
+    func commandHover(_ p: CGPoint?) {
+        if let p, !pill.isHidden, pill.frame.contains(p) { return }   // on the pill: keep it (it may sit past the grid)
+        guard settle == nil, let p, commandsShown(), let g = host?.gridMetrics, let c = host?.gridCell(at: p) else {
+            return hideCommand()
+        }
+        if c.row == commandRow { return }
+        commandRow = c.row
+        commandReads += 1
+        let lines = (host?.viewportText() ?? "").components(separatedBy: "\n")
+        hoveredCommand = Self.commandBlock(lines, at: c.row, cols: Int(g.columns))
+        guard let cmd = hoveredCommand, g.cellHeightPixels > 0 else {
+            pill.isHidden = true
+            return
+        }
+        let h = CGFloat(g.cellHeightPixels) / max(window?.backingScaleFactor ?? 2, 1), w = max(2 * h, 24)
+        pill.frame = CGRect(x: bounds.width - w - 4, y: AgentTerminalHostView.gridOrigin.y + CGFloat(cmd.row) * h, width: w, height: h)
+        pill.isHidden = false
+    }
+
+    /// The pill goes and the next move reads again.
+    func hideCommand() {
+        commandRow = nil
+        hoveredCommand = nil
+        if !pill.isHidden { pill.isHidden = true }
+    }
+
+    /// Copy: the command on the host's pasteboard (tests hand a private one), then "Copied" in the pane.
+    @objc func copyCommand() {
+        guard let text = hoveredCommand?.text, let host else { return }
+        let pb = host.pasteboard()
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        host.owner?.show(Self.copiedText)
+    }
+    static let copiedText = "Copied"
+
+    /// The command block row `row` is in: a head row whose text (after its indent and a Claude Code ⏺/● marker) starts
+    /// with "! " or "$ ", then the rows under it indented at least as far and not at column 0 (Claude Code's hard wrap),
+    /// up to a blank, marker or other head row; joined as one line (`joined`) without the "! " / "$ ". Nil for any other
+    /// row, or past `cap` rows above it. Reads only the rows from the head to the block's end. Pure.
+    /// shortcut: a column-0 head takes no continuation (a shell's output follows it), and output indented under an
+    /// indented "$ " joins it; upgrade to the wrap width (the phone's oneLine fill rule) if that copies too much.
+    nonisolated static func commandBlock(_ lines: [String], at row: Int, cols: Int, cap: Int = 12) -> HoverCommand? {
+        func indent(_ i: Int) -> Int { lines[i].prefix(while: \.isWhitespace).count }
+        func body(_ i: Int) -> Substring { lines[i].drop(while: \.isWhitespace) }
+        func cont(_ i: Int) -> Bool { body(i).first.map { !"⏺●⎿│╭╰".contains($0) } ?? false }
+        /// The head's "!"/"$" column, its marker dropped; nil: not a head.
+        func head(_ i: Int) -> Int? {
+            var b = body(i), col = indent(i)
+            if let f = b.first, "⏺●".contains(f) { b = b.dropFirst(); col += 1 + b.prefix(while: { $0 == " " }).count; b = b.drop(while: { $0 == " " }) }
+            guard b.hasPrefix("! ") || b.hasPrefix("$ "), b.dropFirst(2).contains(where: { !$0.isWhitespace }) else { return nil }
+            return col
+        }
+        guard lines.indices.contains(row) else { return nil }
+        var top = row
+        while head(top) == nil {
+            guard top > 0, row - top < cap, cont(top) else { return nil }
+            top -= 1
+        }
+        guard let col = head(top) else { return nil }
+        var bottom = top
+        while col > 0, bottom + 1 < lines.count, bottom - top < cap, cont(bottom + 1), head(bottom + 1) == nil,
+              indent(bottom + 1) >= col {
+            bottom += 1
+        }
+        guard row <= bottom else { return nil }
+        // the head's marker and "! " turn into spaces, so a full head row still counts as full (the phone's rule)
+        var first = lines[top]
+        first = String(repeating: " ", count: col + 2) + first.dropFirst(col + 2)
+        let text = joined([first] + lines[(top + 1)..<(bottom + 1)], cols: cols)
+        return text.isEmpty ? nil : HoverCommand(row: top, text: text)
+    }
+
+    /// Wrapped rows as the one line they were (prosper-ios TerminalMath.oneLine, cols only): each row trimmed, joined with
+    /// " "; with "" when the row above filled `cols` and its last token plus this row's first would not fit its wrap box
+    /// (a long token split mid-way); a trailing " \\" drops the backslash. Pure.
+    nonisolated static func joined(_ rows: [String], cols: Int) -> String {
+        var out = "", full: (tail: Int, box: Int)?
+        for row in rows {
+            let right = String(row.reversed().drop(while: \.isWhitespace).reversed()), line = right.drop(while: \.isWhitespace)
+            guard !line.isEmpty else { continue }
+            if !out.isEmpty {
+                let head = line.prefix(while: { !$0.isWhitespace }).count
+                out += full.map { $0.tail + head > $0.box } == true ? "" : " "
+            }
+            out += line
+            full = nil
+            if right.hasSuffix(" \\") {
+                out.removeLast()
+                while out.last?.isWhitespace == true { out.removeLast() }
+                continue
+            }
+            if cols > 0, right.count % cols == 0 {
+                full = (right.reversed().prefix(while: { !$0.isWhitespace }).count, cols - (right.count - line.count))
+            }
+        }
+        return out
     }
 
     /// The text colour, faded as the Transcript's marks.
@@ -392,4 +530,38 @@ final class XrayHover {
 
     /// Closes the card of the panel (its close kills its read).
     func close() { model?.dismiss() }
+}
+
+/// #1952: the command pill: one small opaque capsule (the window's card fill and stroke) holding the Copy button.
+final class XrayCommandPill: NSView {
+    let copy = NSButton(title: "", target: nil, action: nil)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isHidden = true
+        copy.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy command")
+        copy.imagePosition = .imageOnly
+        copy.isBordered = false
+        copy.toolTip = "Copy command"
+        copy.setAccessibilityLabel("Copy command")
+        addSubview(copy)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        copy.frame = bounds
+        copy.symbolConfiguration = .init(pointSize: max(bounds.height * 0.5, 8), weight: .medium)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.height / 2, path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: r, yRadius: r)
+        NSColor(Neon.card).setFill()
+        path.fill()
+        NSColor(Neon.stroke).setStroke()
+        path.stroke()
+        copy.contentTintColor = NSColor(Neon.textSecondary)
+    }
 }

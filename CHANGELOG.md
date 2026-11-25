@@ -31,6 +31,8 @@ tag from the now-released section and put it on the new top draft.
   counts, set apart from the prompt list. (#1950)
 - X-ray: the Prompts tab and Command-click cards no longer go missing when an older copy of a pane's
   header anchor, out of the window, was the one remembered. (#1951)
+- Agent Sessions: hovering a command line ("! …" or "$ …") in the terminal shows a Copy button at
+  the pane's right edge; it copies the command without its "! " or "$ ". (#1952)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

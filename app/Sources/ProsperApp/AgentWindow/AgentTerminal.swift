@@ -858,7 +858,7 @@ final class AgentTerminalController: ObservableObject {
         }
     }
 
-    private func show(_ text: String) {
+    func show(_ text: String) {   // #1952: the command pill's "Copied" too
         notice = text
         after(Self.noticeFor) { [weak self] in if self?.notice == text { self?.notice = nil } }
     }
@@ -1217,6 +1217,7 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// switch the wheel went to a stale point and did nothing until the mouse moved. In ?1002/?1003 that move also
     /// writes one motion report at the wheel point (the operator's rule: the wheel reports to that program).
     override func scrollWheel(with event: NSEvent) {
+        marks.hideCommand()   // #1952: a scroll moves the rows under the command pill
         super.mouseMoved(with: event)
         if let mouseWheel { mouseWheel(event) } else { super.scrollWheel(with: event) }
     }
