@@ -248,4 +248,18 @@ final class XrayPanelMemoryTests: XCTestCase {
         XCTAssertEqual(f(c, true)["xrayAge"]?.maxX ?? -1, fa["xrayAge"]?.maxX ?? -2, accuracy: 0.5, "age ends at one x")
         XCTAssertGreaterThan(abs((f(a, false)["xrayStatus"]?.minX ?? 0) - (f(b, false)["xrayStatus"]?.minX ?? 0)), 1, "control: drifts")
     }
+
+    /// Red at 8fb2c9e1: no memoryCols / colsBuilt (the tab built every XrayMemoryRow on each body).
+    func testMemoryColumnsAreBuiltOncePerChangeOfTheMemory() {
+        let p = panel()
+        let r = rows(p)
+        let c = p.memoryCols
+        XCTAssertEqual(c.session, XrayCol.widest(r.map(\.session)))
+        XCTAssertEqual(c.age, XrayCol.widest(r.map(\.age)))
+        for q in ["", "zsh", "zzz", ""] { p.filter = q; XCTAssertTrue(p.memoryCols == c, "a filter keeps the columns") }
+        XCTAssertEqual(p.colsBuilt.memory, 1, "N bodies and filters: one computation")
+        p.apply(tasks: (0, XrayPanelTasksTests.tasksOut), memory: (0, Data()))
+        _ = p.memoryCols
+        XCTAssertEqual(p.colsBuilt.memory, 2, "changed memory: one more")
+    }
 }

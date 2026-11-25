@@ -204,15 +204,21 @@ final class XrayPanels: ObservableObject {
 final class XrayPanelModel: ObservableObject {
     let target: XrayTarget
     /// nil: no Tasks tab (design 3.9: exit not 0, a schema other than 1, an empty list, a shell).
-    @Published var tasks: XrayTasks?   // set here and by the poller (XrayPoller.swift)
+    @Published var tasks: XrayTasks? {   // set here and by the poller (XrayPoller.swift)
+        didSet { if tasks != oldValue { taskColsMemo = nil } }
+    }
     /// nil: no Memory tab (exit not 0, no row).
-    @Published private(set) var memory: XrayMemory?
+    @Published private(set) var memory: XrayMemory? {
+        didSet { if memory != oldValue { memoryColsMemo = nil } }
+    }
     /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
     @Published var dchChapters: [TranscriptOutline.Chapter]?
     /// #1566: the corpus fields of the same read or snapshot (the header's second line); nil: none said.
     @Published var corpus: XrayChapters.Corpus?
     /// #1415: the refs of dch's `--json` read (gate A on only); nil: none read. "Show all kinds" (dch `a`).
-    @Published var refs: XrayRefs?
+    @Published var refs: XrayRefs? {
+        didSet { if refs != oldValue { refCountMemo = nil } }
+    }
     @Published var showAllRefs = false
     /// #1416: the ref card's data from the last --ref read (XrayPanels.runRef), or why it has none.
     @Published var refContext: XrayRefContext?
@@ -494,6 +500,46 @@ final class XrayPanelModel: ObservableObject {
             [XrayTaskLine(id: "g\(i)", header: "\(g.title) \(g.tasks.count)", task: nil)]
                 + g.tasks.enumerated().map { j, t in XrayTaskLine(id: "g\(i).\(j)", header: nil, task: t) }
         }
+    }
+
+    // #1948: the list columns' widths over ALL items (so they hold while the filter types), computed from the source
+    // fields, once per change of the data (and per clock minute for the ages), never per body.
+    private var taskColsMemo: (minute: Int, cols: XrayTaskCols)?
+    private var memoryColsMemo: (minute: Int, session: String, age: String)?
+    private var refCountMemo: (complete: Bool, widest: String)?
+    /// Counts the width computations (tests read it: N bodies, one computation).
+    private(set) var colsBuilt = (tasks: 0, refs: 0, memory: 0)
+
+    private func minute() -> Int { Int(max(-1e12, min(now().timeIntervalSince1970 / 60, 1e12)).rounded(.down)) }
+
+    var taskCols: XrayTaskCols {
+        let m = minute()
+        if let c = taskColsMemo, c.minute == m { return c.cols }
+        colsBuilt.tasks += 1
+        let cols = XrayTaskCols(tasks: (tasks?.groups ?? []).flatMap(\.tasks), now: now())
+        taskColsMemo = (m, cols)
+        return cols
+    }
+
+    var memoryCols: (session: String, age: String) {
+        let m = minute()
+        if let c = memoryColsMemo, c.minute == m { return (c.session, c.age) }
+        colsBuilt.memory += 1
+        let items = (memory?.groups ?? []).flatMap(\.items), at = now()
+        let s = XrayCol.widest(items.map { $0.sessionWord.flatMap { $0.isEmpty ? nil : $0 } })
+        let a = XrayCol.widest(items.map { XrayTaskRow.age($0.updated, now: at)?.short })
+        memoryColsMemo = (m, s, a)
+        return (s, a)
+    }
+
+    /// The widest count of every ref, with the "\u{2265}" an incomplete read puts before it.
+    var refCountWidest: String {
+        let complete = refs?.complete ?? true
+        if let c = refCountMemo, c.complete == complete { return c.widest }
+        colsBuilt.refs += 1
+        let w = XrayCol.widest((refs?.ordered ?? []).map { (complete ? "" : "\u{2265}") + "\($0.count)" })
+        refCountMemo = (complete, w)
+        return w
     }
 
     /// "Tasks \u{00B7} <title>" for a command list; nil otherwise.
@@ -1010,7 +1056,7 @@ struct XrayPanelView: View {
     }
 
     var tasksTab: some View {
-        let cols = XrayTaskCols(panel.taskLines.compactMap { l in l.task.map { XrayTaskRow($0, now: panel.now()) } })   // #1945
+        let cols = panel.taskCols, lines = panel.taskLines   // #1945, #1948: memoised on the model; one filter pass
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
@@ -1020,7 +1066,7 @@ struct XrayPanelView: View {
             if let t = panel.listTitle { Text(verbatim: t).font(Neon.font(XrayText.row, weight: .semibold)).lineLimit(1) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(panel.taskLines) { l in
+                    ForEach(lines) { l in
                         if let h = l.header {
                             faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
                         } else if let t = l.task {
@@ -1110,8 +1156,7 @@ struct XrayPanelView: View {
     /// #1415: the Refs list; #1417: a row opens its card.
     var refsTab: some View {
         let complete = panel.refs?.complete ?? true
-        let rows = panel.shownRefs.map { XrayRefRow($0, complete: complete, home: panel.home, cwd: panel.cwd()) }   // #1945
-        let countW = XrayCol.widest(rows.map(\.count))
+        let countW = panel.refCountWidest   // #1945, #1948
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
@@ -1121,7 +1166,7 @@ struct XrayPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { i, e in
-                        XrayRefRowView(row: rows[i], countWidest: countW) { panel.openRef(e) }
+                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd()), countWidest: countW) { panel.openRef(e) }
                     }
                 }
             }
@@ -1138,8 +1183,7 @@ struct XrayPanelView: View {
     }
 
     var memoryTab: some View {
-        let mrows = panel.shownMemory.flatMap { g in g.items.map { XrayMemoryRow($0, now: panel.now(), home: panel.home, cwd: panel.cwd()) } }   // #1945
-        let sessionW = XrayCol.widest(mrows.map(\.session)), ageW = XrayCol.widest(mrows.map(\.age))
+        let (sessionW, ageW) = panel.memoryCols   // #1945, #1948
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
@@ -1239,6 +1283,12 @@ struct XrayTaskCols: Equatable {
         id = XrayCol.widest(rows.map(\.id))
         label = XrayCol.widest(rows.map(\.label))
         age = XrayCol.widest(rows.map(\.age))
+    }
+    /// #1948: the same widths from the tasks' own fields, no row built (spoken join, blocked strings).
+    init(tasks: [XrayTasks.Task], now: Date) {
+        id = XrayCol.widest(tasks.map(\.id))
+        label = XrayCol.widest(tasks.map { XrayTaskRow.label($0) })
+        age = XrayCol.widest(tasks.map { XrayTaskRow.age($0.updated ?? $0.created, now: now)?.short })
     }
 }
 

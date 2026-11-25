@@ -574,4 +574,43 @@ final class XrayPanelTasksTests: XCTestCase {
         XCTAssertLessThanOrEqual(f["xrayAge"]?.maxX ?? 1000, w - sz(10) + 0.5, "nothing is clipped at the right edge")
         XCTAssertGreaterThan(f["xrayTitle"]?.width ?? 0, 0)
     }
+
+    // MARK: #1948: the column widths are memoised on the model
+
+    /// Red at 8fb2c9e1: no taskCols / colsBuilt (the tab built a row per task and filtered twice on every body).
+    func testTaskColumnsAreBuiltOncePerChangeOfTheTasksNotPerBodyOrFilter() throws {
+        let p = panel()
+        var clock = Self.now
+        p.now = { clock }
+        let all = (p.tasks?.groups ?? []).flatMap(\.tasks).map { XrayTaskRow($0, now: Self.now) }
+        let first = p.taskCols
+        XCTAssertEqual(first, XrayTaskCols(all), "the widths from the fields equal the widths from the built rows")
+        for q in ["", "Ship", "zzz", "login", ""] { p.filter = q; XCTAssertEqual(p.taskCols, first, "a filter keeps the columns (all tasks count)") }
+        XCTAssertEqual(p.colsBuilt.tasks, 1, "N bodies and filter changes: one computation")
+        p.tasks = p.tasks   // the poll tick: the same list
+        XCTAssertEqual(p.taskCols, first)
+        XCTAssertEqual(p.colsBuilt.tasks, 1, "an unchanged list is not recomputed")
+        p.tasks = XrayTasks.parse(Self.ndjson([Self.header, Self.rows[0],
+            #"{"task":{"id":"123456","title":"Long id","status":"pending","label":"pending"}}"#, Self.done]))
+        XCTAssertEqual(p.taskCols.id, "123456")
+        XCTAssertEqual(p.taskCols.id, "123456")
+        XCTAssertEqual(p.colsBuilt.tasks, 2, "a changed list: one more")
+        clock = clock.addingTimeInterval(61)
+        _ = p.taskCols; _ = p.taskCols
+        XCTAssertEqual(p.colsBuilt.tasks, 3, "a new clock minute re-ages once")
+    }
+
+    /// Red at 8fb2c9e1: no refCountWidest / colsBuilt; the Refs tab built a row per shown ref on every body.
+    func testRefCountWidthIsBuiltOncePerChangeOfTheRefs() throws {
+        let p = panel()
+        p.refs = try XrayRefTermTests().parsed()
+        let w = p.refCountWidest
+        for q in ["", "a", ""] { p.filter = q; XCTAssertEqual(p.refCountWidest, w) }
+        p.showAllRefs.toggle()
+        XCTAssertEqual(p.refCountWidest, w)
+        XCTAssertEqual(p.colsBuilt.refs, 1, "bodies, filters and the kind toggle: one computation")
+        p.refs = nil
+        XCTAssertEqual(p.refCountWidest, "")
+        XCTAssertEqual(p.colsBuilt.refs, 2, "changed refs: one more")
+    }
 }
