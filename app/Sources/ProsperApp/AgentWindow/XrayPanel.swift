@@ -639,18 +639,16 @@ final class XrayPanelModel: ObservableObject {
         return (all.filter(\.auto).count, all.filter { $0.from == .peer }.count)
     }
 
-    /// The footer's toggles (dch xview.c:3563-3575): "3 automatic hidden" + Show, or Hide; "2 agent messages hidden" + Show,
-    /// or Hide; none when the tab has no such row.
-    func promptFooter(_ tab: XrayTab) -> [(text: String?, button: String, toggle: () -> Void)] {
+    /// #1950: the filter bar's chips (dch xview.c:3563-3575's toggles): "Automatic" and "Agent messages", each with the
+    /// number of such rows on the tab (filter applied, shown or hidden); none when the tab has no such row.
+    func promptFooter(_ tab: XrayTab) -> [XrayFilterChip] {
         let n = hidden(tab)
-        var out: [(text: String?, button: String, toggle: () -> Void)] = []
+        var out: [XrayFilterChip] = []
         if n.auto > 0 {
-            out.append((showAuto ? nil : "\(n.auto) automatic hidden", showAuto ? "Hide automatic" : "Show automatic",
-                        { [weak self] in self?.showAuto.toggle() }))
+            out.append(XrayFilterChip(label: "Automatic", count: n.auto, shown: showAuto) { [weak self] in self?.showAuto.toggle() })
         }
         if n.peer > 0 {
-            out.append((hidePeer ? "\(n.peer) agent message\(n.peer == 1 ? "" : "s") hidden" : nil,
-                        hidePeer ? "Show agent messages" : "Hide agent messages", { [weak self] in self?.hidePeer.toggle() }))
+            out.append(XrayFilterChip(label: "Agent messages", count: n.peer, shown: !hidePeer) { [weak self] in self?.hidePeer.toggle() })
         }
         return out
     }
@@ -1098,15 +1096,24 @@ struct XrayPanelView: View {
                     }
                 }
             }
-            ForEach(Array(panel.promptFooter(.prompts).enumerated()), id: \.offset) { _, f in
-                HStack(spacing: sz(6)) {
-                    if let t = f.text { faint(t) }
-                    Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(XrayText.small, weight: .medium))
-                }
-            }
+            promptFilterBar
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
         .padding(sz(10))
+    }
+
+    /// #1950: the Automatic / Agent messages filters, a bar of its own under the list (hairline above, chips with
+    /// their counts inside, so no number sits in the ordinal column).
+    @ViewBuilder var promptFilterBar: some View {
+        let chips = panel.promptFooter(.prompts)
+        if !chips.isEmpty {
+            Divider().overlay(Neon.stroke)
+            HStack(spacing: sz(6)) {
+                faint("Show")
+                ForEach(chips, id: \.label) { XrayFilterChipView(chip: $0) }
+            }
+            .padding(.top, sz(2))
+        }
     }
 
     /// #1355: the query runs on Return (never per keystroke, never polled); a hit does nothing yet (P8/P9).
@@ -1213,6 +1220,39 @@ struct XrayPanelView: View {
 
     func faint(_ s: String) -> some View {
         Text(verbatim: s).font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+    }
+}
+
+/// #1950: one filter chip of the Prompts tab: what it filters, how many such rows there are, whether they are listed.
+struct XrayFilterChip {
+    let label: String, count: Int, shown: Bool, toggle: () -> Void
+    var spoken: String { "\(label), \(count) \(count == 1 ? "row" : "rows")" }
+}
+
+/// #1950: the chip: outlined capsule, count badge inside; on = Neon.blue tint + eye, off = outline + eye.slash.
+struct XrayFilterChipView: View {
+    let chip: XrayFilterChip
+
+    var body: some View {
+        Button(action: chip.toggle) {
+            HStack(spacing: sz(4)) {
+                Image(systemName: chip.shown ? "eye" : "eye.slash").font(Neon.font(XrayText.small - 1))
+                Text(verbatim: chip.label).font(Neon.font(XrayText.small, weight: .medium))
+                Text(verbatim: "\(chip.count)").font(Neon.font(XrayText.small - 1, weight: .medium).monospacedDigit())
+                    .padding(.horizontal, sz(5))
+                    .background(Capsule().fill(Neon.stroke))
+            }
+            .foregroundStyle(chip.shown ? Neon.textPrimary : Neon.textSecondary)
+            .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+            .background(Capsule().fill(chip.shown ? Neon.blue.opacity(0.2) : .clear))
+            .overlay(Capsule().stroke(chip.shown ? Neon.blue.opacity(0.6) : Neon.stroke, lineWidth: 1))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(chip.spoken)
+        .accessibilityValue(chip.shown ? "shown" : "hidden")
+        .accessibilityAddTraits(chip.shown ? .isSelected : [])
     }
 }
 

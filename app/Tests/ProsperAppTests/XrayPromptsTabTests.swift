@@ -62,8 +62,9 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(p.title(.prompts), "Prompts 3")
         XCTAssertEqual(p.spoken(.prompts), "Prompts, 3")
         let f = p.promptFooter(.prompts)
-        XCTAssertEqual(f.first?.text, "3 automatic hidden")
-        XCTAssertEqual(f.first?.button, "Show automatic")
+        XCTAssertEqual(f.first?.label, "Automatic")
+        XCTAssertEqual(f.first?.count, 3)
+        XCTAssertEqual(f.first?.shown, false)
     }
 
     /// Red with auto-shown-by-default. The toggle shows them faint, titled by their summary, with dch's marks.
@@ -76,8 +77,8 @@ final class XrayPromptsTabTests: XCTestCase {
         let rows = p.shownPrompts
         XCTAssertEqual(rows.count, 7)
         XCTAssertEqual(p.title(.prompts), "Prompts 7", "the count is the rows listed")
-        XCTAssertEqual(p.promptFooter(.prompts).first?.text, nil)
-        XCTAssertEqual(p.promptFooter(.prompts).first?.button, "Hide automatic")
+        XCTAssertEqual(p.promptFooter(.prompts).first?.shown, true)
+        XCTAssertEqual(p.promptFooter(.prompts).first?.count, 3, "the count stays when shown")
         let note = try XCTUnwrap(rows.first { $0.ordinal == 2 }), back = try XCTUnwrap(rows.first { $0.ordinal == 4 })
         let compact = try XCTUnwrap(rows.first { $0.ordinal == 5 })
         XCTAssertEqual(note.title, "Background build finished", "titled by its summary")
@@ -100,8 +101,9 @@ final class XrayPromptsTabTests: XCTestCase {
         defer { m.stop() }
         XCTAssertFalse(p.shownPrompts.contains { $0.from == .peer }, "#1815: hidden by default")
         let show = try XCTUnwrap(p.promptFooter(.prompts).last)
-        XCTAssertEqual(show.text, "1 agent message hidden")
-        XCTAssertEqual(show.button, "Show agent messages")
+        XCTAssertEqual(show.label, "Agent messages")
+        XCTAssertEqual(show.count, 1)
+        XCTAssertFalse(show.shown)
         show.toggle()
         XCTAssertFalse(p.hidePeer)
         let c = try XCTUnwrap(p.shownPrompts.first { $0.from == .peer })
@@ -112,15 +114,35 @@ final class XrayPromptsTabTests: XCTestCase {
         XCTAssertEqual(row.spoken, "Message from api-qa, prompt 3, Please rerun the api suite")
         XCTAssertFalse(row.faint)
         let toggle = try XCTUnwrap(p.promptFooter(.prompts).last)
-        XCTAssertEqual(toggle.text, nil, "shown")
-        XCTAssertEqual(toggle.button, "Hide agent messages")
+        XCTAssertTrue(toggle.shown)
+        XCTAssertEqual(toggle.count, 1)
         toggle.toggle()
         XCTAssertTrue(p.hidePeer)
         XCTAssertFalse(p.shownPrompts.contains { $0.from == .peer })
-        XCTAssertEqual(p.promptFooter(.prompts).last?.text, "1 agent message hidden")
-        XCTAssertEqual(p.promptFooter(.prompts).last?.button, "Show agent messages")
+        XCTAssertEqual(p.promptFooter(.prompts).last?.shown, false)
+        XCTAssertEqual(p.promptFooter(.prompts).last?.count, 1)
         p.promptFooter(.prompts).last?.toggle()
         XCTAssertEqual(p.shownPrompts.filter { $0.from == .peer }.count, 1)
+    }
+
+    /// #1950: both chips with their counts; a toggle flips `shown` and the listed rows; the spoken label has the count.
+    /// Red at TIP: promptFooter returns (text, button, toggle), no label, count or shown flag.
+    func testFilterChipsCarryCountsAndToggle() throws {
+        let (p, m) = try panel(Self.session())
+        defer { m.stop() }
+        let chips = p.promptFooter(.prompts)
+        XCTAssertEqual(chips.map(\.label), ["Automatic", "Agent messages"])
+        XCTAssertEqual(chips.map(\.count), [3, 1])
+        XCTAssertEqual(chips.map(\.shown), [false, false])
+        XCTAssertEqual(chips.map(\.spoken), ["Automatic, 3 rows", "Agent messages, 1 row"])
+        XCTAssertEqual(p.shownPrompts.count, 3)
+        chips.last?.toggle()
+        XCTAssertEqual(p.shownPrompts.count, 4, "the agent message listed")
+        XCTAssertEqual(p.promptFooter(.prompts).map(\.shown), [false, true])
+        XCTAssertEqual(p.promptFooter(.prompts).map(\.count), [3, 1], "counts do not change with the toggle")
+        chips.first?.toggle()
+        XCTAssertEqual(p.shownPrompts.count, 7)
+        XCTAssertEqual(p.promptFooter(.prompts).map(\.shown), [true, true])
     }
 
     /// Red with peer-counted-when-hidden.

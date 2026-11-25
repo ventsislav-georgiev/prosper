@@ -27,6 +27,8 @@ tag from the now-released section and put it on the new top draft.
   the same size. (#1947)
 - X-ray drawer: slightly larger text, with ids, status and age lined up in columns; blocked-by ids
   sit under the title instead of being cut off at the edge. (#1945)
+- X-ray: the Prompts filters (Automatic, Agent messages) are outlined toggle chips with their
+  counts, set apart from the prompt list. (#1950)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
