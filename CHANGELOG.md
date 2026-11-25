@@ -18,7 +18,11 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.179.0 *(unreleased)*
+## v2.180.0 *(unreleased)*
+- Ships dch 1.160.0: a Run or "!" message that did not go through is taken back out of Claude's input,
+  which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
+
+## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier
   prompt's card at "No response yet": both prompts show the reply (dch 1.152.0). (#1946)
 - X-ray: a prompt card opened from a ref card (or a ref card opened from a prompt card) has a Back
