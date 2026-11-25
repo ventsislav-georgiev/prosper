@@ -21,6 +21,8 @@ tag from the now-released section and put it on the new top draft.
 ## v2.179.0 *(unreleased)*
 - X-ray: a prompt card opened from a ref card (or a ref card opened from a prompt card) has a Back
   button, and Escape goes back to the card under it. (#1944)
+- Plan usage popover: no "current" mark on the account any more, and every reset time is drawn at
+  the same size. (#1947)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

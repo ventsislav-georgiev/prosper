@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import XCTest
 @testable import ProsperApp
 
@@ -76,7 +77,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         let first = try XCTUnwrap(a.limits.first)
         XCTAssertEqual(AgentPlanLimits.resetText(first, now: now, timeZone: utc), "2 h 14 min \u{00B7} Fri 10:14")
         XCTAssertEqual(AgentPlanLimits.spoken(a, now: now, timeZone: utc),
-                       "alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14; "
+                       "alpha, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14; "
                        + "week 99 percent, resets in 3 days, Monday 08:00, updated 3 min ago")
     }
 
@@ -125,9 +126,26 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertEqual(split.compact.map(\.status), ["benched until 09:40", "no recent data"])
     }
 
-    @MainActor func testOnlyTheCurrentCardIsStroked() {
-        XCTAssertEqual(AgentPlanLimitsView.strokeWidth(account("alpha", current: true, util: ["five_hour": 0.1])), 1)
-        XCTAssertEqual(AgentPlanLimitsView.strokeWidth(account("beta", util: ["five_hour": 0.1])), 0)
+    /// #1947: every reset text is drawn at 10 pt with no scaling, so the widest real one fits its column as measured.
+    @MainActor func testWidestResetTextFitsItsColumnAtTenPoints() {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        func width(_ reset: Int, now n: Double) -> CGFloat {
+            let l = AgentPlanLimits.Limit(claim: "five_hour", name: "5h", util: 0.5, reset: reset, runsOut: nil)
+            let t = AgentPlanLimits.resetText(l, now: n, timeZone: utc) ?? ""
+            return ceil((t as NSString).size(withAttributes: [.font: font]).width)
+        }
+        // 23 h 59 min (the longest hour form) and 6 d 23 h (the longest day form of a 7 day window), each ending at 23:59 on every weekday name.
+        let spans: [Int] = [23 * 3600 + 59 * 60, 6 * 86400 + 23 * 3600]
+        let midnight = Int(now) - 8 * 3600
+        var widest: CGFloat = 0
+        for k in 0..<7 {
+            let target = midnight + k * 86400 + 23 * 3600 + 59 * 60
+            for span in spans { widest = max(widest, width(target, now: Double(target - span))) }
+        }
+        print("RESETWIDEST \(widest) of \(AgentPlanLimitsView.resetWidth)")
+        XCTAssertLessThanOrEqual(widest, AgentPlanLimitsView.resetWidth, "widest \(widest)")
+        let expected: CGFloat = 360 - 44 - 42 - 80 - 38 - 18
+        XCTAssertEqual(AgentPlanLimitsView.resetWidth, expected)
     }
 
     @MainActor func testBarIsDangerFromNinetyPercent() {
@@ -141,7 +159,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         let alpha = account("alpha", current: true, util: ["five_hour": 0.15], at: now - 180, reset: ["five_hour": Int(now) + 8040])
         let delta = AgentPlanLimits.Account(label: "delta", isCurrent: false, util: [:], at: nil, reset: [:],
                                             cooldown: ["five_hour": Int(now) + 6000], claims: claims, now: now)
-        let spoken = ["alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14, updated 3 min ago",
+        let spoken = ["alpha, 5 hour 15 percent, resets in 2 hours 14 minutes, Friday 10:14, updated 3 min ago",
                       "delta, no recent data, benched until 09:40"]
         XCTAssertEqual([alpha, delta].map { AgentPlanLimits.spoken($0, now: now, timeZone: utc) }, spoken, "#1898's words")
         let view = AgentPlanLimitsView(limits: AgentPlanLimits(pool: "5h 85% (more at Fri 09:00)", accounts: [alpha, delta]), now: now, timeZone: utc)
@@ -207,7 +225,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertEqual(row.limits.map(\.runsOut), [Int(now) + 3000, nil])
         XCTAssertEqual(row.limits.first.flatMap { AgentPlanLimits.runsOutText($0, timeZone: utc) }, "at this pace runs out ~08:50")
         let spoken = AgentPlanLimits.spoken(row, now: now, timeZone: utc)
-        XCTAssertEqual(spoken, "alpha, current, 5 hour 75 percent, resets in 2 hours, Friday 10:00, at this pace runs out around 08:50; "
+        XCTAssertEqual(spoken, "alpha, 5 hour 75 percent, resets in 2 hours, Friday 10:00, at this pace runs out around 08:50; "
                        + "week 20 percent, resets in 3 days, Monday 08:00, updated 1 min ago")
         let tree = AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 340, height: 300)) { t in
             t.contains { $0.reads(spoken) }

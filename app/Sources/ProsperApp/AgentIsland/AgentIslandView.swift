@@ -1846,7 +1846,7 @@ struct AgentIslandComposer: View {
 
 /// #1898: the plan usage line's popover: the pool's free share on top, then one row per account, most urgent first
 /// (AgentPlanLimits' order). Read only: the one control is the link to the Account pool settings. Pure over its value.
-/// #1915: the pool is one aligned row per window; an account with limits is a card (the current one stroked), its windows
+/// #1915: the pool is one aligned row per window; an account with limits is a card, its windows
 /// rows on one grid across the cards with the reset inline; an account with none is one compact dimmed row after the cards.
 struct AgentPlanLimitsView: View {
     let limits: AgentPlanLimits
@@ -1856,8 +1856,15 @@ struct AgentPlanLimitsView: View {
 
     /// The grid's columns: the window's name, its bar, its percent (right-aligned).
     static let nameWidth: CGFloat = 42
-    static let barWidth: CGFloat = 96
+    static let barWidth: CGFloat = 80
     static let percentWidth: CGFloat = 38
+    /// The popover's width, its padding, the card's padding and the gap between grid columns; the reset column is what is left.
+    static let width: CGFloat = 360
+    static let padding: CGFloat = 12
+    static let cardPadding: CGFloat = 10
+    static let gap: CGFloat = 6
+    /// #1947: the reset text's column at its one size (10 pt, no scaling): "23 h 59 min · Wed 23:59" must fit it.
+    static let resetWidth: CGFloat = width - 2 * (padding + cardPadding) - nameWidth - barWidth - percentWidth - 3 * gap
 
     /// #1915: the cards (accounts with limits) and the compact rows (with their status), each in AgentPlanLimits' order.
     static func split(_ limits: AgentPlanLimits, timeZone: TimeZone)
@@ -1868,9 +1875,6 @@ struct AgentPlanLimitsView: View {
         }
         return (cards, compact)
     }
-
-    /// #1915: the current account's card has a 1 pt accent stroke; the others none.
-    static func strokeWidth(_ a: AgentPlanLimits.Account) -> CGFloat { a.isCurrent ? 1 : 0 }
 
     /// A bar's fill: 90% and over in the danger colour.
     static func barColor(_ u: Double) -> Color { u >= 0.9 ? Neon.magenta : Neon.blue }
@@ -1890,8 +1894,8 @@ struct AgentPlanLimitsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(AgentIslandInk.selectedTab)
         }
-        .padding(12)
-        .frame(width: 340, alignment: .leading)
+        .padding(Self.padding)
+        .frame(width: Self.width, alignment: .leading)
         .background(Color.black)
     }
 
@@ -1919,22 +1923,19 @@ struct AgentPlanLimitsView: View {
             HStack(spacing: 6) {
                 Text(verbatim: OutsideText.shown(a.label, max: 40))
                     .font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.white).lineLimit(1)
-                if a.isCurrent {
-                    Text(verbatim: "current").font(.system(size: 10, weight: .medium)).foregroundStyle(AgentIslandInk.selectedTab)
-                }
                 Spacer(minLength: 6)
                 if let at = a.sampleAt { dim(AgentPlanLimits.ago(at, now: now)) }
             }
             ForEach(a.limits, id: \.claim) { l in
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: Self.gap) {
                         Text(verbatim: l.name).font(.system(size: 11, weight: .medium)).foregroundStyle(Color.white)
                             .lineLimit(1).frame(width: Self.nameWidth, alignment: .leading)
                         bar(l.util)
                         Text(verbatim: AgentPlanUsage.percent(l.util))
                             .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(Color.white)
                             .lineLimit(1).frame(width: Self.percentWidth, alignment: .trailing)
-                        if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r).lineLimit(1).minimumScaleFactor(0.8) }
+                        if let r = AgentPlanLimits.resetText(l, now: now, timeZone: timeZone) { dim(r).lineLimit(1) }
                     }
                     if let o = AgentPlanLimits.runsOutText(l, timeZone: timeZone) {
                         // The alert: under its window's row, past the name column, in the warning colour.
@@ -1945,11 +1946,10 @@ struct AgentPlanLimitsView: View {
             }
             if let b = a.benchedUntil { dim(AgentPlanLimits.benchedText(b, timeZone: timeZone)) }
         }
-        .padding(10)
+        .padding(Self.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         // The History row's own card (white 0.05, a plain opacity): Neon.faded draws white opaque under Increase Contrast; the popover keeps white ink on black whatever the theme.
         .background(RoundedRectangle(cornerRadius: 8).fill(AgentIslandHistoryRow.ownCardFill(selected: false)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(AgentIslandInk.selectedTab, lineWidth: Self.strokeWidth(a)))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
     }
@@ -1957,7 +1957,6 @@ struct AgentPlanLimitsView: View {
     private func compactRow(_ a: AgentPlanLimits.Account, status: String) -> some View {
         HStack(spacing: 6) {
             Text(verbatim: OutsideText.shown(a.label, max: 40)).font(.system(size: 11, weight: .medium)).lineLimit(1)
-            if a.isCurrent { Text(verbatim: "current").font(.system(size: 10, weight: .medium)) }
             Spacer(minLength: 6)
             Text(verbatim: status).font(.system(size: 10).monospacedDigit()).lineLimit(1)
         }

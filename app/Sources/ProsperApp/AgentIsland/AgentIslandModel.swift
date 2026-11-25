@@ -1513,14 +1513,14 @@ struct AgentPlanLimits: Equatable, Sendable {
     /// The Account pool pane's Settings id ("ext:<extension id>|<section id>", the sidebar's rule).
     static let settingsPane = "ext:com.prosper.ccpool|ccpool"
 
-    /// The row as one spoken element: "alpha, current, 5 hour 15 percent, resets in 2 hours 14 minutes, Tuesday 18:00; week ...".
+    /// The row as one spoken element: "alpha, 5 hour 15 percent, resets in 2 hours 14 minutes, Tuesday 18:00; week ...".
     static func spoken(_ a: Account, now: Double, timeZone: TimeZone) -> String {
         let limits = a.limits.map { l in
             "\(l.name == "5h" ? "5 hour" : l.name) \(Int((l.util * 100).rounded())) percent"
                 + (l.reset.map { ", resets in \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
                 + (l.runsOut.map { ", at this pace runs out around \(clock($0, format: "HH:mm", timeZone: timeZone))" } ?? "")
         }
-        let head = [OutsideText.shown(a.label, max: 40)] + (a.isCurrent ? ["current"] : [])
+        let head = [OutsideText.shown(a.label, max: 40)]
         let tail = (a.limits.isEmpty ? [noData] : [limits.joined(separator: "; ")])
             + (a.benchedUntil.map { [benchedText($0, timeZone: timeZone)] } ?? [])
             + (a.sampleAt.map { [updatedText($0, now: now)] } ?? [])
