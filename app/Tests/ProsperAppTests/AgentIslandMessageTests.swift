@@ -558,6 +558,25 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(p.says.last?.last, "! ls -la", "one session: the person's \"!\" goes as typed")
     }
 
+    /// #1959 (QA R1953 n1): the group "!" refusal also holds for several picked rows with no Message all (the `rows.count > 1`
+    /// arm): each picked row says why, nothing is spawned; one picked row still goes as typed.
+    @MainActor
+    func testALeadingBangToSeveralPickedRowsIsRefusedWithoutMessageAll() throws {
+        let p = Proc()
+        p.out["/d"] = (Self.say("a", "ok"), 0)
+        let c = controller(p, [session("a"), session("b")])
+        let store = try XCTUnwrap(c.store)
+        let a = AgentSessionKey(dir: "/d", name: "a"), b = AgentSessionKey(dir: "/d", name: "b")
+        store.ask([session("a"), session("b")], skipped: 0, global: true)   // two picked rows, no tab: not Message all
+        store.messageDraft = ""
+        store.typeMessage("! ls")
+        c.sendMessage()
+        XCTAssertTrue(store.messageDraft == nil, "the composer closes")
+        XCTAssertEqual(store.actions[a], AgentIsland.messageShellGroupText)
+        XCTAssertEqual(store.actions[b], AgentIsland.messageShellGroupText)
+        XCTAssertEqual(p.args, [], "nothing spawned, no --say")
+    }
+
     /// #1104 (QA #836 INFO-5): a text past 256 KB (UTF-8 bytes) is never spawned: its argv would pass ARG_MAX and
     /// read "Message failed (exit -1)". The composer closes and the row, or Message all's dir line, says why; at the
     /// cap it goes, one argv element, whole.

@@ -129,6 +129,27 @@ final class AgentWindowD1Tests: XCTestCase {
 
     // MARK: - The mapping rides on the island's own --ls-json read
 
+    /// #1959 (QA R1953 n2): the window terminal's Run answers (runOff / run) read the store's live row: a live idle row may
+    /// run, a working one says why, a key with no row or no key is off, and a closed window is off for every row.
+    @MainActor
+    func testRunWiringReadsTheLiveRowAndIsOffForAMissingRowOrAClosedWindow() {
+        let idle = session("api", .idle), busy = session("api-qa", .working)
+        let m = windowModel(store([idle, busy]))
+        let t = m.windowTerminal
+        XCTAssertTrue(t.runOff(idle.key) == nil, "live idle row: Run on")
+        XCTAssertEqual(t.runOff(busy.key), AgentWindowText.working)
+        let gone = AgentSessionKey(dir: "/tmp/dch-test", name: "gone")
+        XCTAssertEqual(t.runOff(gone), AgentWindowText.notRunning, "no row")
+        XCTAssertEqual(t.runOff(nil), AgentWindowText.notRunning, "no key")
+        var told: [String] = []
+        t.run(gone, "ls") { told.append($0) }
+        XCTAssertEqual(told, [AgentWindowText.notRunning], "run on a missing row says so, sends nothing")
+        m.close()
+        XCTAssertEqual(t.runOff(idle.key), AgentWindowText.notRunning, "closed window: off")
+        t.run(idle.key, "ls") { told.append($0) }
+        XCTAssertEqual(told.last, AgentWindowText.notRunning)
+    }
+
     func testAgentWindowMappingKeepsOnlyAWellFormedIdAndAbsoluteJsonlPath() {
         let json = #"""
         [{"name":"ok","claude_session_id":"0b7c2f3e-aaaa-bbbb-cccc-0123456789ab","transcript_path":"/Users/x/.claude/projects/p/0b7c2f3e-aaaa-bbbb-cccc-0123456789ab.jsonl"},
