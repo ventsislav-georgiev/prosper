@@ -1814,7 +1814,7 @@ final class AgentIslandController {
                     last = why
                 } else {
                     let reply = AgentWindowDriver.sayReply(io.say(key, text))
-                    if let why = AgentWindowDriver.sayFailure(reply) {
+                    if let why = AgentWindowDriver.sayFailure(reply, shell: text.hasPrefix("!")) {
                         if reply?.result == "skipped", ["not_claude", "no_screen", "prompt"].contains(reply?.reason) { last = why } else { end = .some(why) }
                     } else {
                         end = .some(nil)

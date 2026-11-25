@@ -23,6 +23,8 @@ tag from the now-released section and put it on the new top draft.
   which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
 - Agent Sessions: a Run or "!" command that did not go through now says nothing was left in Claude's
   input (dch 1.160.0 takes it back out). (#1962)
+- Agent Sessions: a first message starting with "!" that did not go through now says nothing was
+  left in Claude's input, as Run does. (#1963)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

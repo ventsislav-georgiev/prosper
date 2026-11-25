@@ -154,6 +154,17 @@ final class AgentIslandSayFirstTests: XCTestCase {
         }
     }
 
+    /// #1963: a failed first message starting with "!" says the shell line (dch takes it back out); a plain one keeps notSubmitted.
+    @MainActor
+    func testAFailedBangFirstMessageSaysShellNotRun() {
+        for (text, why) in [("!ls", AgentWindowText.shellNotRun), ("ls", AgentWindowText.notSubmitted)] {
+            let f = FirstIO(replies: [Self.reply("failed", "not_submitted")])
+            let c = controller(f)
+            XCTAssertEqual(sayFirst(c, text), why, text)
+            XCTAssertEqual(f.counts.says, 1, text)
+        }
+    }
+
     /// T15: skipped draft (someone typed into the composer): one call, then it fails, never typing over it. dch-lite
     /// (an empty read and no mirror): no say call at all, it fails at once.
     @MainActor
