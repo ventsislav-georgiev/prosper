@@ -1,0 +1,62 @@
+{
+ "entry": 1954,
+ "filter": "XrayCommandPillTests",
+ "mutants": [
+  {
+   "name": "no-corridor",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        if let p, !pill.isHidden, commandCorridor.contains(p), settle == nil, commandsShown() { return }   // #1954: on the way\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheCorridorKeepsThePillOnTheWayToIt"
+  },
+  {
+   "name": "corridor-ignores-shown",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": ", settle == nil, commandsShown() { return }   // #1954",
+   "new": " { return }   // #1954",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "corridor-no-extra-rows",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "height: CGFloat(cmd.last - cmd.row + 3) * h)",
+   "new": "height: CGFloat(cmd.last - cmd.row + 5) * h)",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheCorridorKeepsThePillOnTheWayToIt"
+  },
+  {
+   "name": "corridor-from-col0",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        let left = o.x + CGFloat(cmd.col) * CGFloat(g.cellWidthPixels) / scale\n",
+   "new": "        let left = CGFloat(0)\n",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testTheCorridorKeepsThePillOnTheWayToIt"
+  },
+  {
+   "name": "one-cell-pill",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "let ph = min(h + 4, bounds.height)",
+   "new": "let ph = min(h, bounds.height)",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testThePillIsTallerThanACellAndInsideBounds"
+  },
+  {
+   "name": "no-clamp",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "y: min(max(head - 2, 0), bounds.height - ph)",
+   "new": "y: head - 2",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testThePillIsTallerThanACellAndInsideBounds"
+  },
+  {
+   "name": "hide-keeps-corridor",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        commandCorridor = .null\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests/testAHideDropsTheCorridor"
+  }
+ ]
+}

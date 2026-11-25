@@ -1,0 +1,22 @@
+{
+ "entry": 1955,
+ "filter": "XrayRefsTabTests/testRefsChipCarriesCountAndToggles",
+ "mutants": [
+  {
+   "name": "refs-chip-shown",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "count: n, shown: showAllRefs)",
+   "new": "count: n, shown: !showAllRefs)",
+   "expect": "killed",
+   "filter": "XrayRefsTabTests/testRefsChipCarriesCountAndToggles"
+  },
+  {
+   "name": "refs-chip-label",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "label: \"Files, commits and links\",",
+   "new": "label: \"Files\",",
+   "expect": "killed",
+   "filter": "XrayRefsTabTests/testRefsChipCarriesCountAndToggles"
+  }
+ ]
+}
