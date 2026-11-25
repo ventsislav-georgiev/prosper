@@ -142,7 +142,6 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
             let target = midnight + k * 86400 + 23 * 3600 + 59 * 60
             for span in spans { widest = max(widest, width(target, now: Double(target - span))) }
         }
-        print("RESETWIDEST \(widest) of \(AgentPlanLimitsView.resetWidth)")
         XCTAssertLessThanOrEqual(widest, AgentPlanLimitsView.resetWidth, "widest \(widest)")
         let expected: CGFloat = 360 - 44 - 42 - 80 - 38 - 18
         XCTAssertEqual(AgentPlanLimitsView.resetWidth, expected)

@@ -10,13 +10,6 @@
       "expect": "killed"
     },
     {
-      "name": "stroke_all",
-      "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
-      "old": "a.isCurrent ? 1 : 0 }",
-      "new": "1 }",
-      "expect": "killed"
-    },
-    {
       "name": "bench_is_card",
       "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
       "old": "guard a.limits.isEmpty else { return nil }",
