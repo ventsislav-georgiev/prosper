@@ -1,0 +1,62 @@
+{
+ "entry": 1953,
+ "filter": "XrayCommandPillTests|AgentIslandMessageTests",
+ "mutants": [
+  {
+   "name": "idle_gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        if s.state == .idle || s.state == .done { return nil }\n",
+   "new": "        return nil\n",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "one_line",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "guard !ControlSessionsTalk.hasUnseen(command), let t = AgentWindowDriver.message(command)",
+   "new": "guard let t = AgentWindowDriver.message(command)",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "draft_map",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "return shell ? AgentWindowText.shellMode : AgentWindowText.draft",
+   "new": "return AgentWindowText.draft",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "hit_width",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "w = max(3 * ph, 36)",
+   "new": "w = max(2 * ph, 24)",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "bang_prefix",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        return \"! \" + t\n",
+   "new": "        return t\n",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  },
+  {
+   "name": "group_bang",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let shell = text.hasPrefix(\"!\") && (all || rows.count > 1)",
+   "new": "let shell = false",
+   "expect": "killed",
+   "filter": "AgentIslandMessageTests/testALeadingBangGoesToOneSessionNeverToAGroup"
+  },
+  {
+   "name": "run_off_on_show",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        pill.runOff(host?.owner.flatMap { $0.runOff($0.key) })",
+   "new": "        _ = 0",
+   "expect": "killed",
+   "filter": "XrayCommandPillTests"
+  }
+ ]
+}
