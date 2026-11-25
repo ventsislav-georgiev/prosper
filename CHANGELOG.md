@@ -25,8 +25,7 @@ tag from the now-released section and put it on the new top draft.
   button, and Escape goes back to the card under it. (#1944)
 - Plan usage popover: no "current" mark on the account any more, and every reset time is drawn at
   the same size. (#1947)
-- X-ray drawer: slightly larger text, with ids, status and age lined up in columns; blocked-by ids
-  sit under the title instead of being cut off at the edge. (#1945)
+- X-ray drawer: slightly larger text, with ids, status and age lined up in columns. (#1945)
 - X-ray: the Prompts filters (Automatic, Agent messages) are outlined toggle chips with their
   counts, set apart from the prompt list. (#1950)
 - X-ray: the Prompts tab and Command-click cards no longer go missing when an older copy of a pane's
@@ -35,6 +34,8 @@ tag from the now-released section and put it on the new top draft.
   the pane's right edge; it copies the command without its "! " or "$ ". (#1952)
 - X-ray: the Refs tab's "files, commits and links" filter is the same outlined chip as the Prompts
   filters. (#1955)
+- X-ray Tasks: every row is one line at one height; a blocked task shows a link mark, with its
+  blockers in the tooltip. (#1956)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

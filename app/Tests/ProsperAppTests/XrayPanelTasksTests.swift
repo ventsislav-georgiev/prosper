@@ -137,7 +137,7 @@ final class XrayPanelTasksTests: XCTestCase {
         XCTAssertEqual(rows.map(\.mark), ["circle.dotted", "circle", "circle", "checkmark.circle"])
         XCTAssertEqual(rows.map(\.title), ["Writing the parser", "Fix the login test", "Ship it", "Old work"], "active shows `active`")
         XCTAssertEqual(rows.map(\.label), [nil, nil, "PARKED", nil], "a label only when it says more than the status")
-        XCTAssertEqual(rows.map(\.blocked), [nil, "blocked by 9, 10", nil, nil])
+        XCTAssertEqual(rows.map(\.blocked), [nil, "Blocked by 9, 10", nil, nil])
         XCTAssertEqual(rows.map(\.age), ["1h", "3h", nil, "2d"], "updated, else created")
         XCTAssertEqual(p.footer, ["tasks_command was slow", "2 not shown"])
         let cut = panel((0, Self.ndjson([Self.header] + Self.rows)))
@@ -480,13 +480,13 @@ final class XrayPanelTasksTests: XCTestCase {
         return box.d
     }
 
-    func testRowShowsTheFirstBlockedIdsAndAPlusNCardKeepsAll() {
+    func testRowKeepsTheWholeBlockedListForTheTooltipAndVoiceOverCardKeepsAll() {
         let two = XrayTaskRow(Self.task(blocked: ["9", "10"]), now: Self.now)
-        XCTAssertEqual(two.blocked, "blocked by 9, 10", "two ids whole")
+        XCTAssertEqual(two.blocked, "Blocked by 9, 10", "the tooltip")
         let ids = (1...12).map { "T\($0)" }
         let many = Self.task(blocked: ids)
         let row = XrayTaskRow(many, now: Self.now)
-        XCTAssertEqual(row.blocked, "blocked by T1, T2, T3 +9", "the first ones and +N")
+        XCTAssertEqual(row.blocked, "Blocked by " + ids.joined(separator: ", "), "the whole list, no +N")
         XCTAssertTrue(row.spoken.contains("blocked by " + ids.joined(separator: ", ")), "VoiceOver keeps the whole list")
         XCTAssertTrue(XrayTaskCard.fields(many, now: Self.now).contains { $0.label == "Blocked by" && $0.value == ids.joined(separator: ", ") },
                       "the card keeps the full list")
@@ -573,6 +573,30 @@ final class XrayPanelTasksTests: XCTestCase {
                        size: CGSize(width: w, height: 120), kinds: ["xrayTitle", "xrayAge"])
         XCTAssertLessThanOrEqual(f["xrayAge"]?.maxX ?? 1000, w - sz(10) + 0.5, "nothing is clipped at the right edge")
         XCTAssertGreaterThan(f["xrayTitle"]?.width ?? 0, 0)
+    }
+
+    /// #1956: rows with and without blockers (and every status) are one height; the link mark shows only when blocked.
+    func testEveryRowIsOneHeightAndTheLinkMarkShowsOnlyWhenBlocked() {
+        let saved = ThemeRuntime.scale
+        defer { ThemeRuntime.scale = saved }
+        for scale: CGFloat in [0.7, 1.0] {
+            ThemeRuntime.scale = scale
+            let w: CGFloat = 340
+            func height(_ t: XrayTasks.Task) -> CGFloat {
+                NSHostingView(rootView: XrayTaskRowView(row: XrayTaskRow(t, now: Self.now), open: {}).frame(width: w)).fittingSize.height
+            }
+            let blocked = Self.task(blocked: ["9", "10", "11"]), plain = Self.task(blocked: [])
+            XCTAssertEqual(height(blocked), sz(XrayText.rowHeight), accuracy: 0.5, "blocked row at \(scale)")
+            XCTAssertEqual(height(plain), sz(XrayText.rowHeight), accuracy: 0.5, "plain row at \(scale)")
+            func kinds(_ t: XrayTasks.Task) -> [String: CGRect] {
+                frames(XrayTaskRowView(row: XrayTaskRow(t, now: Self.now), open: {}).frame(width: w),
+                       size: CGSize(width: w, height: 60), kinds: ["xrayTitle"])
+            }
+            let (kb, kp) = (kinds(blocked), kinds(plain))
+            XCTAssertNotNil(kb["xrayBlocked"]); XCTAssertNil(kb["xrayNotBlocked"])
+            XCTAssertNotNil(kp["xrayNotBlocked"]); XCTAssertNil(kp["xrayBlocked"])
+            XCTAssertEqual(kb["xrayTitle"]?.minX ?? -1, kp["xrayTitle"]?.minX ?? -2, accuracy: 0.5, "titles stay aligned")
+        }
     }
 
     // MARK: #1948: the column widths are memoised on the model

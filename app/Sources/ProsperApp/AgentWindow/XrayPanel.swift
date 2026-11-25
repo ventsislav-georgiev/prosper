@@ -853,9 +853,6 @@ struct XrayTaskRow: Equatable {
     let age: String?
     let spoken: String
 
-    /// R1351-i2: the ids the row names; the card keeps the full list.
-    static let blockedShown = 3
-
     static func statusName(_ s: XrayTasks.Status) -> String {
         switch s {
         case .active: "In progress"
@@ -895,12 +892,10 @@ struct XrayTaskRow: Equatable {
         id = t.id
         title = t.status == .active ? (t.active.flatMap { $0.isEmpty ? nil : $0 } ?? t.title) : t.title
         label = Self.label(t)
-        blocked = t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.prefix(Self.blockedShown).joined(separator: ", "))"
-            + (t.blockedBy.count > Self.blockedShown ? " +\(t.blockedBy.count - Self.blockedShown)" : "")
+        blocked = t.blockedBy.isEmpty ? nil : "Blocked by \(t.blockedBy.joined(separator: ", "))"   // #1956: the tooltip; the row shows a link mark
         let a = Self.age(t.updated ?? t.created, now: now)
         age = a?.short
-        let blockedAll = t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.joined(separator: ", "))"
-        spoken = (["\(Self.statusName(t.status)) task \(t.id)", title, label, blockedAll, a?.spoken].compactMap { $0 })
+        spoken = (["\(Self.statusName(t.status)) task \(t.id)", title, label, t.blockedBy.isEmpty ? nil : "blocked by \(t.blockedBy.joined(separator: ", "))", a?.spoken].compactMap { $0 })
             .joined(separator: ", ")
     }
 }
@@ -1286,6 +1281,8 @@ struct XrayTabStrip: View {
 /// footers, and the row's vertical padding.
 enum XrayText {
     static let row: CGFloat = 12.5, small: CGFloat = 11.5, pad: CGFloat = 4
+    /// #1956: every Tasks row is this tall (a 16 pt line for the 12.5 pt text, plus the padding), whatever it holds.
+    static let rowHeight: CGFloat = 16 + 2 * pad
 }
 
 /// #1945: one column cell. The cell is as wide as `widest` (the list's longest value of the column, drawn hidden), so
@@ -1338,15 +1335,13 @@ struct XrayTaskRowView: View {
             HStack(spacing: sz(6)) {
                 Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)
                 XrayCol(text: row.id, widest: cols?.id ?? row.id, trailing: true).foregroundStyle(Neon.textSecondary)
-                VStack(alignment: .leading, spacing: sz(1)) {
-                    Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
-                        .modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
-                    // #1945: under the title, so the right edge keeps only the status and age columns; truncates in its own line
-                    if let b = row.blocked {
-                        Text(verbatim: b).font(Neon.font(XrayText.small)).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
-                    }
-                }
-                .layoutPriority(1)
+                // #1956: a fixed narrow column, drawn hidden when nothing blocks the task, so the titles stay aligned
+                Image(systemName: "link").font(Neon.font(XrayText.small)).foregroundStyle(Neon.textSecondary).opacity(0.6)
+                    .opacity(row.blocked == nil ? 0 : 1)
+                    .modifier(AgentPaneProbe(kind: row.blocked == nil ? "xrayNotBlocked" : "xrayBlocked"))
+                Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
+                    .layoutPriority(1)
+                    .modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
                 Spacer(minLength: sz(4))
                 XrayCol(text: row.label, widest: cols?.label ?? row.label ?? "").foregroundStyle(Neon.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayStatus"))
@@ -1354,10 +1349,11 @@ struct XrayTaskRowView: View {
                     .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
             .font(Neon.font(XrayText.row))
-            .padding(.vertical, sz(XrayText.pad))
+            .frame(height: sz(XrayText.rowHeight))   // #1956: one height for every row, no measuring
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(row.blocked ?? "")
         .accessibilityLabel(row.spoken)
     }
 }
