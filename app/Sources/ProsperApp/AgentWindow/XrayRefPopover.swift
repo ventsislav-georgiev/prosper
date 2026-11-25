@@ -24,6 +24,7 @@ struct XrayRefPopover: View {
     @State var othersOpen = false
     /// #1569 (X7 c): an extension ref's card: the handler block in place of the tabs; nil: a dch ref's card.
     var ext: XrayExtensionCard? = nil
+    @Environment(\.xrayCardBack) var back
 
     /// The context the card shows (#1931: always all of it; the unpinned guard went with the hover card).
     var context: XrayRefContext? { panel.refContext }
@@ -127,7 +128,8 @@ struct XrayRefPopover: View {
 
     func openLink() { if let u = Self.openURL(entry) { panel.openURL(u) } }
 
-    func escape() { Self.escape(&filter, close: panel.dismiss) }
+    /// #1944: a card opened from another card goes back to it; the first card closes.
+    func escape() { Self.escape(&filter, close: back ?? panel.dismiss) }
 
     var body: some View {
         if let ext {
@@ -141,14 +143,17 @@ struct XrayRefPopover: View {
         let lines = Self.header(entry, complete: complete, home: panel.home, cwd: panel.cwd())
         let q = Self.query(filter)
         VStack(alignment: .leading, spacing: sz(10)) {
-            VStack(alignment: .leading, spacing: sz(3)) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
-                    Text(verbatim: l).font(i == 0 ? Neon.font(14, weight: .semibold) : Neon.font(11))
-                        .foregroundStyle(i == 0 ? Neon.textPrimary : Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+            HStack(alignment: .top, spacing: sz(4)) {
+                XrayCardBackButton()   // #1944: opened from another card
+                VStack(alignment: .leading, spacing: sz(3)) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
+                        Text(verbatim: l).font(i == 0 ? Neon.font(14, weight: .semibold) : Neon.font(11))
+                            .foregroundStyle(i == 0 ? Neon.textPrimary : Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                    }
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(XrayRefRow(entry, complete: complete, home: panel.home, cwd: panel.cwd()).spoken)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(XrayRefRow(entry, complete: complete, home: panel.home, cwd: panel.cwd()).spoken)
             strip
             filterField
             ScrollView {

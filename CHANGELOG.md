@@ -18,7 +18,11 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.178.0 *(unreleased)*
+## v2.179.0 *(unreleased)*
+- X-ray: a prompt card opened from a ref card (or a ref card opened from a prompt card) has a Back
+  button, and Escape goes back to the card under it. (#1944)
+
+## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than
   before or wider than 40% of the window, and the width is remembered. (#1923)
 - Terminal X-ray: holding Command over a reference no longer pops up its card (it was inconsistent

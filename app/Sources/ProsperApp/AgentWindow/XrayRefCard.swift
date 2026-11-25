@@ -594,7 +594,7 @@ extension XrayPanelModel {
     @discardableResult
     func jumpRef(_ m: XrayRefStream.Mention, in c: XrayRefContext) -> Bool {
         guard let ch = mentionChapter(m, in: c) else { return false }
-        openChapterCard(ch)
+        openChapterCard(ch, fromCard: true)   // #1944: Back returns to the ref card
         return true
     }
 
@@ -602,7 +602,7 @@ extension XrayPanelModel {
     @discardableResult
     func jumpTurn(_ t: XrayRefContext.Turn, in c: XrayRefContext) -> Bool {
         guard let ch = turnChapter(t) else { return false }
-        openChapterCard(ch)
+        openChapterCard(ch, fromCard: true)
         return true
     }
 }

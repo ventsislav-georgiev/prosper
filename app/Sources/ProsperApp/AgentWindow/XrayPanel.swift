@@ -99,12 +99,13 @@ final class XrayPanels: ObservableObject {
     func wire(_ m: XrayPanelModel, _ pane: UUID) {   // #1418: and XrayRefLink.panel, for a transcript link's card
         let target = m.target
         // #1417: `closed` runs once when the card goes, whoever closed it (the ref card cancels its --ref read there)
-        func show(_ view: AnyView, _ size: CGSize, _ closed: @escaping @MainActor () -> Void) {
+        func show(_ view: AnyView, _ size: CGSize, push: Bool = false, _ closed: @escaping @MainActor () -> Void) {
             guard let w = Self.window(pane), let anchor = XrayCardAnchor.view(for: pane, in: w) ?? w.contentView else { return closed() }
-            w.cards.present(view, size: size, anchor: anchor, closed: closed)
+            if push { w.cards.push(view, size: size, anchor: anchor, closed: closed) } else { w.cards.present(view, size: size, anchor: anchor, closed: closed) }
         }
         m.present = { show($0, $1) {} }
         m.presentRef = { show($0, $1, $2) }
+        m.pushRef = { show($0, $1, push: true, $2) }
         m.panels = self
         m.dismiss = { Self.window(pane)?.cards.close() }
         m.fromDch = { Self.chaptersRead(pane, target) }
@@ -285,6 +286,8 @@ final class XrayPanelModel: ObservableObject {
     var present: (AnyView, CGSize) -> Void = { _, _ in }
     /// #1417: as present, with the presenter's `closed` (the ref card's --ref cancel).
     var presentRef: (AnyView, CGSize, @escaping @MainActor () -> Void) -> Void = { _, _, _ in }
+    /// #1944: as presentRef, for a card opened from inside a card (the presenter's push: Back returns); nil: presentRef.
+    var pushRef: ((AnyView, CGSize, @escaping @MainActor () -> Void) -> Void)?
     var dismiss: () -> Void = {}
     var openURL: (URL) -> Void = { _ in }
     var cwd: () -> String? = { nil }
@@ -564,7 +567,7 @@ final class XrayPanelModel: ObservableObject {
         guard XrayMemoryCard.canRead(m) else { return }
         let i = m.chapter.flatMap { chapterAnchors[$0] }
         guard let c = dchChapters?.last(where: { $0.ordinal == i }) else { return openMemoryCard(m, note: Self.notReadNote) }
-        openChapterCard(c)
+        openChapterCard(c, fromCard: true)
     }
 
     // MARK: #1354 Prompts
@@ -612,9 +615,11 @@ final class XrayPanelModel: ObservableObject {
     /// #1472: the prompt and its response through the window's presenter, as the memory card. #1472 b: it opens with
     /// what dch's chapters gave and runs one --chapter read for the chapter's anchor (none known, or one that is not
     /// dch's shape: no read); the card's close, or the next card, cancels that read (the product runner SIGTERMs dch).
-    func openChapterCard(_ c: TranscriptOutline.Chapter) {
+    /// #1944: `fromCard` (a ref card's arrow or turn, Read the prompt): pushed over that card, whose read goes on until it
+    /// leaves the stack (its own `closed`).
+    func openChapterCard(_ c: TranscriptOutline.Chapter, fromCard: Bool = false) {
         chapterCard = c
-        chapterRead?.cancel()
+        if !fromCard { chapterRead?.cancel() }
         let read = XrayChapterRead()
         chapterRead = read
         if let anchor = chapterAnchors.filter({ $0.value == c.ordinal }).keys.min(), DchCtl.anchorOK(anchor),
@@ -626,7 +631,7 @@ final class XrayPanelModel: ObservableObject {
                 read.take(r)
             }
         }
-        presentRef(AnyView(XrayChapterCard(chapter: c, read: read, refs: refs?.entries ?? [],
+        (fromCard ? pushRef ?? presentRef : presentRef)(AnyView(XrayChapterCard(chapter: c, read: read, refs: refs?.entries ?? [],
                                            link: { [weak self] in self?.openLink($0) ?? .discarded }, match: filter)),
                    XrayChapterCard.size) { [weak read] in read?.cancel() }
     }
@@ -634,7 +639,7 @@ final class XrayPanelModel: ObservableObject {
     /// #1472: a link in the chapter card (XrayRefLink.open's rule): a ref of this panel's read opens
     /// its ref card; http, https and mailto: go to the system; anything else is dropped.
     func openLink(_ url: URL) -> XrayRefLink.Outcome {
-        XrayRefLink.open(url, refs: refs) { [weak self] in self?.openRef($0) }
+        XrayRefLink.open(url, refs: refs) { [weak self] in self?.openRef($0, fromCard: true) }   // #1944: over the chapter card
     }
 
     /// #1472: dch's `anchor` -> `i` for each chapter, by XrayChapters.parse's rules (schema 1, the newest maxRows, `i`
@@ -698,7 +703,12 @@ final class XrayPanelModel: ObservableObject {
 
     /// #1417: Return or a click on a Refs row: its card at once (header from the row), then the --ref read fills it. The
     /// card's close, however it goes (presenter closed, Esc, Search), cancels that read (XrayPanels.closeRef).
-    func openRef(_ e: XrayRefs.Entry) {
+    /// #1944: `fromCard` (a chapter card's link): pushed; the one --ref read is this card's now, so its close puts back
+    /// the ref card state it replaced, for a ref card under it.
+    func openRef(_ e: XrayRefs.Entry, fromCard: Bool = false) {
+        // shortcut: a ref card under this one whose read had not landed comes back as it was (its read was cancelled);
+        // re-read on Back if that shows up as stuck cards.
+        let before = fromCard ? (refCard, refContext, refNote) : nil
         refCard = e
         (refContext, refNote) = (nil, nil)
         let panels = panels
@@ -708,8 +718,10 @@ final class XrayPanelModel: ObservableObject {
             refNote = panels?.refTooLong(sent, for: self) == true ? Self.refTooLong : Self.refNotARef
         }
         let read = panels?.refReading
-        presentRef(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true)), XrayRefPopover.size) { [weak panels] in
+        (fromCard ? pushRef ?? presentRef : presentRef)(AnyView(XrayRefPopover(panel: self, entry: e, complete: refs?.complete ?? true)),
+                                                       XrayRefPopover.size) { [weak panels, weak self] in
             panels?.closeRef(started: read)
+            if let before, let self { (self.refCard, self.refContext, self.refNote) = before }
         }
     }
 

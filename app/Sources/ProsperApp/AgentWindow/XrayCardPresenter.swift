@@ -10,6 +10,47 @@ protocol XrayCardPresenter: AnyObject {
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void)
     func close()
     var isShown: Bool { get }
+    /// #1944: as present, opened from inside the shown card: that card stays (hidden, its `closed` not run) under this one.
+    func push(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void)
+    /// #1944: Back or Escape: the shown card goes (its `closed` runs) and the one under it comes back; none under: close().
+    func back()
+}
+
+extension XrayCardPresenter {
+    // Presenters without a stack (the rows' fakes): a push replaces, Back closes.
+    func push(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
+        present(content, size: size, anchor: anchor, closed: closed)
+    }
+    func back() { close() }
+}
+
+/// #1944: a pushed card's way back to the card under it (nil on the first card): its header's Back and its Escape.
+private struct XrayCardBackKey: EnvironmentKey { static var defaultValue: (() -> Void)? { nil } }
+
+extension EnvironmentValues {
+    var xrayCardBack: (() -> Void)? {
+        get { self[XrayCardBackKey.self] }
+        set { self[XrayCardBackKey.self] = newValue }
+    }
+}
+
+/// #1944: the Back control at the start of a card's header; drawn only on a card opened from another card.
+struct XrayCardBackButton: View {
+    @Environment(\.xrayCardBack) var back
+
+    var body: some View {
+        if let back {
+            Button(action: back) {
+                Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
+                    .font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                    .frame(width: sz(20), height: sz(20)).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Back")
+            .accessibilityLabel("Back")
+            .accessibilityHint("Returns to the previous card")
+        }
+    }
 }
 
 /// #1760: the card's window: borderless and clear (the card draws its own rounded surface), the system's soft shadow,
@@ -23,13 +64,21 @@ final class XrayCardPanel: NSPanel {
 
 /// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
 /// corners) in its own panel, replacing the dropdown-like NSPopover. Placed by `frame` (below the anchor; beside the
-/// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it.
+/// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it. #1944: a card opened from
+/// inside the shown card is pushed over it; Back or Escape returns to the card under it, a click outside closes them all.
 @MainActor
 final class XrayCardPanelPresenter: XrayCardPresenter {
     // Internal, not private: rows read the panel and post its resign-key without ever showing one.
     var panel: XrayCardPanel?
     var closed: (@MainActor () -> Void)?
     private var resign: NSObjectProtocol?
+    /// #1944: the cards under the shown one, oldest first: hidden, kept whole (tab, filter, scroll), `closed` not yet run.
+    struct Under {
+        let panel: XrayCardPanel
+        let closed: @MainActor () -> Void
+        weak var parent: NSWindow?
+    }
+    private(set) var under: [Under] = []
     enum Order: Equatable { case showKey, hide }
     /// The seam that shows (key: a click or keyboard open) or hides the card's panel over `parent`; rows put a recorder
     /// here, so no window is ever ordered front or made key by a test.
@@ -48,7 +97,29 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
     var isShown: Bool { panel != nil }
 
     func present(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
-        close()   // one card at a time: the old card's closed runs before the new one is installed (#1432)
+        close()   // one card at a time: the old cards' closed run before the new one is installed (#1432); #1944: the stack goes
+        show(content, size: size, anchor: anchor, closed: closed)
+    }
+
+    func push(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
+        guard let p = panel, let c = self.closed else { return present(content, size: size, anchor: anchor, closed: closed) }
+        let parent = p.parent
+        unobserve()   // before the hide: its resign key is no click outside
+        (panel, self.closed) = (nil, nil)
+        under.append(Under(panel: p, closed: c, parent: parent))
+        order(p, parent, .hide)
+        show(content, size: size, anchor: anchor, closed: closed)
+    }
+
+    func back() {
+        guard let u = under.popLast() else { return close() }
+        hideShown()
+        (panel, closed) = (u.panel, u.closed)
+        observe(u.panel)
+        order(u.panel, u.parent, .showKey)
+    }
+
+    private func show(_ content: AnyView, size: CGSize, anchor: NSView, closed: @escaping @MainActor () -> Void) {
         let win = anchor.window
         let screen = (win?.screen ?? NSScreen.main)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let at = win.map { $0.convertToScreen(anchor.convert(anchor.bounds, to: nil)) } ?? .zero
@@ -63,29 +134,48 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         p.hidesOnDeactivate = true
         p.level = .floating
         let shape = RoundedRectangle(cornerRadius: sz(14), style: .continuous)
+        let back: (() -> Void)? = under.isEmpty ? nil : { [weak self] in self?.back() }
         let host = NSHostingView(rootView: Themed {
             content.frame(width: f.width, height: f.height, alignment: .topLeading)
+                .environment(\.xrayCardBack, back)
                 .background(shape.fill(Neon.card))
                 .overlay(shape.strokeBorder(Neon.cardStroke, lineWidth: 1))
                 .clipShape(shape)
         })
         host.frame = CGRect(origin: .zero, size: f.size)
         p.contentView = host
-        p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.close() } }
-        resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
-            [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
-        }
+        p.onCancel = { [weak self, weak p] in if let self, self.panel === p { self.back() } }   // #1944: Escape goes back
         (panel, self.closed) = (p, closed)
+        observe(p)
         order(p, win, .showKey)
     }
 
-    func close() {
+    /// A click outside (the shown panel resigns key) closes the whole stack.
+    private func observe(_ p: XrayCardPanel) {
+        resign = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: p, queue: nil) {
+            [weak self, weak p] _ in MainActor.assumeIsolated { if let self, let p, self.panel === p { self.close() } }
+        }
+    }
+
+    private func unobserve() {
+        resign.map { NotificationCenter.default.removeObserver($0) }
+        resign = nil
+    }
+
+    /// The shown card goes; its closed runs once.
+    private func hideShown() {
         guard let p = panel else { return }
         let f = closed
-        resign.map { NotificationCenter.default.removeObserver($0) }
-        (panel, self.closed, resign) = (nil, nil, nil)
+        unobserve()
+        (panel, self.closed) = (nil, nil)
         order(p, p.parent, .hide)
         f?()
+    }
+
+    /// The shown card, then each card under it (newest first), goes; each closed runs once.
+    func close() {
+        hideShown()
+        while let u = under.popLast() { u.closed() }
     }
 
     static let gap: CGFloat = 6

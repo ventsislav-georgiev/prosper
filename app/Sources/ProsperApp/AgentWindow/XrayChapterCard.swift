@@ -83,7 +83,10 @@ struct XrayChapterCard: View {
         let full = read.full
         let pp = Self.promptParts(chapter, full), rp = Self.responseParts(chapter, full)
         VStack(alignment: .leading, spacing: sz(8)) {
-            Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            HStack(spacing: sz(4)) {
+                XrayCardBackButton()   // #1944: opened from a ref card or a memory card
+                Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: sz(8)) {
                     XrayRichBlock(text: pp.head, size: 12, strong: true, match: match)

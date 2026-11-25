@@ -383,7 +383,8 @@ final class XrayGridMarksTests: XCTestCase {
                 XCTAssertEqual(p.chapterAnchors, ["f3a41c:0": 1])
                 XCTAssertEqual(p.chapters.map(\.ordinal), [1])
                 var shown = 0
-                (p.run, p.presentRef) = (nil, { _, _, _ in shown += 1 })   // no --chapter read, no real card window
+                // no --chapter read, no real card window; #1944: the arrow opens it from the ref card: a push
+                (p.run, p.presentRef, p.pushRef) = (nil, { _, _, _ in XCTFail("a push, not a replace") }, { _, _, _ in shown += 1 })
                 let first = XrayRefStreamTests.first.replacingOccurrences(of: #""session":"api""#, with: #""session":"shell""#)
                 let lines = [first, XrayRefContextTests.mention("shell", at: 40, offset: 0, chapter: "f3a41c:0"), XrayRefStreamTests.done]
                 let c = XrayRefContext(XrayRefStreamTests.parse(lines), ref: "#12", tasks: nil, memory: nil)
