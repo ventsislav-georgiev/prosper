@@ -304,6 +304,8 @@ enum AgentWindowText {
     /// #1135: dch 1.63's not_foreground (and claude_foreground false): Claude is suspended or in the background.
     static let notForeground = AgentIsland.notInFrontText + ". Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
+    /// #1962: dch 1.160.0 takes a failed "!" text back out of the composer and leaves bash mode (not_submitted, not_typed).
+    static let shellNotRun = "The command didn't run; nothing was left in Claude's input"
     /// #854: dch 1.46's draft_left: a signal came once the message was typed, and it may still be in the composer.
     static let draftLeft = "The message may still be in Claude's input, but it wasn't sent. Open in terminal"
     /// #854: dch 1.46's interrupted (nothing typed) and withdrawn (typed, then taken back out): Claude's input is as it was.
@@ -621,6 +623,7 @@ struct AgentWindowDriver: Sendable {
         case ("skipped"?, "no_screen"?): return AgentWindowText.noScreen
         case ("skipped"?, "not_claude"?): return AgentWindowText.notClaude
         case ("failed"?, "not_foreground"?): return AgentWindowText.notForeground
+        case ("failed"?, "not_submitted"?) where shell, ("failed"?, "not_typed"?) where shell: return AgentWindowText.shellNotRun
         case ("failed"?, "not_submitted"?): return AgentWindowText.notSubmitted
         case ("failed"?, "draft_left"?): return AgentWindowText.draftLeft
         case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return AgentWindowText.notSent

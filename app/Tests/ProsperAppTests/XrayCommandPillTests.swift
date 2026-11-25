@@ -400,4 +400,25 @@ final class XrayCommandPillTests: XCTestCase {
         until("refused") { !i.busy }
         XCTAssertEqual(told, [AgentWindowText.shellMode])
     }
+
+    /// #1962: red if a failed "!" text (not_submitted, not_typed) still says it is in Claude's input (dch 1.160.0 takes it back out),
+    /// or a plain message's notSubmitted text changed.
+    func testAFailedRunSaysNothingWasLeftInClaudesInput() {
+        for reason in ["not_submitted", "not_typed"] {
+            let reply = #"{"name":"s","result":"failed","reason":"\#(reason)","detail":""}"#
+            let f = Fake(statuses: ["idle"], reply: reply)
+            let d = AgentWindowDriver(key: Self.key, io: f.io, pause: { _ in })
+            XCTAssertEqual(d.send("! ls"), .failed(AgentWindowText.shellNotRun), reason)
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: true), AgentWindowText.shellNotRun, reason)
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: false),
+                           reason == "not_submitted" ? AgentWindowText.notSubmitted : "dch didn't send it (not_typed). Open in terminal", reason)
+            XCTAssertEqual(d.send("hi"), .failed(reason == "not_submitted" ? AgentWindowText.notSubmitted : "dch didn't send it (not_typed). Open in terminal"), reason)
+        }
+        let g = Fake(statuses: ["idle"], reply: #"{"name":"s","result":"failed","reason":"not_submitted","detail":""}"#)
+        let i = interaction(g)
+        var told: [String] = []
+        i.run("ls", session: session(.idle)) { told.append($0) }
+        until("refused") { !i.busy }
+        XCTAssertEqual(told, [AgentWindowText.shellNotRun])
+    }
 }

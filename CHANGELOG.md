@@ -21,6 +21,8 @@ tag from the now-released section and put it on the new top draft.
 ## v2.180.0 *(unreleased)*
 - Ships dch 1.160.0: a Run or "!" message that did not go through is taken back out of Claude's input,
   which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
+- Agent Sessions: a Run or "!" command that did not go through now says nothing was left in Claude's
+  input (dch 1.160.0 takes it back out). (#1962)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

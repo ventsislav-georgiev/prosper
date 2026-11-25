@@ -266,6 +266,10 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(row(Self.say("api", "failed", "no_session", "no such session"), status: 1), "no such session")
         XCTAssertEqual(row(Self.say("api", "failed", "not_submitted", "api: not submitted")), "not submitted", "\"<name>: \" stripped")
         XCTAssertEqual(row(Self.say("api", "skipped", "draft")), "Message skipped (draft)", "no detail: result and reason")
+        // #1962: a "!" message dch 1.160.0 took back out: the row is dch's detail, never the resume wording "may still be in Claude's input".
+        XCTAssertEqual(row(Self.say("api", "failed", "not_submitted", "api: taken back out, bash mode left, nothing run")),
+                       "taken back out, bash mode left, nothing run")
+        XCTAssertEqual(row(Self.say("api", "failed", "not_typed")), "Message failed (not_typed)")
         XCTAssertEqual(row(Self.say("other", "ok")), "Message failed (exit 0)", "a line about another session is no result")
         XCTAssertEqual(row("dch: usage: dch --say <name>... | --all [--json] -- <text...>", status: 1),
                        "Message failed: dch: usage: dch --say <name>... | --all [--json] -- <text...>")
