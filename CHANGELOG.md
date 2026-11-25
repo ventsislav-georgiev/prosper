@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.180.0 *(unreleased)*
+- Ships dch 1.161.0: a "!" message dch could not take back out says it may be left in Claude's input in
+  shell mode; X-ray terms read better (a spread rule over all turns, emphasis words are never terms). (#1966)
 - Ships dch 1.160.0: a Run or "!" message that did not go through is taken back out of Claude's input,
   which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
 - Agent Sessions: a Run or "!" command that did not go through now says nothing was left in Claude's
