@@ -1,0 +1,30 @@
+{
+  "entry": 1962,
+  "filter": "XrayCommandPillTests/testAFailedRunSaysNothingWasLeftInClaudesInput|AgentWindowInteractionTests/testAgentWindowMapsEverySayRefusal",
+  "mutants": [
+    {
+      "name": "shell_notsubmitted_off",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellNotRun",
+      "new": "case (\"failed\"?, \"not_submitted\"?) where !shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellNotRun",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysNothingWasLeftInClaudesInput|AgentWindowInteractionTests/testAgentWindowMapsEverySayRefusal"
+    },
+    {
+      "name": "shell_nottyped_off",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellNotRun",
+      "new": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where !shell: return AgentWindowText.shellNotRun",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysNothingWasLeftInClaudesInput|AgentWindowInteractionTests/testAgentWindowMapsEverySayRefusal"
+    },
+    {
+      "name": "plain_gets_shell_text",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellNotRun",
+      "new": "case (\"failed\"?, \"not_submitted\"?), (\"failed\"?, \"not_typed\"?): return AgentWindowText.shellNotRun",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysNothingWasLeftInClaudesInput|AgentWindowInteractionTests/testAgentWindowMapsEverySayRefusal"
+    }
+  ]
+}
