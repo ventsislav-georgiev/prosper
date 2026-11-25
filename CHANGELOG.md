@@ -48,6 +48,9 @@ tag from the now-released section and put it on the new top draft.
   otherwise it is off, with the reason in its tooltip. A message starting with "!" sent to one
   session from the island also runs as a shell command; a message to a whole group that starts with
   "!" is refused. (#1953)
+- X-ray: Escape now closes a prompt, memory or ref card even after you click into its text (a card
+  opened from another card still goes back to it first, and Escape in a ref card's filter still
+  clears the filter first). (#1960)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

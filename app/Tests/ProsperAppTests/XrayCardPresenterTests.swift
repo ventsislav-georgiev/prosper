@@ -137,6 +137,80 @@ final class XrayCardPresenterTests: XCTestCase {
         XCTAssertFalse(p.isShown)
     }
 
+    // MARK: #1960 Esc reaches the card whatever took focus in it
+
+    /// A plain Esc keyDown, built and handed to the never-shown panel's own sendEvent (never posted).
+    func escapeEvent(_ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                                       context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                       isARepeat: false, keyCode: 53))
+    }
+
+    /// `view` (in the never-shown panel) becomes its first responder, as a click in the card's text makes it.
+    func focus(_ panel: XrayCardPanel, _ view: NSView) {
+        panel.contentView?.addSubview(view)
+        XCTAssertTrue(panel.makeFirstResponder(view))
+    }
+
+    /// Red without the sendEvent hook: a click in the prompt card's selectable text gave first responder to a text view
+    /// that ate Esc; now Esc on the first card closes it, its closed once.
+    func testEscapeWithTheCardTextFocusedClosesTheFirstCard() throws {
+        let (p, shows) = presenter()
+        var ran = 0
+        show(p) { ran += 1 }
+        let panel = try XCTUnwrap(p.panel)
+        focus(panel, NSTextView())
+        panel.sendEvent(try escapeEvent())
+        XCTAssertEqual(ran, 1)
+        XCTAssertFalse(p.isShown)
+        XCTAssertEqual(shows(), [.showKey, .hide])
+    }
+
+    /// Red without the sendEvent hook: the same Esc on a pushed card goes back to the card under it (#1944 kept).
+    func testEscapeWithTheCardTextFocusedGoesBackFromAPushedCard() throws {
+        let (p, _) = presenter()
+        var log: [String] = []
+        show(p) { log.append("a") }
+        let first = try XCTUnwrap(p.panel)
+        push(p) { log.append("b") }
+        focus(try XCTUnwrap(p.panel), NSTextView())
+        p.panel?.sendEvent(try escapeEvent())
+        XCTAssertEqual(log, ["b"])
+        XCTAssertTrue(p.panel === first)
+        p.close()
+    }
+
+    /// Red with takesEscape true for every key or modifier, or for a text field: only a plain Esc is the card's, and a
+    /// field editor (the ref card's filter) keeps it, so its own Esc clears the filter first.
+    func testOnlyAPlainEscapeOutsideATextFieldIsTheCards() throws {
+        let (p, _) = presenter()
+        show(p) {}
+        let panel = try XCTUnwrap(p.panel)
+        XCTAssertTrue(panel.takesEscape(53, []))
+        XCTAssertFalse(panel.takesEscape(53, .shift))
+        XCTAssertFalse(panel.takesEscape(53, .command))
+        XCTAssertFalse(panel.takesEscape(36, []), "Return")
+        let field = NSTextView()
+        field.isFieldEditor = true
+        focus(panel, field)
+        XCTAssertFalse(panel.takesEscape(53, []))
+        XCTAssertTrue(p.isShown)
+        p.close()
+    }
+
+    /// Red with the marks' old guard (their own card only): an Esc in the terminal while a card the marks did not open is
+    /// up (the drawer's, Command-L's) closes it and never goes on to the pty; with no card it does.
+    func testTerminalEscapeClosesAnyShownCard() {
+        let m = XrayGridMarksView(frame: .zero)
+        var shown = true, closed = 0
+        m.cardShown = { _ in shown }
+        m.closeCards = { _ in closed += 1; shown = false }
+        XCTAssertTrue(m.escape(), "a card up: the Esc is used")
+        XCTAssertEqual(closed, 1)
+        XCTAssertFalse(m.escape(), "no card: the Esc goes to the pty")
+        XCTAssertEqual(closed, 1)
+    }
+
     /// Red with close() leaving the cards under: a fresh open, a click outside and close() each clear the whole stack;
     /// each card's closed runs once, the shown one first, then down the stack; never on a push.
     func testClearRunsEachClosedOnceInOrder() throws {

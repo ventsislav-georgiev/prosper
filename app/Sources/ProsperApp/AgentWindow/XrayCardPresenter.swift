@@ -60,6 +60,19 @@ final class XrayCardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func cancelOperation(_ sender: Any?) { onCancel?() }
+
+    /// #1960: a plain Esc is the card's (back, or close on the first card) whatever took focus in it: a click in the
+    /// prompt card's selectable text makes SwiftUI's text view first responder, and that view ate Esc. A text field
+    /// (the ref card's filter) keeps it: its Esc clears the filter first.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, takesEscape(event.keyCode, event.modifierFlags) { return cancelOperation(nil) }
+        super.sendEvent(event)
+    }
+
+    func takesEscape(_ keyCode: UInt16, _ flags: NSEvent.ModifierFlags) -> Bool {
+        keyCode == 53 && flags.intersection([.command, .option, .control, .shift]).isEmpty
+            && (firstResponder as? NSTextView)?.isFieldEditor != true
+    }
 }
 
 /// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt

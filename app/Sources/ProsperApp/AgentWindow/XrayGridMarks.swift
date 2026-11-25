@@ -90,6 +90,8 @@ final class XrayGridMarksView: NSView {
     let hover = XrayHover()
     /// #1565: the window shows a card (Esc closes it only then).
     var cardShown: @MainActor (NSWindow?) -> Bool = { ($0 as? AgentsNSWindow)?.cards.isShown == true }
+    /// #1960: closes the window's cards (a card the marks did not open: the drawer's, Command-L's).
+    var closeCards: @MainActor (NSWindow?) -> Void = { ($0 as? AgentsNSWindow)?.cards.close() }
     private var observers: [NSObjectProtocol] = []
 
     override init(frame: NSRect) {
@@ -272,11 +274,12 @@ final class XrayGridMarksView: NSView {
     }
 
     /// #1565: Esc in the terminal closes the card and kills its read. #1568: AgentTerminalHostView.keyDown calls it; false
-    /// (no card of the marks' panel up) leaves the Esc to the pty.
+    /// (no card up) leaves the Esc to the pty. #1960: any card the window shows, not only the marks' own: an Esc never
+    /// reaches the pty (Claude's interrupt) while a card is up.
     @discardableResult
     func escape() -> Bool {
-        guard hover.model != nil && cardShown(window) else { return false }
-        hover.close()
+        guard cardShown(window) else { return false }
+        if hover.model != nil { hover.close() } else { closeCards(window) }
         return true
     }
 
