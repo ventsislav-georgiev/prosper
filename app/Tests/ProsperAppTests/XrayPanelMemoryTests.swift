@@ -229,4 +229,23 @@ final class XrayPanelMemoryTests: XCTestCase {
             XCTAssertEqual(whole.text.unicodeScalars.count, fits.unicodeScalars.count + g.unicodeScalars.count)
         }
     }
+
+    /// #1945. Red at 5c214a39: the session and age cells fit their own text, so "wrote" and "loaded" started at different x.
+    func testSessionAndAgeColumnsLineUp() throws {
+        let r = rows(panel())
+        let a = try XCTUnwrap(r.first), b = try XCTUnwrap(r.dropFirst().first), c = try XCTUnwrap(r.dropFirst(2).first)
+        XCTAssertEqual([a.session, b.session, c.session], ["wrote", "loaded", nil])
+        let (sw, aw) = (XrayCol.widest(r.map(\.session)), XrayCol.widest(r.map(\.age)))
+        XCTAssertEqual(sw, "loaded")
+        func f(_ row: XrayMemoryRow, _ fit: Bool) -> [String: CGRect] {
+            let v = XrayMemoryRowView(row: row, sessionWidest: fit ? sw : nil, ageWidest: fit ? aw : nil, open: {})
+            return XrayPanelTasksTests().frames(v.padding(sz(10)).frame(width: 420), size: CGSize(width: 420, height: 80),
+                                                kinds: ["xrayStatus", "xrayAge"])
+        }
+        let (fa, fb) = (f(a, true), f(b, true))
+        XCTAssertTrue(fa["xrayStatus"] != nil && fb["xrayStatus"] != nil && fa["xrayAge"] != nil, "drawn")
+        XCTAssertEqual(fa["xrayStatus"]?.minX ?? -1, fb["xrayStatus"]?.minX ?? -2, accuracy: 0.5, "session starts at one x")
+        XCTAssertEqual(f(c, true)["xrayAge"]?.maxX ?? -1, fa["xrayAge"]?.maxX ?? -2, accuracy: 0.5, "age ends at one x")
+        XCTAssertGreaterThan(abs((f(a, false)["xrayStatus"]?.minX ?? 0) - (f(b, false)["xrayStatus"]?.minX ?? 0)), 1, "control: drifts")
+    }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import ProsperApp
 
@@ -257,5 +258,22 @@ final class XrayPromptsTabTests: XCTestCase {
         defer { m.stop() }
         p.hidePeer = false
         XCTAssertTrue(Preferences.defaults.object(forKey: Self.hideKey) == nil)
+    }
+
+    /// #1945. Red at 5c214a39: the ordinal cell fit its own text, so "9" and "120" started their titles at different x.
+    func testPromptTitlesStartAtOneXWhateverTheOrdinalLength() {
+        func row(_ n: Int) -> XrayPromptRow {
+            XrayPromptRow(TranscriptOutline.Chapter(id: n, ordinal: n, title: "Fix the login test", kind: .prompt, hasError: false))
+        }
+        let (a, b) = (row(9), row(120))
+        let w = XrayCol.widest([a.ordinal, b.ordinal])
+        XCTAssertEqual(w, "120")
+        let host = XrayPanelTasksTests()
+        func x(_ r: XrayPromptRow, _ widest: String?) -> CGFloat? {
+            host.frames(XrayPromptRowView(row: r, ordinalWidest: widest, open: {}).padding(sz(10)).frame(width: 420),
+                        size: CGSize(width: 420, height: 60), kinds: ["xrayTitle"])["xrayTitle"]?.minX
+        }
+        XCTAssertTrue(x(a, w) != nil && x(a, w) == x(b, w), "one title x with the list's widest ordinal")
+        XCTAssertTrue(x(a, nil) != x(b, nil), "control: each cell fitting its text drifts")
     }
 }

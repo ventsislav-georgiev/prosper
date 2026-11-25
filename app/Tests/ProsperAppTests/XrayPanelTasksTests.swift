@@ -526,4 +526,52 @@ final class XrayPanelTasksTests: XCTestCase {
             }
         }
     }
+
+    // MARK: #1945: larger list text, ids / status / age in columns
+
+    /// Red at 5c214a39: every cell fit its own text (no XrayTaskCols), so titles, status and age started at different x.
+    func testTaskColumnsLineUpAcrossRowsWithDifferentIdsLabelsAndAges() throws {
+        func task(_ id: String, _ label: String, _ updated: String) throws -> XrayTaskRow {
+            let t = XrayTasks.parse(Self.ndjson([Self.header,
+                #"{"task":{"id":"\#(id)","title":"Fix the login test","status":"pending","label":"\#(label)","updated":"\#(updated)"}}"#,
+                Self.done])).tasks[0]
+            return XrayTaskRow(t, now: Self.now)
+        }
+        let a = try task("7", "PARKED", "2026-11-16T11:55:00Z"), b = try task("1157", "IN PROGRESS", "2026-09-10T11:55:00Z")
+        XCTAssertEqual([a.age, b.age], ["5m", "67d"], "ages of different lengths")
+        let cols = XrayTaskCols([a, b])
+        XCTAssertEqual([cols.id, cols.label, cols.age], ["1157", "IN PROGRESS", "67d"])
+        let size = CGSize(width: 420, height: 80)
+        func f(_ r: XrayTaskRow, _ c: XrayTaskCols?) -> [String: CGRect] {
+            frames(XrayTaskRowView(row: r, cols: c, open: {}).padding(sz(10)).frame(width: 420), size: size,
+                   kinds: ["xrayTitle", "xrayStatus", "xrayAge"])
+        }
+        let (fa, fb) = (f(a, cols), f(b, cols))
+        for k in ["xrayTitle", "xrayStatus", "xrayAge"] {
+            XCTAssertTrue(fa[k] != nil && fb[k] != nil, "\(k) is drawn")
+        }
+        XCTAssertEqual(fa["xrayTitle"]?.minX ?? -1, fb["xrayTitle"]?.minX ?? -2, accuracy: 0.5, "the titles start at one x")
+        XCTAssertEqual(fa["xrayStatus"]?.minX ?? -1, fb["xrayStatus"]?.minX ?? -2, accuracy: 0.5, "the status column starts at one x")
+        XCTAssertEqual(fa["xrayAge"]?.minX ?? -1, fb["xrayAge"]?.minX ?? -2, accuracy: 0.5, "the age column starts at one x")
+        XCTAssertEqual(fa["xrayAge"]?.maxX ?? -1, fb["xrayAge"]?.maxX ?? -2, accuracy: 0.5, "and ends at one x")
+        // control: without the list's widths the cells fit their own text and drift (the old drawing)
+        let (ga, gb) = (f(a, nil), f(b, nil))
+        XCTAssertGreaterThan(abs((ga["xrayTitle"]?.minX ?? 0) - (gb["xrayTitle"]?.minX ?? 0)), 1, "control: the ids drift")
+        XCTAssertGreaterThan(abs((ga["xrayStatus"]?.minX ?? 0) - (gb["xrayStatus"]?.minX ?? 0)), 1, "control: the status drifts")
+    }
+
+    /// Red at 5c214a39: Neon.font(11) and a 2 pt row padding.
+    func testListTextIsLargerAndTheBlockedIdsStayInsideTheRow() {
+        XCTAssertEqual(XrayText.row, 12.5)
+        let row = XrayTaskRow(Self.task(blocked: ["9", "10", "11"]), now: Self.now)
+        let plain = XrayTaskRow(Self.task(blocked: []), now: Self.now)
+        let line = NSHostingView(rootView: Text(verbatim: "Ag").font(Neon.font(12.5))).fittingSize.height
+        let h = NSHostingView(rootView: XrayTaskRowView(row: plain, open: {}).frame(width: 420)).fittingSize.height
+        XCTAssertGreaterThanOrEqual(h, line + 2 * sz(XrayText.pad) - 0.5, "a row is a 12.5 pt line plus its padding")
+        let w: CGFloat = 340
+        let f = frames(XrayTaskRowView(row: row, open: {}).padding(sz(10)).frame(width: w),
+                       size: CGSize(width: w, height: 120), kinds: ["xrayTitle", "xrayAge"])
+        XCTAssertLessThanOrEqual(f["xrayAge"]?.maxX ?? 1000, w - sz(10) + 0.5, "nothing is clipped at the right edge")
+        XCTAssertGreaterThan(f["xrayTitle"]?.width ?? 0, 0)
+    }
 }

@@ -23,6 +23,8 @@ tag from the now-released section and put it on the new top draft.
   button, and Escape goes back to the card under it. (#1944)
 - Plan usage popover: no "current" mark on the account any more, and every reset time is drawn at
   the same size. (#1947)
+- X-ray drawer: slightly larger text, with ids, status and age lined up in columns; blocked-by ids
+  sit under the title instead of being cut off at the edge. (#1945)
 
 ## v2.178.0
 - The Agent Sessions sidebar can now be resized by dragging its edge: it never gets narrower than

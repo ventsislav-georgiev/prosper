@@ -1010,20 +1010,21 @@ struct XrayPanelView: View {
     }
 
     var tasksTab: some View {
-        VStack(alignment: .leading, spacing: sz(4)) {
+        let cols = XrayTaskCols(panel.taskLines.compactMap { l in l.task.map { XrayTaskRow($0, now: panel.now()) } })   // #1945
+        return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
-                .font(Neon.font(11))
+                .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
                 .accessibilityLabel("Filter tasks")
-            if let t = panel.listTitle { Text(verbatim: t).font(Neon.font(11, weight: .semibold)).lineLimit(1) }
+            if let t = panel.listTitle { Text(verbatim: t).font(Neon.font(XrayText.row, weight: .semibold)).lineLimit(1) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(panel.taskLines) { l in
                         if let h = l.header {
                             faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
                         } else if let t = l.task {
-                            XrayTaskRowView(row: XrayTaskRow(t, now: panel.now())) { panel.activate(t) }
+                            XrayTaskRowView(row: XrayTaskRow(t, now: panel.now()), cols: cols) { panel.activate(t) }
                         }
                     }
                 }
@@ -1036,24 +1037,25 @@ struct XrayPanelView: View {
     /// #1354: Prompts, newest first; the footer's counts and toggles (design 1.3, 3.10).
     var promptsTab: some View {
         let rows = panel.shownPrompts
+        let ordinalW = XrayCol.widest(rows.map { "\($0.ordinal)" })   // #1945
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
-                .font(Neon.font(11))
+                .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
                 .accessibilityLabel("Filter prompts")
             if rows.isEmpty { faint("No prompts shown") }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: sz(2)) {
                     ForEach(rows) { c in
-                        XrayPromptRowView(row: XrayPromptRow(c)) { panel.activate(c) }
+                        XrayPromptRowView(row: XrayPromptRow(c), ordinalWidest: ordinalW) { panel.activate(c) }
                     }
                 }
             }
             ForEach(Array(panel.promptFooter(.prompts).enumerated()), id: \.offset) { _, f in
                 HStack(spacing: sz(6)) {
                     if let t = f.text { faint(t) }
-                    Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(10, weight: .medium))
+                    Button(f.button, action: f.toggle).buttonStyle(.link).font(Neon.font(XrayText.small, weight: .medium))
                 }
             }
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
@@ -1066,7 +1068,7 @@ struct XrayPanelView: View {
         VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Search", text: $panel.query)
                 .textFieldStyle(.roundedBorder)
-                .font(Neon.font(11))
+                .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
                 .onSubmit { panel.runSearch() }
                 .accessibilityLabel(panel.searchFieldLabel)
@@ -1085,7 +1087,7 @@ struct XrayPanelView: View {
                             let (gi, g) = (gr.id.row, gr.e)
                             let head = XraySearch.header(g, now: panel.now())
                             Button { _ = panel.openSession(g) } label: {
-                                Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                                Text(verbatim: head).font(Neon.font(XrayText.row, weight: .semibold)).foregroundStyle(Neon.textPrimary)
                                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1108,16 +1110,18 @@ struct XrayPanelView: View {
     /// #1415: the Refs list; #1417: a row opens its card.
     var refsTab: some View {
         let complete = panel.refs?.complete ?? true
+        let rows = panel.shownRefs.map { XrayRefRow($0, complete: complete, home: panel.home, cwd: panel.cwd()) }   // #1945
+        let countW = XrayCol.widest(rows.map(\.count))
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
-                .font(Neon.font(11))
+                .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
                 .accessibilityLabel("Filter refs")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { _, e in
-                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd())) { panel.openRef(e) }
+                    ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { i, e in
+                        XrayRefRowView(row: rows[i], countWidest: countW) { panel.openRef(e) }
                     }
                 }
             }
@@ -1125,7 +1129,7 @@ struct XrayPanelView: View {
             if let f = panel.refsToggle {
                 HStack(spacing: sz(6)) {
                     if let t = f.text { faint(t) }
-                    Button(f.button) { panel.showAllRefs.toggle() }.buttonStyle(.link).font(Neon.font(10, weight: .medium))
+                    Button(f.button) { panel.showAllRefs.toggle() }.buttonStyle(.link).font(Neon.font(XrayText.small, weight: .medium))
                 }
             }
             ForEach(panel.refsFooter, id: \.self) { faint($0) }
@@ -1134,10 +1138,12 @@ struct XrayPanelView: View {
     }
 
     var memoryTab: some View {
-        VStack(alignment: .leading, spacing: sz(4)) {
+        let mrows = panel.shownMemory.flatMap { g in g.items.map { XrayMemoryRow($0, now: panel.now(), home: panel.home, cwd: panel.cwd()) } }   // #1945
+        let sessionW = XrayCol.widest(mrows.map(\.session)), ageW = XrayCol.widest(mrows.map(\.age))
+        return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
-                .font(Neon.font(11))
+                .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
                 .accessibilityLabel("Filter memory")
             ScrollView {
@@ -1148,7 +1154,8 @@ struct XrayPanelView: View {
                         faint("\(g.title) \(g.items.count)").padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
                         ForEach(XrayRefPopover.keyed(g.items, part: 0, block: gi), id: \.id) { mr in
                             let m = mr.e
-                            XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd())) {
+                            XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd()),
+                                             sessionWidest: sessionW, ageWidest: ageW) {
                                 panel.openMemoryCard(m)
                             }
                         }
@@ -1161,7 +1168,7 @@ struct XrayPanelView: View {
     }
 
     func faint(_ s: String) -> some View {
-        Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+        Text(verbatim: s).font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
     }
 }
 
@@ -1196,29 +1203,73 @@ struct XrayTabStrip: View {
     }
 }
 
+/// #1945: the drawer list's text sizes (at UI scale 1.0, through Neon.font): rows and filters, the small headers and
+/// footers, and the row's vertical padding.
+enum XrayText {
+    static let row: CGFloat = 12.5, small: CGFloat = 11.5, pad: CGFloat = 4
+}
+
+/// #1945: one column cell. The cell is as wide as `widest` (the list's longest value of the column, drawn hidden), so
+/// every row's cell starts and ends at the same x; no per-row measuring. Digits are monospaced, so the longest string by
+/// character count is the widest one for ids and ages. An empty `widest` (no row has the value) draws nothing.
+struct XrayCol: View {
+    let text: String?
+    let widest: String
+    var trailing = false
+
+    var body: some View {
+        if !widest.isEmpty {
+            Text(verbatim: widest).monospacedDigit().lineLimit(1).fixedSize().hidden()
+                .overlay(alignment: trailing ? .trailing : .leading) {
+                    if let text { Text(verbatim: text).monospacedDigit().lineLimit(1).fixedSize() }
+                }
+        }
+    }
+
+    /// shortcut: the longest by character count; a proportional label (not digits) of equal length can differ by a few
+    /// points, upgrade to a measured width if a status label ever needs it.
+    static func widest(_ xs: [String?]) -> String { xs.reduce("") { m, x in (x?.count ?? 0) > m.count ? x! : m } }
+    static func widest(_ xs: [String]) -> String { widest(xs.map { Optional($0) }) }
+}
+
+/// #1945: the Tasks list's column widths: the widest id, status label and age of the rows.
+struct XrayTaskCols: Equatable {
+    let id: String, label: String, age: String
+    init(_ rows: [XrayTaskRow]) {
+        id = XrayCol.widest(rows.map(\.id))
+        label = XrayCol.widest(rows.map(\.label))
+        age = XrayCol.widest(rows.map(\.age))
+    }
+}
+
 struct XrayTaskRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayTaskRow
+    var cols: XrayTaskCols?   // nil: each cell fits its own text
     let open: () -> Void
 
     var body: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
                 Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)
-                Text(verbatim: row.id).foregroundStyle(Neon.textSecondary).fixedSize()
-                Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
-                    .layoutPriority(1).modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
+                XrayCol(text: row.id, widest: cols?.id ?? row.id, trailing: true).foregroundStyle(Neon.textSecondary)
+                VStack(alignment: .leading, spacing: sz(1)) {
+                    Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
+                        .modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
+                    // #1945: under the title, so the right edge keeps only the status and age columns; truncates in its own line
+                    if let b = row.blocked {
+                        Text(verbatim: b).font(Neon.font(XrayText.small)).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                .layoutPriority(1)
                 Spacer(minLength: sz(4))
-                ForEach([row.label, row.age].compactMap { $0 }, id: \.self) {
-                    Text(verbatim: $0).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
-                }
-                // truncates under its own cap: a long id list never pushes the title out
-                if let b = row.blocked {
-                    Text(verbatim: b).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail).frame(maxWidth: sz(120), alignment: .trailing)
-                }
+                XrayCol(text: row.label, widest: cols?.label ?? row.label ?? "").foregroundStyle(Neon.textSecondary)
+                    .modifier(AgentPaneProbe(kind: "xrayStatus"))
+                XrayCol(text: row.age, widest: cols?.age ?? row.age ?? "", trailing: true).foregroundStyle(Neon.textSecondary)
+                    .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
-            .font(Neon.font(11))
-            .padding(.vertical, sz(2))
+            .font(Neon.font(XrayText.row))
+            .padding(.vertical, sz(XrayText.pad))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1231,19 +1282,20 @@ struct XrayTaskRowView: View {
 struct XrayPromptRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayPromptRow
+    var ordinalWidest: String?
     let open: () -> Void
 
     var body: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
-                Text(verbatim: row.ordinal).foregroundStyle(Neon.textSecondary).fixedSize()
-                if row.robot { RobotGlyph(size: 11).foregroundStyle(Neon.textSecondary) }
+                XrayCol(text: row.ordinal, widest: ordinalWidest ?? row.ordinal, trailing: true).foregroundStyle(Neon.textSecondary)
+                if row.robot { RobotGlyph(size: XrayText.row).foregroundStyle(Neon.textSecondary) }
                 if let m = row.mark, !m.isEmpty { Text(verbatim: m).foregroundStyle(Neon.textSecondary).lineLimit(1) }
                 Text(verbatim: row.title).foregroundStyle(row.faint ? Neon.textSecondary : Neon.textPrimary)
-                    .lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    .lineLimit(1).truncationMode(.tail).layoutPriority(1).modifier(AgentPaneProbe(kind: "xrayTitle"))
             }
-            .font(Neon.font(11))
-            .padding(.vertical, sz(2))
+            .font(Neon.font(XrayText.row))
+            .padding(.vertical, sz(XrayText.pad))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -1266,7 +1318,7 @@ struct XraySearchRowView: View {
             }
             Text(verbatim: row.snippet).foregroundStyle(Neon.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }
-        .font(Neon.font(11))
+        .font(Neon.font(XrayText.row))
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(row.spoken)
@@ -1277,6 +1329,7 @@ struct XraySearchRowView: View {
 struct XrayRefRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayRefRow
+    var countWidest: String?
     let open: () -> Void
 
     var body: some View {
@@ -1288,10 +1341,11 @@ struct XrayRefRowView: View {
                     Text(verbatim: row.title).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: sz(4))
-                Text(verbatim: row.count).foregroundStyle(Neon.textSecondary).fixedSize()
+                XrayCol(text: row.count, widest: countWidest ?? row.count, trailing: true).foregroundStyle(Neon.textSecondary)
+                    .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
-            .font(Neon.font(11))
-            .padding(.vertical, sz(2))
+            .font(Neon.font(XrayText.row))
+            .padding(.vertical, sz(XrayText.pad))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1302,6 +1356,7 @@ struct XrayRefRowView: View {
 struct XrayMemoryRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayMemoryRow
+    var sessionWidest: String?, ageWidest: String?
     let open: () -> Void
 
     var body: some View {
@@ -1310,12 +1365,13 @@ struct XrayMemoryRowView: View {
                 Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
                 Text(verbatim: row.detail).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: sz(4))
-                ForEach([row.session, row.age].compactMap { $0 }, id: \.self) {
-                    Text(verbatim: $0).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
-                }
+                XrayCol(text: row.session, widest: sessionWidest ?? row.session ?? "").foregroundStyle(Neon.textSecondary)
+                    .modifier(AgentPaneProbe(kind: "xrayStatus"))
+                XrayCol(text: row.age, widest: ageWidest ?? row.age ?? "", trailing: true).foregroundStyle(Neon.textSecondary)
+                    .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
-            .font(Neon.font(11))
-            .padding(.vertical, sz(2))
+            .font(Neon.font(XrayText.row))
+            .padding(.vertical, sz(XrayText.pad))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
