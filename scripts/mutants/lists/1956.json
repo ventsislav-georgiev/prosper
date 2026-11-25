@@ -1,0 +1,30 @@
+{
+ "entry": 1956,
+ "filter": "XrayPanelTasksTests",
+ "mutants": [
+  {
+   "name": "height-unfixed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "            .frame(height: sz(XrayText.rowHeight))   // #1956: one height for every row, no measuring",
+   "new": "            .padding(.vertical, sz(XrayText.pad))",
+   "expect": "killed",
+   "filter": "XrayPanelTasksTests/testEveryRowIsOneHeightAndTheLinkMarkShowsOnlyWhenBlocked"
+  },
+  {
+   "name": "glyph-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": ".modifier(AgentPaneProbe(kind: row.blocked == nil ? \"xrayNotBlocked\" : \"xrayBlocked\"))",
+   "new": ".modifier(AgentPaneProbe(kind: \"xrayBlocked\"))",
+   "expect": "killed",
+   "filter": "XrayPanelTasksTests/testEveryRowIsOneHeightAndTheLinkMarkShowsOnlyWhenBlocked"
+  },
+  {
+   "name": "tooltip-capped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "\"Blocked by \\(t.blockedBy.joined(separator: \", \"))\"   // #1956",
+   "new": "\"Blocked by \\(t.blockedBy.prefix(2).joined(separator: \", \"))\"   // #1956",
+   "expect": "killed",
+   "filter": "XrayPanelTasksTests/testRowKeepsTheWholeBlockedListForTheTooltipAndVoiceOverCardKeepsAll"
+  }
+ ]
+}
