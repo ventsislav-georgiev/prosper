@@ -401,24 +401,44 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertEqual(told, [AgentWindowText.shellMode])
     }
 
-    /// #1962: red if a failed "!" text (not_submitted, not_typed) still says it is in Claude's input (dch 1.160.0 takes it back out),
-    /// or a plain message's notSubmitted text changed.
-    func testAFailedRunSaysNothingWasLeftInClaudesInput() {
+    /// #1962/#1966: red if a "!" text dch took back out (detail "taken back out") says anything but shellNotRun, a "!" text it could not
+    /// take back (empty detail, or "may be left there in bash mode") says anything but shellLeft, or a plain message's texts changed.
+    func testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput() {
+        let back = "s: the message stayed in the composer through every Enter: taken back out, bash mode left, nothing run"
+        let kept = "s: the message stayed in the composer through every Enter: it may be left there in bash mode, so clear it before pressing Enter"
+        let plain = ["not_submitted": AgentWindowText.notSubmitted, "not_typed": "dch didn't send it (not_typed). Open in terminal"]
         for reason in ["not_submitted", "not_typed"] {
-            let reply = #"{"name":"s","result":"failed","reason":"\#(reason)","detail":""}"#
-            let f = Fake(statuses: ["idle"], reply: reply)
-            let d = AgentWindowDriver(key: Self.key, io: f.io, pause: { _ in })
-            XCTAssertEqual(d.send("! ls"), .failed(AgentWindowText.shellNotRun), reason)
-            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: true), AgentWindowText.shellNotRun, reason)
-            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: false),
-                           reason == "not_submitted" ? AgentWindowText.notSubmitted : "dch didn't send it (not_typed). Open in terminal", reason)
-            XCTAssertEqual(d.send("hi"), .failed(reason == "not_submitted" ? AgentWindowText.notSubmitted : "dch didn't send it (not_typed). Open in terminal"), reason)
+            for (detail, want) in [(back, AgentWindowText.shellNotRun), ("", AgentWindowText.shellLeft), (kept, AgentWindowText.shellLeft)] {
+                let f = Fake(statuses: ["idle"], reply: #"{"name":"s","result":"failed","reason":"\#(reason)","detail":"\#(detail)"}"#)
+                let d = AgentWindowDriver(key: Self.key, io: f.io, pause: { _ in })
+                XCTAssertEqual(d.send("! ls"), .failed(want), "\(reason): \(detail)")
+                XCTAssertEqual(d.send("hi"), .failed(detail == back ? AgentWindowText.shellNotRun : plain[reason]!), "plain \(reason): \(detail)")
+            }
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason + "_back"), shell: true), AgentWindowText.shellNotRun, reason)
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason + "_back"), shell: false), AgentWindowText.shellNotRun, reason)
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: true), AgentWindowText.shellLeft, reason)
+            XCTAssertEqual(AgentWindowDriver.sayFailure(("failed", reason), shell: false), plain[reason], reason)
         }
         let g = Fake(statuses: ["idle"], reply: #"{"name":"s","result":"failed","reason":"not_submitted","detail":""}"#)
         let i = interaction(g)
         var told: [String] = []
         i.run("ls", session: session(.idle)) { told.append($0) }
         until("refused") { !i.busy }
-        XCTAssertEqual(told, [AgentWindowText.shellNotRun])
+        XCTAssertEqual(told, [AgentWindowText.shellLeft])
+    }
+
+    /// #1966: sayReply turns the reason into *_back only for failed + not_submitted/not_typed + a detail with "taken back out".
+    func testSayReplyMarksATakenBackTextOnlyFromTheDetail() {
+        func reply(_ result: String, _ reason: String, _ detail: String) -> String {
+            AgentWindowDriver.sayReply(#"{"name":"s","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)"}"#)?.reason ?? "nil"
+        }
+        let back = "taken back out, bash mode left, nothing run"
+        XCTAssertEqual(reply("failed", "not_submitted", back), "not_submitted_back")
+        XCTAssertEqual(reply("failed", "not_typed", back), "not_typed_back")
+        XCTAssertEqual(reply("failed", "not_submitted", ""), "not_submitted")
+        XCTAssertEqual(reply("failed", "not_typed", "it may be left there in bash mode, so clear it before pressing Enter"), "not_typed")
+        XCTAssertEqual(reply("failed", "draft_left", back), "draft_left")
+        XCTAssertEqual(reply("skipped", "not_submitted", back), "not_submitted")
+        XCTAssertEqual(AgentWindowDriver.sayReply(#"{"name":"s","result":"failed","reason":"not_typed"}"#)?.reason, "not_typed", "no detail key")
     }
 }

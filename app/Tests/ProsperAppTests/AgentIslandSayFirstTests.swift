@@ -154,13 +154,20 @@ final class AgentIslandSayFirstTests: XCTestCase {
         }
     }
 
-    /// #1963: a failed first message starting with "!" says the shell line (dch takes it back out); a plain one keeps notSubmitted.
+    /// #1963/#1966: a failed first message starting with "!" says shellNotRun when dch took it back out ("taken back out" in the
+    /// detail) and shellLeft when it did not (empty detail, or "may be left there in bash mode"); a plain one keeps notSubmitted.
     @MainActor
-    func testAFailedBangFirstMessageSaysShellNotRun() {
-        for (text, why) in [("!ls", AgentWindowText.shellNotRun), ("ls", AgentWindowText.notSubmitted)] {
-            let f = FirstIO(replies: [Self.reply("failed", "not_submitted")])
+    func testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft() {
+        func reply(_ detail: String) -> String {
+            #"{"name":"s","result":"failed","reason":"not_submitted","detail":"\#(detail)"}"#
+        }
+        let back = "s: taken back out, bash mode left, nothing run"
+        let kept = "s: it may be left there in bash mode, so clear it before pressing Enter"
+        for (text, detail, why) in [("!ls", back, AgentWindowText.shellNotRun), ("!ls", "", AgentWindowText.shellLeft),
+                                    ("!ls", kept, AgentWindowText.shellLeft), ("ls", "", AgentWindowText.notSubmitted)] {
+            let f = FirstIO(replies: [reply(detail)])
             let c = controller(f)
-            XCTAssertEqual(sayFirst(c, text), why, text)
+            XCTAssertEqual(sayFirst(c, text), why, "\(text): \(detail)")
             XCTAssertEqual(f.counts.says, 1, text)
         }
     }

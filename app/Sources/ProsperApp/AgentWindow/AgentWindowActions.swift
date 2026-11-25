@@ -306,6 +306,8 @@ enum AgentWindowText {
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"
     /// #1962: dch 1.160.0 takes a failed "!" text back out of the composer and leaves bash mode (not_submitted, not_typed).
     static let shellNotRun = "The command didn't run; nothing was left in Claude's input"
+    /// #1966: the same two reasons, but dch could not take the "!" text back out (its detail lacks "taken back out"): it may sit in the composer.
+    static let shellLeft = "The command may still be in Claude's input in shell mode; clear it before pressing Enter"
     /// #854: dch 1.46's draft_left: a signal came once the message was typed, and it may still be in the composer.
     static let draftLeft = "The message may still be in Claude's input, but it wasn't sent. Open in terminal"
     /// #854: dch 1.46's interrupted (nothing typed) and withdrawn (typed, then taken back out): Claude's input is as it was.
@@ -606,6 +608,8 @@ struct AgentWindowDriver: Sendable {
             guard let o = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any],
                   let r = o["result"] as? String else { continue }
             let why = (o["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // #1966: dch 1.160.0+ gives a taken-back "!" text the same reason codes as one it could not take back; only the detail differs.
+            if r == "failed", why == "not_submitted" || why == "not_typed", (o["detail"] as? String)?.contains("taken back out") == true { return (r, why! + "_back") }
             return (r, why)
         }
         return nil
@@ -623,7 +627,8 @@ struct AgentWindowDriver: Sendable {
         case ("skipped"?, "no_screen"?): return AgentWindowText.noScreen
         case ("skipped"?, "not_claude"?): return AgentWindowText.notClaude
         case ("failed"?, "not_foreground"?): return AgentWindowText.notForeground
-        case ("failed"?, "not_submitted"?) where shell, ("failed"?, "not_typed"?) where shell: return AgentWindowText.shellNotRun
+        case ("failed"?, "not_submitted_back"?), ("failed"?, "not_typed_back"?): return AgentWindowText.shellNotRun
+        case ("failed"?, "not_submitted"?) where shell, ("failed"?, "not_typed"?) where shell: return AgentWindowText.shellLeft
         case ("failed"?, "not_submitted"?): return AgentWindowText.notSubmitted
         case ("failed"?, "draft_left"?): return AgentWindowText.draftLeft
         case ("failed"?, "withdrawn"?), ("failed"?, "interrupted"?): return AgentWindowText.notSent

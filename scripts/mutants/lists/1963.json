@@ -1,6 +1,6 @@
 {
   "entry": 1963,
-  "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysShellNotRun",
+  "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft",
   "mutants": [
     {
       "name": "first_drop_shell",
@@ -8,7 +8,7 @@
       "old": "if let why = AgentWindowDriver.sayFailure(reply, shell: text.hasPrefix(\"!\")) {",
       "new": "if let why = AgentWindowDriver.sayFailure(reply) {",
       "expect": "killed",
-      "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysShellNotRun"
+      "filter": "AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
     }
   ]
 }

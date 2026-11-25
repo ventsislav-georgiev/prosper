@@ -1,0 +1,46 @@
+{
+  "entry": 1966,
+  "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft",
+  "mutants": [
+    {
+      "name": "detail_ignored",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "if r == \"failed\", why == \"not_submitted\" || why == \"not_typed\", (o[\"detail\"] as? String)?.contains(\"taken back out\") == true { return (r, why! + \"_back\") }",
+      "new": "if r == \"failed\", why == \"not_submitted\" || why == \"not_typed\", (o[\"detail\"] as? String)?.contains(\"\") == false { return (r, why! + \"_back\") }",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
+    },
+    {
+      "name": "detail_any_result",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "if r == \"failed\", why == \"not_submitted\" || why == \"not_typed\", (o[\"detail\"] as? String)?.contains(\"taken back out\") == true { return (r, why! + \"_back\") }",
+      "new": "if why == \"not_submitted\" || why == \"not_typed\", (o[\"detail\"] as? String)?.contains(\"taken back out\") == true { return (r, why! + \"_back\") }",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
+    },
+    {
+      "name": "back_arm_says_left",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted_back\"?), (\"failed\"?, \"not_typed_back\"?): return AgentWindowText.shellNotRun",
+      "new": "case (\"failed\"?, \"not_submitted_back\"?), (\"failed\"?, \"not_typed_back\"?): return AgentWindowText.shellLeft",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
+    },
+    {
+      "name": "left_arm_says_not_run",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellLeft",
+      "new": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellNotRun",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
+    },
+    {
+      "name": "left_arm_plain_too",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+      "old": "case (\"failed\"?, \"not_submitted\"?) where shell, (\"failed\"?, \"not_typed\"?) where shell: return AgentWindowText.shellLeft",
+      "new": "case (\"failed\"?, \"not_submitted\"?), (\"failed\"?, \"not_typed\"?): return AgentWindowText.shellLeft",
+      "expect": "killed",
+      "filter": "XrayCommandPillTests/testAFailedRunSaysWhetherTheCommandWasLeftInClaudesInput|XrayCommandPillTests/testSayReplyMarksATakenBackTextOnlyFromTheDetail|AgentIslandSayFirstTests/testAFailedBangFirstMessageSaysWhetherTheCommandWasLeft"
+    }
+  ]
+}

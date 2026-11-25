@@ -27,6 +27,8 @@ tag from the now-released section and put it on the new top draft.
   input (dch 1.160.0 takes it back out). (#1962)
 - Agent Sessions: a first message starting with "!" that did not go through now says nothing was
   left in Claude's input, as Run does. (#1963)
+- Agent Sessions: a Run or "!" command that dch could not take back out now says it may still be in
+  Claude's input in shell mode; clear it before pressing Enter. (#1966)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier
