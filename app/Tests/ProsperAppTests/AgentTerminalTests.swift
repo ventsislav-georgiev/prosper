@@ -148,10 +148,10 @@ final class AgentTerminalTests: XCTestCase {
 
     @MainActor
     func wait(_ what: String, timeout: TimeInterval = 10, file: StaticString = #filePath, line: UInt = #line,
-              _ done: () -> Bool) {
+              state: () -> String = { "" }, _ done: () -> Bool) {
         let end = Date().addingTimeInterval(timeout)
         while !done() {
-            if Date() > end { return XCTFail("timed out: \(what)", file: file, line: line) }
+            if Date() > end { return XCTFail("timed out: \(what)\(state())", file: file, line: line) }
             spin(0.01)
         }
     }
@@ -687,6 +687,12 @@ final class AgentTerminalTests: XCTestCase {
 
     // MARK: The real view (libghostty), offscreen
 
+    /// #1921: the rig's window is never ordered in, so its occlusionState lacks .visible; the window server can still
+    /// post an occlusion change for it at any moment (CI), and libghostty's view then stops drawing for good. As shown.
+    final class ShownWindow: NSWindow {
+        override var occlusionState: NSWindow.OcclusionState { .visible }
+    }
+
     @MainActor
     final class ViewRig {
         let rig: Rig
@@ -703,7 +709,7 @@ final class AgentTerminalTests: XCTestCase {
             host.pasteboard = { [pb] in pb }
             host.owner = rig.c
             rig.c.view = host
-            window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window = ShownWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
         }
 
@@ -1342,7 +1348,7 @@ final class AgentTerminalTests: XCTestCase {
             let v = startedView()
             v.output("\u{1b}[1;36mProsper\u{1b}[0m terminal at \(scale)\r\n\u{1b}[42m green \u{1b}[0m\r\n", self)
             var rep: NSBitmapImageRep?
-            wait("a frame") {
+            wait("a frame at scale \(scale)", state: { Self.surfaceState(v) }) {
                 rep = Self.surfaceImage(v.host)
                 return rep.map { Self.ink($0) > 50 } ?? false
             }
@@ -1353,6 +1359,29 @@ final class AgentTerminalTests: XCTestCase {
                 }
             }
             v.tearDown()
+        }
+    }
+
+    /// #1921: what a frame wait saw when it gave up.
+    @MainActor
+    static func surfaceState(_ v: ViewRig) -> String {
+        let s = surfaceRef(v.host)?.0
+        return " (IOSurface \(s.map { "\(IOSurfaceGetWidth($0))x\(IOSurfaceGetHeight($0))" } ?? "none"), ink "
+            + "\(surfaceImage(v.host).map { ink($0) } ?? -1), window occlusion \(v.window.occlusionState.rawValue), "
+            + "screen \(v.window.screen != nil))"
+    }
+
+    /// #1921 (CI 45360452677, 45554353068): an occlusion notice for the rig's never-shown window (the window server's,
+    /// at any moment) leaves the surface drawing. Red on the parent: the plain NSWindow answered "not visible", the
+    /// view's observer stopped libghostty's frames, and the frame wait timed out.
+    @MainActor
+    func testAnOcclusionNoticeForTheOffscreenRigStillDraws() {
+        let v = startedView()
+        defer { v.tearDown() }
+        NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: v.window)
+        v.output("\u{1b}[42m green \u{1b}[0m after the notice\r\n", self)
+        wait("a frame after an occlusion notice", timeout: 5, state: { Self.surfaceState(v) }) {
+            Self.surfaceImage(v.host).map { Self.ink($0) > 50 } ?? false
         }
     }
 
