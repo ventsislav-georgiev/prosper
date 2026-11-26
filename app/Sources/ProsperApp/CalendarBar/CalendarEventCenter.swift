@@ -81,7 +81,7 @@ final class CalendarEventCenter {
         return s
     }
 
-    /// Request full read access (macOS 14+ API; the app's floor is 14.0).
+    /// Request full read access (macOS 14+ API; the app's floor is 15.0).
     /// Completion on main with the resulting grant state.
     func requestAccess(_ completion: @escaping @MainActor (Bool) -> Void) {
         if Self.authorized { completion(true); return }

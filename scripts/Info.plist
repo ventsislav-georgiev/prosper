@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>15.0</string>
 	<!-- Menu-bar agent: no Dock tile / no Cmd-Tab entry. LSUIElement pins the
 	     initial activation policy to .accessory so AppKit never promotes us to
 	     .regular (the racy tail-of-launch promotion that left a stray Dock icon

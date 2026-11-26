@@ -201,7 +201,7 @@ final class CCPoolUsageRecordTests: XCTestCase {
     /// "other", no counts, the account of the attempt), the client's bytes the 400 it always got.
     func testBadRequestPath400HasOneRowAndTheClientBytesAreUnchanged() throws {
         let r = try rig()
-        // #1588: since macOS 14 (the app's floor) URL(string:) percent-encodes what it once refused, so no request-line
+        // #1588: since macOS 14 (below the app's floor) URL(string:) percent-encodes what it once refused, so no request-line
         // path (a leading "/", no space) fails it and the guard is not reached: the path is relayed, the pool's 400 never
         // sent. The guard stays; the 400 case below runs on an OS whose URL(string:) refuses one of these again.
         let candidates = ["/v1/messages%zz", "/%", "/v1/%GG", "/v1/messages%"]

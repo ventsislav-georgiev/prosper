@@ -246,7 +246,7 @@ jobs:
           # proves an uncorrupted download. A DCH_TAG bump waits for dch's
           # release-assets workflow to attach the tarball, then updates both lines.
           DCH_SHA256: d48efbcfd4dc1a087462d9a206f9c30844c2c7399230bca4d1d3c21bbc7d51f2
-          # dch's release assets are built for minos 14.0 = LSMinimumSystemVersion.
+          # dch's release assets are built for minos 14.0, at or below LSMinimumSystemVersion (15.0).
           # Every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a 14.0
           # app and dyld refused it on macOS 14-26 (#447); the Bundle step's minos
           # guard fails on any drift, so a DCH_TAG bump cannot reintroduce it.

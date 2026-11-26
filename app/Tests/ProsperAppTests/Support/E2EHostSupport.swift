@@ -62,7 +62,7 @@ final class E2EHost {
         <key>CFBundlePackageType</key><string>APPL</string>
         <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
         <key>CFBundleShortVersionString</key><string>1.0</string>
-        <key>LSMinimumSystemVersion</key><string>14.0</string>
+        <key>LSMinimumSystemVersion</key><string>15.0</string>
         </dict></plist>
         """
         try plist.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true, encoding: .utf8)

@@ -16,7 +16,7 @@ import PackageDescription
 let package = Package(
     name: "Prosper",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     dependencies: [
         // MLX LLM stack. MLXLLM/MLXLMCommon provide LLMModelFactory, ModelContainer,

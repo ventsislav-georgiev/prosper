@@ -67,4 +67,13 @@ final class InfoPlistDocumentTypesTests: XCTestCase {
         ]
         XCTAssertEqual(urlTypes, expected)
     }
+
+    /// #1978: the floor is macOS 15 in both places that declare it. Sparkle's generate_appcast copies
+    /// LSMinimumSystemVersion into each item's sparkle:minimumSystemVersion, so a macOS 14 Mac is not offered it.
+    func testMinimumSystemVersionIsMacOS15InPlistAndPackage() throws {
+        XCTAssertEqual(try plist()["LSMinimumSystemVersion"] as? String, "15.0")
+        let package = try String(contentsOf: plistURL.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("app/Package.swift"), encoding: .utf8)
+        XCTAssertTrue(package.contains(".macOS(.v15)"), "Package.swift platforms must match LSMinimumSystemVersion")
+    }
 }

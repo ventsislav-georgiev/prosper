@@ -6,7 +6,7 @@ Developer documentation: building from source, architecture, extension authoring
 
 ## Build & develop
 
-**Requires:** Xcode 16+ / Swift 6, Apple Silicon, macOS 14+. No Ollama, no Python, no model server.
+**Requires:** Xcode 16+ / Swift 6, Apple Silicon, macOS 15 Sequoia+. No Ollama, no Python, no model server.
 
 ```sh
 ./scripts/build.sh release      # build

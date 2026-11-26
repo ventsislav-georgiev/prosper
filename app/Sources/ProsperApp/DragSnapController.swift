@@ -212,7 +212,7 @@ final class DragSnapController {
         case .leftMouseDragged: return .drag
         case .leftMouseUp: return .drop
         // .mouseCancelled (raw 40, macOS 26+; the case is unavailable below our
-        // macOS 14 target).
+        // macOS 15 target).
         case let t where t.rawValue == 40: return .cancel
         default: return nil
         }

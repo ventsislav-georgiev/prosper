@@ -11,7 +11,7 @@ import SwiftUI
 ///
 /// Place it as a bar's `.background`, above any tint. Give non-interactive labels and
 /// icons on the bar `.allowsHitTesting(false)` so a press on them falls through to it.
-/// (SwiftUI's WindowDragGesture needs macOS 15; the app supports 14.)
+/// (Written while the floor was macOS 14, before SwiftUI's WindowDragGesture (macOS 15) could be used.)
 struct WindowDragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> WindowDragHandleView { WindowDragHandleView() }
     func updateNSView(_ nsView: WindowDragHandleView, context: Context) {}

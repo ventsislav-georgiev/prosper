@@ -44,6 +44,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer now shows its rows as soon as the tab you are on has them, instead of waiting
   about a second for every read; opening it again on the same session shows the last rows at once
   while they refresh. (#1976)
+- Prosper now needs macOS 15 Sequoia or later; Macs on macOS 14 keep the last version that supports
+  them. (#1978)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier
