@@ -17,6 +17,11 @@ struct DchHistoryRecord: Equatable, Identifiable {
         var configDir = ""
     }
 
+    /// #1990: dch 1.173.0's "codex" object, the Codex thread `--revive` resumes (`codex resume <threadID>`).
+    struct Codex: Equatable {
+        var threadID = "", home = ""
+    }
+
     let key: AgentSessionKey
     var alias = ""
     var cwd = ""
@@ -35,6 +40,8 @@ struct DchHistoryRecord: Equatable, Identifiable {
     /// record a cold start under its name moved aside (`<name>.<ended>`), 1.28.1 on
     /// every record (the name's own: the name). One name can have several records.
     var file = ""
+    /// #1990: nil when dch sends no "codex" object or no string "thread_id" in it.
+    var codex: Codex? = nil
 
     /// #714: moved aside: a file that is not the name (1.28.0 and 1.28.1 alike).
     var isAside: Bool { !file.isEmpty && file != key.name }
@@ -246,7 +253,7 @@ extension AgentIsland {
         func strings(_ v: Any?) -> [String] { (v as? [Any])?.compactMap { $0 as? String } ?? [] }
         return rows.compactMap { o in
             guard let name = o["name"] as? String, !name.isEmpty else { return nil }
-            let a = o["agent"] as? [String: Any]
+            let a = o["agent"] as? [String: Any], c = o["codex"] as? [String: Any]
             return DchHistoryRecord(
                 key: AgentSessionKey(dir: dir, name: name), alias: o["alias"] as? String ?? "",
                 cwd: o["cwd"] as? String ?? "", argv: strings(o["argv"]), started: num(o["started"]),
@@ -255,7 +262,8 @@ extension AgentIsland {
                     .init(kind: $0["kind"] as? String ?? "", sessionID: $0["session_id"] as? String ?? "",
                           name: $0["name"] as? String ?? "", cwd: $0["cwd"] as? String ?? "", launch: strings($0["launch"]),
                           configDir: $0["config_dir"] as? String ?? "")
-                }, pinned: o["pinned"] as? Bool ?? false, file: o["file"] as? String ?? "")
+                }, pinned: o["pinned"] as? Bool ?? false, file: o["file"] as? String ?? "",
+                codex: (c?["thread_id"] as? String).flatMap { $0.isEmpty ? nil : DchHistoryRecord.Codex(threadID: $0, home: c?["home"] as? String ?? "") })
         }
     }
 
@@ -555,10 +563,12 @@ extension AgentIsland {
         if o.result == "ok" {
             guard verb == .resume || verb == .resumeNoMessage else { return verb.done }
             if verb == .resume, o.reason == "no_screen" { return "Resumed (resume message not typed)" }   // dch-lite
+            // #1990: dch 1.173.0 revived the session but not its Codex: its own words and by-hand command follow.
+            let codex = o.detail.flatMap { d in d.range(of: "; codex NOT resumed").map { String(d[$0.lowerBound...]) } } ?? ""
             if let a = o.revivedAs, !a.isEmpty, a != o.name {
-                return "Resumed as \(a)" + (verb == .resume ? "" : " without the message")
+                return "Resumed as \(a)" + (verb == .resume ? "" : " without the message") + codex
             }
-            return verb.done
+            return verb.done + codex
         }
         if o.reason == "pinned" { return pinnedRefusal }   // QA #489 I5: never dch's -f hint
         if let w = reasonWords(o, verb) { return w }

@@ -424,11 +424,14 @@ enum AgentWindowControls {
     /// older unpinned records (#743, the menu item's count), so the line says so.
     static func removeQuestion(_ r: DchHistoryRecord, in history: [DchHistoryRecord] = []) -> String {
         let sid = r.agent?.sessionID ?? ""
+        // #1990: a record dch keeps a Codex thread for (and no Claude id) names Codex and its by-hand resume.
+        let codex = sid.isEmpty ? r.codex?.threadID : nil
+        let agent = codex == nil ? "Claude Code" : "Codex"
         let n = AgentIsland.older(r, in: history).filter { !$0.pinned }.count
-        let what = n == 0 ? "\(r.title) from History? Resume won't be able to bring it back. Its Claude Code conversation stays"
+        let what = n == 0 ? "\(r.title) from History? Resume won't be able to bring it back. Its \(agent) conversation stays"
             : "\(r.title) and its \(n) older record\(n == 1 ? "" : "s") from History? Resume won't be able to bring them back."
-                + " Their Claude Code conversations stay"
-        return "Remove \(what) on disk." + (sid.isEmpty ? "" : " (claude --resume \(sid))")
+                + " Their \(agent) conversations stay"
+        return "Remove \(what) on disk." + (codex.map { " (codex resume \($0))" } ?? (sid.isEmpty ? "" : " (claude --resume \(sid))"))
     }
 
     static let blockedSentence = " It's waiting on a prompt: answer it first."

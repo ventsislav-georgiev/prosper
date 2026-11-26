@@ -100,6 +100,22 @@ final class ControlSessionsHistoryTests: XCTestCase {
         try withSeams { refused(try ControlSessions.history(), ControlSessions.islandOff) }
     }
 
+    /// #1990: a record with dch 1.173.0's "codex" lists its thread id; one without it, null.
+    @MainActor
+    func testSessionsHistoryListsACodexRecordsThread() throws {
+        let st = historyStore(), thread = "019a0000-aaaa-bbbb-cccc-0123456789ab"
+        st.history = st.history.map { r in
+            var r = r
+            if r.name == "web" { r.codex = DchHistoryRecord.Codex(threadID: thread, home: "/Users/example/.codex") }
+            return r
+        }
+        try withSeams(store: st) {
+            let r = rows(try ControlSessions.history())
+            XCTAssertEqual(r["web"]?["codex"], .string(thread))
+            XCTAssertEqual(r["api"]?["codex"], .null)
+        }
+    }
+
     // MARK: - sessions.resume (this Mac)
 
     /// The menu's gate, then the controller's resume once with the record and noMessage; a message resumes as Resume (no

@@ -300,7 +300,8 @@ enum AgentWindowText {
     static let noScreen = "This dch can't confirm a message. Open in terminal"
     /// QA #651 INFO-2: no terminal mirror (dch-lite), so no screen to check before the Esc.
     static let noScreenInterrupt = "This dch can't confirm an interrupt. Open in terminal"
-    static let notClaude = "Claude isn't running in this session. Open in terminal"
+    /// #1990: dch 1.173.0 types into Codex too, so its not_claude means neither Claude nor Codex runs there.
+    static let notClaude = "No Claude or Codex is running in this session. Open in terminal"
     /// #1135: dch 1.63's not_foreground (and claude_foreground false): Claude is suspended or in the background.
     static let notForeground = AgentIsland.notInFrontText + ". Open in terminal"
     static let notSubmitted = "The message is in Claude's input but wasn't sent. Open in terminal"

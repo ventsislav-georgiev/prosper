@@ -299,8 +299,9 @@ enum ControlSessions {
                                           absent: AgentWindowControls.historyOff(verb, r, store: st))
     }
 
-    /// {"history": [{id, name, title, cwd, ended, status, age, pinned, host, action, resume, resumeWhyNot,
+    /// {"history": [{id, name, title, cwd, ended, status, age, pinned, host, codex, action, resume, resumeWhyNot,
     /// resumeNoMessage, resumeNoMessageWhyNot}]}: read on demand from the store the window keeps (no dch call).
+    /// #1990: `codex`, the Codex thread id dch 1.173.0 resumes for the record, else null.
     static func history() throws -> ControlJSON {
         let st = try store(), m = model(), now = m?.now() ?? Date().timeIntervalSince1970
         func str(_ s: String?) -> ControlJSON { s.map { .string($0) } ?? .null }
@@ -312,6 +313,7 @@ enum ControlSessions {
                 "cwd": r.cwd.isEmpty ? .null : .string(r.cwd), "ended": r.ended > 0 ? .number(r.ended) : .null,
                 "status": .string(AgentIsland.endLabel(r.end)), "age": .string(r.lastSeen > 0 ? AgentIsland.age(now - r.lastSeen) : ""),
                 "pinned": .bool(r.pinned), "host": remote ? .string(String(r.key.dir.dropFirst())) : .null,
+                "codex": str(r.codex?.threadID),
                 "action": str(remote ? m?.remoteResumeText[r.id] : st.historyActions[r.id]),
                 "resume": .bool(resume == nil), "resumeWhyNot": str(resume),
                 "resumeNoMessage": .bool(quiet == nil), "resumeNoMessageWhyNot": str(quiet),
@@ -393,7 +395,7 @@ extension ControlRegistry {
         ]) { _, a in try ControlSessions.setLayout(a) })
         // #1833: the History rows and their Resume.
         r.register(ControlCommand(name: "sessions.history",
-                                  summary: "List History records: id, name, cwd, ended, status, age, pinned, host, and whether Resume runs.",
+                                  summary: "List History records: id, name, cwd, ended, status, age, pinned, host, codex thread, and whether Resume runs.",
                                   args: [:], mutates: false) { _, _ in try ControlSessions.history() })
         // #1877: awaited (reply(to:) calls runAsync) when it carries a message; ControlSessionsTalk.resume records the change.
         r.register(ControlCommand(name: "sessions.resume", summary: "Resume a History record, optionally without dch's message or with your own (no undo). Without a message the reply is the name it revives as; with one it waits (up to 60 s) for the message: {name, delivered: true}, an error naming the resume and why the message was not sent, or {name, delivered: \"unknown\", note}.", args: [

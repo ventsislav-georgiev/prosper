@@ -42,6 +42,8 @@ tag from the now-released section and put it on the new top draft.
   definitions in Codex sessions. (#1983)
 - The X-ray drawer keeps the line you are reading exactly where it was when new rows arrive, and
   typing a filter or switching a chip starts the list at the top. (#1979)
+- Ships dch 1.173.0: Agent Sessions can send messages to Codex sessions, and History lists Codex
+  sessions and revives them with codex resume. (#1990)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
