@@ -44,6 +44,9 @@ tag from the now-released section and put it on the new top draft.
   typing a filter or switching a chip starts the list at the top. (#1979)
 - Ships dch 1.173.0: Agent Sessions can send messages to Codex sessions, and History lists Codex
   sessions and revives them with codex resume. (#1990)
+- Ships dch 1.174.0: X-ray opens ended Codex sessions and says when a Codex rollout is compressed or
+  corrupt, and Agent Sessions show dch's words when it stops, restarts or skips a Codex session.
+  (#1991)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -625,6 +625,47 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.restartAllSummary(result("", status: 15, stopped: true)), "Restart all cancelled: no answer in 15m")
     }
 
+    /// #1991 (dch 1.174.0 dch.c:9377-9430, :10149-10153, :8679, :9060, :9127): each new Codex code and detail on a row is
+    /// dch's own detail (Claude's strings unchanged); codex_daemon and cwd_unknown are skips in Restart all's count,
+    /// a current Codex is no skip, codex_exited a failure. Red with any of them mapped to Prosper words or miscounted.
+    func testCodexStopAndRestartCodesShowDchsDetail() {
+        func line(_ result: String, _ reason: String, _ detail: String, sid: String = "") -> String {
+            #"{"name":"a","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)","session_id":"\#(sid)"}"#
+        }
+        let tid = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+        let rows: [(String, AgentIsland.Verb, String)] = [
+            (line("skipped", "codex_daemon", "codex runs attached to its daemon (no --no-daemon): /quit would leave its turn running"),
+             .stop, "codex runs attached to its daemon (no --no-daemon): /quit would leave its turn running"),
+            (line("skipped", "codex_daemon", "codex runs with --remote: /quit would leave its turn running on the server"),
+             .restart, "codex runs with --remote: /quit would leave its turn running on the server"),
+            (line("skipped", "codex_daemon", "codex's command line cannot be read"), .restart, "codex's command line cannot be read"),
+            (line("failed", "codex_exited", "codex exited while pausing", sid: tid), .stop, "codex exited while pausing"),
+            (line("skipped", "cwd_unknown", "codex's cwd cannot be read"), .restart, "codex's cwd cannot be read"),
+            (line("skipped", "in_shell", "codex was started inside the session's shell, not as its command"), .restart,
+             "codex was started inside the session's shell, not as its command"),
+            (line("skipped", "current", "already on the installed codex (its binary is unchanged since it started)"), .restart,
+             "already on the installed codex (its binary is unchanged since it started)"),
+            (line("failed", "relaunch_failed", "relaunch with codex resume \(tid) was refused (exit 1); session ended", sid: tid), .restart,
+             "relaunch with codex resume \(tid) was refused (exit 1); session ended"),
+            (line("failed", "relaunch_failed", "relaunched with codex resume \(tid), but no codex runs in the session within 30s", sid: tid),
+             .restart, "relaunched with codex resume \(tid), but no codex runs in the session within 30s"),
+            (line("ok", "", "codex resumed \(tid), the resume message as its prompt", sid: tid), .restart, "Restarted"),
+            (line("ok", "", "", sid: tid), .stop, "Stopped"),
+        ]
+        for (out, verb, want) in rows {
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: 0), name: "a", verb), want, out)
+        }
+        func sum(_ out: String, status: Int32 = 0) -> String { AgentIsland.restartAllSummary(result(out, status: status)) }
+        XCTAssertEqual(sum(line("skipped", "current", "already on the installed codex (its binary is unchanged since it started)")),
+                       "all agents current", "a current Codex is no skip")
+        XCTAssertEqual(sum(line("skipped", "codex_daemon", "codex's command line cannot be read") + "\n"
+                           + line("skipped", "cwd_unknown", "codex's cwd cannot be read")), "all agents current (2 skipped)")
+        XCTAssertEqual(sum(line("failed", "codex_exited", "codex exited while pausing", sid: tid), status: 1), "1 failed")
+        XCTAssertEqual(AgentIsland.tally(result(line("skipped", "codex_daemon", "codex's command line cannot be read") + "\n"
+                                                + line("failed", "codex_exited", "codex exited while pausing"), status: 1),
+                                         .stop, title: "Stop all", empty: "nothing stopped"), "1 failed, 1 skipped")
+    }
+
     func testResumeCrashedAndStopAllTallies() {
         func resume(_ out: String, status: Int32 = 0) -> String {
             AgentIsland.tally(result(out, status: status), .resume, title: "Resume", empty: "nothing to resume")

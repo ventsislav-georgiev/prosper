@@ -600,6 +600,9 @@ extension XrayPanels {
 extension XrayPanelModel {
     static let refNoCorpus = "No X-ray history for this session"
     static let refNotARef = "dch did not read this as a ref"
+    /// #1991 (dch 1.174.0): exit 1's words, with dch's stderr reason ("the Codex rollout is <reason>") when this panel's
+    /// last read answered that corpus (Run carries no stderr).
+    var noCorpusNote: String { corpus?.rolloutWhy.map { "\(Self.refNoCorpus): \($0)" } ?? Self.refNoCorpus }
     static let refTooLong = "Too long to look up here"
     static let refFailed = "The ref read failed"
     /// #1568: a remote --xray's exit 6 (dch README v1.99.0:1267-1269: the host's hello lacks the `xray` token).
@@ -625,7 +628,7 @@ extension XrayPanelModel {
             // an equal one publishes nothing, so the card does not redraw
             let next = scope != "project" ? refContext?.with(others: c) : refContext.map { $0.ref == text ? $0.merged(c) : c } ?? c
             if next != refContext { refContext = next }
-        case 1: refNote = Self.refNoCorpus
+        case 1: refNote = noCorpusNote
         case 2: refNote = Self.refNotARef
         case 6 where target.dir == nil: refNote = Self.refNoXray
         case _ where unreached(r.status): refNote = "host unreachable"

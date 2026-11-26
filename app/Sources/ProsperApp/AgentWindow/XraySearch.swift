@@ -131,7 +131,8 @@ struct XraySearch: Equatable {
     /// group's session_id; with no id, the live row of that name (dch #493: an id never falls back to a name).
     static func row(_ g: Group, in rows: [AgentSidebar.Row]) -> AgentSidebar.RowID? {
         if let id = g.sessionID, !id.isEmpty {
-            return rows.first { $0.session?.claudeSessionID == id || $0.record?.agent?.sessionID == id }?.id
+            // #1991: dch 1.174.0 answers an ended Codex with its thread id
+            return rows.first { $0.session?.claudeSessionID == id || $0.record?.agent?.sessionID == id || $0.record?.codex?.threadID == id }?.id
         }
         return rows.first { $0.session?.key.name == g.session }?.id
     }
@@ -217,7 +218,8 @@ extension XrayPanelModel {
         unreachable = false
         if r.status == 1 || r.status == 6 {
             (searchable, search) = (false, nil)
-            searchGone = r.status == 1 ? XraySearch.cannotSearch : XraySearch.refused   // R1355-i1: said where the strip lands
+            // R1355-i1: said where the strip lands; #1991: a Codex rollout dch could not read says so
+            searchGone = r.status == 1 ? (corpus?.rolloutWhy == nil ? XraySearch.cannotSearch : noCorpusNote) : XraySearch.refused
             return
         }
         // #1407: this answer was too large; unlike exit 6 (the host never answers this form) another text may fit, so the tab stays

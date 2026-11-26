@@ -176,6 +176,18 @@ final class XraySearchScopeTests: XCTestCase {
         XCTAssertTrue(XraySearch.row(g("api-qa", "ffff"), in: rows) == nil, "an unknown id never falls back to the name")
     }
 
+    /// #1991 (dch 1.174.0): an ended Codex's group carries its thread id: it opens the History row whose record kept
+    /// that thread (red with the Codex match gone: nil).
+    func testOpenSessionKeysAnEndedCodexOnItsThreadID() {
+        let key = AgentSessionKey(dir: "/tmp/dch-test", name: "api")
+        var rec = DchHistoryRecord(key: key, cwd: "/Users/example/api", file: "api")
+        rec.codex = .init(threadID: "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b", home: "/Users/example/.codex")
+        var r = AgentSidebar.Row(id: .history(key), title: "api", state: .idle, detail: "", age: "", prs: [])
+        r.record = rec
+        let g = XraySearch.Group(session: "api", sessionID: "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b", lastActive: nil, hits: [], more: false)
+        XCTAssertEqual(XraySearch.row(g, in: [r]), AgentSidebar.RowID.history(key))
+    }
+
     /// As XraySearchTabTests.opened: a shown, live panel on the Search tab, its clock at the fixtures' now.
     func opened(_ target: XrayTarget, _ run: @escaping XrayPanels.Run) async -> XrayPanelModel {
         let p = XrayPanelModel(target: target, tab: .search)

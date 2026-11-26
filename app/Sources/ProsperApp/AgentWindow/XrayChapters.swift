@@ -71,6 +71,9 @@ enum XrayChapters {
                 if claudes > 1 { return "\(claudes) Claude sessions run here; X-ray reads one" }
                 if reason == "ended" { return "Shell\(d)ended\(d)not kept" }
                 if reason.isEmpty && claudes == 0 { return "No Claude session found here" }
+                // #1991 (dch 1.174.0 README "Codex"): a .zst rollout this dch cannot decode, or one that decodes to nothing
+                if reason == "compressed" { return "Codex rollout is compressed: X-ray needs a dch built with libzstd" }
+                if reason == "corrupt" { return "Codex rollout is corrupt: nothing could be read" }
                 return reason == "lite" ? "X-ray needs the full dch build"
                     : reason == "off" ? "X-ray is off for shells (xray_ring = 0)" : "No X-ray corpus for this session"
             default: return "X-ray corpus not supported by this dch"
@@ -78,7 +81,16 @@ enum XrayChapters {
         }
 
         /// Design 3.9 / 5.5 (QA677 S16): a shell's counts while dch read only part of its ring.
-        var rangeNote: String? { corpus == "shell" && !complete && why == "range" ? "counts in the last \(lines) rows" : nil }
+        /// #1991 (dch 1.174.0): a Codex rollout cut by a bad frame: what decoded before it.
+        var rangeNote: String? {
+            guard !complete else { return nil }
+            if corpus == "shell" && why == "range" { return "counts in the last \(lines) rows" }
+            return corpus == "codex" && why == "corrupt" ? "rollout corrupt: read up to the damage" : nil
+        }
+
+        /// #1991: why a Codex rollout gave no corpus, in dch's --ref/--search stderr words ("the Codex rollout is <reason>");
+        /// nil for any other answer.
+        var rolloutWhy: String? { corpus == "none" && ["compressed", "corrupt"].contains(reason) ? "the Codex rollout is \(reason)" : nil }
     }
 
     /// #1566: nil without schema 1 and a string `corpus` (an older dch, a reset's empty object).

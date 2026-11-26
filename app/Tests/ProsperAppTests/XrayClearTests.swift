@@ -268,6 +268,53 @@ final class XrayClearTests: XCTestCase {
         }
     }
 
+    /// #1991 (dch 1.174.0 README "Ended Codex", "Codex", "None"): an ended Codex is corpus "codex" with live false, its
+    /// label "Codex" as a live one's and its session_id the thread id; no rollout is none with reason null; the reasons
+    /// "compressed" and "corrupt" have their own words; why "corrupt" (a partial decode) gives its note, and only on a
+    /// Codex. Red with the reason words gone (they read "No X-ray corpus for this session") or the note dropped.
+    func testEndedCodexCorpusAndItsRolloutReasons() {
+        let tid = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+        let ended = XrayChapters.corpus(Self.object(#""corpus":"codex","live":false,"available":true,"mentions_only":false,"session_id":"\#(tid)""#))
+        XCTAssertEqual(ended?.label, "Codex")
+        XCTAssertEqual(ended?.sessionID, tid, "the thread id, never a record file")
+        XCTAssertTrue(ended?.rangeNote == nil && ended?.rolloutWhy == nil)
+        let rows: [(String, String?, String?)] = [
+            (#""corpus":"none","reason":null,"available":false,"session_id":"\#(tid)""#, "No X-ray corpus for this session", nil),
+            (#""corpus":"none","reason":"compressed","available":false,"session_id":"\#(tid)""#,
+             "Codex rollout is compressed: X-ray needs a dch built with libzstd", "the Codex rollout is compressed"),
+            (#""corpus":"none","reason":"corrupt","available":false,"session_id":"\#(tid)""#,
+             "Codex rollout is corrupt: nothing could be read", "the Codex rollout is corrupt"),
+            (#""corpus":"none","reason":"ended","available":false"#, "Shell \u{00B7} ended \u{00B7} not kept", nil),
+        ]
+        for (fields, label, why) in rows {
+            let c = XrayChapters.corpus(Self.object(fields))
+            XCTAssertEqual(c?.label, label, fields)
+            XCTAssertEqual(c?.rolloutWhy, why, fields)
+        }
+        let partial = XrayChapters.corpus(Self.object(#""corpus":"codex","available":true,"complete":false,"why":"corrupt""#))
+        XCTAssertEqual(partial?.rangeNote, "rollout corrupt: read up to the damage")
+        for fields in [#""corpus":"codex","complete":true,"why":"corrupt""#, #""corpus":"codex","complete":false,"why":"range""#,
+                       #""corpus":"shell","lines":5,"complete":false,"why":"corrupt""#] {
+            XCTAssertTrue(XrayChapters.corpus(Self.object(fields))?.rangeNote == nil, fields)
+        }
+    }
+
+    /// #1991: an Ended pane's X-ray of a Codex opens: its read's chapters land, the header says "Codex" and the corrupt
+    /// note, and the corpus keeps the thread id (red with an ended Codex answer dropped or mislabelled).
+    func testAnEndedCodexReadOpensWithItsChapters() {
+        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: Self.dir), tab: .prompts)
+        p.fromDch = { true }
+        let tid = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+        let json = #"{"schema":1,"session":"api","session_id":"\#(tid)","corpus":"codex","live":false,"available":true,"#
+            + #""mentions_only":false,"complete":false,"why":"corrupt","chapters":[{"i":1,"title":"Fix the login form"}]}"#
+        p.takeChapters((0, Data(json.utf8)))
+        XCTAssertEqual(p.dchChapters?.count, 1)
+        XCTAssertEqual(p.dchChapters?.first?.title, "Fix the login form")
+        XCTAssertEqual(p.corpusLine, "Codex \u{00B7} rollout corrupt: read up to the damage")
+        XCTAssertEqual(p.corpus?.sessionID, tid)
+        p.stop()
+    }
+
     /// The panel header's second line from a `--json` read and from a follow snapshot, through OutsideText.shown; a
     /// lone Claude's has none (red with the line not set from either source).
     func testThePanelHeaderLineComesFromTheReadAndTheSnapshot() throws {

@@ -153,6 +153,21 @@ final class XrayRefRunTests: XCTestCase {
         XCTAssertTrue(p.refContext == nil)
     }
 
+    /// #1991 (dch 1.174.0): exit 1 after a read that answered none with a Codex rollout reason says it after the
+    /// no-corpus words, as dch's stderr does; reason null keeps the plain words. Red with the reason dropped.
+    func testExitOneSaysTheCodexRolloutReason() async {
+        for (reason, note) in [("compressed", "No X-ray history for this session: the Codex rollout is compressed"),
+                               ("corrupt", "No X-ray history for this session: the Codex rollout is corrupt"),
+                               ("", XrayPanelModel.refNoCorpus)] {
+            let run = Run(), panels = XrayPanels(), p = panel(run)
+            p.corpus = XrayChapters.corpus(["schema": 1, "corpus": "none", "reason": reason])
+            run.answer = (1, Data())
+            panels.runRef("#12", for: p)
+            await panels.refReading?.value
+            XCTAssertEqual(p.refNote, note, reason)
+        }
+    }
+
     func testExitCodesSayWhy() async {
         let cases: [(Int32, String)] = [(1, XrayPanelModel.refNoCorpus), (2, XrayPanelModel.refNotARef), (4, "host unreachable"),
                                         (7, "host unreachable"), (3, XrayPanelModel.refFailed), (XrayPanels.overCap, XrayPanelModel.refFailed)]

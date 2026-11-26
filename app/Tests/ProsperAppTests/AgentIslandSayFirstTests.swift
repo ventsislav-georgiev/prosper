@@ -154,6 +154,19 @@ final class AgentIslandSayFirstTests: XCTestCase {
         }
     }
 
+    /// #1991: dch 1.174.0's Codex skips (codex_daemon, cwd_unknown) are not in the waiting list: one say, no retry, no
+    /// pause. Red with either added to the list of skips that wait for the next round.
+    @MainActor
+    func testACodexSkipIsNeverRetried() {
+        for reason in ["codex_daemon", "cwd_unknown"] {
+            let f = FirstIO(replies: [Self.reply("skipped", reason), Self.reply("ok")])
+            let c = controller(f)
+            XCTAssertTrue(sayFirst(c, "Example task") != nil, reason)
+            XCTAssertEqual(f.counts.says, 1, "no retry: \(reason)")
+            XCTAssertEqual(f.counts.pauses, 0, reason)
+        }
+    }
+
     /// #1963/#1966: a failed first message starting with "!" says shellNotRun when dch took it back out ("taken back out" in the
     /// detail) and shellLeft when it did not (empty detail, or "may be left there in bash mode"); a plain one keeps notSubmitted.
     @MainActor

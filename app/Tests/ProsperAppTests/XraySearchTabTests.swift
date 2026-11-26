@@ -157,6 +157,21 @@ final class XraySearchTabTests: XCTestCase {
         }
     }
 
+    /// #1991 (dch 1.174.0): exit 1 on a panel whose last read was a Codex rollout dch could not read ("compressed",
+    /// "corrupt") says that rollout's reason, as dch's stderr does; any other corpus keeps cannotSearch. Red with the
+    /// reason dropped.
+    func testExitOneOnAnUnreadableCodexRolloutSaysWhy() async {
+        for (reason, word) in [("compressed", "No X-ray history for this session: the Codex rollout is compressed"),
+                               ("corrupt", "No X-ray history for this session: the Codex rollout is corrupt"),
+                               ("ended", XraySearch.cannotSearch)] {
+            let run = Run(), p = await opened(Self.remote, Clock(), run)
+            p.corpus = XrayChapters.corpus(["schema": 1, "corpus": "none", "reason": reason])
+            run.answer("login", (1, Data()))
+            await search(p, "login")
+            XCTAssertEqual(p.searchGone, word, reason)
+        }
+    }
+
     /// R1355-i1: a panel whose only tab was Search: exit 1 leaves no tab and the empty state says why.
     func testExitOneOnAnOnlySearchTabSaysWhyOnTheEmptyState() async {
         let run = Run(), p = await opened(Self.remote, Clock(), run)
