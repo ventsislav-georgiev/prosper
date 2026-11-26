@@ -55,7 +55,7 @@
   {
    "name": "prompt_any_agent",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard agent == \"claude\" || prompt == nil else",
+   "old": "guard agent == \"claude\" || agent == \"codex\" || prompt == nil else",
    "new": "guard true else",
    "expect": "killed"
   },

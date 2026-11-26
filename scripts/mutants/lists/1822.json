@@ -61,8 +61,8 @@
   {
    "name": "reason-hidden",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "form.imageNote ?? (claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host))",
-   "new": "form.imageNote ?? Self.promptHint",
+   "old": "?? (claude ? Self.promptHint : takes ? Self.codexPromptHint : Self.notClaude(command: form.command, host: form.host))",
+   "new": "?? Self.promptHint",
    "expect": "killed"
   },
   {

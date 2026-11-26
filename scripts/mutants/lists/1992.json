@@ -1,0 +1,97 @@
+{
+ "entry": "1992",
+ "filter": "AgentNewSessionTests|AgentWindowD1Tests|ControlSessionsTests|ControlSessionsHistoryTests|ControlRemoteTests|AgentIslandSayFirstTests|AgentWindowUnsentFirstTests|AgentWindowNewSessionFormTests|AgentWindowNewSessionSidekickTests",
+ "mutants": [
+  {
+   "name": "codex_any_wrapper",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "else if argv.count > 2, dchBase(argv[0], is: \"headroom\"), argv[1] == \"wrap\", dchBase(argv[2], is: \"codex\") { at = 2 }",
+   "new": "else if let i = argv.firstIndex(where: { dchBase($0, is: \"codex\") }) { at = i }",
+   "expect": "killed"
+  },
+  {
+   "name": "codex_remote_kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "if rest.contains(where: { $0 == \"--remote\" || $0.hasPrefix(\"--remote=\") }) { return false }",
+   "new": "if rest.contains(where: { $0 == \"--remote\" }) { return false }",
+   "expect": "killed"
+  },
+  {
+   "name": "codex_subcommand_any",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "return !(rest.first { !$0.hasPrefix(\"-\") }.map(codexNotTUI.contains) ?? false)",
+   "new": "return !(rest.first.map(codexNotTUI.contains) ?? false)",
+   "expect": "killed"
+  },
+  {
+   "name": "firstrun_claude_check_for_codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : AgentWindowDriver.refusal(shown)",
+   "new": "AgentWindowDriver.refusal(shown)",
+   "expect": "killed"
+  },
+  {
+   "name": "firstrun_codex_empty_read_says",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : AgentWindowDriver.refusal(shown)",
+   "new": "codex ? nil : AgentWindowDriver.refusal(shown)",
+   "expect": "killed"
+  },
+  {
+   "name": "model_codex_flag_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "prompt: prompt, codex: AgentIsland.isInteractiveCodex(argv), persist: persist)",
+   "new": "prompt: prompt, codex: false, persist: persist)",
+   "expect": "killed"
+  },
+  {
+   "name": "model_prompt_claude_only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "prompt: newSessionTakesPrompt ? f.prompt : \"\", persist: persist)",
+   "new": "prompt: newSessionClaude ? f.prompt : \"\", persist: persist)",
+   "expect": "killed"
+  },
+  {
+   "name": "model_shell_refusal_claude_only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "newSessionTakesPrompt && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }",
+   "new": "newSessionClaude && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "new_codex_prompt_refused",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard agent == \"claude\" || agent == \"codex\" || prompt == nil else",
+   "new": "guard agent == \"claude\" || prompt == nil else",
+   "expect": "killed"
+  },
+  {
+   "name": "new_codex_images_allowed",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard agent == \"claude\" || images.isEmpty else",
+   "new": "guard agent == \"claude\" || agent == \"codex\" || images.isEmpty else",
+   "expect": "killed"
+  },
+  {
+   "name": "resume_codex_refused",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "guard AgentIsland.isInteractiveClaude(r.argv) || AgentIsland.isInteractiveCodex(r.argv) else {",
+   "new": "guard AgentIsland.isInteractiveClaude(r.argv) else {",
+   "expect": "killed"
+  },
+  {
+   "name": "resume_codex_flag_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "if let m = model() { m.sayFirst(key, message, codex, then) }",
+   "new": "if let m = model() { m.sayFirst(key, message, false, then) }",
+   "expect": "killed"
+  },
+  {
+   "name": "view_codex_hint_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "?? (claude ? Self.promptHint : takes ? Self.codexPromptHint : Self.notClaude(command: form.command, host: form.host)))",
+   "new": "?? (claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host)))",
+   "expect": "killed"
+  }
+ ]
+}

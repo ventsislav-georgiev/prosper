@@ -47,8 +47,8 @@
   {
    "name": "message_to_non_claude",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard AgentIsland.isInteractiveClaude(r.argv) else { throw ControlError(\"a message needs a Claude Code session\") }",
-   "new": "_ = r.argv",
+   "old": "guard AgentIsland.isInteractiveClaude(r.argv) || AgentIsland.isInteractiveCodex(r.argv) else {",
+   "new": "if false {",
    "expect": "killed"
   },
   {
