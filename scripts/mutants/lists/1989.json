@@ -1,0 +1,27 @@
+{
+ "entry": "1989",
+ "filter": "AgentTerminalTests",
+ "mutants": [
+  {
+   "name": "no-output",
+   "file": "app/Tests/ProsperAppTests/AgentTerminalTests.swift",
+   "old": "            v.output(\"\\u{1b}[1;36mProsper\\u{1b}[0m terminal at \\(scale)\\r\\n\\u{1b}[42m green \\u{1b}[0m\\r\\n\", self)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "fixed-50",
+   "file": "app/Tests/ProsperAppTests/AgentTerminalTests.swift",
+   "old": "        ink(rep) > 3 * max(cellSamples(rep, v), 4)\n",
+   "new": "        ink(rep) > 50\n",
+   "expect": "killed"
+  },
+  {
+   "name": "no-controller",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if controller !== look() { controller = look() }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
