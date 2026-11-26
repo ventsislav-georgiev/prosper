@@ -1,0 +1,34 @@
+{
+ "entry": "1993",
+ "filter": "AgentIslandControlsTests|AgentIslandSayFirstTests",
+ "mutants": [
+  {
+   "name": "hint_agent_ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "o.agent == \"codex\" ? \" (codex resume",
+   "new": "o.agent == \"never\" ? \" (codex resume",
+   "expect": "killed"
+  },
+  {
+   "name": "agent_not_parsed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "agent = try? c.decodeIfPresent(String.self, forKey: .agent)",
+   "new": "agent = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "dirline_no_codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": " || $0.codex?.threadID == sid)",
+   "new": ")",
+   "expect": "killed"
+  },
+  {
+   "name": "no_thread_retried",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "[\"not_claude\", \"no_screen\", \"prompt\"].contains(reply?.reason)",
+   "new": "[\"not_claude\", \"no_screen\", \"prompt\", \"no_thread\"].contains(reply?.reason)",
+   "expect": "killed"
+  }
+ ]
+}
