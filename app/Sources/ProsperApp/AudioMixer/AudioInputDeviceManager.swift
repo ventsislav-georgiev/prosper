@@ -87,7 +87,7 @@ final class AudioInputDeviceManager: ObservableObject {
     /// Follows the mixer's master switch: the picker only exists inside the
     /// mixer panel, so off means no listeners and no published state.
     func syncWithPreferences() {
-        if Preferences.mixerEnabled, MixerCore.isSupported {
+        if Preferences.mixerEnabled {
             start()
         } else {
             stop()
@@ -275,7 +275,7 @@ final class AudioInputDeviceManager: ObservableObject {
     /// mixer is off — the listeners are down, so `micMuted` says nothing useful
     /// and there would be no switch in sight to undo it with.
     func toggleMicMute() {
-        guard Preferences.mixerEnabled, MixerCore.isSupported else { return }
+        guard Preferences.mixerEnabled else { return }
         setMicMuted(!micMuted)
     }
 

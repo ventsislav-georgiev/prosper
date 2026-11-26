@@ -1,6 +1,7 @@
 import MLXLMCommon   // ToolSpec, as in AgentModelReadOnceTests (a type only: no model is loaded)
 import XCTest
 import os
+import Synchronization
 @testable import ProsperApp
 
 /// #1181 (R1181-a, R1181-d): codex's config names the model the run LOADED, never a second read of the
@@ -34,12 +35,12 @@ final class AgentModelSpawnReadTests: XCTestCase {
         let d = Preferences.defaults, keys = ["agentModel", "customAgentModelsV1", "modelLabelOverridesV1"]
         let saved = keys.map { d.object(forKey: $0) }
         let savedGB = AgentModelRegistry.physicalMemoryGB
-        let savedFlag = ModelResidencyCoordinator.activeFlag.withLock { $0 }
+        let savedFlag = ModelResidencyCoordinator.activeFlag.load(ordering: .acquiring)
         defer {
             ProsperLLMServer.shared.stop()
             for (k, v) in zip(keys, saved) { d.set(v, forKey: k) }
             AgentModelRegistry.physicalMemoryGB = savedGB
-            ModelResidencyCoordinator.activeFlag.withLock { $0 = savedFlag }
+            ModelResidencyCoordinator.activeFlag.store(savedFlag, ordering: .releasing)
         }
         AgentModelRegistry.physicalMemoryGB = 64   // both rows fit, so the setting is not healed away
         CustomModelStore.upsert(CustomAgentModel(id: modelB, label: "B", sizeBytes: 0, note: "", toolFormat: .qwenXML))

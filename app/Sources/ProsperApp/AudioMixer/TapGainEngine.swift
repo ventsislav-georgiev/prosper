@@ -11,11 +11,6 @@ import Foundation
 /// persistence) lands separately; these live here so the engine builds on its
 /// own.
 enum MixerCore {
-    static var isSupported: Bool {
-        if #available(macOS 14.4, *) { return true }
-        return false
-    }
-
     /// Volumes run 0...2: 1.0 is 100% (untouched passthrough), up to 2.0 is a
     /// 200% boost for sources that play too quietly.
     static let maxVolume: Double = 2.0
@@ -106,8 +101,7 @@ enum MixerCore {
 
 // MARK: - Tap engine
 
-/// Availability-erased face of the engine, so the mixer can store engines on
-/// any macOS while the implementation requires 14.4.
+/// The engine's face to the mixer, so tests can stand in a fake engine.
 protocol GainEngine: AnyObject {
     var gain: Float { get set }
     var tappedObjects: [AudioObjectID] { get }
@@ -122,7 +116,6 @@ protocol GainEngine: AnyObject {
 /// The audio path for one routed app: a muted process tap feeding an aggregate
 /// device whose IO proc re-renders the samples scaled by `gain` onto the chosen
 /// output device.
-@available(macOS 14.4, *)
 final class TapGainEngine: GainEngine {
     let tappedObjects: [AudioObjectID]
     let outputDeviceUID: String

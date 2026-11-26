@@ -1,6 +1,7 @@
 import MLXLMCommon   // ToolSpec, as in DchChatTests (a type only: no model is loaded)
 import XCTest
 import os
+import Synchronization
 @testable import ProsperApp
 
 /// #1181: one agent run reads the agent model setting ONCE (AgentController, where the run starts) and
@@ -34,11 +35,11 @@ final class AgentModelReadOnceTests: XCTestCase {
         let d = Preferences.defaults, keys = ["agentModel", "customAgentModelsV1", "modelLabelOverridesV1"]
         let saved = keys.map { d.object(forKey: $0) }
         let savedGB = AgentModelRegistry.physicalMemoryGB
-        let savedFlag = ModelResidencyCoordinator.activeFlag.withLock { $0 }
+        let savedFlag = ModelResidencyCoordinator.activeFlag.load(ordering: .acquiring)
         defer {
             for (k, v) in zip(keys, saved) { d.set(v, forKey: k) }
             AgentModelRegistry.physicalMemoryGB = savedGB
-            ModelResidencyCoordinator.activeFlag.withLock { $0 = savedFlag }
+            ModelResidencyCoordinator.activeFlag.store(savedFlag, ordering: .releasing)
         }
         AgentModelRegistry.physicalMemoryGB = 64
         CustomModelStore.upsert(CustomAgentModel(id: modelA, label: "A", sizeBytes: 0, note: "", toolFormat: .mistral))

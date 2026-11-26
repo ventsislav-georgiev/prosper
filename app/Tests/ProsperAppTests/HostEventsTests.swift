@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import XCTest
 @testable import ProsperApp
 
@@ -20,6 +21,58 @@ final class HostEventsTests: XCTestCase {
         XCTAssertEqual(emitted.map(\.0), ["screen.locked", "screen.locked"])
         XCTAssertEqual(Self.boolField("locked", emitted[0].1), true)
         XCTAssertEqual(Self.boolField("locked", emitted[1].1), false)
+    }
+
+    // MARK: network.changed (#1984: NWPathMonitor replaced SCNetworkReachability)
+
+    /// Same `{ "reachable": bool }` payload the SCNetworkReachability callback sent.
+    @MainActor
+    func testNetworkChangedPayloadCarriesBothEdges() {
+        let w = SystemEventWatchers()
+        var emitted: [(String, String)] = []
+        w.emit = { emitted.append(($0, $1)) }
+
+        w.emitNetworkChanged(false)
+        w.emitNetworkChanged(true)
+
+        XCTAssertEqual(emitted.map(\.0), ["network.changed", "network.changed"])
+        XCTAssertEqual(emitted.first.flatMap { Self.boolField("reachable", $0.1) }, false)
+        XCTAssertEqual(emitted.last.flatMap { Self.boolField("reachable", $0.1) }, true)
+    }
+
+    /// The route seam, fed by hand (no monitor, never the real network): fail-open
+    /// before the first path, only `.satisfied` is reachable, and the edge callback
+    /// counts one call per flip — the first path and repeats deliver nothing.
+    func testNetworkRouteIsFailOpenAndDeliversOnlyFlips() {
+        final class Edges: @unchecked Sendable { var seen: [Bool] = [] }  // fed synchronously by update()
+        let edges = Edges()
+        let route = NetworkRoute(monitoring: false) { edges.seen.append($0) }
+
+        XCTAssertTrue(route.reachable, "no path seen yet must read reachable (fail-open)")
+        route.update(.unsatisfied)
+        XCTAssertFalse(route.reachable)
+        XCTAssertEqual(edges.seen, [], "the first path only seeds the state")
+        route.update(.requiresConnection)
+        XCTAssertFalse(route.reachable, "requiresConnection was connectionRequired: not reachable")
+        XCTAssertEqual(edges.seen, [])
+        route.update(.satisfied)
+        XCTAssertTrue(route.reachable)
+        route.update(.satisfied)
+        route.update(.unsatisfied)
+        XCTAssertFalse(route.reachable)
+        XCTAssertEqual(edges.seen, [true, false], "one delivery per flip, none for a repeat")
+    }
+
+    /// A first path that is up seeds silently too, and the next down is the edge.
+    func testNetworkRouteFirstPathUpSeedsWithoutDelivery() {
+        final class Edges: @unchecked Sendable { var seen: [Bool] = [] }
+        let edges = Edges()
+        let route = NetworkRoute(monitoring: false) { edges.seen.append($0) }
+        route.update(.satisfied)
+        XCTAssertTrue(route.reachable)
+        XCTAssertEqual(edges.seen, [])
+        route.update(.unsatisfied)
+        XCTAssertEqual(edges.seen, [false])
     }
 
     // MARK: clipboard.changed

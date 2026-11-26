@@ -1,5 +1,5 @@
 import Foundation
-import os.lock
+import Synchronization
 
 /// Enforces **one resident LLM at a time**. The inline-completion model
 /// (`MLXEngine.shared`, multi-GB) and the coding-agent model (also multi-GB) cannot
@@ -41,17 +41,15 @@ actor ModelResidencyCoordinator {
     private var agentModelId = ""
     private var acquireModelId = ""
 
-    /// Cheap, lock-guarded snapshot of "is the agent model resident", readable from
-    /// the inline hot path without an actor hop. `OSAllocatedUnfairLock` is the
-    /// lightest correct primitive available on macOS 14 (no `Synchronization.Atomic`
-    /// until macOS 15).
+    /// Cheap atomic snapshot of "is the agent model resident", readable from
+    /// the inline hot path without an actor hop.
     /// Internal (not private) only so tests can restore it: it is static, shared by
     /// every instance including `shared`.
-    static let activeFlag = OSAllocatedUnfairLock<Bool>(initialState: false)
+    static let activeFlag = Atomic<Bool>(false)
 
     /// True while the agent model is (being) loaded/resident. Inline completion
     /// consults this and skips generation so it never fights the agent for memory.
-    nonisolated static var isAgentActive: Bool { activeFlag.withLock { $0 } }
+    nonisolated static var isAgentActive: Bool { activeFlag.load(ordering: .acquiring) }
 
     /// In-flight load, shared by concurrent acquirers. Without this, two callers
     /// (e.g. `warmUp` on window open racing the first `submit`) both pass the
@@ -98,7 +96,7 @@ actor ModelResidencyCoordinator {
         if let acquireTask {
             task = acquireTask
         } else {
-            Self.activeFlag.withLock { $0 = true }
+            Self.activeFlag.store(true, ordering: .releasing)
             acquireModelId = modelId
             let pending = releasing
             // Strong capture: the closure dies with the load.
@@ -130,7 +128,7 @@ actor ModelResidencyCoordinator {
             return (engine, loadingId)
         } catch {
             if epoch == myEpoch {
-                Self.activeFlag.withLock { $0 = false }
+                Self.activeFlag.store(false, ordering: .releasing)
                 mode = .inline
                 acquireTask = nil
                 progressSinks = []
@@ -170,7 +168,7 @@ actor ModelResidencyCoordinator {
         }
         // Only if nothing newer started meanwhile (an acquire may be waiting on us).
         if agent == nil, acquireTask == nil, releasing == nil {
-            Self.activeFlag.withLock { $0 = false }
+            Self.activeFlag.store(false, ordering: .releasing)
         }
     }
 

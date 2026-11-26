@@ -264,9 +264,7 @@ struct MixerPanelView: View {
     private var appsSection: some View {
         VStack(alignment: .leading, spacing: sz(6)) {
             sectionLabel("Apps")
-            if !MixerCore.isSupported {
-                empty("Per-app volume needs macOS 14.4 or newer.")
-            } else if mixer.needsPermission {
+            if mixer.needsPermission {
                 permissionHint
                 rowList
             } else if visibleApps.isEmpty {

@@ -498,7 +498,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         // left unregistered rather than firing into a stopped service. They
         // follow the master switch, not the menu-bar icon toggle.
         if self == .mixerCycleOutput || self == .mixerToggleMicMute {
-            return MixerCore.isSupported && Preferences.mixerEnabled
+            return Preferences.mixerEnabled
         }
         guard let ext = owningExtensionID else { return true }
         return registry?.record(id: ext)?.enabled ?? false

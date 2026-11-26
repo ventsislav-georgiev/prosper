@@ -384,7 +384,7 @@ final class RunnerPanel {
         case .openSettings:
             SettingsHooks.shared.onOpenSettings?()
         case .openVolumeMixer:
-            // Mixer off (or pre-14.4): there's no menu-bar item to hang the
+            // Mixer off: there's no menu-bar item to hang the
             // popover on, so open the pane whose master switch turns it on.
             if !MixerPanelController.shared.showPanel() {
                 LiveExtensionHostServices.shared.settingsOpener?("audio-mixer")

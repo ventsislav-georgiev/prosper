@@ -5,10 +5,11 @@ import Foundation
 import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
+import Network
 import notify
 import ProsperHelperProtocol
-import SystemConfiguration
 import os
+import Synchronization
 
 /// Native backings for the "ambient system" host APIs an extension uses to rebuild
 /// the user's Hammerspoon openlid/sleep/power behaviour: power assertions
@@ -204,22 +205,13 @@ enum SystemInfo {
         return s
     }
 
-    /// Default route up (SCNetworkReachability on 0.0.0.0)? Fail-open: SC errors
-    /// report reachable, so a broken check never fires "no network" behavior.
-    /// Thread-safe, synchronous, no DNS (address-based). Note this is the ROUTE,
-    /// not the interface list: Tailscale's utun keeps its 100.x address when the
-    /// physical network drops, so interface presence cannot detect a network loss.
-    static func networkReachable() -> Bool {
-        var addr = sockaddr()
-        addr.sa_len = UInt8(MemoryLayout<sockaddr>.size)
-        addr.sa_family = sa_family_t(AF_INET)
-        guard let reach = withUnsafePointer(to: &addr, { ptr in
-            SCNetworkReachabilityCreateWithAddress(nil, ptr)
-        }) else { return true }
-        var flags = SCNetworkReachabilityFlags()
-        guard SCNetworkReachabilityGetFlags(reach, &flags) else { return true }
-        return flags.contains(.reachable) && !flags.contains(.connectionRequired)
-    }
+    /// Default route up? The last path the app-wide `NetworkRoute.shared` monitor saw.
+    /// Fail-open: before its first update it reports reachable, so a missing answer
+    /// never fires "no network" behavior. Thread-safe, synchronous, one atomic load.
+    /// Note this is the ROUTE, not the interface list: Tailscale's utun keeps its
+    /// 100.x address when the physical network drops, so interface presence cannot
+    /// detect a network loss.
+    static func networkReachable() -> Bool { NetworkRoute.shared.reachable }
 
     /// Clamshell (lid) closed? Reads IOKit `AppleClamshellState`. nil when the key
     /// is unavailable (desktops). Cheap enough to poll, but the watcher below makes
@@ -232,6 +224,40 @@ enum SystemInfo {
             entry, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)
         else { return nil }
         return (prop.takeRetainedValue() as? Bool)
+    }
+}
+
+/// Default-route state from an NWPathMonitor (replaces SCNetworkReachability on
+/// 0.0.0.0, deprecated in macOS 14.4): `.satisfied` is the old `.reachable` without
+/// `.connectionRequired`. The monitor runs on its own utility queue; readers on any
+/// thread get the last path with one atomic load, never a wait.
+final class NetworkRoute: @unchecked Sendable {  // state is one Atomic; the rest is immutable
+    /// The one app-wide monitor behind `SystemInfo.networkReachable()`, started on
+    /// first use.
+    static let shared = NetworkRoute()
+
+    /// 0 = no path seen yet, 1 = down, 2 = up.
+    private let state = Atomic<UInt8>(0)
+    private let onChange: (@Sendable (Bool) -> Void)?
+    private let monitor: NWPathMonitor?
+
+    /// `onChange` runs on the monitor's queue, only when reachability flips; the
+    /// first path only seeds the state (SCNetworkReachability never called back on
+    /// schedule either). `monitoring: false` is the test seam: feed `update` by hand.
+    init(monitoring: Bool = true, onChange: (@Sendable (Bool) -> Void)? = nil) {
+        self.onChange = onChange
+        monitor = monitoring ? NWPathMonitor() : nil
+        monitor?.pathUpdateHandler = { [weak self] path in self?.update(path.status) }
+        monitor?.start(queue: DispatchQueue(label: "prosper.network-route", qos: .utility))
+    }
+
+    /// Fail-open: true until the first path arrives.
+    var reachable: Bool { state.load(ordering: .acquiring) != 1 }
+
+    func update(_ status: NWPath.Status) {
+        let now: UInt8 = status == .satisfied ? 2 : 1
+        let was = state.exchange(now, ordering: .acquiringAndReleasing)
+        if was != 0, was != now { onChange?(now == 2) }
     }
 }
 
@@ -753,7 +779,7 @@ final class SystemEventWatchers {
     private var runLoopSource: CFRunLoopSource?
     private var powerNotifyToken: Int32 = -1  // NOTIFY_TOKEN_INVALID
     private var powerEdge = PowerEdgeFilter()
-    private var reachability: SCNetworkReachability?
+    private var networkRoute: NetworkRoute?
     private var wakeObserver: NSObjectProtocol?
     private var sleepObserver: NSObjectProtocol?
     private var lockObservers: [NSObjectProtocol] = []
@@ -838,25 +864,18 @@ final class SystemEventWatchers {
         emit?("battery.changed", Self.json(["powerSource": snap.source, "percentage": snap.pct]))
     }
 
-    // Network reachability for a general route (0.0.0.0).
+    // Default-route reachability edges. The monitor lives as long as this
+    // singleton (no stop(), like the other watchers here); main is touched only
+    // to deliver an edge.
     private func startNetwork() {
-        var addr = sockaddr()
-        addr.sa_len = UInt8(MemoryLayout<sockaddr>.size)
-        addr.sa_family = sa_family_t(AF_INET)
-        guard let reach = withUnsafePointer(to: &addr, { ptr in
-            SCNetworkReachabilityCreateWithAddress(nil, ptr)
-        }) else { return }
-        reachability = reach
-        var ctx = SCNetworkReachabilityContext(
-            version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil)
-        SCNetworkReachabilitySetCallback(reach, { _, flags, info in
-            guard let info else { return }
-            let me = Unmanaged<SystemEventWatchers>.fromOpaque(info).takeUnretainedValue()
-            let reachable = flags.contains(.reachable) && !flags.contains(.connectionRequired)
-            Task { @MainActor in me.emit?("network.changed", SystemEventWatchers.json(["reachable": reachable])) }
-        }, &ctx)
-        SCNetworkReachabilityScheduleWithRunLoop(reach, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        networkRoute = NetworkRoute { [weak self] reachable in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.emitNetworkChanged(reachable) } }
+        }
+    }
+
+    /// Same `{ "reachable": bool }` payload as before; split out so it is testable.
+    func emitNetworkChanged(_ reachable: Bool) {
+        emit?("network.changed", Self.json(["reachable": reachable]))
     }
 
     // Wake (NSWorkspace) + screen-change (drives lid transitions natively, replacing

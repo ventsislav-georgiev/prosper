@@ -96,8 +96,8 @@ struct RefreshSnapshot {
     let defaultDeviceID: AudioObjectID?
     let systemOutputVolume: Double?
     let systemOutputMuted: Bool?
-    /// Nil where process taps do not exist (before macOS 14.4): the app list
-    /// stays empty and no process object is looked at.
+    /// Nil: the app list stays empty and no process object is looked at.
+    /// Only test snapshots pass nil; a real refresh always lists apps.
     let apps: [MixerApp]?
     let processObjects: [AudioObjectID]
 }
@@ -231,7 +231,7 @@ final class AppVolumeMixer: ObservableObject {
     /// The whole mixer follows its master switch: off means no HAL listeners,
     /// no taps and no published state at all.
     func syncWithPreferences() {
-        if Preferences.mixerEnabled, MixerCore.isSupported {
+        if Preferences.mixerEnabled {
             start()
         } else {
             stop()
@@ -251,9 +251,7 @@ final class AppVolumeMixer: ObservableObject {
         installListener(selector: kAudioHardwarePropertyDevices)
         installListener(selector: kAudioHardwarePropertyDefaultOutputDevice)
         installListener(selector: kAudioHardwarePropertyDefaultSystemOutputDevice)
-        if MixerCore.isSupported {
-            installListener(selector: kAudioHardwarePropertyProcessObjectList)
-        }
+        installListener(selector: kAudioHardwarePropertyProcessObjectList)
         if wakeObserver == nil {
             wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.didWakeNotification,
@@ -686,7 +684,7 @@ final class AppVolumeMixer: ObservableObject {
     /// device list is only kept fresh while the service runs.
     @discardableResult
     func cycleSoundOutput() -> Bool {
-        guard Preferences.mixerEnabled, MixerCore.isSupported else { return false }
+        guard Preferences.mixerEnabled else { return false }
         return switchToNextSoundOutput(in: participatingOutputUIDs)
     }
 
@@ -729,7 +727,7 @@ final class AppVolumeMixer: ObservableObject {
             objects: app.audioObjects,
             outputDeviceUID: targetOutputDeviceUID)
         guard engineRecovery.allowsBuild(app.id, configuration: configuration) else { return }
-        guard #available(macOS 14.4, *), let token = builds.begin(app.id) else { return }
+        guard let token = builds.begin(app.id) else { return }
 
         buildQueue.async { [weak self] in
             let box = EngineBox(TapGainEngine(objects: app.audioObjects,
@@ -971,18 +969,6 @@ final class AppVolumeMixer: ObservableObject {
                 : nil
         }
         let systemOutputMuted = defaultDevice.flatMap { outputMuted(for: $0.audioObjectID) }
-
-        guard MixerCore.isSupported else {
-            return RefreshSnapshot(defaultUID: defaultUID,
-                                   systemSoundUID: systemSoundUID,
-                                   outputDevices: nextOutputDevices,
-                                   deviceIDs: deviceIDs,
-                                   defaultDeviceID: defaultDevice?.audioObjectID,
-                                   systemOutputVolume: systemOutputVolume,
-                                   systemOutputMuted: systemOutputMuted,
-                                   apps: nil,
-                                   processObjects: [])
-        }
 
         let ownPid = request.ownPid
         let saved = request.savedVolumes
@@ -1400,7 +1386,6 @@ final class AppVolumeMixer: ObservableObject {
     /// only to fill in an identity the running-application lookup could not
     /// provide, never to override it.
     private nonisolated static func processBundleIdentifier(of object: AudioObjectID) -> String? {
-        guard #available(macOS 14.4, *) else { return nil }
         var bundleRef: CFString = "" as CFString
         guard MixerCore.read(object, kAudioProcessPropertyBundleID, &bundleRef) else { return nil }
         let bundleID = bundleRef as String

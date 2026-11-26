@@ -75,8 +75,7 @@ final class MixerPanelController {
         // The engine follows the master switch alone (synced above); the item
         // needs the separate icon toggle too, so hiding the icon leaves the
         // taps and the microphone routing running.
-        guard Preferences.mixerEnabled, Preferences.mixerIconEnabled,
-              MixerCore.isSupported else { teardown(); return }
+        guard Preferences.mixerEnabled, Preferences.mixerIconEnabled else { teardown(); return }
         syncItem()
     }
 

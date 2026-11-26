@@ -20,25 +20,20 @@ struct VolumeMixerPane: View {
 
             NeonSection("Volume Mixer",
                         footer: "Off means nothing runs \u{2014} no audio taps, no device listeners, no menu-bar item.") {
-                if MixerCore.isSupported {
-                    NeonRow("Enable volume mixer",
-                            subtitle: "The whole feature: per-app volume, microphone routing and output switching") {
-                        Toggle("", isOn: $enabled).labelsHidden()
-                            .onChange(of: enabled) { _, v in
-                                Preferences.mixerEnabled = v
-                                MixerPanelController.shared.reload()
-                                // Both mixer hotkeys are gated on this
-                                // preference, so they have to be (un)registered now.
-                                SettingsHooks.shared.onShortcutsChanged?()
-                            }
-                    }
-                } else {
-                    NeonRow("Enable volume mixer",
-                            subtitle: "Per-app volume needs macOS 14.4 or newer.") { EmptyView() }
+                NeonRow("Enable volume mixer",
+                        subtitle: "The whole feature: per-app volume, microphone routing and output switching") {
+                    Toggle("", isOn: $enabled).labelsHidden()
+                        .onChange(of: enabled) { _, v in
+                            Preferences.mixerEnabled = v
+                            MixerPanelController.shared.reload()
+                            // Both mixer hotkeys are gated on this
+                            // preference, so they have to be (un)registered now.
+                            SettingsHooks.shared.onShortcutsChanged?()
+                        }
                 }
             }
 
-            if MixerCore.isSupported, enabled {
+            if enabled {
                 // The icon is a separate switch: hiding it leaves the engine,
                 // the shortcuts and the microphone routing running.
                 NeonSection("Menu Bar") {

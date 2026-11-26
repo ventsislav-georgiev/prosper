@@ -1,6 +1,7 @@
 import Foundation
 import MLXLMCommon
 import os.lock
+import Synchronization
 import XCTest
 @testable import ProsperApp
 
@@ -116,13 +117,13 @@ final class ModelResidencyCoordinatorTests: XCTestCase {
     nonisolated(unsafe) private var savedFlag = false
 
     nonisolated override func setUp() {
-        savedFlag = ModelResidencyCoordinator.activeFlag.withLock { $0 }
-        ModelResidencyCoordinator.activeFlag.withLock { $0 = false }
+        savedFlag = ModelResidencyCoordinator.activeFlag.load(ordering: .acquiring)
+        ModelResidencyCoordinator.activeFlag.store(false, ordering: .releasing)
     }
 
     nonisolated override func tearDown() {
         let saved = savedFlag
-        ModelResidencyCoordinator.activeFlag.withLock { $0 = saved }
+        ModelResidencyCoordinator.activeFlag.store(saved, ordering: .releasing)
     }
 
     private var flag: Bool { ModelResidencyCoordinator.isAgentActive }
