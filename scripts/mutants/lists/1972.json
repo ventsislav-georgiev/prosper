@@ -1,6 +1,6 @@
 {
  "entry": "1972",
- "filter": "XrayRefMergeTests|XrayRefStagedOpenTests",
+ "filter": "XrayRefMergeTests|XrayRefStagedOpenTests|XrayScrollAnchorTests|XrayPanelTasksTests",
  "mutants": [
   {
    "name": "M1-wholesale",
@@ -84,6 +84,111 @@
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
    "old": "if self[keyPath: k] != v { self[keyPath: k] = v }",
    "new": "self[keyPath: k] = v",
+   "expect": "killed"
+  },
+  {
+   "name": "anchor-top-moves",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "guard let a = anchor, a != old.first, let i = old.firstIndex(of: a) else { return nil }",
+   "new": "guard let a = anchor, let i = old.firstIndex(of: a) else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "always-restore",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "return old[..<i].elementsEqual(new[..<j]) ? nil : keep",
+   "new": "return keep",
+   "expect": "killed"
+  },
+  {
+   "name": "no-fallback-before",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "old[i...].first(where: now.contains) ?? old[..<i].last(where: now.contains)",
+   "new": "old[i...].first(where: now.contains)",
+   "expect": "killed"
+  },
+  {
+   "name": "unique-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "return n == 1 ? id : \"\\(id)\\u{1F}\\(n)\"",
+   "new": "return id",
+   "expect": "killed"
+  },
+  {
+   "name": "task-ids-positional",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "XrayTaskLine(id: \"t:\" + t.id,",
+   "new": "XrayTaskLine(id: \"t:\\(g.tasks.firstIndex(of: t) ?? 0)\",",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-ids-positional",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "rows.map { \"r:\" + $0.text }",
+   "new": "rows.indices.map { \"r:\\($0)\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "prompt-ids-block",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "anchor[$0.ordinal].map { \"a:\" + $0 } ?? \"c:\\($0.id)\"",
+   "new": "\"c:\\($0.id)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "memory-ids-positional",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "(id: \"m:\" + $0.id,",
+   "new": "(id: \"m:\\(g.items.firstIndex(of: $0) ?? 0)\",",
+   "expect": "killed"
+  },
+  {
+   "name": "tab-keeps-anchor",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "didSet { if tab != oldValue { topRow = nil } }",
+   "new": "didSet { }",
+   "expect": "killed"
+  },
+  {
+   "name": "ages-no-send",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if m != agesMinute { agesMinute = m; objectWillChange.send() }",
+   "new": "if m != agesMinute { agesMinute = m }",
+   "expect": "killed"
+  },
+  {
+   "name": "ages-every-tick",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if m != agesMinute { agesMinute = m; objectWillChange.send() }",
+   "new": "agesMinute = m; objectWillChange.send()",
+   "expect": "killed"
+  },
+  {
+   "name": "ages-any-tab",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if s.visible, tab == .tasks || tab == .memory { agesTick() }",
+   "new": "if s.visible { agesTick() }",
+   "expect": "killed"
+  },
+  {
+   "name": "ages-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if s.visible, tab == .tasks || tab == .memory { agesTick() }",
+   "new": "if tab == .tasks || tab == .memory { agesTick() }",
+   "expect": "killed"
+  },
+  {
+   "name": "n1-no-session-raise",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "n.session = max(n.session, own.reduce(0) { $0 + $1.mentions.count })",
+   "new": "_ = own",
+   "expect": "killed"
+  },
+  {
+   "name": "n1-no-sessions-raise",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "n.projectSessions = max(n.projectSessions, rest.count)",
+   "new": "_ = rest",
    "expect": "killed"
   }
  ]
