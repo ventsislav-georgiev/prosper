@@ -38,6 +38,8 @@ tag from the now-released section and put it on the new top draft.
   session has questions. (#1974)
 - X-ray of a Codex session no longer says "mentions only" now that dch finds its definitions.
   (#1983)
+- Ships dch 1.172.0: Codex approval dialogs and questions read as blocked, and X-ray finds
+  definitions in Codex sessions. (#1983)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
