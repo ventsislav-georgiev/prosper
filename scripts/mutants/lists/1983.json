@@ -1,0 +1,13 @@
+{
+ "entry": "1983",
+ "filter": "XrayClearTests",
+ "mutants": [
+  {
+   "name": "codex-label-ignores-flag",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "return mentionsOnly ? \"Codex\\(d)mentions only\" : \"Codex\"",
+   "new": "return \"Codex\\(d)mentions only\"",
+   "expect": "killed"
+  }
+ ]
+}
