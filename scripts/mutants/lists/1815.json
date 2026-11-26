@@ -5,7 +5,7 @@
   {
    "name": "ids-per-group",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "XrayTaskLine(id: \"t:\" + t.id, header: nil, task: t)",
+   "old": "XrayTaskLine(id: row + t.id, header: nil, task: t)",
    "new": "XrayTaskLine(id: \"\\(g.tasks.firstIndex(of: t) ?? 0)\", header: nil, task: t)",
    "expect": "killed"
   },

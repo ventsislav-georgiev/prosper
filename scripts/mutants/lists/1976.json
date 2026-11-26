@@ -89,8 +89,8 @@
   {
    "name": "cancelled-answer-taken",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "guard !Task.isCancelled, let self else { return }   // #1368",
-   "new": "guard let self else { return }   // #1368",
+   "old": "guard !Task.isCancelled, let self else { g.cancelAll(); return }",
+   "new": "guard let self else { g.cancelAll(); return }",
    "expect": "killed"
   }
  ]

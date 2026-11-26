@@ -1,0 +1,125 @@
+{
+ "entry": "1974",
+ "filter": "XrayQuestionsTabTests|XrayOpenFastTests",
+ "mutants": [
+  {
+   "name": "q-no-question-key",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "let t = row.task ?? row.question {",
+   "new": "let t = row.task {",
+   "expect": "killed"
+  },
+  {
+   "name": "q-no-bare",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "} else if let t = try? dec.decode(Row.T.self, from: line), t.id != nil {",
+   "new": "} else if false, let t = try? dec.decode(Row.T.self, from: line), t.id != nil {",
+   "expect": "killed"
+  },
+  {
+   "name": "q-bare-no-id-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "from: line), t.id != nil {",
+   "new": "from: line) {",
+   "expect": "killed"
+  },
+  {
+   "name": "q-groups-answered-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "return [Group(title: \"Open\", tasks: g[0].tasks + g[1].tasks), Group(title: \"Answered\", tasks: g[2].tasks)] + g.dropFirst(3)",
+   "new": "return [Group(title: \"Answered\", tasks: g[2].tasks), Group(title: \"Open\", tasks: g[0].tasks + g[1].tasks)] + g.dropFirst(3)",
+   "expect": "killed"
+  },
+  {
+   "name": "q-tab-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "case .questions: questions != nil",
+   "new": "case .questions: false",
+   "expect": "killed"
+  },
+  {
+   "name": "q-take-ignores-status",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "put(\\.questions, Self.tasksTab(r))",
+   "new": "put(\\.questions, Self.tasksTab((0, r.out)))",
+   "expect": "killed"
+  },
+  {
+   "name": "q-unreached-clears",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "    func takeQuestions(_ r: (status: Int32, out: Data)) {\n        if unreached(r.status) { unreachable = true; return }",
+   "new": "    func takeQuestions(_ r: (status: Int32, out: Data)) {\n        if unreached(r.status) { unreachable = true }",
+   "expect": "killed"
+  },
+  {
+   "name": "q-open-no-read",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "let q = XrayPanels.questionsTab() ? target.args(\"questions\") : nil",
+   "new": "let q: [String]? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "q-poll-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "let asked = tab == .questions && questions != nil",
+   "new": "let asked = questions != nil",
+   "expect": "killed"
+  },
+  {
+   "name": "q-poll-never",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "else if asked { readQuestions(dch, run) }",
+   "new": "else if false { readQuestions(dch, run) }",
+   "expect": "killed"
+  },
+  {
+   "name": "q-poll-30-is-5",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "tab == .memory || tab == .refs || tab == .questions) ? 30",
+   "new": "tab == .memory || tab == .refs) ? 30",
+   "expect": "killed"
+  },
+  {
+   "name": "q-kept-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "XrayPanels.Kept(tasks: tasks, questions: questions,",
+   "new": "XrayPanels.Kept(tasks: tasks, questions: nil,",
+   "expect": "killed"
+  },
+  {
+   "name": "q-row-prefix-t",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "var questionLines: [XrayTaskLine] { Self.lines(shownQuestionGroups, row: \"q:\") }",
+   "new": "var questionLines: [XrayTaskLine] { Self.lines(shownQuestionGroups, row: \"t:\") }",
+   "expect": "killed"
+  },
+  {
+   "name": "q-spoken-plain",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "tab == .tasks || tab == .questions ? \"\\(tab.rawValue)",
+   "new": "tab == .tasks ? \"\\(tab.rawValue)",
+   "expect": "killed"
+  },
+  {
+   "name": "q-cols-no-memo",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if let c = questionColsMemo, c.minute == m { return c.cols }",
+   "new": "if false, let c = questionColsMemo, c.minute == m { return c.cols }",
+   "expect": "killed"
+  },
+  {
+   "name": "n1-no-tab-fix",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        else if loaded, !tabs.contains(tab), let first = tabs.first { tab = first }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "n2-chip-seeds",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if !answered, fallback == nil, XrayPanels.keepRows(),",
+   "new": "if !answered, XrayPanels.keepRows(),",
+   "expect": "killed"
+  }
+ ]
+}
