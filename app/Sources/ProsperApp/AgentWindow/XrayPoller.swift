@@ -51,6 +51,7 @@ extension XrayPanelModel {
         if let f = follow, f.state != nil, !f.running { detachFollow() }
         let s = paneState()
         if !s.visible { quiet.reset() }   // #1636: shown again: the base spacing
+        if s.visible, tab == .tasks || tab == .memory { agesTick() }   // #1972 (QA f2): ages move on a quiet ledger
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
         // #1389: Prompts polls dch only on a dch-chapters pane whose read answered (a Transcript pane never)

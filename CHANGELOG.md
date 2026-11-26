@@ -35,6 +35,10 @@ tag from the now-released section and put it on the new top draft.
 - X-ray: when you Cmd+click a ref, the card no longer jumps when the fuller answer arrives a few
   seconds later: what you were reading stays in place and new mentions are added below it; unchanged
   refreshes no longer redraw the X-ray drawer. (#1972)
+- X-ray drawer: when new prompts, refs, tasks or memories arrive while you are scrolled down a list,
+  the row you were reading stays in place (at the very top, new rows still show); task and memory
+  ages now update every minute, and a ref card's counts never read lower than the rows it lists.
+  (#1972)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

@@ -145,15 +145,15 @@
   {
    "name": "no-read-corpus",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "        corpus = r.status == 0 ? XrayChapters.corpus(r.out) : nil",
+   "old": "        put(\\.corpus, r.status == 0 ? XrayChapters.corpus(r.out) : nil)",
    "new": "        _ = 0",
    "expect": "killed"
   },
   {
    "name": "no-follow-corpus",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "(dchChapters, chapterAnchors, corpus) = (s.chapters, s.anchors, s.corpus)",
-   "new": "(dchChapters, chapterAnchors) = (s.chapters, s.anchors)",
+   "old": "; put(\\.corpus, s.corpus) }",
+   "new": " }",
    "expect": "killed"
   },
   {

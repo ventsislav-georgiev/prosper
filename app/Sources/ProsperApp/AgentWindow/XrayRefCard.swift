@@ -247,7 +247,7 @@ struct XrayRefContext: Equatable {
     var memoryRich: [[XrayRich.Run]]
     /// #1567: the footer's facts: dch's counts as sent, a done line came, every count a lower bound (XrayRefStream), and
     /// the answer came from a light read (takeRef sets it; a full result serving a light ask is not light).
-    let rawCounts: XrayRefStream.Counts?
+    var rawCounts: XrayRefStream.Counts?   // #1972 (QA n1): merged raises it to the rows kept
     let done: Bool
     let partial: Bool
     var light = false
@@ -389,6 +389,14 @@ struct XrayRefContext: Equatable {
         let memory = Self.merge(self.memory, new.memory, key: { $0.id })
         if memory != new.memory {
             (c.memory, c.memoryRich) = (memory, memory.prefix(Self.richCap).map { XrayRich.runs($0.title, max: XrayRefStream.lineCap) })
+        }
+        // QA n1: a shown row `new` lacks stays, so the footer's counts are raised to the rows the card lists
+        if var n = c.rawCounts {
+            let own = c.groups.filter { $0.session == (c.session ?? "") }, rest = c.groups.filter { $0.session != (c.session ?? "") }
+            n.session = max(n.session, own.reduce(0) { $0 + $1.mentions.count })
+            n.project = max(n.project, rest.reduce(0) { $0 + $1.mentions.count })
+            n.projectSessions = max(n.projectSessions, rest.count)
+            c.rawCounts = n
         }
         return c
     }

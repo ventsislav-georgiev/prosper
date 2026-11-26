@@ -243,7 +243,14 @@ final class XrayPanelModel: ObservableObject {
     /// #1355 (R1355-i1): why the Search tab went (exit 1 or 6), said where the strip lands; a new panel has none.
     @Published var searchGone: String?
     @Published private(set) var loaded = false
-    @Published var tab: XrayTab
+    @Published var tab: XrayTab {
+        didSet { if tab != oldValue { topRow = nil } }   // #1972: another tab's list starts at its top
+    }
+    /// #1972 (operator 2026-11-26, "Keep scroll anchored"): the id of the top row the person sees in the shown tab's list
+    /// (its scrollPosition writes it while they scroll; not published: a scroll redraws nothing).
+    var topRow: String?
+    /// #1972 (QA f2): the clock minute the Tasks and Memory ages were last sent for (XrayPoller tick).
+    var agesMinute: Int?
     @Published var filter = ""
     @Published var filterFocused = false
     /// The task whose card was asked for last (the presenter shows it).
@@ -429,6 +436,20 @@ final class XrayPanelModel: ObservableObject {
         if self[keyPath: k] != v { self[keyPath: k] = v }
     }
 
+    /// #1972 (QA f2): put() leaves a quiet ledger's rows unsent, so the ticker sends one change when the clock minute
+    /// turns while Tasks or Memory shows: their ages ("5m", "3h") are drawn from now() and move with it.
+    func agesTick() {
+        let m = minute()
+        if m != agesMinute { agesMinute = m; objectWillChange.send() }
+    }
+
+    /// #1972: after the shown list's ids went from `old` to `new`: the row to put back at the top (nil: leave the scroll).
+    func restoreTop(old: [String], new: [String]) -> String? {
+        let r = XrayScrollAnchor.restore(old: old, new: new, anchor: topRow)
+        if let r { topRow = r }
+        return r
+    }
+
     /// #1352: a tab chosen in the strip; Memory is read again then: at once, or (#1381, R1352-i1) when the read in
     /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
@@ -501,11 +522,35 @@ final class XrayPanelModel: ObservableObject {
     /// #1815: shownGroups as the list draws it, one id per line ("g<i>" a header, "g<i>.<j>" its task). The view had a
     /// ForEach per group inside a LazyVStack, which flattens them: each group's ids were 0, 1, ... again, rows sharing an
     /// id went undrawn, and the operator saw an empty gap under "Pending" (op-1121-36).
+    /// #1972: the ids are stable across polls ("h:" the group's title, "t:" the task's id; a repeat made unique), so a
+    /// new task above keeps the reader's row (XrayAnchoredScroll).
     var taskLines: [XrayTaskLine] {
-        shownGroups.enumerated().flatMap { i, g in
-            [XrayTaskLine(id: "g\(i)", header: "\(g.title) \(g.tasks.count)", task: nil)]
-                + g.tasks.enumerated().map { j, t in XrayTaskLine(id: "g\(i).\(j)", header: nil, task: t) }
+        let lines = shownGroups.flatMap { g in
+            [XrayTaskLine(id: "h:" + g.title, header: "\(g.title) \(g.tasks.count)", task: nil)]
+                + g.tasks.map { t in XrayTaskLine(id: "t:" + t.id, header: nil, task: t) }
         }
+        return zip(XrayScrollAnchor.unique(lines.map(\.id)), lines).map { XrayTaskLine(id: $0, header: $1.header, task: $1.task) }
+    }
+
+    /// #1972: each shown prompt under a stable id: its dch anchor (from the same read), else its block id.
+    func promptLines(_ rows: [TranscriptOutline.Chapter]) -> [(id: String, c: TranscriptOutline.Chapter)] {
+        let anchor = Dictionary(chapterAnchors.map { ($0.value, $0.key) }, uniquingKeysWith: min)   // as openChapterCard's
+        return zip(XrayScrollAnchor.unique(rows.map { anchor[$0.ordinal].map { "a:" + $0 } ?? "c:\($0.id)" }), rows).map { (id: $0, c: $1) }
+    }
+
+    /// #1972: each shown ref under its text (unique).
+    var refLines: [(id: String, e: XrayRefs.Entry)] {
+        let rows = shownRefs
+        return zip(XrayScrollAnchor.unique(rows.map { "r:" + $0.text }), rows).map { (id: $0, e: $1) }
+    }
+
+    /// #1972: the Memory list as drawn, one stable id per line: "h:" a group's header, "m:" a memory's id.
+    var memoryLines: [(id: String, header: String?, item: XrayMemory.Item?)] {
+        let lines = shownMemory.flatMap { g in
+            [(id: "h:" + g.title, header: Optional("\(g.title) \(g.items.count)"), item: XrayMemory.Item?.none)]
+                + g.items.map { (id: "m:" + $0.id, header: String?.none, item: Optional($0)) }
+        }
+        return zip(XrayScrollAnchor.unique(lines.map(\.id)), lines).map { (id: $0, header: $1.header, item: $1.item) }
     }
 
     // #1948: the list columns' widths over ALL items (so they hold while the filter types), computed from the source
@@ -1074,7 +1119,9 @@ struct XrayPanelView: View {
                         }
                     }
                 }
+                .scrollTargetLayout()
             }
+            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
             ForEach(panel.footer, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1082,7 +1129,7 @@ struct XrayPanelView: View {
 
     /// #1354: Prompts, newest first; the footer's counts and toggles (design 1.3, 3.10).
     var promptsTab: some View {
-        let rows = panel.shownPrompts
+        let rows = panel.shownPrompts, lines = panel.promptLines(rows)   // #1972: stable ids
         let ordinalW = XrayCol.widest(rows.map { "\($0.ordinal)" })   // #1945
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
@@ -1093,11 +1140,13 @@ struct XrayPanelView: View {
             if rows.isEmpty { faint("No prompts shown") }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: sz(2)) {
-                    ForEach(rows) { c in
-                        XrayPromptRowView(row: XrayPromptRow(c), ordinalWidest: ordinalW) { panel.activate(c) }
+                    ForEach(lines, id: \.id) { l in
+                        XrayPromptRowView(row: XrayPromptRow(l.c), ordinalWidest: ordinalW) { panel.activate(l.c) }
                     }
                 }
+                .scrollTargetLayout()
             }
+            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
             filterBar(panel.promptFooter(.prompts))
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
@@ -1165,6 +1214,7 @@ struct XrayPanelView: View {
     var refsTab: some View {
         let complete = panel.refs?.complete ?? true
         let countW = panel.refCountWidest   // #1945, #1948
+        let lines = panel.refLines   // #1972: keyed by the ref's text, not its place
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
@@ -1173,11 +1223,13 @@ struct XrayPanelView: View {
                 .accessibilityLabel("Filter refs")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(panel.shownRefs.enumerated()), id: \.offset) { i, e in
-                        XrayRefRowView(row: XrayRefRow(e, complete: complete, home: panel.home, cwd: panel.cwd()), countWidest: countW) { panel.openRef(e) }
+                    ForEach(lines, id: \.id) { l in
+                        XrayRefRowView(row: XrayRefRow(l.e, complete: complete, home: panel.home, cwd: panel.cwd()), countWidest: countW) { panel.openRef(l.e) }
                     }
                 }
+                .scrollTargetLayout()
             }
+            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
             if let n = panel.refsEmpty { faint(n) }
             filterBar(panel.refsChips)
             ForEach(panel.refsFooter, id: \.self) { faint($0) }
@@ -1187,6 +1239,7 @@ struct XrayPanelView: View {
 
     var memoryTab: some View {
         let (sessionW, ageW) = panel.memoryCols   // #1945, #1948
+        let lines = panel.memoryLines   // #1972: one flat list of stable ids (#1823: unique in the lazy stack)
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
@@ -1195,12 +1248,10 @@ struct XrayPanelView: View {
                 .accessibilityLabel("Filter memory")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    // #1823: unique lazy row ids (XrayRefPopover.keyed, as #1816): a nested per-group offset id repeated across groups
-                    ForEach(XrayRefPopover.keyed(panel.shownMemory, part: 0), id: \.id) { gr in
-                        let (gi, g) = (gr.id.row, gr.e)
-                        faint("\(g.title) \(g.items.count)").padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
-                        ForEach(XrayRefPopover.keyed(g.items, part: 0, block: gi), id: \.id) { mr in
-                            let m = mr.e
+                    ForEach(lines, id: \.id) { l in
+                        if let h = l.header {
+                            faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
+                        } else if let m = l.item {
                             XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd()),
                                              sessionWidest: sessionW, ageWidest: ageW) {
                                 panel.openMemoryCard(m)
@@ -1208,7 +1259,9 @@ struct XrayPanelView: View {
                         }
                     }
                 }
+                .scrollTargetLayout()
             }
+            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
             ForEach(panel.goneFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1216,6 +1269,49 @@ struct XrayPanelView: View {
 
     func faint(_ s: String) -> some View {
         Text(verbatim: s).font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+    }
+}
+
+/// #1972 (operator 2026-11-26, "Keep scroll anchored"): a drawer list whose rows carry stable ids. The top row the person
+/// sees is kept on the model as they scroll; when an update changes the rows above it (a poll's new prompt, ref or task
+/// sorting first), that row goes back to the top. At the very top nothing moves, so new rows there show.
+/// shortcut: the row comes back flush with the top (a part-scrolled row loses its few points); a ScrollPosition offset once macOS 15 is the floor.
+struct XrayAnchoredScroll: ViewModifier {
+    let panel: XrayPanelModel
+    let ids: [String]
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                .scrollPosition(id: Binding(get: { panel.topRow }, set: { panel.topRow = $0 }), anchor: .top)
+                .onChange(of: ids) { old, new in
+                    if let id = panel.restoreTop(old: old, new: new) { proxy.scrollTo(id, anchor: .top) }
+                }
+        }
+    }
+}
+
+/// #1972: the pure part of XrayAnchoredScroll.
+enum XrayScrollAnchor {
+    /// The row to put back at the top after the ids went from `old` to `new`, `anchor` the top row the person saw; nil:
+    /// leave the scroll (no anchor, the anchor the first row: the very top, or nothing above it changed). An anchor that
+    /// went: the next row of `old` still there, else the one before it.
+    static func restore(old: [String], new: [String], anchor: String?) -> String? {
+        guard let a = anchor, a != old.first, let i = old.firstIndex(of: a) else { return nil }
+        let now = Set(new)
+        guard let keep = old[i...].first(where: now.contains) ?? old[..<i].last(where: now.contains),
+              let j = new.firstIndex(of: keep) else { return nil }
+        return old[..<i].elementsEqual(new[..<j]) ? nil : keep
+    }
+
+    /// A repeated id gets "\u{1F}2", "\u{1F}3", ... (a lazy stack draws one row per id: #1815, #1823).
+    static func unique(_ ids: [String]) -> [String] {
+        var seen: [String: Int] = [:]
+        return ids.map { id in
+            let n = seen[id, default: 0] + 1
+            seen[id] = n
+            return n == 1 ? id : "\(id)\u{1F}\(n)"
+        }
     }
 }
 

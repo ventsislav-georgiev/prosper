@@ -118,7 +118,7 @@ final class XrayPanelTasksTests: XCTestCase {
     func testTaskLinesHaveOneIdEachAndEachGroupsRowsFollowItsHeader() {
         let p = panel()
         let lines = p.taskLines
-        XCTAssertEqual(lines.map(\.id), ["g0", "g0.0", "g1", "g1.0", "g1.1", "g2", "g2.0"])
+        XCTAssertEqual(lines.map(\.id), ["h:In progress", "t:1", "h:Pending", "t:12", "t:13", "h:Done", "t:9"])   // #1972: stable ids
         XCTAssertEqual(Set(lines.map(\.id)).count, lines.count, "no id twice")
         XCTAssertEqual(lines.map { $0.header ?? $0.task?.id ?? "?" }, ["In progress 1", "1", "Pending 2", "12", "13", "Done 1", "9"])
         XCTAssertTrue(lines.allSatisfy { ($0.header == nil) != ($0.task == nil) }, "a line is a header or a task")
