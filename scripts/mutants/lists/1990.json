@@ -1,0 +1,62 @@
+{
+ "entry": "1990",
+ "filter": "DchCodexSessionsTests|ControlSessionsHistoryTests",
+ "mutants": [
+  {
+   "name": "notclaude_old_text",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "static let notClaude = \"No Claude or Codex is running in this session. Open in terminal\"",
+   "new": "static let notClaude = \"Claude isn't running in this session. Open in terminal\"",
+   "expect": "killed"
+  },
+  {
+   "name": "codex_empty_thread_kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": ".flatMap { $0.isEmpty ? nil : DchHistoryRecord.Codex(",
+   "new": ".flatMap { false ? nil : DchHistoryRecord.Codex(",
+   "expect": "killed"
+  },
+  {
+   "name": "codex_home_dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "home: c?[\"home\"] as? String ?? \"\")",
+   "new": "home: \"\")",
+   "expect": "killed"
+  },
+  {
+   "name": "revive_tail_dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "return verb.done + codex",
+   "new": "return verb.done",
+   "expect": "killed"
+  },
+  {
+   "name": "revive_as_tail_dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "(verb == .resume ? \"\" : \" without the message\") + codex",
+   "new": "(verb == .resume ? \"\" : \" without the message\")",
+   "expect": "killed"
+  },
+  {
+   "name": "remove_codex_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "let codex = sid.isEmpty ? r.codex?.threadID : nil",
+   "new": "let codex: String? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "remove_codex_over_claude",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "let codex = sid.isEmpty ? r.codex?.threadID : nil",
+   "new": "let codex = r.codex?.threadID",
+   "expect": "killed"
+  },
+  {
+   "name": "control_codex_null",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "\"codex\": str(r.codex?.threadID),",
+   "new": "\"codex\": .null,",
+   "expect": "killed"
+  }
+ ]
+}
