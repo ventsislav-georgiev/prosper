@@ -1,0 +1,48 @@
+{
+ "entry": "1984",
+ "filter": "HostEventsTests",
+ "mutants": [
+  {
+   "name": "route_fail_closed",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "state.load(ordering: .acquiring) != 1 }",
+   "new": "state.load(ordering: .acquiring) == 2 }",
+   "expect": "killed"
+  },
+  {
+   "name": "route_first_path_emits",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "if was != 0, was != now { onChange?(now == 2) }",
+   "new": "if was != now { onChange?(now == 2) }",
+   "expect": "killed"
+  },
+  {
+   "name": "route_repeats_emit",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "if was != 0, was != now { onChange?(now == 2) }",
+   "new": "if was != 0 { onChange?(now == 2) }",
+   "expect": "killed"
+  },
+  {
+   "name": "route_requires_connection_up",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "let now: UInt8 = status == .satisfied ? 2 : 1",
+   "new": "let now: UInt8 = status != .unsatisfied ? 2 : 1",
+   "expect": "killed"
+  },
+  {
+   "name": "network_payload_key",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "Self.json([\"reachable\": reachable])",
+   "new": "Self.json([\"up\": reachable])",
+   "expect": "killed"
+  },
+  {
+   "name": "network_event_name",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionSystemServices.swift",
+   "old": "emit?(\"network.changed\", Self.json",
+   "new": "emit?(\"network.change\", Self.json",
+   "expect": "killed"
+  }
+ ]
+}
