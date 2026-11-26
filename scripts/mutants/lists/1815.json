@@ -5,14 +5,14 @@
   {
    "name": "ids-per-group",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "XrayTaskLine(id: \"g\\(i).\\(j)\", header: nil, task: t)",
-   "new": "XrayTaskLine(id: \"\\(j)\", header: nil, task: t)",
+   "old": "XrayTaskLine(id: \"t:\" + t.id, header: nil, task: t)",
+   "new": "XrayTaskLine(id: \"\\(g.tasks.firstIndex(of: t) ?? 0)\", header: nil, task: t)",
    "expect": "killed"
   },
   {
    "name": "header-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "[XrayTaskLine(id: \"g\\(i)\", header: \"\\(g.title) \\(g.tasks.count)\", task: nil)]\n                + ",
+   "old": "[XrayTaskLine(id: \"h:\" + g.title, header: \"\\(g.title) \\(g.tasks.count)\", task: nil)]\n                + ",
    "new": "",
    "expect": "killed"
   },

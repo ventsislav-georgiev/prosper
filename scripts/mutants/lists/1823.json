@@ -3,18 +3,17 @@
  "filter": "XrayLazyRowIDTests",
  "mutants": [
   {
-   "name": "revert-memory",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "ForEach(XrayRefPopover.keyed(g.items, part: 0, block: gi), id: \\.id) { mr in",
-   "new": "ForEach(Array(g.items.enumerated()), id: \\.offset) { _, mr in let mr = (id: 0, e: mr)",
-   "expect": "killed"
-  },
-  {
    "name": "revert-search-others",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
    "old": "ForEach(XrayRefPopover.keyed(g.hits, part: 1, block: gi), id: \\.id) { h in",
    "new": "ForEach(Array(g.hits.enumerated()), id: \\.offset) { _, h in let h = (id: 0, e: h)",
    "expect": "killed"
+  }
+ ],
+ "retired": [
+  {
+   "name": "revert-memory",
+   "note": "#1972 removed the per-group keyed Memory ForEach: the tab draws memoryLines, one flat list made unique by XrayScrollAnchor.unique (1972 unique-off, memory-ids-positional guard it)"
   }
  ]
 }

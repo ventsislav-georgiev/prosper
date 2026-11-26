@@ -14,10 +14,12 @@ final class XrayLazyRowIDTests: XCTestCase {
     }
 
     func testMemoryAndSearchListsKeyEveryRowByTheStackUniqueId() throws {
-        for (name, end) in [("var searchTab: some View", "ForEach(panel.searchFooter"), ("var memoryTab: some View", "ForEach(panel.goneFooter")] {
+        // #1972: Memory draws one flat list of stable ids (memoryLines, made unique by XrayScrollAnchor.unique)
+        for (name, end, keyed) in [("var searchTab: some View", "ForEach(panel.searchFooter", "XrayRefPopover.keyed("),
+                                   ("var memoryTab: some View", "ForEach(panel.goneFooter", "panel.memoryLines")] {
             let body = try Self.section(name, to: end)
             XCTAssertFalse(body.contains("id: \\.offset"), "\(name): a per-group offset id repeats across groups in the LazyVStack")
-            XCTAssertTrue(body.contains("XrayRefPopover.keyed("), name)
+            XCTAssertTrue(body.contains(keyed), name)
         }
     }
 
