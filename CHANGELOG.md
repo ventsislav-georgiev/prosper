@@ -49,7 +49,7 @@ tag from the now-released section and put it on the new top draft.
   (#1991)
 - A new Codex session can start with a first prompt, and resuming a Codex session from History over
   the control channel can send a message. (#1992)
-- Ships dch 1.177.0: An interrupted stop or restart of a Codex session names codex resume, a Codex
+- Ships dch 1.177.0: an interrupted stop or restart of a Codex session names codex resume, a Codex
   with no known thread is left running with dch's reason, and a resumed Codex record's result shows
   on its own History row. (#1993)
 
