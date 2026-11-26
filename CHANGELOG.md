@@ -40,6 +40,8 @@ tag from the now-released section and put it on the new top draft.
   (#1983)
 - Ships dch 1.172.0: Codex approval dialogs and questions read as blocked, and X-ray finds
   definitions in Codex sessions. (#1983)
+- The X-ray drawer keeps the line you are reading exactly where it was when new rows arrive, and
+  typing a filter or switching a chip starts the list at the top. (#1979)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

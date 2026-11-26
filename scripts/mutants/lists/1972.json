@@ -89,15 +89,15 @@
   {
    "name": "anchor-top-moves",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "guard let a = anchor, a != old.first, let i = old.firstIndex(of: a) else { return nil }",
-   "new": "guard let a = anchor, let i = old.firstIndex(of: a) else { return nil }",
+   "old": "guard let a = anchor, let i = old.firstIndex(of: a.id), i > 0 || a.offset >= 1 else { return nil }",
+   "new": "guard let a = anchor, let i = old.firstIndex(of: a.id) else { return nil }",
    "expect": "killed"
   },
   {
    "name": "always-restore",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "return old[..<i].elementsEqual(new[..<j]) ? nil : keep",
-   "new": "return keep",
+   "old": "return old[..<i].elementsEqual(new[..<j]) ? nil : Top(id: keep, offset: keep == a.id ? a.offset : 0)",
+   "new": "return Top(id: keep, offset: keep == a.id ? a.offset : 0)",
    "expect": "killed"
   },
   {

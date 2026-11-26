@@ -28,18 +28,89 @@ final class XrayScrollAnchorTests: XCTestCase {
 
     // MARK: the pure restore
 
+    typealias Top = XrayScrollAnchor.Top
+
     func testRestoreKeepsTheReadersRowUnlessAtTheTop() {
         let old = ["a", "b", "c", "d"]
-        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: "c"), "c", "a new first row: the reader's row comes back")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: "a") == nil, "at the very top: the new row shows")
+        func at(_ id: String) -> Top { Top(id: id) }
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: at("c")), at("c"), "a new first row: the reader's row comes back")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: at("a")) == nil, "at the very top: the new row shows")
         XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: nil) == nil, "never scrolled: the top")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: old + ["n"], anchor: "c") == nil, "a row below: nothing above moved")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: old, anchor: "c") == nil, "the same rows: nothing")
-        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n", "a", "b", "d"], anchor: "c"), "d", "the row went: the next one")
-        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n", "a", "b"], anchor: "c"), "b", "none after it: the one before")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["a", "b", "d"], anchor: "c") == nil, "it went, nothing above moved")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: "x") == nil, "another tab's row: nothing")
-        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: [], anchor: "c") == nil, "an emptied list: nothing")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: old + ["n"], anchor: at("c")) == nil, "a row below: nothing above moved")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: old, anchor: at("c")) == nil, "the same rows: nothing")
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n", "a", "b", "d"], anchor: at("c")), at("d"), "the row went: the next one")
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n", "a", "b"], anchor: at("c")), at("b"), "none after it: the one before")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["a", "b", "d"], anchor: at("c")) == nil, "it went, nothing above moved")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: at("x")) == nil, "another tab's row: nothing")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: [], anchor: at("c")) == nil, "an emptied list: nothing")
+    }
+
+    /// #1979: red with #1972's restore (the id only: the row came back flush, its offset lost) and with the offset kept
+    /// for a stand-in row; the first row part-scrolled is not the very top.
+    func testRestoreKeepsTheOffsetInsideTheReadersRow() {
+        let old = ["a", "b", "c", "d"]
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: Top(id: "c", offset: 17.5)),
+                       Top(id: "c", offset: 17.5), "a row above came: the row and the points past its top")
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n", "a", "b", "d"], anchor: Top(id: "c", offset: 17.5)),
+                       Top(id: "d", offset: 0), "the row went: the next one, flush")
+        XCTAssertEqual(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: Top(id: "a", offset: 12)),
+                       Top(id: "a", offset: 12), "the first row part-scrolled: kept too")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: ["n"] + old, anchor: Top(id: "a", offset: 0.5)) == nil,
+                      "under a point into the first row: the very top, the new row shows")
+        XCTAssertTrue(XrayScrollAnchor.restore(old: old, new: old + ["n"], anchor: Top(id: "a", offset: 12)) == nil,
+                      "nothing above it: leave the scroll")
+    }
+
+    /// #1979: the row that straddles the list's top edge reports the points past its top; every other row nothing.
+    func testOnlyTheRowAtTheTopEdgeReportsItsOffset() {
+        XCTAssertEqual(XrayScrollAnchor.past(CGRect(x: 0, y: -12, width: 100, height: 30)), 12)
+        XCTAssertEqual(XrayScrollAnchor.past(CGRect(x: 0, y: 0, width: 100, height: 30)), 0, "flush with the top")
+        XCTAssertTrue(XrayScrollAnchor.past(CGRect(x: 0, y: 4, width: 100, height: 30)) == nil, "below the edge")
+        XCTAssertTrue(XrayScrollAnchor.past(CGRect(x: 0, y: -30, width: 100, height: 30)) == nil, "scrolled out above")
+    }
+
+    // MARK: #1979 (QA n3): a filter or chip change starts at the top; a poll keeps the reader's row
+
+    func shown(_ p: XrayPanelModel, _ ids: [String]) -> XrayScrollAnchor.Shown { .init(gen: p.listGen, ids: ids) }
+
+    /// Red without the didSet bumps on filter, showAuto, hidePeer and showAllRefs (the change looked like a poll and
+    /// the anchor was put back) and without shownChanged's gen check.
+    func testAFilterOrChipChangeGoesToTheTopAndClearsTheAnchor() {
+        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .prompts)
+        let ids = ["a:1", "a:2", "a:3"]
+        for (name, change) in [("filter", { p.filter = "log" }), ("Automatic", { p.showAuto.toggle() }),
+                               ("Agent messages", { p.hidePeer.toggle() }), ("refs chip", { p.showAllRefs.toggle() }),
+                               ("filter cleared", { p.filter = "" })] as [(String, () -> Void)] {
+            p.scrolled("a:3", offset: 9)
+            let old = shown(p, ids)
+            change()
+            XCTAssertTrue(p.topRow == nil, "\(name): the anchor is cleared")
+            XCTAssertEqual(p.shownChanged(old: old, new: shown(p, ["n"] + ids)), .top, "\(name): the list starts at its top")
+            XCTAssertEqual(p.shownChanged(old: old, new: shown(p, ids)), .top, "\(name): even with the same rows")
+            XCTAssertTrue(p.topRow == nil && p.settle == nil, name)
+        }
+        let g = p.listGen
+        p.filter = ""
+        p.showAuto = p.showAuto
+        XCTAssertEqual(p.listGen, g, "no change: no bump")
+    }
+
+    /// Red with the offset dropped in restoreTop or settled, or with a poll taken for a filter change.
+    func testAPollUpdateWithTheSameFilterKeepsTheRowAndItsOffset() {
+        let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .prompts)
+        p.filter = "log"
+        let ids = ["a:1", "a:2", "a:3"]
+        p.scrolled("a:2", offset: 14)
+        let old = shown(p, ids)
+        XCTAssertEqual(p.shownChanged(old: old, new: shown(p, ["a:0"] + ids)), .row(Top(id: "a:2", offset: 14)))
+        XCTAssertEqual(p.topRow, "a:2")
+        XCTAssertEqual(p.settled(300), 314, "landed flush at 300: on by its offset")
+        XCTAssertTrue(p.settled(320) == nil, "once only: a later scroll is the person's")
+        p.scrolled("a:2", offset: 0)
+        XCTAssertEqual(p.shownChanged(old: old, new: shown(p, ["a:0"] + ids)), .row(Top(id: "a:2")))
+        XCTAssertTrue(p.settled(300) == nil, "flush: nothing to add")
+        p.scrolled("a:1", offset: 0)
+        XCTAssertTrue(p.shownChanged(old: old, new: shown(p, ["a:0"] + ids)) == nil, "at the very top: nothing moves")
     }
 
     func testUniqueIdsKeepTheFirstAndMarkRepeats() {
@@ -63,7 +134,7 @@ final class XrayScrollAnchorTests: XCTestCase {
         p.take(tasks([r[0], Self.newTask] + r.dropFirst()))   // dch lists 14 before 12 and 13
         let new = p.taskLines.map(\.id)
         XCTAssertEqual(new, ["h:In progress", "t:1", "h:Pending", "t:14", "t:12", "t:13", "h:Done", "t:9"])
-        XCTAssertEqual(p.restoreTop(old: old, new: new), "t:13")
+        XCTAssertEqual(p.restoreTop(old: old, new: new)?.id, "t:13")
         XCTAssertEqual(p.taskLines.first { $0.id == p.topRow }?.task?.id, "13", "the anchor still names the task read")
         p.topRow = "h:In progress"
         XCTAssertTrue(p.restoreTop(old: new, new: new) == nil, "at the top: nothing moves")
@@ -85,7 +156,7 @@ final class XrayScrollAnchorTests: XCTestCase {
         p.takeRefs((0, XrayRefsParseTests.object(refs: more)))
         let new = p.refLines.map(\.id)
         XCTAssertEqual(new.first, "r:#900")
-        XCTAssertEqual(p.restoreTop(old: old, new: new), "r:#831")
+        XCTAssertEqual(p.restoreTop(old: old, new: new)?.id, "r:#831")
         XCTAssertEqual(p.refLines.first { $0.id == "r:#831" }?.e.text, "#831")
     }
 
@@ -107,7 +178,7 @@ final class XrayScrollAnchorTests: XCTestCase {
         p.takeChapters((0, Data(json.utf8)))
         let new = p.promptLines(p.shownPrompts).map(\.id)
         XCTAssertEqual(new, ["a:f3a41c:600", "a:f3a41c:500", "a:f3a41c:400", "a:f3a41c:300", "a:f3a41c:100"])
-        XCTAssertEqual(p.restoreTop(old: old, new: new), "a:f3a41c:400")
+        XCTAssertEqual(p.restoreTop(old: old, new: new)?.id, "a:f3a41c:400")
         XCTAssertEqual(p.promptLines(p.shownPrompts).first { $0.id == "a:f3a41c:400" }?.c.title, "Conversation compacted")
     }
 
@@ -125,7 +196,7 @@ final class XrayScrollAnchorTests: XCTestCase {
                                                      + [#"{"done":true,"count":6,"dropped":0}"#])))
         let new = p.memoryLines.map(\.id)
         XCTAssertLessThan(new.firstIndex(of: "m:m0") ?? .max, new.firstIndex(of: "m:m1") ?? -1, "m0 is above m1")
-        XCTAssertEqual(p.restoreTop(old: old, new: new), "m:m1")
+        XCTAssertEqual(p.restoreTop(old: old, new: new)?.id, "m:m1")
         XCTAssertEqual(p.memoryLines.first { $0.id == "m:m1" }?.item?.id, "m1")
     }
 

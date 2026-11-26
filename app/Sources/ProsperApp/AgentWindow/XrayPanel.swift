@@ -249,7 +249,7 @@ final class XrayPanelModel: ObservableObject {
     @Published var refs: XrayRefs? {
         didSet { if refs != oldValue { refCountMemo = nil } }
     }
-    @Published var showAllRefs = false
+    @Published var showAllRefs = false { didSet { if showAllRefs != oldValue { listChanged() } } }
     /// #1416: the ref card's data from the last --ref read (XrayPanels.runRef), or why it has none.
     @Published var refContext: XrayRefContext?
     @Published var refNote: String?
@@ -277,11 +277,18 @@ final class XrayPanelModel: ObservableObject {
         didSet { if tab != oldValue { topRow = nil } }   // #1972: another tab's list starts at its top
     }
     /// #1972 (operator 2026-11-26, "Keep scroll anchored"): the id of the top row the person sees in the shown tab's list
-    /// (its scrollPosition writes it while they scroll; not published: a scroll redraws nothing).
+    /// (#1979: the row at the top edge writes it while they scroll, XrayScrollRow; not published: a scroll redraws nothing).
     var topRow: String?
+    /// #1979: the points scrolled past topRow's top (its row's geometry writes it, XrayScrollRow; unpublished as topRow).
+    var topOffset: CGFloat = 0
+    /// #1979 (QA n3): bumped by a filter keystroke or a chip toggle; XrayAnchoredScroll compares it to tell those
+    /// (the list starts at its top) from a poll or follow update (the reader's row is kept).
+    private(set) var listGen = 0
+    /// #1979: the offset to add once the restored row lands flush at the top (XrayAnchoredScroll, settled(_:)).
+    var settle: CGFloat?
     /// #1972 (QA f2): the clock minute the Tasks and Memory ages were last sent for (XrayPoller tick).
     var agesMinute: Int?
-    @Published var filter = ""
+    @Published var filter = "" { didSet { if filter != oldValue { listChanged() } } }
     @Published var filterFocused = false
     /// The task whose card was asked for last (the presenter shows it).
     @Published private(set) var card: XrayTasks.Task?
@@ -340,9 +347,12 @@ final class XrayPanelModel: ObservableObject {
     /// #1354: Prompts shows the automatic rows (dch `n`, off at open) / hides other sessions' messages (`a`); #1815: the
     /// hide is the person's saved choice (Preferences.xrayHideAgentMessages, on unless set off), stored only behind the
     /// rememberTab seam as the last tab is.
-    @Published var showAuto = false
+    @Published var showAuto = false { didSet { if showAuto != oldValue { listChanged() } } }
     @Published var hidePeer = Preferences.xrayHideAgentMessages {
-        didSet { if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer } }
+        didSet {
+            if hidePeer != oldValue { listChanged() }   // #1979
+            if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer }
+        }
     }
     /// R1351-i1: true while this panel is still the pane's open one and the pane still shows `target`; the fallback runs
     /// only then (chosen over cancelling the read: a panel hidden by a selection change stays open, so close never fires).
@@ -525,11 +535,36 @@ final class XrayPanelModel: ObservableObject {
         if m != agesMinute { agesMinute = m; objectWillChange.send() }
     }
 
-    /// #1972: after the shown list's ids went from `old` to `new`: the row to put back at the top (nil: leave the scroll).
-    func restoreTop(old: [String], new: [String]) -> String? {
-        let r = XrayScrollAnchor.restore(old: old, new: new, anchor: topRow)
-        if let r { topRow = r }
+    /// #1972: after the shown list's ids went from `old` to `new`: the row to put back at the top and (#1979) the points
+    /// past its top, armed in `settle` (nil: leave the scroll).
+    func restoreTop(old: [String], new: [String]) -> XrayScrollAnchor.Top? {
+        settle = nil
+        let r = XrayScrollAnchor.restore(old: old, new: new, anchor: topRow.map { .init(id: $0, offset: topOffset) })
+        if let r { (topRow, topOffset, settle) = (r.id, r.offset, r.offset > 0 ? r.offset : nil) }
         return r
+    }
+
+    /// #1979 (QA n3): a filter or chip change: the shown list starts at its top.
+    func listChanged() {
+        listGen &+= 1
+        (topRow, topOffset, settle) = (nil, 0, nil)
+    }
+
+    /// #1979: the shown list went from `old` to `new`: its top after a filter or chip change, else the reader's row.
+    func shownChanged(old: XrayScrollAnchor.Shown, new: XrayScrollAnchor.Shown) -> XrayScrollAnchor.Move? {
+        if old.gen != new.gen { (topRow, topOffset, settle) = (nil, 0, nil); return .top }
+        return restoreTop(old: old.ids, new: new.ids).map { .row($0) }
+    }
+
+    /// #1979: a row straddling the list's top edge, `offset` points past its top (XrayScrollRow).
+    func scrolled(_ id: String, offset: CGFloat) {
+        (topRow, topOffset) = (id, offset)
+    }
+
+    /// #1979: the scroll's y once the restored row landed flush at the top: the y to scroll on to (its offset added), once.
+    func settled(_ y: CGFloat) -> CGFloat? {
+        defer { settle = nil }
+        return settle.map { y + $0 }
     }
 
     /// #1352: a tab chosen in the strip; Memory is read again then: at once, or (#1381, R1352-i1) when the read in
@@ -1226,16 +1261,19 @@ struct XrayPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines) { l in
-                        if let h = l.header {
-                            faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
-                        } else if let t = l.task {
-                            XrayTaskRowView(row: XrayTaskRow(t, now: panel.now()), cols: cols) { panel.activate(t) }
+                        Group {
+                            if let h = l.header {
+                                faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
+                            } else if let t = l.task {
+                                XrayTaskRowView(row: XrayTaskRow(t, now: panel.now()), cols: cols) { panel.activate(t) }
+                            }
                         }
+                        .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
+            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             ForEach(footer, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1256,11 +1294,12 @@ struct XrayPanelView: View {
                 LazyVStack(alignment: .leading, spacing: sz(2)) {
                     ForEach(lines, id: \.id) { l in
                         XrayPromptRowView(row: XrayPromptRow(l.c), ordinalWidest: ordinalW) { panel.activate(l.c) }
+                            .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
+            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             filterBar(panel.promptFooter(.prompts))
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
@@ -1339,11 +1378,12 @@ struct XrayPanelView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines, id: \.id) { l in
                         XrayRefRowView(row: XrayRefRow(l.e, complete: complete, home: panel.home, cwd: panel.cwd()), countWidest: countW) { panel.openRef(l.e) }
+                            .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
+            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             if let n = panel.refsEmpty { faint(n) }
             filterBar(panel.refsChips)
             ForEach(panel.refsFooter, id: \.self) { faint($0) }
@@ -1363,19 +1403,22 @@ struct XrayPanelView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines, id: \.id) { l in
-                        if let h = l.header {
-                            faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
-                        } else if let m = l.item {
-                            XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd()),
-                                             sessionWidest: sessionW, ageWidest: ageW) {
-                                panel.openMemoryCard(m)
+                        Group {
+                            if let h = l.header {
+                                faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
+                            } else if let m = l.item {
+                                XrayMemoryRowView(row: XrayMemoryRow(m, now: panel.now(), home: panel.home, cwd: panel.cwd()),
+                                                 sessionWidest: sessionW, ageWidest: ageW) {
+                                    panel.openMemoryCard(m)
+                                }
                             }
                         }
+                        .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
+            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             ForEach(panel.goneFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1387,35 +1430,81 @@ struct XrayPanelView: View {
 }
 
 /// #1972 (operator 2026-11-26, "Keep scroll anchored"): a drawer list whose rows carry stable ids. The top row the person
-/// sees is kept on the model as they scroll; when an update changes the rows above it (a poll's new prompt, ref or task
-/// sorting first), that row goes back to the top. At the very top nothing moves, so new rows there show.
-/// shortcut: the row comes back flush with the top (a part-scrolled row loses its few points); a ScrollPosition offset once macOS 15 is the floor.
+/// sees and (#1979) the points scrolled past its top are kept on the model as they scroll (XrayScrollRow); when a poll or
+/// follow update changes the rows above it (a new prompt, ref or task sorting first), that row goes back to the top and
+/// then down by its offset, so the line read stays where it was. At the very top nothing moves, so new rows there show.
+/// #1979 (QA n3): a filter keystroke or a chip toggle (listGen) starts the list at its top.
 struct XrayAnchoredScroll: ViewModifier {
     let panel: XrayPanelModel
-    let ids: [String]
+    let shown: XrayScrollAnchor.Shown
+    @State private var position = ScrollPosition(idType: String.self)
 
     func body(content: Content) -> some View {
-        ScrollViewReader { proxy in
-            content
-                .scrollPosition(id: Binding(get: { panel.topRow }, set: { panel.topRow = $0 }), anchor: .top)
-                .onChange(of: ids) { old, new in
-                    if let id = panel.restoreTop(old: old, new: new) { proxy.scrollTo(id, anchor: .top) }
+        content
+            .scrollPosition($position, anchor: .top)
+            .onChange(of: shown) { old, new in
+                switch panel.shownChanged(old: old, new: new) {
+                case .top: position.scrollTo(edge: .top)
+                case .row(let t): position.scrollTo(id: t.id, anchor: .top)
+                case nil: break
                 }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+                if let to = panel.settled(y) { position.scrollTo(y: to) }
+            }
+            .onScrollPhaseChange { _, p in if p == .tracking || p == .interacting { panel.settle = nil } }   // the person scrolls: no late nudge
+    }
+}
+
+/// #1979: a drawer row: while it straddles the list's top edge it notes itself and the points scrolled past its top on
+/// the model (unpublished: a scroll redraws nothing). Only that row's value changes as the list scrolls.
+struct XrayScrollRow: ViewModifier {
+    let panel: XrayPanelModel
+    let id: String
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat?.self) { XrayScrollAnchor.past($0.frame(in: .scrollView)) } action: { _, off in
+            if let off { panel.scrolled(id, offset: off) }
         }
     }
 }
 
 /// #1972: the pure part of XrayAnchoredScroll.
 enum XrayScrollAnchor {
-    /// The row to put back at the top after the ids went from `old` to `new`, `anchor` the top row the person saw; nil:
-    /// leave the scroll (no anchor, the anchor the first row: the very top, or nothing above it changed). An anchor that
-    /// went: the next row of `old` still there, else the one before it.
-    static func restore(old: [String], new: [String], anchor: String?) -> String? {
-        guard let a = anchor, a != old.first, let i = old.firstIndex(of: a) else { return nil }
+    /// #1979: the reader's top row and the points scrolled past its top.
+    struct Top: Equatable {
+        var id: String
+        var offset: CGFloat = 0
+    }
+
+    /// #1979: what a drawer list shows: the filter and chip generation (XrayPanelModel.listGen) and its row ids.
+    struct Shown: Equatable {
+        var gen: Int
+        var ids: [String]
+    }
+
+    /// #1979: where the list goes after it changed: its top (a filter or chip change) or back to the reader's row.
+    enum Move: Equatable {
+        case top
+        case row(Top)
+    }
+
+    /// The row to put back at the top after the ids went from `old` to `new`, `anchor` the top row the person saw and
+    /// the points past its top (kept with it; 0 for a row that stands in for it); nil: leave the scroll (no anchor, the
+    /// very top: the first row, under a point into it, or nothing above it changed). An anchor that went: the next row
+    /// of `old` still there, else the one before it.
+    static func restore(old: [String], new: [String], anchor: Top?) -> Top? {
+        guard let a = anchor, let i = old.firstIndex(of: a.id), i > 0 || a.offset >= 1 else { return nil }
         let now = Set(new)
         guard let keep = old[i...].first(where: now.contains) ?? old[..<i].last(where: now.contains),
               let j = new.firstIndex(of: keep) else { return nil }
-        return old[..<i].elementsEqual(new[..<j]) ? nil : keep
+        return old[..<i].elementsEqual(new[..<j]) ? nil : Top(id: keep, offset: keep == a.id ? a.offset : 0)
+    }
+
+    /// #1979: the points scrolled past a row's top while it straddles the scroll view's top edge (`frame` in its
+    /// coordinates); nil for every other row.
+    static func past(_ frame: CGRect) -> CGFloat? {
+        frame.minY <= 0 && frame.maxY > 0 ? -frame.minY : nil
     }
 
     /// A repeated id gets "\u{1F}2", "\u{1F}3", ... (a lazy stack draws one row per id: #1815, #1823).
