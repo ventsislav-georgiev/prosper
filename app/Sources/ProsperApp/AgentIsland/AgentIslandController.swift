@@ -712,7 +712,8 @@ final class AgentIslandController {
                 let mine = store.history.filter { $0.key == key }, taken = store.reviveAllTaken, sid = o.sessionID ?? ""
                 // #720 (QA #535 L-4): a final names its Claude id (dch's rv_say); from 1.28.2 no two
                 // taken records of a dir share one, so it lands on its own row, and shows there.
-                if !sid.isEmpty, let r = mine.first(where: { taken.contains($0.id) && $0.agent?.sessionID == sid }) {
+                // #1993: a Codex record's final names its thread (rv_say: the Claude id, else the Codex thread).
+                if !sid.isEmpty, let r = mine.first(where: { taken.contains($0.id) && ($0.agent?.sessionID == sid || $0.codex?.threadID == sid) }) {
                     record = r
                     named = true
                 } else {

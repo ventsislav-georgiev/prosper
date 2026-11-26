@@ -174,10 +174,11 @@ final class AgentIslandSayFirstTests: XCTestCase {
     }
 
     /// #1991: dch 1.174.0's Codex skips (codex_daemon, cwd_unknown) are not in the waiting list: one say, no retry, no
-    /// pause. Red with either added to the list of skips that wait for the next round.
+    /// pause. Red with either added to the list of skips that wait for the next round. #1993: no_thread (dch 1.176.0, a
+    /// --stop/--include-agents skip; --say never sends it) the same, should it ever reach a say.
     @MainActor
     func testACodexSkipIsNeverRetried() {
-        for reason in ["codex_daemon", "cwd_unknown"] {
+        for reason in ["codex_daemon", "cwd_unknown", "no_thread"] {
             let f = FirstIO(replies: [Self.reply("skipped", reason), Self.reply("ok")])
             let c = controller(f)
             XCTAssertTrue(sayFirst(c, "Example task") != nil, reason)

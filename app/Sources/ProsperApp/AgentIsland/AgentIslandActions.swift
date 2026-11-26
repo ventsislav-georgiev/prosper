@@ -88,9 +88,11 @@ struct DchJSONLine: Decodable, Equatable, Sendable {
     var revivedAs: String?
     var sessionID: String?
     var running: Bool?
+    /// #1993: dch 1.177.0's "agent" on a --stop/--restart --include-agents final: "claude", "codex" or nil (null, older dch).
+    var agent: String?
 
     enum CodingKeys: String, CodingKey {
-        case name, phase, result, reason, detail, running
+        case name, phase, result, reason, detail, running, agent
         case revivedAs = "as", sessionID = "session_id"
     }
 
@@ -116,6 +118,7 @@ extension DchJSONLine {
         revivedAs = try c.decodeIfPresent(String.self, forKey: .revivedAs)
         sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
         running = try? c.decodeIfPresent(Bool.self, forKey: .running)
+        agent = try? c.decodeIfPresent(String.self, forKey: .agent)
     }
 }
 
@@ -615,7 +618,8 @@ extension AgentIsland {
             return "Not stopped: its Claude session record can't be read; left running"
         case "signal" where o.result == "interrupted":
             let d = o.detail ?? "", bare = d.hasPrefix(o.name + ": ") ? String(d.dropFirst(o.name.count + 2)) : d
-            let id = sid.isEmpty || d.contains(sid) ? "" : " (claude --resume \(sid))"
+            // #1993: dch 1.177.0 names a Codex agent; its by-hand resume is codex's. Codex's detail ends with its own note.
+            let id = sid.isEmpty || d.contains(sid) ? "" : o.agent == "codex" ? " (codex resume \(sid))" : " (claude --resume \(sid))"
             return (bare.isEmpty ? "\(verb.rawValue) interrupted" : bare) + id
         default:
             return nil

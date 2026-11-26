@@ -666,6 +666,46 @@ final class AgentIslandControlsTests: XCTestCase {
                                          .stop, title: "Stop all", empty: "nothing stopped"), "1 failed, 1 skipped")
     }
 
+    /// #1993 (dch 1.177.0 dch.c:7477-7490 stop_json, :9301 cx_no_thread, :9590-9594): the final's "agent" is read
+    /// leniently; a signal-interrupted Codex keeps dch's whole detail (its pause-message note) and then names
+    /// `codex resume <thread>`, a Claude or an older dch's line (no agent, null, a number) `claude --resume`;
+    /// no_thread shows dch's detail and is a skip. Red with the hint not switched on the agent, or no_thread mapped.
+    func testCodexAgentFieldNamesCodexResumeAndNoThreadIsASkip() {
+        let tid = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+        let noThread = "codex's thread id is unknown (no shell snapshot names it: no turn yet, or snapshots are off); left running, nothing typed"
+        let codexSignal = "a: interrupted (signal 15) while waiting for it to pause; resume message not typed; the pause "
+            + "message cannot be taken back from codex and still runs once its turn ends"
+        func line(_ result: String, _ reason: String, _ detail: String, sid: String, agent: String?) -> String {
+            #"{"name":"a","result":"\#(result)","reason":"\#(reason)","detail":"\#(detail)","session_id":"\#(sid)""#
+                + (agent.map { ",\"agent\":\($0)}" } ?? "}")
+        }
+        XCTAssertEqual(AgentIsland.jsonLine(line("ok", "", "", sid: tid, agent: #""codex""#))?.agent, "codex")
+        XCTAssertTrue(AgentIsland.jsonLine(line("ok", "", "", sid: tid, agent: "null"))?.agent == nil)
+        XCTAssertTrue(AgentIsland.jsonLine(line("ok", "", "", sid: tid, agent: "7"))?.agent == nil, "a non-string agent drops only itself")
+        XCTAssertEqual(AgentIsland.jsonLine(line("ok", "", "", sid: tid, agent: "7"))?.result, "ok")
+        let bare = String(codexSignal.dropFirst(3))
+        let rows: [(String, AgentIsland.Verb, String)] = [
+            (line("interrupted", "signal", codexSignal, sid: tid, agent: #""codex""#), .stop, bare + " (codex resume \(tid))"),
+            (line("interrupted", "signal", codexSignal, sid: tid, agent: #""codex""#), .restart, bare + " (codex resume \(tid))"),
+            (line("interrupted", "signal", "a: interrupted", sid: "abc", agent: #""claude""#), .stop, "interrupted (claude --resume abc)"),
+            (line("interrupted", "signal", "a: interrupted", sid: "abc", agent: "null"), .stop, "interrupted (claude --resume abc)"),
+            (line("interrupted", "signal", "a: interrupted", sid: "abc", agent: nil), .stop, "interrupted (claude --resume abc)"),
+            (line("interrupted", "signal", "a: relaunched with codex resume \(tid)", sid: tid, agent: #""codex""#), .restart,
+             "relaunched with codex resume \(tid)"),
+            (line("skipped", "no_thread", noThread, sid: "", agent: #""codex""#), .stop,
+             noThread),
+            (line("skipped", "no_thread", noThread, sid: "", agent: #""codex""#), .restart,
+             noThread),
+        ]
+        for (out, verb, want) in rows {
+            XCTAssertEqual(AgentIsland.rowText(result(out, status: verb == .stop ? 1 : 0), name: "a", verb), want, out)
+        }
+        let skip = line("skipped", "no_thread", noThread, sid: "", agent: #""codex""#)
+        XCTAssertEqual(AgentIsland.restartAllSummary(result(skip)), "all agents current (1 skipped)")
+        XCTAssertEqual(AgentIsland.tally(result(skip + "\n" + line("ok", "", "", sid: "abc", agent: #""claude""#)),
+                                         .stop, title: "Stop all", empty: "nothing stopped"), "1 stopped, 1 skipped")
+    }
+
     func testResumeCrashedAndStopAllTallies() {
         func resume(_ out: String, status: Int32 = 0) -> String {
             AgentIsland.tally(result(out, status: status), .resume, title: "Resume", empty: "nothing to resume")
@@ -5729,6 +5769,36 @@ final class AgentIslandControlsTests: XCTestCase {
         settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
         XCTAssertEqual(store.historyActions[rows[0].id], AgentIsland.finalText(try XCTUnwrap(AgentIsland.jsonLine(ok)), .resume))
         XCTAssertNil(store.historyActions[rows[1].id])
+    }
+
+    /// #1993: a Codex record's revive final names its Codex thread (dch rv_say: the Claude id, else the thread), so it
+    /// lands on that older row, not the name's newest taken one. Red with dirLine matching agent.sessionID only.
+    @MainActor
+    func testResumeAllFinalLandsOnTheRowOfItsCodexThread() throws {
+        let f = FakeProc(), reads = Reads()
+        let tid = "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b"
+        var cx = rec719("work.1762099880", name: "work", sid: "", ago: 120)
+        cx.agent = nil
+        cx.codex = .init(threadID: tid)
+        let rows = [rec719("work", sid: "A", ago: 60), cx]
+        reads.records = rows
+        let c = controller(f, reads, dch: Self.v1283)
+        c.store?.sessions = [session("b", version: "1.28.3")]
+        c.setExpanded(true)
+        settle(c) { c.store?.history.count == 2 }
+        let store = try XCTUnwrap(c.store)
+        store.now = { Self.t719 }
+        XCTAssertEqual(store.resumableCount, 2)
+        let ok = #"{"name":"work","as":"work-2","result":"ok","reason":"","detail":"revived as work-2 in /src","session_id":"\#(tid)"}"#
+        f.progress = #"{"name":"work","phase":"starting"}"# + "\n"
+        f.output = ok + "\n"
+        c.resumeCrashed()
+        XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+        settle(c) { store.historyActions[rows[0].id] == "Starting…" }
+        f.release.signal()
+        settle(c) { store.actions[AgentSessionKey(dir: "/d", name: "")] != AgentIsland.resumingText }
+        XCTAssertEqual(store.historyActions[rows[1].id], AgentIsland.finalText(try XCTUnwrap(AgentIsland.jsonLine(ok)), .resume))
+        XCTAssertNotEqual(store.historyActions[rows[0].id], store.historyActions[rows[1].id])
     }
 
     /// QA #535 L-4: two taken records of one name: a final names its Claude id and lands
