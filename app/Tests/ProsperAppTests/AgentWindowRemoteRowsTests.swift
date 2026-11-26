@@ -188,7 +188,9 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
         XCTAssertEqual(lister.calls.count, 1)
         XCTAssertFalse(seen.calls.contains { $0.contains("--remote") })
         // No server or island source holds a "--remote" argument (DchCommand.listSessions, the watch hub, the ctl reads);
-        // Claude's own "--remote-control" flag is another word.
+        // Claude's own "--remote-control" flag is another word. #1992: Codex's own --remote (isInteractiveCodex refuses a
+        // codex run with it) is the one named exception, matched as its whole expression so a dch "--remote" still fails.
+        let codexFlag = #"$0 == "--remote" || $0.hasPrefix("--remote=")"#
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp")
         for folder in ["Server", "AgentIsland"] {
@@ -196,7 +198,8 @@ final class AgentWindowRemoteRowsTests: XCTestCase {
                                                                     includingPropertiesForKeys: nil)
             XCTAssertFalse(files.isEmpty, folder)
             for f in files where f.pathExtension == "swift" {
-                XCTAssertFalse(try String(contentsOf: f, encoding: .utf8).contains("\"--remote\""), f.lastPathComponent)
+                let text = try String(contentsOf: f, encoding: .utf8)
+                XCTAssertFalse(text.replacingOccurrences(of: codexFlag, with: "").contains("\"--remote\""), f.lastPathComponent)
             }
         }
     }

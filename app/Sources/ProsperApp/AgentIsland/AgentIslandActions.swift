@@ -1162,14 +1162,14 @@ extension AgentIsland {
             && !(rest.first.map(claudeCommands.contains) ?? false)
     }
 
-    /// #1992: Codex 0.167's subcommands that are not its TUI (dch v1.176.0 bridge.c:1160-1171, codex_not_tui).
+    /// #1992: Codex 0.167's subcommands that are not its TUI (dch v1.174.0 bridge.c:1160-1171, codex_not_tui).
     static let codexNotTUI: Set<String> = [
         "agents", "exec", "e", "review", "login", "logout", "mcp", "mcp-server", "plugin", "app-server", "remote-control",
         "app", "completion", "update", "doctor", "sandbox", "debug", "apply", "a", "queue", "archive", "delete",
         "migrate-rollouts", "migrate-nfs-db", "unarchive", "cloud", "exec-server", "features", "help",
     ]
 
-    /// #1992: argv opens Codex's TUI, as dch reads it for --revive (dch_codex_tui_word, v1.176.0 bridge.c:1180-1209,
+    /// #1992: argv opens Codex's TUI, as dch reads it for --revive (dch_codex_tui_word, v1.174.0 bridge.c:1180-1209,
     /// nd = 1): `codex …` or `headroom wrap codex …` (no env or other wrapper), no --remote, and the first word that is
     /// not an option names no non-TUI subcommand (a prompt, `resume` and `fork` are the TUI). An explicit --no-daemon is
     /// still the TUI.

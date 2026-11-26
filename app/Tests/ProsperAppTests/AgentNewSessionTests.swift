@@ -173,7 +173,7 @@ final class AgentNewSessionTests: XCTestCase {
         XCTAssertEqual(AgentIsland.naming(["claude", "--", "-p"], name: "api"), ["claude", "--name", "api", "--", "-p"])
     }
 
-    /// #1992: isInteractiveCodex row by row against dch v1.176.0's own cases (bridge.c:2243-2263, codex_tui_slot), plus
+    /// #1992: isInteractiveCodex row by row against dch v1.174.0's own cases (bridge.c:2243-2263, codex_tui_slot), plus
     /// where dch_codex_tui_word (nd = 1, --revive's rule this mirrors) differs: an explicit --no-daemon is the TUI.
     func testAgentNewSessionInteractiveCodexMirrorsDchsRows() {
         let rows: [([String], Bool, String)] = [
