@@ -1348,9 +1348,22 @@ final class AgentTerminalTests: XCTestCase {
             let v = startedView()
             v.output("\u{1b}[1;36mProsper\u{1b}[0m terminal at \(scale)\r\n\u{1b}[42m green \u{1b}[0m\r\n", self)
             var rep: NSBitmapImageRep?
-            wait("a frame at scale \(scale)", state: { Self.surfaceState(v) }) {
+            var asked = 0
+            var askAt = Date().addingTimeInterval(2)
+            wait("a frame at scale \(scale)", state: { Self.surfaceState(v) + ", asked again \(asked)x" }) {
                 rep = Self.surfaceImage(v.host)
-                return rep.map { Self.ink($0) > 50 } ?? false
+                if rep.map({ Self.showsOutput($0, v) }) == true { return true }
+                // #1989 (CI 45868323379): on the CI VM the display link can stop delivering frames, leaving the
+                // pre-output (cursor-only) frame; ask again the way a host does, re-acquiring the link. A surface that
+                // never draws the output still times out.
+                if Date() > askAt {
+                    asked += 1
+                    askAt = Date().addingTimeInterval(2)
+                    print("#1989: no frame with the output at scale \(scale)\(Self.surfaceState(v)); asking again (\(asked))")
+                    v.host.setSurfaceVisible(false)
+                    v.host.setSurfaceVisible(true)
+                }
+                return false
             }
             if let rep, let png = rep.representation(using: .png, properties: [:]) {
                 try png.write(to: tempDir("822-surface").appendingPathComponent("surface-\(scale).png"))
@@ -1368,7 +1381,21 @@ final class AgentTerminalTests: XCTestCase {
         let s = surfaceRef(v.host)?.0
         return " (IOSurface \(s.map { "\(IOSurfaceGetWidth($0))x\(IOSurfaceGetHeight($0))" } ?? "none"), ink "
             + "\(surfaceImage(v.host).map { ink($0) } ?? -1), window occlusion \(v.window.occlusionState.rawValue), "
-            + "screen \(v.window.screen != nil))"
+            + "screen \(v.window.screen != nil), backing \(v.window.backingScaleFactor), need > "
+            + "\(surfaceImage(v.host).map { cellSamples($0, v) * 3 } ?? -1))"
+    }
+
+    /// #1989: ink() samples of one cell. A frame with the output inks well over three cells (seven green ones plus a
+    /// line of glyphs); a cursor-only frame inks one (14 at 1x and 0.7 on CI), which a fixed 50 let pass at 2x.
+    @MainActor
+    static func cellSamples(_ rep: NSBitmapImageRep, _ v: ViewRig) -> Int {
+        guard let g = v.rig.c.grid, g.cols > 0, g.rows > 0 else { return Int.max / 4 }
+        return rep.pixelsWide * rep.pixelsHigh / (4 * g.cols * g.rows)
+    }
+
+    @MainActor
+    static func showsOutput(_ rep: NSBitmapImageRep, _ v: ViewRig) -> Bool {
+        ink(rep) > 3 * max(cellSamples(rep, v), 4)
     }
 
     /// #1921 (CI 45360452677, 45554353068): an occlusion notice for the rig's never-shown window (the window server's,
@@ -1381,7 +1408,7 @@ final class AgentTerminalTests: XCTestCase {
         NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: v.window)
         v.output("\u{1b}[42m green \u{1b}[0m after the notice\r\n", self)
         wait("a frame after an occlusion notice", timeout: 5, state: { Self.surfaceState(v) }) {
-            Self.surfaceImage(v.host).map { Self.ink($0) > 50 } ?? false
+            Self.surfaceImage(v.host).map { Self.showsOutput($0, v) } ?? false
         }
     }
 
