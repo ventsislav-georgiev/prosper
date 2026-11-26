@@ -27,15 +27,15 @@
   {
    "name": "hide-not-saved",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "didSet { if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer } }",
-   "new": "didSet { }",
+   "old": "if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer }",
+   "new": "_ = XrayPanels.rememberTab()",
    "expect": "killed"
   },
   {
    "name": "hide-saved-without-seam",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "didSet { if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer } }",
-   "new": "didSet { Preferences.xrayHideAgentMessages = hidePeer }",
+   "old": "if XrayPanels.rememberTab() { Preferences.xrayHideAgentMessages = hidePeer }",
+   "new": "Preferences.xrayHideAgentMessages = hidePeer",
    "expect": "killed"
   },
   {
