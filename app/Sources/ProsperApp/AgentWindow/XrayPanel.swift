@@ -384,11 +384,12 @@ final class XrayPanelModel: ObservableObject {
     /// the open when Tasks and Memory answered; before them it draws the cached rows at once (no "Reading").
     func takeFollow(_ s: XrayFollow.State?) {
         guard let s, !stopped else { return }
-        if fromDch() { (dchChapters, chapterAnchors, corpus) = (s.chapters, s.anchors, s.corpus) }
-        if XrayPanels.refsTab() { refs = s.refs }
+        if fromDch() { put(\.dchChapters, s.chapters); chapterAnchors = s.anchors; put(\.corpus, s.corpus) }   // #1972: changes only
+        if XrayPanels.refsTab() { put(\.refs, s.refs) }
         // #1475 c: the stream's Tasks and Memory replace the reads' (a reset keeps the rows until its blocks come)
-        if let t = s.tasks { tasks = Self.tasksTab(t) }
-        if let m = s.memory { memory = m.count == 0 ? nil : m }
+        // #1972: the same rows as the open's reads publish nothing: the drawer does not redraw under the reader
+        if let t = s.tasks { put(\.tasks, Self.tasksTab(t)) }
+        if let m = s.memory { put(\.memory, m.count == 0 ? nil : m) }
         if loaded, s.tasks != nil || s.memory != nil, !tabs.contains(tab), let first = tabs.first { tab = first }
         guard !loaded else { return }
         if answered { finishOpen() } else if fallback == nil { loaded = true }   // the chip's list waits for its Tasks
@@ -419,8 +420,13 @@ final class XrayPanelModel: ObservableObject {
     }
 
     func takeMemory(_ mr: (status: Int32, out: Data)) {
-        memory = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
-        if memory?.count == 0 { memory = nil }
+        let m = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
+        put(\.memory, m?.count == 0 ? nil : m)   // #1972: one publish at most (it was two for an empty list), none when unchanged
+    }
+
+    /// #1972: sets a published value only when it changed (@Published sends on every set, an equal one too).
+    func put<T: Equatable>(_ k: ReferenceWritableKeyPath<XrayPanelModel, T>, _ v: T) {
+        if self[keyPath: k] != v { self[keyPath: k] = v }
     }
 
     /// #1352: a tab chosen in the strip; Memory is read again then: at once, or (#1381, R1352-i1) when the read in

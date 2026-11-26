@@ -240,11 +240,11 @@ struct XrayRefContext: Equatable {
     /// "All projects" count line; nil until that read lands.
     var others: [Group]?
     var othersCount: String?
-    let tasks: [XrayTasks.Task]
-    let memory: [XrayMemory.Item]
+    var tasks: [XrayTasks.Task]
+    var memory: [XrayMemory.Item]
     /// #1760: each task's and memory's title as Markdown runs, parsed once with the context (the card's filter reads `fold`).
-    let taskRich: [[XrayRich.Run]]
-    let memoryRich: [[XrayRich.Run]]
+    var taskRich: [[XrayRich.Run]]
+    var memoryRich: [[XrayRich.Run]]
     /// #1567: the footer's facts: dch's counts as sent, a done line came, every count a lower bound (XrayRefStream), and
     /// the answer came from a light read (takeRef sets it; a full result serving a light ask is not light).
     let rawCounts: XrayRefStream.Counts?
@@ -357,6 +357,63 @@ struct XrayRefContext: Equatable {
         c.others = all.groups.filter { !seen.contains($0.session) }
         c.othersCount = all.counts.last { $0.hasPrefix(Self.othersCountPrefix) }
         return c
+    }
+
+    /// #1972: the rows to show when `new` answers the request `self` is already drawn for (a light answer, then the
+    /// pin's full one): every shown row keeps its order and place, its text updated in place from `new`'s row of the
+    /// same identity; `new`'s other rows follow below, in `new`'s order. A shown row `new` lacks stays (nothing above
+    /// the reader's row ever goes). Counts, heading and footer facts are `new`'s.
+    func merged(_ new: XrayRefContext) -> XrayRefContext {
+        var c = new
+        c.definitions = Self.merge(definitions, new.definitions, key: { [$0.session, $0.title, $0.rule, $0.chapter ?? ""] })
+        c.groups = Self.merge(groups, new.groups, key: { $0.session }) { o, n in
+            Group(session: n.session, mentions: Self.merge(o.mentions, n.mentions, key: Self.mentionKey))
+        }
+        if let old = turns, let now = new.turns {
+            let ts = Self.merge(old, now, key: { [$0.session ?? "", $0.turn.map { "\($0)" } ?? "-"] }) { o, n in
+                var t = n
+                t.mentions = Self.merge(o.mentions, n.mentions, key: Self.mentionKey)
+                return t
+            }
+            // a recall block's header goes on its session's first turn, wherever the merge put it
+            c.turns = ts.enumerated().map { i, t in
+                var t = t
+                t.opens = t.session != nil && (i == 0 || ts[i - 1].session != t.session)
+                return t
+            }
+        }
+        let tasks = Self.merge(self.tasks, new.tasks, key: { $0.id })
+        if tasks != new.tasks {   // only then: runs again for the reordered rows (as init does, at most richCap)
+            (c.tasks, c.taskRich) = (tasks, tasks.prefix(Self.richCap).map { XrayRich.runs($0.title, max: XrayRefStream.lineCap) })
+        }
+        let memory = Self.merge(self.memory, new.memory, key: { $0.id })
+        if memory != new.memory {
+            (c.memory, c.memoryRich) = (memory, memory.prefix(Self.richCap).map { XrayRich.runs($0.title, max: XrayRefStream.lineCap) })
+        }
+        return c
+    }
+
+    /// #1972: a mention's identity across two reads of one ref (dch numbers `index` per read): where it is, and its
+    /// line only when dch sent no offset.
+    static func mentionKey(_ m: XrayRefStream.Mention) -> [String] {
+        [m.sessionID ?? m.session, m.chapter ?? "", m.offset.map { "\($0)" } ?? "line:" + m.line]
+    }
+
+    /// #1972: `shown` in its order, each row replaced (`with`) by the first unused row of `new` with its key, then
+    /// `new`'s unmatched rows in `new`'s order. A shown row with no match stays as it was.
+    static func merge<T, K: Hashable>(_ shown: [T], _ new: [T], key: (T) -> K,
+                                      with: (T, T) -> T = { $1 }) -> [T] {
+        var free = Dictionary(grouping: new.indices, by: { key(new[$0]) })   // each key's rows, in `new`'s order
+        var used = Set<Int>()
+        var out = shown.map { s -> T in
+            let k = key(s)
+            guard let i = free[k]?.first else { return s }
+            free[k]?.removeFirst()
+            used.insert(i)
+            return with(s, new[i])
+        }
+        out += new.indices.lazy.filter { !used.contains($0) }.map { new[$0] }
+        return out
     }
 
     /// #1560 (dch README v1.99.0 "--ref" :1775-1893, resolved states): one plain line for a state that is not `ok` (nil:
@@ -556,7 +613,10 @@ extension XrayPanelModel {
             if light, !cached { XrayPanels.spent(s.first?.elapsed) }
             var c = XrayRefContext(s, ref: text, tasks: tasks, memory: memory)
             (c.light, c.more) = (light, more)
-            refContext = scope == "project" ? c : refContext?.with(others: c)
+            // #1972: a later answer for the card already drawn (runRef cleared any other ref's) merges below its rows;
+            // an equal one publishes nothing, so the card does not redraw
+            let next = scope != "project" ? refContext?.with(others: c) : refContext.map { $0.ref == text ? $0.merged(c) : c } ?? c
+            if next != refContext { refContext = next }
         case 1: refNote = Self.refNoCorpus
         case 2: refNote = Self.refNotARef
         case 6 where target.dir == nil: refNote = Self.refNoXray

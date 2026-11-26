@@ -32,6 +32,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: a Run, "!" or first "!" message that did not go through now says whether it is still
   in Claude's input: nothing was left when dch took it back out, else clear it before pressing Enter.
   (#1962, #1963, #1966)
+- X-ray: when you Cmd+click a ref, the card no longer jumps when the fuller answer arrives a few
+  seconds later: what you were reading stays in place and new mentions are added below it; unchanged
+  refreshes no longer redraw the X-ray drawer. (#1972)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

@@ -101,18 +101,19 @@ extension XrayPanelModel {
     /// Responses tab (nil), and with the tab gone the tick reads no more chapters.
     func takeChapters(_ r: (status: Int32, out: Data)) {
         if unreached(r.status) { unreachable = true; return }
-        unreachable = false
-        dchChapters = r.status == 0 ? XrayChapters.parse(r.out) : nil
+        put(\.unreachable, false)
+        // #1972: each through put: a poll's unchanged answer publishes nothing (no redraw, nothing moves)
+        put(\.dchChapters, r.status == 0 ? XrayChapters.parse(r.out) : nil)
         chapterAnchors = r.status == 0 ? Self.anchors(r.out) : [:]   // #1472, #1475: every read's, not the open's alone
-        if XrayPanels.refsTab() { refs = r.status == 0 ? XrayRefs.parse(r.out) : nil }   // #1415: the same bytes
-        corpus = r.status == 0 ? XrayChapters.corpus(r.out) : nil   // #1566: the header's label, from the same bytes
+        if XrayPanels.refsTab() { put(\.refs, r.status == 0 ? XrayRefs.parse(r.out) : nil) }   // #1415: the same bytes
+        put(\.corpus, r.status == 0 ? XrayChapters.corpus(r.out) : nil)   // #1566: the header's label, from the same bytes
     }
 
     /// #1415: a Transcript pane's `--json` read: its refs only, by takeChapters' rules (4/7 keep the rows).
     func takeRefs(_ r: (status: Int32, out: Data)) {
         if unreached(r.status) { unreachable = true; return }
-        unreachable = false
-        refs = r.status == 0 ? XrayRefs.parse(r.out) : nil
+        put(\.unreachable, false)
+        put(\.refs, r.status == 0 ? XrayRefs.parse(r.out) : nil)
     }
 
     /// #1381: one `--memory` read in `reading` (the tab switch's, the pending one, the 30 s poll). A host that did not
@@ -127,7 +128,7 @@ extension XrayPanelModel {
             guard !Task.isCancelled, let self else { return }
             self.reading = nil
             self.quiet.note("m", r)
-            self.unreachable = self.unreached(r.status)
+            self.put(\.unreachable, self.unreached(r.status))
             if !self.unreachable { self.takeMemory(r) }
             self.pendingMemory = false   // this read answered the switch
             self.landed()
@@ -150,8 +151,8 @@ extension XrayPanelModel {
     /// removes it), an over-cap answer (#1407) is a refusal that is not read again while the panel is open, and a non-zero exit (a local -1 too) stops the reads until the mtime moves.
     func take(_ r: (status: Int32, out: Data)) {
         if unreached(r.status) { unreachable = true; return }
-        unreachable = false
-        tasks = Self.tasksTab(r)
+        put(\.unreachable, false)
+        put(\.tasks, Self.tasksTab(r))   // #1972: an unchanged poll publishes nothing
         failed = r.status != 0
         if r.status == XrayPanels.overCap { tasksRefused = true }   // #1407: no Tasks read again until the panel is reopened
         if failed { failedMtime = dch.flatMap(mtime) }
