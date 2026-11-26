@@ -41,6 +41,9 @@ tag from the now-released section and put it on the new top draft.
   the row you were reading stays in place (at the very top, new rows still show); task and memory
   ages now update every minute, and a ref card's counts never read lower than the rows it lists.
   (#1972)
+- The X-ray drawer now shows its rows as soon as the tab you are on has them, instead of waiting
+  about a second for every read; opening it again on the same session shows the last rows at once
+  while they refresh. (#1976)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

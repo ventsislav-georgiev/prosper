@@ -59,12 +59,13 @@ extension XrayPanelModel {
         let prose = tab == .prompts && dchChapters != nil && fromDch() && follow == nil
         let refsShown = tab == .refs && refs != nil && follow == nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
         let streamed = follow?.carriesTasks == true   // #1475 c: the follow carries Tasks and Memory: no poll beside it
-        guard !loaded || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || prose || refsShown) else { return }
+        // #1976: an open drawn early (kept rows, its tab answered) whose reads a cancel left out still reads them all
+        guard !loaded || !answered || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || prose || refsShown) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
         if tab == .tasks, tasksRefused { return }
-        if !loaded { if !answered { readBoth() } } else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
+        if !answered { readBoth() } else if !loaded {} else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
         else { readTasks(dch, run) }
     }
 
@@ -168,6 +169,7 @@ extension XrayPanelModel {
 
     /// The panel left XrayPanels.open: no tick reads again.
     func stop() {
+        if loaded, !stopped, XrayPanels.keepRows() { panels?.keep(target, keptRows) }   // #1976: the next open draws these
         stopped = true
         detachFollow()   // #1475
         stopTicker?()

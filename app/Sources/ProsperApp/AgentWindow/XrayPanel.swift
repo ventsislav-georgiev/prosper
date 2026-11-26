@@ -123,6 +123,27 @@ final class XrayPanels: ObservableObject {
     /// #1475: the follows (XrayFollow.swift): one per target, shared by the panels showing it, kept in an LRU.
     let follows = XrayFollows()
 
+    /// #1976: a closed panel's rows, for the next open of its target (a target with no follow, or whose follow has no
+    /// Tasks and Memory, draws them on its first frame). The newest XrayFollows.limit targets; the oldest goes.
+    struct Kept {
+        var tasks: XrayTasks? = nil
+        var memory: XrayMemory? = nil
+        var chapters: [TranscriptOutline.Chapter]? = nil
+        var refs: XrayRefs? = nil
+        var corpus: XrayChapters.Corpus? = nil
+        var anchors: [String: Int]
+    }
+    private(set) var kept: [XrayTarget: Kept] = [:]
+    private var keptOrder: [XrayTarget] = []
+    func keep(_ t: XrayTarget, _ k: Kept) {
+        keptOrder.removeAll { $0 == t }
+        keptOrder.append(t)
+        kept[t] = k
+        if keptOrder.count > XrayFollows.limit { kept[keptOrder.removeFirst()] = nil }
+    }
+    /// #1976: off under XCTest as searchTab is, so no row's rows leak into another row's open; rows set it and restore it.
+    static var keepRows: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
+
     /// #1561: the warm `--requests` connections (XrayRequests.swift): a remote panel's request forms go through them.
     let requests = XrayRequests()
 
@@ -329,6 +350,7 @@ final class XrayPanelModel: ObservableObject {
     func read(dch: String, run: @escaping XrayPanels.Run) {
         (self.dch, self.run) = (dch, panels?.requests.run(for: target, cold: run) ?? run)   // #1561: remote: warm
         if stopTicker == nil { stopTicker = XrayPanels.ticker { [weak self] in self?.tick() } }
+        if !answered, XrayPanels.keepRows(), let k = panels?.kept[target] { seed(k) }   // #1976: the last rows, on this frame
         attachFollow(dch)   // #1475: before readBoth, so the open's chapters come from the stream (cached: at once)
         readBoth()
     }
@@ -345,14 +367,22 @@ final class XrayPanelModel: ObservableObject {
             guard let c else { return nil }
             return await run(dch, c, env)
         }
+        // #1976: each read is taken as it answers (the chapters read, 1.5 s on a big session, gates no tab)
         reading = Task { [weak self] in
-            async let t = run(dch, a, env)
-            async let m = run(dch, b, env)
-            async let k = chapters()
-            let (tr, mr, kr) = await (t, m, k)
-            guard !Task.isCancelled else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
+            await withTaskGroup(of: (Int, (status: Int32, out: Data)?).self) { g in
+                g.addTask { (0, await run(dch, a, env)) }
+                g.addTask { (1, await run(dch, b, env)) }
+                g.addTask { (2, await chapters()) }
+                for await (k, r) in g {
+                    guard !Task.isCancelled, let self else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
+                    guard let r else { continue }
+                    if k == 0 { self.take(r) } else if k == 1 { self.takeMemory(r) } else { self.takeChapters(r, refsOnly: refsOnly) }
+                    self.openStep(tasksIn: k == 0)
+                }
+            }
+            guard !Task.isCancelled else { return }
             self?.reading = nil
-            self?.apply(tasks: tr, memory: mr, chapters: kr, refsOnly: refsOnly)
+            self?.answeredAll()
         }
     }
 
@@ -360,19 +390,46 @@ final class XrayPanelModel: ObservableObject {
                chapters kr: (status: Int32, out: Data)? = nil, refsOnly: Bool = false) {
         take(tr)
         takeMemory(mr)
-        if let kr { if refsOnly { takeRefs(kr) } else { takeChapters(kr) } }
+        if let kr { takeChapters(kr, refsOnly: refsOnly) }
+        answeredAll()
+    }
+
+    func takeChapters(_ r: (status: Int32, out: Data), refsOnly: Bool) { if refsOnly { takeRefs(r) } else { takeChapters(r) } }
+
+    /// The open's reads all answered.
+    func answeredAll() {
         answered = true
         if follow == nil || follow?.state != nil { finishOpen() }   // #1475: else the first snapshot finishes it
     }
 
+    /// #1976: one open read answered (or the kept rows were drawn): the shown tab draws once its rows are in, before
+    /// the other reads; the Todos chip's list decides at the Tasks answer (never on kept rows or another read).
+    func openStep(tasksIn: Bool) {
+        guard !loaded else { return }
+        if fallback != nil { if tasksIn { finishOpen() } } else if tabs.contains(tab) { loaded = true }
+    }
+
     /// The open is done: the strip draws; the Todos chip's fallback when there is no Tasks tab.
     func finishOpen() {
-        loaded = true
+        if !loaded { loaded = true }   // #1976: an open drawn early publishes nothing more when the rest answer unchanged
         if let fallback, tasks == nil {
+            self.fallback = nil   // #1976: once (the Tasks answer decides; the end of the open does not again)
             if isCurrent() { close(); fallback() }   // another session now shown: the list never opens over it
             return
         }
         if !tabs.contains(tab), let first = tabs.first { tab = first }
+    }
+
+    /// #1976: the rows a closed panel for this target had; the fresh reads replace them through put (changes only).
+    func seed(_ k: XrayPanels.Kept) {
+        put(\.tasks, k.tasks); put(\.memory, k.memory); put(\.dchChapters, k.chapters); put(\.refs, k.refs); put(\.corpus, k.corpus)
+        chapterAnchors = k.anchors
+        openStep(tasksIn: false)
+    }
+
+    /// #1976: what a new panel for this target draws first (XrayPanels.keep, on stop).
+    var keptRows: XrayPanels.Kept {
+        XrayPanels.Kept(tasks: tasks, memory: memory, chapters: dchChapters, refs: refs, corpus: corpus, anchors: chapterAnchors)
     }
 
     /// #1475: this panel reads its chapters and refs from the target's follow (XrayFollows.attach): a Terminal-mode or
