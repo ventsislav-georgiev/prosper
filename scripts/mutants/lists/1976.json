@@ -1,0 +1,97 @@
+{
+ "entry": "1976",
+ "filter": "XrayOpenFastTests|XrayPollTests",
+ "mutants": [
+  {
+   "name": "early-draw-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "else if tabs.contains(tab) { loaded = true }",
+   "new": "else if false && tabs.contains(tab) { loaded = true }",
+   "expect": "killed"
+  },
+  {
+   "name": "draw-any-tab",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "else if tabs.contains(tab) { loaded = true }",
+   "new": "else if true { loaded = true }",
+   "expect": "killed"
+  },
+  {
+   "name": "fallback-at-end-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if fallback != nil { if tasksIn { finishOpen() } }",
+   "new": "if fallback != nil { if false && tasksIn { finishOpen() } }",
+   "expect": "killed"
+  },
+  {
+   "name": "fallback-before-tasks",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if fallback != nil { if tasksIn { finishOpen() } }",
+   "new": "if fallback != nil { if true { finishOpen() } }",
+   "expect": "killed"
+  },
+  {
+   "name": "fallback-twice",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "self.fallback = nil   // #1976",
+   "new": "// self.fallback = nil   // #1976",
+   "expect": "killed"
+  },
+  {
+   "name": "no-seed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "let k = panels?.kept[target] { seed(k) }",
+   "new": "let k = panels?.kept[target] { _ = k }",
+   "expect": "killed"
+  },
+  {
+   "name": "keep-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if loaded, !stopped, XrayPanels.keepRows() { panels?.keep(target, keptRows) }",
+   "new": "if false, loaded, !stopped, XrayPanels.keepRows() { panels?.keep(target, keptRows) }",
+   "expect": "killed"
+  },
+  {
+   "name": "loaded-republish",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if !loaded { loaded = true }   // #1976",
+   "new": "loaded = true   // #1976",
+   "expect": "killed"
+  },
+  {
+   "name": "tick-loaded-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "if !answered { readBoth() } else if !loaded {} else if tab == .memory",
+   "new": "if !loaded { if !answered { readBoth() } } else if tab == .memory",
+   "expect": "killed"
+  },
+  {
+   "name": "tick-guard-loaded-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "guard !loaded || !answered || s.live",
+   "new": "guard !loaded || s.live",
+   "expect": "killed"
+  },
+  {
+   "name": "kept-unbounded",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if keptOrder.count > XrayFollows.limit {",
+   "new": "if false && keptOrder.count > XrayFollows.limit {",
+   "expect": "killed"
+  },
+  {
+   "name": "keep-on-under-xctest",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "static var keepRows: @MainActor () -> Bool = { NSClassFromString(\"XCTestCase\") == nil }",
+   "new": "static var keepRows: @MainActor () -> Bool = { true }",
+   "expect": "killed"
+  },
+  {
+   "name": "cancelled-answer-taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "guard !Task.isCancelled, let self else { return }   // #1368",
+   "new": "guard let self else { return }   // #1368",
+   "expect": "killed"
+  }
+ ]
+}
