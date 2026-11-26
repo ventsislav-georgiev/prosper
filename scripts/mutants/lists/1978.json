@@ -1,0 +1,20 @@
+{
+ "entry": "1978",
+ "filter": "InfoPlistDocumentTypesTests",
+ "mutants": [
+  {
+   "name": "plist_floor_14",
+   "file": "scripts/Info.plist",
+   "old": "<key>LSMinimumSystemVersion</key>\n\t<string>15.0</string>",
+   "new": "<key>LSMinimumSystemVersion</key>\n\t<string>14.0</string>",
+   "expect": "killed"
+  },
+  {
+   "name": "package_floor_14",
+   "file": "app/Package.swift",
+   "old": "        .macOS(.v15)\n",
+   "new": "        .macOS(.v14)\n",
+   "expect": "killed"
+  }
+ ]
+}
