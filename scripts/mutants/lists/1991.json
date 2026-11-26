@@ -1,0 +1,76 @@
+{
+ "entry": "1991",
+ "filter": "XrayClearTests|XrayRefRunTests|XraySearchScopeTests|XraySearchTabTests|AgentIslandControlsTests|AgentIslandSayFirstTests",
+ "mutants": [
+  {
+   "name": "compressed-words-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "if reason == \"compressed\" { return \"Codex rollout is compressed: X-ray needs a dch built with libzstd\" }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "corrupt-words-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "if reason == \"corrupt\" { return \"Codex rollout is corrupt: nothing could be read\" }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "corrupt-note-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "return corpus == \"codex\" && why == \"corrupt\" ?",
+   "new": "return false ?",
+   "expect": "killed"
+  },
+  {
+   "name": "corrupt-note-any-corpus",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "return corpus == \"codex\" && why == \"corrupt\" ?",
+   "new": "return why == \"corrupt\" ?",
+   "expect": "killed"
+  },
+  {
+   "name": "rollout-why-any-reason",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
+   "old": "corpus == \"none\" && [\"compressed\", \"corrupt\"].contains(reason) ?",
+   "new": "corpus == \"none\" ?",
+   "expect": "killed"
+  },
+  {
+   "name": "ref-why-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "case 1: refNote = noCorpusNote",
+   "new": "case 1: refNote = Self.refNoCorpus",
+   "expect": "killed"
+  },
+  {
+   "name": "search-why-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": "(corpus?.rolloutWhy == nil ? XraySearch.cannotSearch : noCorpusNote)",
+   "new": "XraySearch.cannotSearch",
+   "expect": "killed"
+  },
+  {
+   "name": "search-row-codex-gone",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySearch.swift",
+   "old": " || $0.record?.codex?.threadID == id }",
+   "new": " }",
+   "expect": "killed"
+  },
+  {
+   "name": "say-retries-codex-skip",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "[\"not_claude\", \"no_screen\", \"prompt\"].contains(reply?.reason)",
+   "new": "[\"not_claude\", \"no_screen\", \"prompt\", \"codex_daemon\", \"cwd_unknown\"].contains(reply?.reason)",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-skip-not-counted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "![\"not_claude\", \"current\"].contains($0.reason ?? \"\")",
+   "new": "![\"not_claude\", \"current\", \"codex_daemon\"].contains($0.reason ?? \"\")",
+   "expect": "killed"
+  }
+ ]
+}

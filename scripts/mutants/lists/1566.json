@@ -124,15 +124,15 @@
   {
    "name": "no-range-note",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
-   "old": "!complete && why == \"range\"",
-   "new": "false",
+   "old": "if corpus == \"shell\" && why == \"range\" {",
+   "new": "if false {",
    "expect": "killed"
   },
   {
    "name": "range-when-complete",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayChapters.swift",
-   "old": "!complete && why == \"range\"",
-   "new": "why != \"budget\"",
+   "old": "guard !complete else { return nil }\n            if corpus == \"shell\" && why == \"range\" {",
+   "new": "if corpus == \"shell\" && why != \"budget\" {",
    "expect": "killed"
   },
   {
