@@ -62,7 +62,7 @@ enum XrayChapters {
             let d = Self.dot
             switch corpus {
             case "claude" where claudes < 2: return nil
-            case "codex": return "Codex\(d)mentions only"
+            case "codex": return mentionsOnly ? "Codex\(d)mentions only" : "Codex"
             case "shell":
                 let head = mentionsOnly ? "Shell\(d)no shell integration\(d)mentions only" : "Shell\(d)last \(lines) rows"
                 return head + (why == "alt" ? d + "waiting for the shell prompt" : "") + d + Self.clearNote

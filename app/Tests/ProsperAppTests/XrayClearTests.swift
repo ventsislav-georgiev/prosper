@@ -235,6 +235,7 @@ final class XrayClearTests: XCTestCase {
             (#""corpus":"claude","reason":null,"available":true,"claudes":1"#, nil),
             (#""corpus":"claude","reason":null,"available":true,"claudes":2"#, "2 Claude sessions run here; X-ray reads one"),
             (#""corpus":"codex","reason":null,"available":true,"mentions_only":true"#, "Codex \u{00B7} mentions only"),
+            (#""corpus":"codex","reason":null,"available":true,"mentions_only":false"#, "Codex"),
             (#""corpus":"shell","available":true,"mentions_only":false,"lines":500,"complete":true"#, "Shell \u{00B7} last 500 rows" + note),
             (#""corpus":"shell","available":true,"mentions_only":true,"lines":40"#, "Shell \u{00B7} no shell integration \u{00B7} mentions only" + note),
             (#""corpus":"shell","available":true,"lines":12,"complete":true,"why":"alt""#,

@@ -36,6 +36,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer has a Questions tab next to Tasks: a session's open questions first, then the
   answered and dropped ones, with the ruling in each question's card. The tab shows only when the
   session has questions. (#1974)
+- X-ray of a Codex session no longer says "mentions only" now that dch finds its definitions.
+  (#1983)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
