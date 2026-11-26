@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.180.0 *(unreleased)*
+- Ships dch 1.171.0: X-ray task and memory lists find a session's ledger by its Claude session name and
+  alias, and dch can read a session's open questions. (#1973)
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
   stops waiting as soon as the shell has ended. (#1969)
 - In X-ray terms (dch 1.163.0-1.167.0), a one-word bold the prose also says plain is emphasis again (not
