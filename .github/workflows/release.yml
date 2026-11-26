@@ -504,7 +504,7 @@ jobs:
           ZIP: ${{ steps.zip.outputs.zip }}
         run: |
           # Bump the canonical cask in ventsislav-georgiev/homebrew-tap to this
-          # release: rewrite only the version + sha256 lines. Requires
+          # release: rewrite the version, sha256 and macOS floor lines. Requires
           # HOMEBREW_TAP_TOKEN (PAT with repo write on the tap); skipped if unset.
           if [[ -z "${TAP_TOKEN}" ]]; then
             echo "::warning::HOMEBREW_TAP_TOKEN not set — skipping Homebrew cask publish."
@@ -515,6 +515,10 @@ jobs:
             "https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-tap.git" tap
           sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" tap/Casks/prosper.rb
           sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/"     tap/Casks/prosper.rb
+          # #1978: the cask's macOS floor follows the app's (LSMinimumSystemVersion 15.0), or brew installs on 14.
+          sed -i '' -E 's/^  depends_on macos: .*/  depends_on macos: ">= :sequoia"/' tap/Casks/prosper.rb
+          grep -q '^  depends_on macos: ">= :sequoia"$' tap/Casks/prosper.rb \
+            || { echo "::error::Casks/prosper.rb has no depends_on macos line to set"; exit 1; }
           cd tap
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
