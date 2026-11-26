@@ -1,0 +1,90 @@
+{
+ "entry": "1972",
+ "filter": "XrayRefMergeTests|XrayRefStagedOpenTests",
+ "mutants": [
+  {
+   "name": "M1-wholesale",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "refContext.map { $0.ref == text ? $0.merged(c) : c } ?? c",
+   "new": "c",
+   "expect": "killed"
+  },
+  {
+   "name": "M2-noRefCheck",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "refContext.map { $0.ref == text ? $0.merged(c) : c } ?? c",
+   "new": "refContext.map { $0.merged(c) } ?? c",
+   "expect": "killed"
+  },
+  {
+   "name": "M3-alwaysPublish",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "if next != refContext { refContext = next }",
+   "new": "refContext = next",
+   "expect": "killed"
+  },
+  {
+   "name": "M4-dropStale",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        var out = shown.map { s -> T in\n            let k = key(s)\n            guard let i = free[k]?.first else { return s }",
+   "new": "        var out = shown.compactMap { s -> T? in\n            let k = key(s)\n            guard let i = free[k]?.first else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "M5-newOrder",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "        out += new.indices.lazy.filter { !used.contains($0) }.map { new[$0] }\n        return out",
+   "new": "        out += new.indices.lazy.filter { !used.contains($0) }.map { new[$0] }\n        return out.isEmpty ? out : new",
+   "expect": "killed"
+  },
+  {
+   "name": "M6-keyByLine",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "m.offset.map { \"\\($0)\" } ?? \"line:\" + m.line]",
+   "new": "m.offset.map { \"\\($0)\" } ?? \"line:\" + m.line, m.line]",
+   "expect": "killed"
+  },
+  {
+   "name": "M7-turnsNotMerged",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "            c.turns = ts.enumerated().map { i, t in",
+   "new": "            c.turns = now.enumerated().map { i, t in",
+   "expect": "killed"
+  },
+  {
+   "name": "M8-noDupMatch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefCard.swift",
+   "old": "            free[k]?.removeFirst()\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "M9-tasksPublish",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "put(\\.tasks, Self.tasksTab(r))",
+   "new": "tasks = Self.tasksTab(r)",
+   "expect": "killed"
+  },
+  {
+   "name": "M10-unreachablePublish",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
+   "old": "        put(\\.unreachable, false)\n        put(\\.tasks,",
+   "new": "        unreachable = false\n        put(\\.tasks,",
+   "expect": "killed"
+  },
+  {
+   "name": "M11-memoryTwice",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "put(\\.memory, m?.count == 0 ? nil : m)",
+   "new": "memory = m; if memory?.count == 0 { memory = nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "M12-putAlways",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if self[keyPath: k] != v { self[keyPath: k] = v }",
+   "new": "self[keyPath: k] = v",
+   "expect": "killed"
+  }
+ ]
+}
