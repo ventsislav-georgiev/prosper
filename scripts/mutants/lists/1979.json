@@ -1,0 +1,104 @@
+{
+ "entry": "1979",
+ "filter": "XrayScrollAnchorTests|XrayLazyRowIDTests",
+ "mutants": [
+  {
+   "name": "offset-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "Top(id: keep, offset: keep == a.id ? a.offset : 0)",
+   "new": "Top(id: keep, offset: 0)",
+   "expect": "killed"
+  },
+  {
+   "name": "offset-kept-for-standin",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "Top(id: keep, offset: keep == a.id ? a.offset : 0)",
+   "new": "Top(id: keep, offset: a.offset)",
+   "expect": "killed"
+  },
+  {
+   "name": "first-row-offset-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "let i = old.firstIndex(of: a.id), i > 0 || a.offset >= 1 else",
+   "new": "let i = old.firstIndex(of: a.id), i > 0 else",
+   "expect": "killed"
+  },
+  {
+   "name": "past-all-rows",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "frame.minY <= 0 && frame.maxY > 0 ? -frame.minY : nil",
+   "new": "-frame.minY",
+   "expect": "killed"
+  },
+  {
+   "name": "past-below-edge",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "frame.minY <= 0 && frame.maxY > 0 ? -frame.minY : nil",
+   "new": "frame.maxY > 0 ? -frame.minY : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "settle-not-armed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "(topRow, topOffset, settle) = (r.id, r.offset, r.offset > 0 ? r.offset : nil)",
+   "new": "(topRow, topOffset, settle) = (r.id, r.offset, nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "settle-twice",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        defer { settle = nil }\n        return settle.map { y + $0 }",
+   "new": "        return settle.map { y + $0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "gen-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "if old.gen != new.gen { (topRow, topOffset, settle) = (nil, 0, nil); return .top }",
+   "new": "if false { return .top }",
+   "expect": "killed"
+  },
+  {
+   "name": "filter-no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "@Published var filter = \"\" { didSet { if filter != oldValue { listChanged() } } }",
+   "new": "@Published var filter = \"\"",
+   "expect": "killed"
+  },
+  {
+   "name": "auto-no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "@Published var showAuto = false { didSet { if showAuto != oldValue { listChanged() } } }",
+   "new": "@Published var showAuto = false",
+   "expect": "killed"
+  },
+  {
+   "name": "peer-no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "            if hidePeer != oldValue { listChanged() }   // #1979\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "refs-no-bump",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "@Published var showAllRefs = false { didSet { if showAllRefs != oldValue { listChanged() } } }",
+   "new": "@Published var showAllRefs = false",
+   "expect": "killed"
+  },
+  {
+   "name": "bump-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "@Published var filter = \"\" { didSet { if filter != oldValue { listChanged() } } }",
+   "new": "@Published var filter = \"\" { didSet { listChanged() } }",
+   "expect": "killed"
+  },
+  {
+   "name": "changed-keeps-anchor",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        listGen &+= 1\n        (topRow, topOffset, settle) = (nil, 0, nil)",
+   "new": "        listGen &+= 1",
+   "expect": "killed"
+  }
+ ]
+}
