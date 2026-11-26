@@ -18,22 +18,9 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.180.0 *(unreleased)*
+## v2.181.0 *(unreleased)*
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory
   list commands, and can read a session's open questions. (#1973)
-- Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
-  stops waiting as soon as the shell has ended. (#1969)
-- In X-ray terms (dch 1.163.0-1.167.0), a one-word bold the prose also says plain is emphasis again (not
-  listed) unless the session uses the word as code; sh/console code blocks count as code, while quoted
-  shell words, !word, =value and folder names in paths are no longer terms. (#1967, #1968)
-- Ships dch 1.162.0: a "!" message dch could not take back out says it may be left in Claude's input in
-  shell mode; X-ray terms read better (a spread rule over all turns, emphasis words are never terms);
-  with DCH_DEBUG set, the trace no longer records typed text and only you can read it. (#1966)
-- Ships dch 1.160.0: a Run or "!" message that did not go through is taken back out of Claude's input,
-  which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
-- Agent Sessions: a Run, "!" or first "!" message that did not go through now says whether it is still
-  in Claude's input: nothing was left when dch took it back out, else clear it before pressing Enter.
-  (#1962, #1963, #1966)
 - X-ray: when you Cmd+click a ref, the card no longer jumps when the fuller answer arrives a few
   seconds later: what you were reading stays in place and new mentions are added below it; unchanged
   refreshes no longer redraw the X-ray drawer. (#1972)
@@ -49,6 +36,21 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer has a Questions tab next to Tasks: a session's open questions first, then the
   answered and dropped ones, with the ruling in each question's card. The tab shows only when the
   session has questions. (#1974)
+
+## v2.180.0
+- Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
+  stops waiting as soon as the shell has ended. (#1969)
+- In X-ray terms (dch 1.163.0-1.167.0), a one-word bold the prose also says plain is emphasis again (not
+  listed) unless the session uses the word as code; sh/console code blocks count as code, while quoted
+  shell words, !word, =value and folder names in paths are no longer terms. (#1967, #1968)
+- Ships dch 1.162.0: a "!" message dch could not take back out says it may be left in Claude's input in
+  shell mode; X-ray terms read better (a spread rule over all turns, emphasis words are never terms);
+  with DCH_DEBUG set, the trace no longer records typed text and only you can read it. (#1966)
+- Ships dch 1.160.0: a Run or "!" message that did not go through is taken back out of Claude's input,
+  which leaves shell mode; the double-tap session switch picker is no longer refused at times. (#1961)
+- Agent Sessions: a Run, "!" or first "!" message that did not go through now says whether it is still
+  in Claude's input: nothing was left when dch took it back out, else clear it before pressing Enter.
+  (#1962, #1963, #1966)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier
