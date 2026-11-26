@@ -1162,6 +1162,27 @@ extension AgentIsland {
             && !(rest.first.map(claudeCommands.contains) ?? false)
     }
 
+    /// #1992: Codex 0.167's subcommands that are not its TUI (dch v1.176.0 bridge.c:1160-1171, codex_not_tui).
+    static let codexNotTUI: Set<String> = [
+        "agents", "exec", "e", "review", "login", "logout", "mcp", "mcp-server", "plugin", "app-server", "remote-control",
+        "app", "completion", "update", "doctor", "sandbox", "debug", "apply", "a", "queue", "archive", "delete",
+        "migrate-rollouts", "migrate-nfs-db", "unarchive", "cloud", "exec-server", "features", "help",
+    ]
+
+    /// #1992: argv opens Codex's TUI, as dch reads it for --revive (dch_codex_tui_word, v1.176.0 bridge.c:1180-1209,
+    /// nd = 1): `codex …` or `headroom wrap codex …` (no env or other wrapper), no --remote, and the first word that is
+    /// not an option names no non-TUI subcommand (a prompt, `resume` and `fork` are the TUI). An explicit --no-daemon is
+    /// still the TUI.
+    static func isInteractiveCodex(_ argv: [String]) -> Bool {
+        let at: Int
+        if let a0 = argv.first, dchBase(a0, is: "codex") { at = 0 }
+        else if argv.count > 2, dchBase(argv[0], is: "headroom"), argv[1] == "wrap", dchBase(argv[2], is: "codex") { at = 2 }
+        else { return false }
+        let rest = argv[(at + 1)...]
+        if rest.contains(where: { $0 == "--remote" || $0.hasPrefix("--remote=") }) { return false }
+        return !(rest.first { !$0.hasPrefix("-") }.map(codexNotTUI.contains) ?? false)
+    }
+
     /// #847 D1.2: an interactive Claude's argv without its own name. Read by claudeArgs, so another option's
     /// value is never taken for a name: -n/--name with its value, --name=…, -nfoo go; a cluster -cn x keeps
     /// -c. A bare `--` and what follows stay. Anything else is returned as is.

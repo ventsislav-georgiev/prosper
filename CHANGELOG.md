@@ -47,6 +47,8 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.174.0: X-ray opens ended Codex sessions and says when a Codex rollout is compressed or
   corrupt, and Agent Sessions show dch's words when it stops, restarts or skips a Codex session.
   (#1991)
+- A new Codex session can start with a first prompt, and resuming a Codex session from History over
+  the control channel can send a message. (#1992)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

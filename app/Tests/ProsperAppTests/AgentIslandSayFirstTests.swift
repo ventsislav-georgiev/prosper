@@ -95,10 +95,10 @@ final class AgentIslandSayFirstTests: XCTestCase {
     /// Runs sayFirst to its end; `then` must run exactly once (an over-fulfilled expectation fails the test).
     /// #1877: returns what `then` got (nil: sent, else the reason).
     @MainActor @discardableResult
-    private func sayFirst(_ c: AgentIslandController, _ text: String) -> String? {
+    private func sayFirst(_ c: AgentIslandController, _ text: String, codex: Bool = false) -> String? {
         let done = expectation(description: "then")
         var got: String?
-        c.sayFirst(key, text) { got = $0; done.fulfill() }
+        c.sayFirst(key, text, codex: codex) { got = $0; done.fulfill() }
         wait(for: [done], timeout: 10)
         return got
     }
@@ -152,6 +152,25 @@ final class AgentIslandSayFirstTests: XCTestCase {
             XCTAssertEqual(c.store?.actions[key], AgentWindowText.firstNotSent(why), reply)
             XCTAssertEqual(c.unsentFirst[key], "Example task", reply)
         }
+    }
+
+    /// #1992: a Codex session's rounds skip Claude's screen check (refusal() reads Claude's "❯" composer and caret rows):
+    /// a read Claude's rule refuses (the plan line) still goes to dch, whose skipped prompt (a Codex dialog) waits a round;
+    /// an empty read still waits with no say. Red with refusal() run for codex: no say at all, promptShown after the wait.
+    @MainActor
+    func testACodexRoundLeavesTheScreenCheckToDch() {
+        let f = FirstIO(screens: ["", Self.prompt], replies: [Self.reply("skipped", "prompt"), Self.reply("ok")])
+        let c = controller(f)
+        XCTAssertTrue(sayFirst(c, "Example task", codex: true) == nil, "sent once dch took it")
+        let n = f.counts
+        XCTAssertEqual(n.reads, 3)
+        XCTAssertEqual(n.says, 2, "no say over the empty read; dch's prompt skip waits, then ok")
+        XCTAssertEqual(f.lock.withLock { f.pauses }, [2, 2])
+        XCTAssertTrue(c.store?.actions[key] == nil)
+        // The same screens for a Claude session: never typed (Claude's own check refuses the plan line).
+        let g = FirstIO(screens: ["", Self.prompt], replies: [Self.reply("ok")])
+        XCTAssertEqual(sayFirst(controller(g), "Example task"), AgentWindowText.promptShown)
+        XCTAssertEqual(g.counts.says, 0)
     }
 
     /// #1991: dch 1.174.0's Codex skips (codex_daemon, cwd_unknown) are not in the waiting list: one say, no retry, no

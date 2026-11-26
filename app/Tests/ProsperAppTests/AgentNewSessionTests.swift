@@ -173,6 +173,34 @@ final class AgentNewSessionTests: XCTestCase {
         XCTAssertEqual(AgentIsland.naming(["claude", "--", "-p"], name: "api"), ["claude", "--name", "api", "--", "-p"])
     }
 
+    /// #1992: isInteractiveCodex row by row against dch v1.176.0's own cases (bridge.c:2243-2263, codex_tui_slot), plus
+    /// where dch_codex_tui_word (nd = 1, --revive's rule this mirrors) differs: an explicit --no-daemon is the TUI.
+    func testAgentNewSessionInteractiveCodexMirrorsDchsRows() {
+        let rows: [([String], Bool, String)] = [
+            (["/opt/homebrew/bin/codex"], true, "tui"),
+            (["codex", "-m", "o3", "resume", "--last"], true, "res: resume is the TUI"),
+            (["codex", "fix the exec path"], true, "prompt"),
+            (["headroom", "wrap", "/opt/homebrew/bin/codex"], true, "wrapped"),
+            (["codex", "--full-auto", "exec", "hi"], false, "exec"),
+            (["codex", "review", "exec"], false, "first: review is the first word"),
+            (["codex", "--remote=ws://h:1"], false, "remote"),
+            (["codex", "resume", "--remote", "ws://h:1"], false, "remote2"),
+            (["codex", "--no-daemon"], true, "already: nd = 1 takes it (codex_tui_slot's -1 is only about adding it)"),
+            (["env", "X=1", "codex"], false, "env"),
+            (["x", "wrap", "codex"], false, "wrapcmd"),
+            (["vim", "notes.txt"], false, "plain"),
+            (["codex", "fork"], true, "fork is the TUI"),
+            (["codex", "e", "hi"], false, "e is exec"),
+            (["codex", "-m", "exec"], false, "an option's value counts as the first word (dch: harmless either way)"),
+            (["headroom", "wrap", "codex", "mcp"], false, "wrapped subcommand"),
+            (["headroom", "run", "codex"], false, "headroom without wrap"),
+            (["/x/codex/"], false, "a directory, not codex"),
+            (["claude"], false, "claude"),
+            ([], false, "empty"),
+        ]
+        for (argv, want, why) in rows { XCTAssertEqual(AgentIsland.isInteractiveCodex(argv), want, "\(argv): \(why)") }
+    }
+
     /// r2 (supervisor read): another option's value is never taken for a name, -n/--name still go, and a
     /// cluster's n loses its value but keeps its flags.
     func testAgentNewSessionStrippingNameReadsOptionValues() {

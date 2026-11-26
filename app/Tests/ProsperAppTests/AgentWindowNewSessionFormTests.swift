@@ -215,8 +215,8 @@ extension AgentWindowD1Tests {
             let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(800)))
             defer { win.close() }
             m.openNewSession()
-            for (command, why) in [("", "The login shell has no Claude to name or prompt"),
-                                   ("/bin/zsh -l", "Needs a claude command (claude, or a wrapper that runs claude)")] {
+            for (command, why) in [("", "The login shell has no Claude or Codex to prompt"),
+                                   ("/bin/zsh -l", "Needs a claude or codex command (or a wrapper that runs one)")] {
                 m.setNewSessionCommand(command)
                 XCTAssertFalse(m.newSessionClaude, command)
                 XCTAssertEqual(AgentNewSessionView.notClaude(command: command, host: nil), why)
@@ -231,8 +231,15 @@ extension AgentWindowD1Tests {
             let tree = formRows(host).tree
             XCTAssertFalse(tree.contains { $0.named(prefix: "Sidekick") || $0.named(prefix: "Also start") }, "#1820: no Sidekick row: \(tree.map(\.name))")
             XCTAssertTrue(tree.contains { $0.reads(AgentNewSessionView.promptHint) }, "a Claude: the optional line")
-            XCTAssertFalse(tree.contains { $0.reads("Needs a claude command (claude, or a wrapper that runs claude)") }, "no reason left")
+            XCTAssertFalse(tree.contains { $0.reads("Needs a claude or codex command (or a wrapper that runs one)") }, "no reason left")
             XCTAssertTrue(focusViews(host, AgentComposerTextView.self).first?.isEditable ?? false, "a Claude: the editor is live")
+            // #1992: a Codex: the editor is live, the line says text only (no image paste for it).
+            m.setNewSessionCommand("codex")
+            settle(host)
+            let cx = formRows(host).tree
+            XCTAssertTrue(cx.contains { $0.reads(AgentNewSessionView.codexPromptHint) }, "a Codex: the text-only line: \(cx.map(\.name))")
+            XCTAssertFalse(cx.contains { $0.reads(AgentNewSessionView.promptHint) }, "not Claude's image line")
+            XCTAssertTrue(focusViews(host, AgentComposerTextView.self).first?.isEditable ?? false, "a Codex: the editor is live")
         }
     }
 
@@ -252,7 +259,7 @@ extension AgentWindowD1Tests {
             m.select(.live(a.key))
             @MainActor func say(_ key: AgentSessionKey, _ text: String) {
                 let done = expectation(description: "then \(key.name)")
-                m.sayFirst(key, text) { _ in done.fulfill() }
+                m.sayFirst(key, text, false) { _ in done.fulfill() }
                 wait(for: [done], timeout: 10)
             }
             say(a.key, "Example task for api")

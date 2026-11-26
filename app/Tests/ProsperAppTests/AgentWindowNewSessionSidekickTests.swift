@@ -7,13 +7,13 @@ import XCTest
 extension AgentWindowD1Tests {
 
     final class SayCalls {
-        var calls: [(key: AgentSessionKey, text: String, then: (@MainActor (String?) -> Void)?)] = []
+        var calls: [(key: AgentSessionKey, text: String, codex: Bool, then: (@MainActor (String?) -> Void)?)] = []
     }
 
     @MainActor
     func sidekickModel(_ st: AgentIslandStore, _ spawns: SpawnCalls, _ says: SayCalls) -> AgentWindowModel {
         let m = newSessionModel(st, spawns)
-        m.sayFirst = { key, text, then in says.calls.append((key, text, then)) }
+        m.sayFirst = { key, text, codex, then in says.calls.append((key, text, codex, then)) }
         return m
     }
 
@@ -72,6 +72,45 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(says.calls.isEmpty, "no first message")
             XCTAssertEqual(m.lastPrompt, "fix the login bug", "not taken by this start: kept")
             assertNoPrompt(spawns, "login bug")
+        }
+    }
+
+    /// #1992: the form's prompt gate for codex vs a shell vs claude: an interactive Codex takes the prompt (sayFirst with
+    /// codex true, no --name in its argv), a Claude takes it with codex false, a shell, `codex exec` and `env X=1 codex`
+    /// (no Codex TUI by dch's rule) do not. New shell is refused while a Codex's prompt holds. Red at base: newSessionCodex is new, and a
+    /// codex Start said nothing (prompt: newSessionClaude ? f.prompt : "").
+    @MainActor
+    func testAgentWindowNewSessionCodexTakesTheFirstPrompt() throws {
+        try withNewSessionPrefs {
+            @MainActor func start(_ command: String) -> (SpawnCalls, SayCalls, AgentWindowModel) {
+                let spawns = SpawnCalls(), says = SayCalls(), m = sidekickModel(store([]), spawns, says)
+                m.openNewSessionNamed(folder: "/Users/example/api")
+                m.setNewSessionCommand(command)
+                m.setNewSessionPrompt("fix the login bug")
+                XCTAssertTrue(m.startNewSession(), command)
+                spawns.done.first?(spawnKey("api"), nil)
+                return (spawns, says, m)
+            }
+            for (command, says, codex) in [("codex", 1, true), ("headroom wrap codex --full-auto", 1, true), ("claude", 1, false),
+                                           ("codex exec hi", 0, false), ("/bin/zsh", 0, false), ("env X=1 codex", 0, false)] {
+                let (sp, sa, m) = start(command)
+                defer { m.close() }
+                XCTAssertEqual(sa.calls.count, says, command)
+                XCTAssertEqual(sa.calls.first?.codex, says == 1 ? codex : nil, command)
+                XCTAssertEqual(sa.calls.first?.text, says == 1 ? "fix the login bug" : nil, command)
+                if codex { XCTAssertFalse(sp.calls.first?.argv.contains("--name") ?? true, "no --name for a Codex: \(command)") }
+                assertNoPrompt(sp, "login bug")
+            }
+            let spawns = SpawnCalls(), m = sidekickModel(store([]), spawns, SayCalls())
+            defer { m.close() }
+            m.openNewSessionNamed(folder: "/Users/example/api")
+            m.setNewSessionCommand("codex")
+            XCTAssertTrue(m.newSessionCodex && m.newSessionTakesPrompt && !m.newSessionClaude)
+            m.setNewSessionPrompt("x")
+            XCTAssertEqual(m.newSessionShellRefusal, AgentWindowModel.plainShellRefusal, "a Codex's prompt would be dropped too")
+            m.setNewSessionCommand("/bin/zsh")
+            XCTAssertFalse(m.newSessionTakesPrompt)
+            XCTAssertTrue(m.newSessionShellRefusal == nil)
         }
     }
 

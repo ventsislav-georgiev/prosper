@@ -530,12 +530,12 @@ struct AgentNewSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)   // #1479: centred when it fits; a ScrollView gives it its own height, so it stays top-aligned there
     }
 
-    /// #847 D6.1: why the prompt is dimmed (newSessionClaude false); #1822: shown under it.
+    /// #847 D6.1: why the prompt is dimmed (newSessionTakesPrompt false); #1822: shown under it. #1992: or Codex.
     static func notClaude(command: String, host: String?) -> String {
         if host != nil { return "A first prompt starts on this Mac only" }
         return command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "The login shell has no Claude to name or prompt"
-            : "Needs a claude command (claude, or a wrapper that runs claude)"
+            ? "The login shell has no Claude or Codex to prompt"
+            : "Needs a claude or codex command (or a wrapper that runs one)"
     }
 
     /// #847 D5.1-D5.3: the editor at a fixed sz(96). #1822: always shown (no disclosure), the line under it says it is
@@ -543,6 +543,8 @@ struct AgentNewSessionView: View {
     static let promptLabel = "Prompt"
     static let addingImage = "Adding image…"
     static let promptHint = "Optional. \u{2318}V pastes images too"
+    /// #1992: a Codex's prompt is text only (images go through Claude's paste path).
+    static let codexPromptHint = "Optional. Text only: images need Claude"
     static let promptEditorLabel = "First prompt for the new session"   // #1392: not the composer's "Message Claude"
     static func promptEditor(text: Binding<String>, onSubmit: @escaping () -> Void, editable: Bool,
                              imagePaste: AgentComposerTextView.ImagePaste? = nil) -> AgentComposerField {
@@ -551,8 +553,8 @@ struct AgentNewSessionView: View {
     }
 
     private var promptRows: some View {
-        let claude = model.newSessionClaude
-        let paste = model.promptImagesDir.map { dir in
+        let claude = model.newSessionClaude, takes = model.newSessionTakesPrompt
+        let paste = !claude ? nil : model.promptImagesDir.map { dir in
             AgentComposerTextView.ImagePaste(dir: dir, began: { [weak model] in model?.beginNewSessionPromptPaste() },
                                                  added: { [weak model] out in model?.addNewSessionPromptImages(out) })
         }
@@ -562,17 +564,18 @@ struct AgentNewSessionView: View {
             Text(Self.promptLabel).font(Neon.font(11.5)).foregroundStyle(Neon.textSecondary).frame(width: sz(64), alignment: .leading)
             VStack(alignment: .leading, spacing: sz(2)) {
                 Self.promptEditor(text: Binding(get: { form.prompt }, set: { model.setNewSessionPrompt($0) }),
-                                  onSubmit: { model.startNewSession() }, editable: claude && form.starting == nil, imagePaste: paste)
+                                  onSubmit: { model.startNewSession() }, editable: takes && form.starting == nil, imagePaste: paste)
                     .frame(height: sz(96))
                     .overlay(RoundedRectangle(cornerRadius: sz(4)).stroke(Neon.textSecondary.opacity(0.4)))
-                    .opacity(claude ? 1 : 0.45)
+                    .opacity(takes ? 1 : 0.45)
                 if !images.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: sz(6)) { ForEach(images, id: \.path) { promptChip($0, enabled: claude && form.starting == nil) } }
+                        HStack(spacing: sz(6)) { ForEach(images, id: \.path) { promptChip($0, enabled: takes && form.starting == nil) } }
                     }
                     .padding(.top, sz(4))
                 }
-                slot(form.pasting > 0 ? Self.addingImage : form.imageNote ?? (claude ? Self.promptHint : Self.notClaude(command: form.command, host: form.host)))
+                slot(form.pasting > 0 ? Self.addingImage : form.imageNote
+                     ?? (claude ? Self.promptHint : takes ? Self.codexPromptHint : Self.notClaude(command: form.command, host: form.host)))
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         }

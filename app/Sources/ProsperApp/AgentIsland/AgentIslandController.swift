@@ -1757,7 +1757,9 @@ final class AgentIslandController {
     /// and say (claimed and released on main), never across a wait, so Stop, Restart and the answer buttons work
     /// between rounds; a round whose key is held elsewhere or has a runner job just waits. A blank text: no call.
     /// #1877: `then` gets firstRun's outcome: nil when sent (or a blank text, nothing to send), else the reason shown.
-    func sayFirst(_ key: AgentSessionKey, _ text: String, then: (@MainActor (_ notSent: String?) -> Void)? = nil) {
+    /// #1992: `codex`, the session runs Codex's TUI (AgentIsland.isInteractiveCodex): firstRun skips Claude's screen check.
+    func sayFirst(_ key: AgentSessionKey, _ text: String, codex: Bool = false,
+                  then: (@MainActor (_ notSent: String?) -> Void)? = nil) {
         guard let message = AgentWindowDriver.message(text) else { then?(nil); return }
         store?.actions[key] = AgentIsland.firstSendingText
         let io = io, pause = firstPause, clock = firstClock
@@ -1778,7 +1780,7 @@ final class AgentIslandController {
         Task { @MainActor [weak self] in
             let why = await withCheckedContinuation { (c: CheckedContinuation<String?, Never>) in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    c.resume(returning: Self.firstRun(key, message, io: io, pause: pause, clock: clock,
+                    c.resume(returning: Self.firstRun(key, message, codex: codex, io: io, pause: pause, clock: clock,
                                                            claim: claim, release: release))
                 }
             }
@@ -1798,7 +1800,9 @@ final class AgentIslandController {
     /// prompt or empty screen on the read, or dch skipped not_claude / no_screen / prompt) waits for the next one;
     /// anything else ends it: a skipped draft (never type over one) and every failed or missing reply, with NO
     /// retry (the text may sit in the composer or have gone out). dch-lite (an empty read, no mirror) fails at once.
-    nonisolated static func firstRun(_ key: AgentSessionKey, _ text: String, io: AgentPromptIO,
+    /// #1992: `codex`: refusal() reads Claude's screen (its "❯" composer and caret rows), so a Codex read is checked only
+    /// for being empty (waits); dch's --say is the authority there (skipped prompt or draft below Codex's composer).
+    nonisolated static func firstRun(_ key: AgentSessionKey, _ text: String, codex: Bool = false, io: AgentPromptIO,
                                      pause: (TimeInterval) -> Void, clock: () -> Date,
                                      claim: () -> Bool, release: () -> Void) -> String? {
         let start = clock()
@@ -1810,7 +1814,7 @@ final class AgentIslandController {
                 let shown = io.read(key)
                 if shown.isEmpty, io.noMirror(key) {
                     end = .some(AgentWindowText.noScreen)
-                } else if let why = AgentWindowDriver.refusal(shown) {
+                } else if let why = codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : AgentWindowDriver.refusal(shown) {
                     last = why
                 } else {
                     let reply = AgentWindowDriver.sayReply(io.say(key, text))

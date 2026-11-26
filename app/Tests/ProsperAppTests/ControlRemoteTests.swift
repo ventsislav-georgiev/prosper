@@ -176,7 +176,7 @@ final class ControlRemoteTests: XCTestCase {
             let st = base.store([]), spawns = AgentWindowD1Tests.SpawnCalls()
             let m = base.newSessionModel(st, spawns)
             defer { m.close() }
-            m.sayFirst = { _, _, _ in }
+            m.sayFirst = { _, _, _, _ in }
             let dir = tempDir(), out = dir.appendingPathComponent("out", isDirectory: true)
             let a = dir.appendingPathComponent("a.png"), link = dir.appendingPathComponent("link.png")
             try png(a)
@@ -198,7 +198,7 @@ final class ControlRemoteTests: XCTestCase {
                 refused(try ControlSessions.new(args(["agent": "claude", "name": "api", "cwd": "/Users/example/api"], images: [a.path]),
                                                 changes: changes), "images need a prompt")
                 refused(try ControlSessions.new(args(["agent": "codex", "prompt": "look"], images: [a.path]), changes: changes),
-                        "a prompt needs agent claude")
+                        "images need agent claude")
                 XCTAssertTrue(m.newSession == nil, "refused before the form opens")
                 XCTAssertEqual(spawns.calls.count, 0)
                 let ch = try ControlSessions.new(args(ok, images: [a.path, link.path]), changes: changes)

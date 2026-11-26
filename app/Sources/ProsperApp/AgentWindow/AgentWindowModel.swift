@@ -2608,10 +2608,11 @@ final class AgentWindowModel: ObservableObject {
     /// #847 D3.7: a first message into a started session, then `then`: the island controller's sayFirst (#1369).
     /// #1370 (R1369 rider): a failure seeds the draft at once when that session is the selected one (follow() seeds
     /// the others when they are selected later).
-    /// #1877: `then` gets the controller's outcome (nil when sent, else why not).
-    lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ then: (@MainActor (_ notSent: String?) -> Void)?) -> Void = {
-        [weak self] key, text, then in
-        self?.island().sayFirst(key, text) { @MainActor [weak self] why in
+    /// #1877: `then` gets the controller's outcome (nil when sent, else why not). #1992: `codex`, a Codex session's.
+    lazy var sayFirst: (_ key: AgentSessionKey, _ text: String, _ codex: Bool,
+                        _ then: (@MainActor (_ notSent: String?) -> Void)?) -> Void = {
+        [weak self] key, text, codex, then in
+        self?.island().sayFirst(key, text, codex: codex) { @MainActor [weak self] why in
             self?.showUnsentFirst(key, selectedOnly: true)
             then?(why)
         }
@@ -2718,6 +2719,15 @@ final class AgentWindowModel: ObservableObject {
         setNewSessionPrompt(AgentPromptImages.removing(path, from: f.prompt))
     }
 
+    /// #1992: an interactive Codex (AgentIsland.isInteractiveCodex) on this Mac: a first prompt, no name, no images.
+    var newSessionCodex: Bool {
+        guard let f = newSession, f.host == nil else { return false }
+        return AgentIsland.isInteractiveCodex(AgentNewSession.argv(f.command, shell: shell))
+    }
+
+    /// #1992: the form's prompt takes effect: a Claude or a Codex on this Mac.
+    var newSessionTakesPrompt: Bool { newSessionClaude || newSessionCodex }
+
     /// #847 D6.1: an interactive Claude (AgentIsland.isInteractiveClaude, the rule naming() uses) on this Mac.
     /// shortcut: another Mac (#1323) gets no first prompt (the say seam is this Mac's); upgrade when the remote spawn
     /// learns it.
@@ -2732,7 +2742,7 @@ final class AgentWindowModel: ObservableObject {
     /// (#1392: the effective value, as the editor shows it; Start ignores it when not Claude).
     var newSessionShellRefusal: String? {
         guard let f = newSession,
-              newSessionClaude && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+              newSessionTakesPrompt && !f.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return Self.plainShellRefusal
     }
 
@@ -2877,9 +2887,9 @@ final class AgentWindowModel: ObservableObject {
         if let host = f.host {
             return spawnRemote(host, AgentNewSession.argv(f.command, shell: nil), name: newSessionName)
         }
-        // #847 D6.1: the prompt only for a Claude; it never joins the spawn's argv.
+        // #847 D6.1: the prompt only for a Claude (#1992: or a Codex); it never joins the spawn's argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
-                     name: newSessionName, command: f.command, prompt: newSessionClaude ? f.prompt : "", persist: persist)
+                     name: newSessionName, command: f.command, prompt: newSessionTakesPrompt ? f.prompt : "", persist: persist)
     }
 
     /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
@@ -2914,7 +2924,7 @@ final class AgentWindowModel: ObservableObject {
         let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
             self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked,
-                          prompt: prompt, persist: persist)
+                          prompt: prompt, codex: AgentIsland.isInteractiveCodex(argv), persist: persist)
         }) else {
             let why = spawnRefusal(name)
             // never dropped silently; #948 F2: a gate refusal goes when the gate opens, a name or busy one with the form
@@ -2997,7 +3007,7 @@ final class AgentWindowModel: ObservableObject {
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
     private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
-                         request: Int?, asked: TimeInterval, prompt: String, persist: Bool) {
+                         request: Int?, asked: TimeInterval, prompt: String, codex: Bool, persist: Bool) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
@@ -3022,13 +3032,13 @@ final class AgentWindowModel: ObservableObject {
         }
         pendingSpawn = (key, now(), asked)
         refresh()
-        firstMessages(main: key, prompt: prompt)
+        firstMessages(main: key, prompt: prompt, codex: codex)
     }
 
     /// #847 D3.7: sayFirst(main, prompt); a blank prompt skips the call. The text goes only through the seam, never into
     /// the spawn's argv.
-    private func firstMessages(main: AgentSessionKey, prompt: String) {
-        if !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sayFirst(main, prompt, nil) }
+    private func firstMessages(main: AgentSessionKey, prompt: String, codex: Bool) {
+        if !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sayFirst(main, prompt, codex, nil) }
     }
 
     /// The pending spawn's row is there: Terminal (a reused name's Transcript choice dropped), selected, the keys in.

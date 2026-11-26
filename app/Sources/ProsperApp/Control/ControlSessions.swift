@@ -168,7 +168,9 @@ enum ControlSessions {
         // An agent's first message is outside text: the same cap and refusals as sessions.say, before anything opens.
         if prompt != nil { _ = try ControlSessionsTalk.text(args, key: "prompt") }
         let images = try imagePaths(args)
-        guard agent == "claude" || prompt == nil else { throw ControlError("a prompt needs agent claude") }
+        guard agent == "claude" || agent == "codex" || prompt == nil else { throw ControlError("a prompt needs agent claude or codex") }
+        // #1992: a Codex's first prompt is text only (the form pastes no images for it).
+        guard agent == "claude" || images.isEmpty else { throw ControlError("images need agent claude") }
         guard host == nil || (prompt == nil && images.isEmpty) else { throw ControlError(AgentNewSessionView.notClaude(command: "", host: host)) }
         // The paths follow the prompt: alone, a leading "/" would read as a slash command.
         guard images.isEmpty || prompt != nil else { throw ControlError("images need a prompt") }
@@ -324,6 +326,7 @@ enum ControlSessions {
     /// A History row's Resume, or its Resume (no message): the History menu's gate, then the controller's resume (this
     /// Mac) or the window's resumeRemote (another Mac). `message`: resumed as Resume (no message), then the New session
     /// first prompt's path (sayFirst: it waits for the revived Claude's prompt); refused for a non-Claude record or another Mac's.
+    /// #1992: a Codex record too (dch 1.173.0+ revives it with `codex resume`, then types the message like Claude's).
     /// No undo: a resume is not reversible. #1877: `said` gets the message's outcome on main, only when one was sent:
     /// nil when delivered, else the error naming the resume (ControlSessionsTalk.resume awaits it).
     static func resume(_ args: [String: ControlJSON], said: (@MainActor (_ failure: String?) -> Void)? = nil) throws -> ControlChange {
@@ -334,9 +337,11 @@ enum ControlSessions {
         let message = string(args, "message"), remote = AgentWindowModel.isRemote(r)
         if message != nil { _ = try ControlSessionsTalk.text(args, key: "message") }   // outside text, before anything resumes
         if message != nil {
-            // The New session form's rule (newSessionClaude): a first message only to an interactive Claude on this Mac.
+            // The New session form's rule (newSessionTakesPrompt): a first message only to an interactive Claude or Codex on this Mac.
             guard !remote else { throw ControlError("a message goes only to a session on this Mac") }
-            guard AgentIsland.isInteractiveClaude(r.argv) else { throw ControlError("a message needs a Claude Code session") }
+            guard AgentIsland.isInteractiveClaude(r.argv) || AgentIsland.isInteractiveCodex(r.argv) else {
+                throw ControlError("a message needs a Claude Code or Codex session")
+            }
             // #1833 r1: the agent's message replaces dch's carry-on one: Resume (no message), on its own gate.
             guard args["noMessage"] != .bool(false) else { throw ControlError("message already resumes without dch's carry-on message") }
         }
@@ -358,10 +363,12 @@ enum ControlSessions {
             guard resumeRecord(r, noMessage) else { throw ControlError(busy) }
             if let message {
                 let key = AgentSessionKey(dir: r.key.dir, name: name), title = r.title, revived = name
+                let codex = !AgentIsland.isInteractiveClaude(r.argv)   // the guard above: else a Codex
                 let then: @MainActor (String?) -> Void = { why in
                     said?(why.map { "\(title): resumed as \(revived), message not delivered: \(OutsideText.shown($0, max: 200))" })
                 }
-                if let m = model() { m.sayFirst(key, message, then) } else { AgentIslandController.shared.sayFirst(key, message, then: then) }
+                if let m = model() { m.sayFirst(key, message, codex, then) }
+                else { AgentIslandController.shared.sayFirst(key, message, codex: codex, then: then) }
             }
         }
         return ControlChange(summary: "\(r.title) (a resume has no undo)", result: .string(name), verb: "resumed")
@@ -379,7 +386,7 @@ extension ControlRegistry {
             "agent": ControlArg(type: "string", required: true, allowed: ControlSessions.agents, summary: "what runs in it"),
             "name": ControlArg(type: "string", summary: "its name; a free one from the folder when absent"),
             "cwd": ControlArg(type: "string", summary: "its folder; the form's default when absent"),
-            "prompt": ControlArg(type: "string", summary: "the first message (claude only)"),
+            "prompt": ControlArg(type: "string", summary: "the first message (claude or codex)"),
             "host": ControlArg(type: "string", summary: "another Mac from remote.list (canStart) to start it on; this Mac when absent"),
             "images": ControlArg(type: "array", summary: "image file paths (absolute) added to the prompt, as a paste adds them (claude on this Mac, with a prompt)"),
         ]) { reg, a in try ControlSessions.new(a, changes: reg.changes) })
@@ -401,7 +408,7 @@ extension ControlRegistry {
         r.register(ControlCommand(name: "sessions.resume", summary: "Resume a History record, optionally without dch's message or with your own (no undo). Without a message the reply is the name it revives as; with one it waits (up to 60 s) for the message: {name, delivered: true}, an error naming the resume and why the message was not sent, or {name, delivered: \"unknown\", note}.", args: [
             "id": ControlArg(type: "string", required: true, summary: "the record's id from sessions.history"),
             "noMessage": ControlArg(type: "boolean", summary: "Resume (no message): dch types no carry-on message"),
-            "message": ControlArg(type: "string", summary: "your first message once it is up, instead of dch's (a Claude session on this Mac only)"),
+            "message": ControlArg(type: "string", summary: "your first message once it is up, instead of dch's (a Claude or Codex session on this Mac only)"),
         ], mutates: true, run: { _, _ in throw ControlError("sessions.resume waits for its outcome: send it through the control channel") },
            runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes) }))
     }

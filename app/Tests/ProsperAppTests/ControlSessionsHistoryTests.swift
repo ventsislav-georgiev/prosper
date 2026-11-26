@@ -118,6 +118,34 @@ final class ControlSessionsHistoryTests: XCTestCase {
 
     // MARK: - sessions.resume (this Mac)
 
+    /// #1992: a message on a Codex record (dch 1.173.0's "codex" thread) resumes it as Resume (no message) and goes to
+    /// sayFirst with codex true; a shell record is still refused. Red at base: "a message needs a Claude Code session".
+    @MainActor
+    func testSessionsResumeWithAMessageTypesIntoACodexRecord() throws {
+        let st = historyStore(), m = base.windowModel(st)
+        defer { m.close() }
+        var cx = base.record("cx")
+        cx.argv = ["codex"]
+        cx.codex = DchHistoryRecord.Codex(threadID: "019a0000-aaaa-bbbb-cccc-0123456789ab", home: "/Users/example/.codex")
+        st.history.append(cx)
+        st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 27, 0])
+        var said: [(String, String, Bool)] = []
+        m.sayFirst = { key, text, codex, _ in said.append((key.name, text, codex)) }
+        try withSeams(model: m) {
+            refused(try ControlSessions.resume(args(["id": "web", "message": "hi"])), "a message needs a Claude Code or Codex session")
+            XCTAssertEqual(calls, [], "a shell record: nothing resumes")
+            let ch = try ControlSessions.resume(args(["id": "cx", "message": "carry on"]))
+            XCTAssertEqual(ch.result, .string("cx"))
+            XCTAssertEqual(calls, ["cx true"], "resumed without dch's carry-on message")
+            XCTAssertEqual(said.count, 1)
+            XCTAssertEqual(said.last?.0, "cx")
+            XCTAssertEqual(said.last?.1, "carry on")
+            XCTAssertEqual(said.last?.2, true, "a Codex record: codex true")
+            _ = try ControlSessions.resume(args(["id": "api", "message": "hello"]))
+            XCTAssertEqual(said.last?.2, false, "a Claude record: codex false")
+        }
+    }
+
     /// The menu's gate, then the controller's resume once with the record and noMessage; a message resumes as Resume (no
     /// message) and goes after it to the name it revives as (the first prompt's sayFirst seam). Refusals run nothing; no undo.
     @MainActor
@@ -125,7 +153,7 @@ final class ControlSessionsHistoryTests: XCTestCase {
         let st = historyStore(), m = base.windowModel(st)
         defer { m.close() }
         var said: [String] = []
-        m.sayFirst = { key, text, _ in said.append("\(key.name): \(text)") }
+        m.sayFirst = { key, text, _, _ in said.append("\(key.name): \(text)") }
         try withSeams(model: m) {
             // #1833 r1: a message replaces dch's carry-on message: it resumes as Resume (no message), on that gate.
             refused(try ControlSessions.resume(args(["id": "api", "message": "hello"])), "Not run: Resume (no message) (needs dch 1.27.0)")
@@ -152,7 +180,7 @@ final class ControlSessionsHistoryTests: XCTestCase {
             _ = try ControlSessions.resume(args(["id": "web"], noMessage: true))
             XCTAssertEqual(calls.last, "web true", "Resume (no message)")
             XCTAssertEqual(said.count, 1, "no message: nothing said")
-            refused(try ControlSessions.resume(args(["id": "web", "message": "hi"])), "a message needs a Claude Code session")
+            refused(try ControlSessions.resume(args(["id": "web", "message": "hi"])), "a message needs a Claude Code or Codex session")
             refused(try ControlSessions.resume(args(["id": "--all"])), "Not run: Resume (not available for this session)")
             refused(try ControlSessions.resume(args(["id": "nope"])), "no History record nope (sessions.history lists them)")
             XCTAssertEqual(calls.count, 3, "a refusal runs nothing")
@@ -237,7 +265,7 @@ final class ControlSessionsHistoryTests: XCTestCase {
         ControlSessions.resumeRecord = { r, quiet in self.calls.append("\(r.name) \(quiet)"); return self.started }
         // A lost outcome ends a row in seconds (the sleep is cancelled once an outcome lands).
         ControlSessionsTalk.resumeBound = 2
-        m.sayFirst = { key, text, then in self.said.append("\(key.name): \(text)"); self.pending = then }
+        m.sayFirst = { key, text, _, then in self.said.append("\(key.name): \(text)"); self.pending = then }
         let changes = ControlChanges()
         changes.present = { _, _ in }
         try await body(m, changes)
@@ -267,7 +295,7 @@ final class ControlSessionsHistoryTests: XCTestCase {
     func testResumeWithAMessageNotSentThrowsNamingTheResume() async throws {
         await withResume { m, changes in
             ControlSessionsTalk.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
-            m.sayFirst = { key, text, then in self.said.append("\(key.name): \(text)"); then?(AgentWindowText.notSubmitted) }
+            m.sayFirst = { key, text, _, then in self.said.append("\(key.name): \(text)"); then?(AgentWindowText.notSubmitted) }
             do {
                 _ = try await ControlSessionsTalk.resume(args(["id": "api", "message": "hello"]), changes: changes)
                 XCTFail("not delivered is an error")

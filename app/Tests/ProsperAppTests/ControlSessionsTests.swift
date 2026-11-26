@@ -289,7 +289,7 @@ final class ControlSessionsTests: XCTestCase {
             let m = base.newSessionModel(st, spawns)
             defer { m.close() }
             try withSeams(model: m) {
-                refused(try ControlSessions.new(args(["agent": "shell", "prompt": "hi"])), "a prompt needs agent claude")
+                refused(try ControlSessions.new(args(["agent": "shell", "prompt": "hi"])), "a prompt needs agent claude or codex")
                 XCTAssertTrue(m.newSession == nil, "refused before the form opens")
                 // QA n145: the agent's first message is outside text: refused whole, the form never opens, nothing spawns.
                 for bad in ["/x", "!x", "a\u{202E}b"] {
@@ -326,7 +326,7 @@ final class ControlSessionsTests: XCTestCase {
                 m.openNewSession()
                 m.setNewSessionPrompt("my draft")
                 m.cancelNewSession()
-                m.sayFirst = { _, _, _ in }
+                m.sayFirst = { _, _, _, _ in }
                 _ = try ControlSessions.new(args(["agent": "claude", "name": "docs", "cwd": "/Users/example/docs", "prompt": "hello"]))
                 XCTAssertEqual(m.newSession?.prompt, "hello", "the agent's message in the form")
                 spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "docs"), nil)
@@ -354,6 +354,32 @@ final class ControlSessionsTests: XCTestCase {
                 m.cancelNewSession()
             }
             try withSeams { refused(try ControlSessions.new(args(["agent": "claude"])), ControlSessions.islandOff) }
+        }
+    }
+
+    /// #1992: sessions.new with agent codex and a prompt starts codex and its first prompt reaches sayFirst (codex true);
+    /// a shell's prompt is still refused before the form opens. Red at base: "a prompt needs agent claude".
+    @MainActor
+    func testSessionsNewCodexPromptReachesSayFirst() throws {
+        try base.withNewSessionPrefs {
+            let st = base.store([]), spawns = AgentWindowD1Tests.SpawnCalls()
+            let m = base.newSessionModel(st, spawns)
+            defer { m.close() }
+            var said: [(String, String, Bool)] = []
+            m.sayFirst = { key, text, codex, _ in said.append((key.name, text, codex)) }
+            try withSeams(model: m) {
+                refused(try ControlSessions.new(args(["agent": "shell", "prompt": "hi"])), "a prompt needs agent claude or codex")
+                XCTAssertTrue(m.newSession == nil, "refused before the form opens")
+                let ch = try ControlSessions.new(args(["agent": "codex", "name": "web", "cwd": "/Users/example/web", "prompt": "hello"]))
+                XCTAssertEqual(ch.result, .string("web"))
+                XCTAssertEqual(spawns.calls.last?.argv.first, "codex")
+                spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+                XCTAssertEqual(said.count, 1)
+                XCTAssertEqual(said.last?.0, "web")
+                XCTAssertEqual(said.last?.1, "hello")
+                XCTAssertEqual(said.last?.2, true, "a Codex: firstRun skips Claude's screen check")
+                m.cancelNewSession()
+            }
         }
     }
 

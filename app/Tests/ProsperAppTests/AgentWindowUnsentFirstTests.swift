@@ -57,7 +57,7 @@ extension AgentWindowD1Tests {
             terminalSetup(m, a)
             let done = expectation(description: "the first message fails")
             var why: String?
-            m.sayFirst(a.key, Self.unsentRaw) { why = $0; done.fulfill() }
+            m.sayFirst(a.key, Self.unsentRaw, false) { why = $0; done.fulfill() }
             wait(for: [done], timeout: 10)
             XCTAssertTrue(why != nil, "#1877: the model's sayFirst passes the controller's reason on")
             try body(m, st, island, a, { m.terminal.writer.flush(); return t.children().flatMap(\.written) })
