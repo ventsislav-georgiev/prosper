@@ -248,7 +248,7 @@ final class XrayPromptsTabTests: XCTestCase {
 
     /// Item 3. Red at base: XrayTab had `responses = "Responses"` (XrayPanel.swift:16) and the strip listed it.
     func testNoResponsesTab() {
-        XCTAssertEqual(XrayTab.allCases.map(\.rawValue), ["Prompts", "Refs", "Search", "Tasks", "Memory"])
+        XCTAssertEqual(XrayTab.allCases.map(\.rawValue), ["Prompts", "Refs", "Search", "Tasks", "Questions", "Memory"])   // #1974
         XCTAssertTrue(XrayTab(rawValue: "Responses") == nil, "a stored last tab of Responses reads as Prompts")
     }
 

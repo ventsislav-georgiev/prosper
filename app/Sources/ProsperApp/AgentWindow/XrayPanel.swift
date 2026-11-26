@@ -12,9 +12,9 @@ import SwiftUI
 // #1389 (P6 step B): the same tabs for a Terminal-mode pane and a remote session, from `dch --xray <n> --json`'s chapters.
 
 /// The tabs in dch's order (xview.c xv_ord); #1415: Refs before Search. #1815 (operator 11-21): no Responses tab, a
-/// prompt's card shows its answer.
+/// prompt's card shows its answer. #1974: Questions (dch 1.171.0's `--questions`) after Tasks.
 enum XrayTab: String, CaseIterable {
-    case prompts = "Prompts", refs = "Refs", search = "Search", tasks = "Tasks", memory = "Memory"
+    case prompts = "Prompts", refs = "Refs", search = "Search", tasks = "Tasks", questions = "Questions", memory = "Memory"
 }
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
@@ -92,6 +92,10 @@ final class XrayPanels: ObservableObject {
     static let refsTabShips = true
     static var refsTab: @MainActor () -> Bool = { refsTabShips && NSClassFromString("XCTestCase") == nil }
 
+    /// #1974: the open reads `--questions` too (an older dch refuses it: no tab). Off under XCTest as searchTab is, so the
+    /// rows that pin read counts keep them; rows set it and restore it.
+    static var questionsTab: @MainActor () -> Bool = { NSClassFromString("XCTestCase") == nil }
+
     /// #1471: every pane reads dch (Terminal is the only mode); no window model for `pane`: no read.
     static func fromDch(_ pane: UUID, _ target: XrayTarget) -> Bool { model(pane) != nil }
 
@@ -127,6 +131,7 @@ final class XrayPanels: ObservableObject {
     /// Tasks and Memory, draws them on its first frame). The newest XrayFollows.limit targets; the oldest goes.
     struct Kept {
         var tasks: XrayTasks? = nil
+        var questions: XrayTasks? = nil   // #1974
         var memory: XrayMemory? = nil
         var chapters: [TranscriptOutline.Chapter]? = nil
         var refs: XrayRefs? = nil
@@ -227,6 +232,10 @@ final class XrayPanelModel: ObservableObject {
     /// nil: no Tasks tab (design 3.9: exit not 0, a schema other than 1, an empty list, a shell).
     @Published var tasks: XrayTasks? {   // set here and by the poller (XrayPoller.swift)
         didSet { if tasks != oldValue { taskColsMemo = nil } }
+    }
+    /// #1974: nil: no Questions tab (Tasks' rule: exit not 0, a schema other than 1, no row; an older dch refuses the form).
+    @Published var questions: XrayTasks? {   // set by the open read and the poller (XrayPoller.swift), never by the follow
+        didSet { if questions != oldValue { questionColsMemo = nil } }
     }
     /// nil: no Memory tab (exit not 0, no row).
     @Published private(set) var memory: XrayMemory? {
@@ -350,7 +359,9 @@ final class XrayPanelModel: ObservableObject {
     func read(dch: String, run: @escaping XrayPanels.Run) {
         (self.dch, self.run) = (dch, panels?.requests.run(for: target, cold: run) ?? run)   // #1561: remote: warm
         if stopTicker == nil { stopTicker = XrayPanels.ticker { [weak self] in self?.tick() } }
-        if !answered, XrayPanels.keepRows(), let k = panels?.kept[target] { seed(k) }   // #1976: the last rows, on this frame
+        // #1976: the last rows, on this frame; #1974 n2: never for the Todos chip, whose Tasks answer alone decides (kept
+        // rows and an unreachable host's kept-rows answer would skip its fallback and show stale rows)
+        if !answered, fallback == nil, XrayPanels.keepRows(), let k = panels?.kept[target] { seed(k) }
         attachFollow(dch)   // #1475: before readBoth, so the open's chapters come from the stream (cached: at once)
         readBoth()
     }
@@ -360,6 +371,7 @@ final class XrayPanelModel: ObservableObject {
         guard let dch, let run else { return }
         lastRead = now()
         let env = target.env, a = target.args("tasks"), b = target.args("memory")
+        let q = XrayPanels.questionsTab() ? target.args("questions") : nil   // #1974
         // #1389: the third read only for a dch-chapters pane; #1415: or, gate A on, for a Transcript pane's refs alone
         // #1475: a follow carries the chapters and refs: no chapters read beside it
         let refsOnly = !fromDch(), c = follow == nil && (!refsOnly || XrayPanels.refsTab()) ? target.chaptersArgs : nil
@@ -367,16 +379,27 @@ final class XrayPanelModel: ObservableObject {
             guard let c else { return nil }
             return await run(dch, c, env)
         }
+        let questions: @Sendable () async -> (status: Int32, out: Data)? = {
+            guard let q else { return nil }
+            return await run(dch, q, env)
+        }
         // #1976: each read is taken as it answers (the chapters read, 1.5 s on a big session, gates no tab)
         reading = Task { [weak self] in
             await withTaskGroup(of: (Int, (status: Int32, out: Data)?).self) { g in
                 g.addTask { (0, await run(dch, a, env)) }
                 g.addTask { (1, await run(dch, b, env)) }
                 g.addTask { (2, await chapters()) }
+                g.addTask { (3, await questions()) }
                 for await (k, r) in g {
-                    guard !Task.isCancelled, let self else { return }   // #1368: closed or switched away: the SIGTERMed answer is not news
+                    // #1368: closed or switched away: the SIGTERMed answer is not news; #1974: the reads still out end too
+                    guard !Task.isCancelled, let self else { g.cancelAll(); return }
                     guard let r else { continue }
-                    if k == 0 { self.take(r) } else if k == 1 { self.takeMemory(r) } else { self.takeChapters(r, refsOnly: refsOnly) }
+                    switch k {
+                    case 0: self.take(r)
+                    case 1: self.takeMemory(r)
+                    case 3: self.takeQuestions(r)
+                    default: self.takeChapters(r, refsOnly: refsOnly)
+                    }
                     self.openStep(tasksIn: k == 0)
                 }
             }
@@ -400,6 +423,8 @@ final class XrayPanelModel: ObservableObject {
     func answeredAll() {
         answered = true
         if follow == nil || follow?.state != nil { finishOpen() }   // #1475: else the first snapshot finishes it
+        // #1974 n1: an open drawn early whose answers removed the shown tab moves now, not at a snapshot that may not come
+        else if loaded, !tabs.contains(tab), let first = tabs.first { tab = first }
     }
 
     /// #1976: one open read answered (or the kept rows were drawn): the shown tab draws once its rows are in, before
@@ -422,14 +447,14 @@ final class XrayPanelModel: ObservableObject {
 
     /// #1976: the rows a closed panel for this target had; the fresh reads replace them through put (changes only).
     func seed(_ k: XrayPanels.Kept) {
-        put(\.tasks, k.tasks); put(\.memory, k.memory); put(\.dchChapters, k.chapters); put(\.refs, k.refs); put(\.corpus, k.corpus)
+        put(\.tasks, k.tasks); put(\.questions, k.questions); put(\.memory, k.memory); put(\.dchChapters, k.chapters); put(\.refs, k.refs); put(\.corpus, k.corpus)
         chapterAnchors = k.anchors
         openStep(tasksIn: false)
     }
 
     /// #1976: what a new panel for this target draws first (XrayPanels.keep, on stop).
     var keptRows: XrayPanels.Kept {
-        XrayPanels.Kept(tasks: tasks, memory: memory, chapters: dchChapters, refs: refs, corpus: corpus, anchors: chapterAnchors)
+        XrayPanels.Kept(tasks: tasks, questions: questions, memory: memory, chapters: dchChapters, refs: refs, corpus: corpus, anchors: chapterAnchors)
     }
 
     /// #1475: this panel reads its chapters and refs from the target's follow (XrayFollows.attach): a Terminal-mode or
@@ -538,6 +563,7 @@ final class XrayPanelModel: ObservableObject {
             case .refs: XrayPanels.refsTab() && refs?.entries.isEmpty == false
             case .search: searchable
             case .tasks: tasks != nil
+            case .questions: questions != nil
             case .memory: memory != nil
             }
         }
@@ -550,6 +576,7 @@ final class XrayPanelModel: ObservableObject {
         case .refs: refs?.entries.count ?? 0   // #1415: every ref, hidden kinds included (dch's rule)
         case .search: search?.hits.count ?? 0
         case .tasks: tasks?.open ?? 0
+        case .questions: questions?.open ?? 0   // #1974: open questions, as Tasks counts open tasks
         case .memory: memory?.count ?? 0
         }
     }
@@ -559,8 +586,10 @@ final class XrayPanelModel: ObservableObject {
         tab == .search && search == nil ? tab.rawValue
             : "\(tab.rawValue) \(tab == .refs && refs?.complete == false ? "\u{2265}" : "")\(count(tab))\(tab == .search && search?.more == true ? "+" : "")"
     }
-    /// VoiceOver: "Tasks, 3 open"; "Memory, 2".
-    func spoken(_ tab: XrayTab) -> String { tab == .tasks ? "Tasks, \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ") }
+    /// VoiceOver: "Tasks, 3 open"; #1974 "Questions, 2 open"; "Memory, 2".
+    func spoken(_ tab: XrayTab) -> String {
+        tab == .tasks || tab == .questions ? "\(tab.rawValue), \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ")
+    }
 
     /// Design 3.2: case-insensitive, over id, title, note and label.
     static func matches(_ t: XrayTasks.Task, _ filter: String) -> Bool {
@@ -569,10 +598,14 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// The groups with the filter applied; an empty group goes, with or without a filter (#1381, as Memory's).
-    var shownGroups: [XrayTasks.Group] {
-        guard let tasks else { return [] }
+    var shownGroups: [XrayTasks.Group] { filtered(tasks?.groups ?? []) }
+
+    /// #1974: the Questions tab's groups (Open, Answered, Dropped) with the filter applied, as shownGroups.
+    var shownQuestionGroups: [XrayTasks.Group] { filtered(questions?.questionGroups ?? []) }
+
+    private func filtered(_ groups: [XrayTasks.Group]) -> [XrayTasks.Group] {
         let q = filter.trimmingCharacters(in: .whitespaces)
-        return tasks.groups.map { XrayTasks.Group(title: $0.title, tasks: $0.tasks.filter { Self.matches($0, q) }) }
+        return groups.map { XrayTasks.Group(title: $0.title, tasks: $0.tasks.filter { Self.matches($0, q) }) }
             .filter { !$0.tasks.isEmpty }
     }
 
@@ -581,10 +614,15 @@ final class XrayPanelModel: ObservableObject {
     /// id went undrawn, and the operator saw an empty gap under "Pending" (op-1121-36).
     /// #1972: the ids are stable across polls ("h:" the group's title, "t:" the task's id; a repeat made unique), so a
     /// new task above keeps the reader's row (XrayAnchoredScroll).
-    var taskLines: [XrayTaskLine] {
-        let lines = shownGroups.flatMap { g in
+    var taskLines: [XrayTaskLine] { Self.lines(shownGroups, row: "t:") }
+
+    /// #1974: the Questions list as drawn: "h:" a group's header, "q:" a question's id (unique), as taskLines.
+    var questionLines: [XrayTaskLine] { Self.lines(shownQuestionGroups, row: "q:") }
+
+    private static func lines(_ groups: [XrayTasks.Group], row: String) -> [XrayTaskLine] {
+        let lines = groups.flatMap { g in
             [XrayTaskLine(id: "h:" + g.title, header: "\(g.title) \(g.tasks.count)", task: nil)]
-                + g.tasks.map { t in XrayTaskLine(id: "t:" + t.id, header: nil, task: t) }
+                + g.tasks.map { t in XrayTaskLine(id: row + t.id, header: nil, task: t) }
         }
         return zip(XrayScrollAnchor.unique(lines.map(\.id)), lines).map { XrayTaskLine(id: $0, header: $1.header, task: $1.task) }
     }
@@ -613,6 +651,9 @@ final class XrayPanelModel: ObservableObject {
     // #1948: the list columns' widths over ALL items (so they hold while the filter types), computed from the source
     // fields, once per change of the data (and per clock minute for the ages), never per body.
     private var taskColsMemo: (minute: Int, cols: XrayTaskCols)?
+    private var questionColsMemo: (minute: Int, cols: XrayTaskCols)?
+    /// #1974: counts the Questions width computations (as colsBuilt).
+    private(set) var questionColsBuilt = 0
     private var memoryColsMemo: (minute: Int, session: String, age: String)?
     private var refCountMemo: (complete: Bool, widest: String)?
     /// Counts the width computations (tests read it: N bodies, one computation).
@@ -626,6 +667,16 @@ final class XrayPanelModel: ObservableObject {
         colsBuilt.tasks += 1
         let cols = XrayTaskCols(tasks: (tasks?.groups ?? []).flatMap(\.tasks), now: now())
         taskColsMemo = (m, cols)
+        return cols
+    }
+
+    /// #1974: the Questions list's widths, as taskCols (over every question, once per change and clock minute).
+    var questionCols: XrayTaskCols {
+        let m = minute()
+        if let c = questionColsMemo, c.minute == m { return c.cols }
+        questionColsBuilt += 1
+        let cols = XrayTaskCols(tasks: questions?.tasks ?? [], now: now())
+        questionColsMemo = (m, cols)
         return cols
     }
 
@@ -1152,20 +1203,26 @@ struct XrayPanelView: View {
             refsTab
         } else if panel.tab == .prompts {
             promptsTab
+        } else if panel.tab == .questions {
+            taskList(panel.questionLines, cols: panel.questionCols, filterLabel: "Filter questions", title: nil, footer: panel.goneFooter)
         } else {
             tasksTab
         }
     }
 
-    var tasksTab: some View {
-        let cols = panel.taskCols, lines = panel.taskLines   // #1945, #1948: memoised on the model; one filter pass
-        return VStack(alignment: .leading, spacing: sz(4)) {
+    var tasksTab: some View {   // #1945, #1948: memoised on the model; one filter pass
+        taskList(panel.taskLines, cols: panel.taskCols, filterLabel: "Filter tasks", title: panel.listTitle, footer: panel.footer)
+    }
+
+    /// The Tasks list; #1974: the Questions tab's too (its own lines, widths and filter label).
+    func taskList(_ lines: [XrayTaskLine], cols: XrayTaskCols, filterLabel: String, title: String?, footer: [String]) -> some View {
+        VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
                 .focused($filterFocus)
-                .accessibilityLabel("Filter tasks")
-            if let t = panel.listTitle { Text(verbatim: t).font(Neon.font(XrayText.row, weight: .semibold)).lineLimit(1) }
+                .accessibilityLabel(filterLabel)
+            if let t = title { Text(verbatim: t).font(Neon.font(XrayText.row, weight: .semibold)).lineLimit(1) }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines) { l in
@@ -1179,7 +1236,7 @@ struct XrayPanelView: View {
                 .scrollTargetLayout()
             }
             .modifier(XrayAnchoredScroll(panel: panel, ids: lines.map(\.id)))   // #1972
-            ForEach(panel.footer, id: \.self) { faint($0) }
+            ForEach(footer, id: \.self) { faint($0) }
         }
         .padding(sz(10))
     }

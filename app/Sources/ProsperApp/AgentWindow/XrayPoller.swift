@@ -12,8 +12,10 @@ import AppKit
 // #1636: while a form's answer is byte-identical the spacing doubles (5, 10, 20, 40, 60 s; remote 15, 30, 60; Memory 30,
 // 60): a changed answer, a tab switch, or the drawer hidden and shown again goes back to the base. Only a status 0
 // answer backs off: any other status (a repeated unreachable) keeps the base spacing, so a host that is back shows at once.
+// #1974: the Questions tab reads `--questions` every 30 s (Memory's cadence) while it is shown and live; a follow never
+// carries questions (dch refuses `--follow --questions`), so this poll runs beside one too.
 
-/// #1636: per poll form ("t" Tasks, "m" Memory, "r" Refs, "c" chapters): the last answer (status, hash, byte count) and how many identical ones followed.
+/// #1636: per poll form ("t" Tasks, "m" Memory, "r" Refs, "c" chapters, #1974 "q" Questions): the last answer (status, hash, byte count) and how many identical ones followed.
 struct XrayQuiet {
     private var runs: [String: Int] = [:]
     private var last: [String: (status: Int32, hash: Int, count: Int)] = [:]   // a hash, not the bytes (Tasks is up to ~1.3 MB)
@@ -33,10 +35,10 @@ extension XrayPanelModel {
     /// Design 3.4 / 3.5: Tasks (#1389: and dch's chapters) 5 s for a local session, 15 s for a remote one; Memory 30 s
     /// (#1381, design 2.2).
     var interval: TimeInterval {
-        quiet.spacing(quietKey, base: loaded && (tab == .memory || tab == .refs) ? 30 : target.dir == nil ? 15 : 5)
+        quiet.spacing(quietKey, base: loaded && (tab == .memory || tab == .refs || tab == .questions) ? 30 : target.dir == nil ? 15 : 5)
     }
     var quietKey: String {
-        loaded && tab == .memory ? "m" : loaded && tab == .refs ? "r" : tab == .prompts ? "c" : "t"
+        loaded && tab == .memory ? "m" : loaded && tab == .refs ? "r" : loaded && tab == .questions ? "q" : tab == .prompts ? "c" : "t"
     }
 
     /// One tick (the product's ticker fires each second; rows call it with an injected clock).
@@ -51,7 +53,7 @@ extension XrayPanelModel {
         if let f = follow, f.state != nil, !f.running { detachFollow() }
         let s = paneState()
         if !s.visible { quiet.reset() }   // #1636: shown again: the base spacing
-        if s.visible, tab == .tasks || tab == .memory { agesTick() }   // #1972 (QA f2): ages move on a quiet ledger
+        if s.visible, tab == .tasks || tab == .questions || tab == .memory { agesTick() }   // #1972 (QA f2): ages move on a quiet ledger
         guard s.visible, reading == nil, let dch, let run else { return }
         // ended: the open read was its one read; a Memory tab gone (a failed read) is not polled again
         // #1389: Prompts polls dch only on a dch-chapters pane whose read answered (a Transcript pane never)
@@ -59,13 +61,14 @@ extension XrayPanelModel {
         let prose = tab == .prompts && dchChapters != nil && fromDch() && follow == nil
         let refsShown = tab == .refs && refs != nil && follow == nil   // #1415: only while Refs is the shown tab (gate A keeps it nil)
         let streamed = follow?.carriesTasks == true   // #1475 c: the follow carries Tasks and Memory: no poll beside it
+        let asked = tab == .questions && questions != nil   // #1974: never carried by the follow; gone (a refusal): not polled
         // #1976: an open drawn early (kept rows, its tab answered) whose reads a cancel left out still reads them all
-        guard !loaded || !answered || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || prose || refsShown) else { return }
+        guard !loaded || !answered || s.live && (!streamed && (tab == .tasks || tab == .memory && memory != nil) || asked || prose || refsShown) else { return }
         guard now().timeIntervalSince(lastRead) >= interval else { return }
         // design 3.9: no Tasks retry until the dch path's mtime moves
         if failed, tab == .tasks, mtime(dch) == failedMtime { return }
         if tab == .tasks, tasksRefused { return }
-        if !answered { readBoth() } else if !loaded {} else if tab == .memory { readMemory() } else if prose || refsShown { readChapters(dch, run) }
+        if !answered { readBoth() } else if !loaded {} else if tab == .memory { readMemory() } else if asked { readQuestions(dch, run) } else if prose || refsShown { readChapters(dch, run) }
         else { readTasks(dch, run) }
     }
 
@@ -80,6 +83,29 @@ extension XrayPanelModel {
             self.take(r)
             self.landed()
         }
+    }
+
+    /// #1974: one `--questions` read (the 30 s poll while the Questions tab shows).
+    private func readQuestions(_ dch: String, _ run: @escaping XrayPanels.Run) {
+        lastRead = now()
+        let env = target.env, a = target.args("questions")
+        reading = Task { [weak self] in
+            let r = await run(dch, a, env)
+            guard !Task.isCancelled, let self else { return }
+            self.reading = nil
+            self.quiet.note("q", r)
+            self.takeQuestions(r)
+            self.landed()
+        }
+    }
+
+    /// #1974: as take, for the Questions tab: exit 4 or 7 (a remote -1) keeps the rows and says "host unreachable"; any
+    /// other answer replaces them by Tasks' rule (an older dch's refusal of the form: no tab and no line, never retried
+    /// while the tab is gone).
+    func takeQuestions(_ r: (status: Int32, out: Data)) {
+        if unreached(r.status) { unreachable = true; return }
+        put(\.unreachable, false)
+        put(\.questions, Self.tasksTab(r))
     }
 
     /// #1389: one chapters read (`--xray <n> --json`), labelled as Tasks' (takeChapters); #1415: a Transcript pane's

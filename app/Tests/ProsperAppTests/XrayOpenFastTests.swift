@@ -16,8 +16,13 @@ final class XrayOpenFastTests: XCTestCase {
         private var _calls: [String] = []
         private var _hold: Set<String>
         let tasks: Data
+        /// #1974: the Tasks answer's exit; the Questions answer (an older dch's refusal unless a row says).
+        var tasksStatus: Int32 = 0
+        var questions: (status: Int32, out: Data) = (1, Data())
         init(hold: Set<String>, tasks: Data = XrayPanelTasksTests.tasksOut) { (_hold, self.tasks) = (hold, tasks) }
-        static func form(_ a: [String]) -> String { a.contains("--tasks") ? "tasks" : a.contains("--memory") ? "memory" : "chapters" }
+        static func form(_ a: [String]) -> String {
+            a.contains("--tasks") ? "tasks" : a.contains("--memory") ? "memory" : a.contains("--questions") ? "questions" : "chapters"
+        }
         var calls: [String] { lock.withLock { _calls } }
         var parkedCount: Int { lock.withLock { parked.count } }
         var hold: Set<String> { get { lock.withLock { _hold } } set { lock.withLock { _hold = newValue } } }
@@ -28,7 +33,7 @@ final class XrayOpenFastTests: XCTestCase {
                 if lock.withLock({ _calls.append(f); return _hold.contains(f) }) {
                     await withCheckedContinuation { c in lock.withLock { parked.append(c) } }
                 }
-                return f == "tasks" ? (0, tasks) : f == "memory" ? XrayChaptersTests.mem : XrayChaptersTests.chapters
+                return f == "tasks" ? (tasksStatus, tasks) : f == "memory" ? XrayChaptersTests.mem : f == "questions" ? questions : XrayChaptersTests.chapters
             }
         }
         func release() { lock.withLock { () -> [CheckedContinuation<Void, Never>] in let h = parked; parked = []; return h }.forEach { $0.resume() } }
@@ -206,5 +211,47 @@ final class XrayOpenFastTests: XCTestCase {
         XCTAssertTrue(p.answered)
         XCTAssertEqual(p.dchChapters?.count, 6)
         p.stop()
+    }
+
+    /// #1974 n1: an open drawn early from kept rows, with a follow attached that has no snapshot yet: when the Tasks answer
+    /// removes the shown tab, the strip moves to the first tab left. Red at base: answeredAll() skipped finishOpen (no
+    /// snapshot) and takeFollow returns at `guard !loaded`, so the drawer sat on the missing Tasks tab.
+    func testAnEarlyOpenWithAFollowLeavesATabItsAnswerRemoved() async {
+        await withKeep {
+            let panels = XrayPanels()
+            panels.keep(XrayChaptersTests.local, XrayPanels.Kept(tasks: XrayPanelModel.tasksTab((0, XrayPanelTasksTests.tasksOut)), anchors: [:]))
+            let none = XrayPanelTasksTests.ndjson([XrayPanelTasksTests.header, #"{"done":true,"count":0,"dropped":0}"#])
+            let p = panel(panels)
+            p.follow = XrayFollow(target: XrayChaptersTests.local)   // attached, never started: no snapshot comes
+            p.read(dch: "/fake/dch", run: Gate(hold: [], tasks: none).run)
+            XCTAssertTrue(p.loaded, "drawn early from the kept Tasks")
+            await p.reading?.value
+            XCTAssertTrue(p.answered)
+            XCTAssertTrue(p.tasks == nil, "the answer has no tasks")
+            XCTAssertEqual(p.tabs, [.memory])
+            XCTAssertEqual(p.tab, .memory, "the strip left the missing Tasks tab")
+            p.follow = nil
+            p.stop()
+        }
+    }
+
+    /// #1974 n2: the Todos chip on a host that does not answer: no kept rows are drawn for it, so its unreachable Tasks
+    /// answer leaves no tasks and the fallback (the list) runs. Red at base: the kept tasks were seeded, exit 4 kept them,
+    /// and the chip showed stale rows instead of its list.
+    func testTheChipDoesNotDrawKeptRows() async {
+        await withKeep {
+            let panels = XrayPanels()
+            panels.keep(XrayChaptersTests.local, XrayPanels.Kept(tasks: XrayPanelModel.tasksTab((0, XrayPanelTasksTests.tasksOut)), anchors: [:]))
+            let gate = Gate(hold: []), p = panel(panels)
+            gate.tasksStatus = 4
+            var fell = 0
+            p.fallback = { fell += 1 }
+            p.read(dch: "/fake/dch", run: gate.run)
+            XCTAssertFalse(p.loaded, "no kept rows on the chip's first frame")
+            await p.reading?.value
+            XCTAssertEqual(fell, 1, "the list opens")
+            XCTAssertTrue(p.tasks == nil)
+            p.stop()
+        }
     }
 }

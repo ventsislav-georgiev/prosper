@@ -46,6 +46,9 @@ tag from the now-released section and put it on the new top draft.
   while they refresh. (#1976)
 - Prosper now needs macOS 15 Sequoia or later; Macs on macOS 14 keep the last version that supports
   them. (#1978)
+- The X-ray drawer has a Questions tab next to Tasks: a session's open questions first, then the
+  answered and dropped ones, with the ruling in each question's card. The tab shows only when the
+  session has questions. (#1974)
 
 ## v2.179.0
 - X-ray: a prompt typed while Claude was still answering the previous one no longer leaves that earlier

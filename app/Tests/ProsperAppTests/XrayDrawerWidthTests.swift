@@ -20,7 +20,7 @@ final class XrayDrawerWidthTests: XCTestCase {
         try body()
     }
 
-    /// A panel that shows all six tabs: dch's chapters with refs (gate on), Search on, Tasks and Memory.
+    /// A panel that shows every tab: dch's chapters with refs (gate on), Search on, Tasks, (#1974) Questions and Memory.
     func sixTabs() -> XrayPanelModel {
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
         p.now = { XrayPanelTasksTests.now }
@@ -28,6 +28,7 @@ final class XrayDrawerWidthTests: XCTestCase {
         p.apply(tasks: (0, XrayPanelTasksTests.tasksOut), memory: (0, XrayPanelTasksTests.ndjson(XrayPanelTasksTests.memory)),
                 chapters: (0, XrayRefsParseTests.object(refs: XrayRefsTabTests.three)))
         p.searchable = true
+        p.takeQuestions((0, XrayQuestionsTabTests.out))   // #1974
         return p
     }
 

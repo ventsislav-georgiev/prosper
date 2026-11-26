@@ -75,6 +75,13 @@ struct XrayTasks: Equatable {
         return out
     }
 
+    /// #1974: a questions list (dch --questions): Open (active and pending) first, then Answered (done, newest first),
+    /// Dropped only when any.
+    var questionGroups: [Group] {
+        let g = groups   // always In progress, Pending, Done, then Dropped when any
+        return [Group(title: "Open", tasks: g[0].tasks + g[1].tasks), Group(title: "Answered", tasks: g[2].tasks)] + g.dropFirst(3)
+    }
+
     // MARK: wire
 
     private struct Header: Decodable {
@@ -101,7 +108,9 @@ struct XrayTasks: Equatable {
             let url: String?
             let group: String?
         }
-        let task: T
+        // #1974: a questions read's rows say "question" where a tasks read's say "task" (the same fields)
+        let task: T?
+        let question: T?
     }
 
     private struct DoneLine: Decodable {
@@ -156,18 +165,21 @@ struct XrayTasks: Equatable {
                           skippedLines: 0, tasks: [])
         var sawDone = false, headerPartial = false, rows = 0
         let dec = JSONDecoder()
+        func add(_ row: Row.T, _ line: Data) {
+            rows += 1
+            if rows > maxRows { r.skippedLines += 1 } else {
+                let t = task(row)
+                cache.parses &+= 1   // a counter only: wrapping is harmless
+                r.tasks.append(t); kept[line] = t
+            }
+        }
         for line in lines where !line.isEmpty {
             if line.count > maxLine { r.skippedLines += 1; continue }
             if let t = kept[line] ?? cache.rows[line] {
                 rows += 1
                 if rows > maxRows { r.skippedLines += 1 } else { r.tasks.append(t); kept[line] = t }
-            } else if let row = try? dec.decode(Row.self, from: line) {
-                rows += 1
-                if rows > maxRows { r.skippedLines += 1 } else {
-                    let t = task(row.task)
-                    cache.parses &+= 1   // a counter only: wrapping is harmless
-                    r.tasks.append(t); kept[line] = t
-                }
+            } else if let row = try? dec.decode(Row.self, from: line), let t = row.task ?? row.question {
+                add(t, line)
             } else if let d = try? dec.decode(DoneLine.self, from: line), d.done {
                 sawDone = true
                 r.droppedCount = max(0, d.dropped ?? 0)
@@ -178,6 +190,8 @@ struct XrayTasks: Equatable {
                 r.sessionTitle = h.title.map { OutsideText.shown($0, max: 120) }
                 headerPartial = h.partial ?? false
                 r.headerWarn = h.warn.map { OutsideText.shown($0, max: 160) }
+            } else if let t = try? dec.decode(Row.T.self, from: line), t.id != nil {
+                add(t, line)   // #1974: a bare row (no "task" or "question" around it), known by its id
             } else { r.skippedLines += 1 }
         }
         r.partial = headerPartial || !sawDone
