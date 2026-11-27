@@ -283,11 +283,11 @@ struct XrayRecapStrip: View {
 
     private func line(_ r: XrayRecap, _ target: XrayTarget) -> some View {
         HStack(spacing: sz(8)) {
-            Image(systemName: "clock.arrow.circlepath").foregroundStyle(Neon.blue).accessibilityHidden(true)
+            Image(systemName: "clock.arrow.circlepath").foregroundStyle(XrayInk.accentInk).accessibilityHidden(true)
             Text(verbatim: r.headline(now: recaps.now())).foregroundStyle(Neon.textPrimary).lineLimit(1).layoutPriority(1)
             ForEach(Array(r.chapters.prefix(XrayRecap.shownChapters).enumerated()), id: \.offset) { _, c in
                 Button { recaps.openChapter(c, pane, target) } label: { Text(verbatim: XrayRecap.title(c)).lineLimit(1) }
-                    .buttonStyle(.plain).foregroundStyle(Neon.blue)
+                    .buttonStyle(.plain).foregroundStyle(XrayInk.accentInk)
                     .help(XrayRecap.fullTitle(c)).accessibilityLabel("Open prompt " + XrayRecap.fullTitle(c))
             }
             ForEach(Array(r.refChips.enumerated()), id: \.offset) { _, chip in
@@ -297,7 +297,7 @@ struct XrayRecapStrip: View {
             }
             if r.moreRefs > 0 {
                 Button { recaps.openDrawer(pane, target) } label: { Text(verbatim: "+\(r.moreRefs) more") }
-                    .buttonStyle(.plain).foregroundStyle(Neon.blue)
+                    .buttonStyle(.plain).foregroundStyle(XrayInk.accentInk)
                     .help("Show every reference in X-ray").accessibilityLabel("Show \(r.moreRefs) more references in X-ray")
             }
             Spacer(minLength: 0)

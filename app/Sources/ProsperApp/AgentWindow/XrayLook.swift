@@ -47,6 +47,29 @@ enum XrayInk {
         return fill
     }
 
+    private struct AccentKey: Equatable { let accent: Color; let surface: Color }
+    private static var accentMemo: (key: AccentKey, text: Color, mark: Color)?
+    /// Tests only: how many times the accent was checked against the surface (a memo miss).
+    static var accentResolves = 0
+
+    /// #2043: off, the theme's accent drawn on the black surface only where it reads (4.5:1 for text or an icon, 3:1 for a
+    /// ring or a tint), else the island's white; on, the accent as it was. Checked once per theme or surface change.
+    private static var accents: (text: Color, mark: Color) {
+        guard !follows else { return (Neon.blue, Neon.blue) }
+        let key = AccentKey(accent: Neon.blue, surface: surface)
+        if let m = accentMemo, m.key == key { return (m.text, m.mark) }
+        let fallback = AgentIslandInk.white(0.9)
+        let text = AgentIslandInk.readable(key.accent, on: key.surface, else: fallback)
+        let mark = AgentIslandInk.readable(key.accent, on: key.surface, else: fallback, dim: true)
+        accentMemo = (key, text, mark)
+        accentResolves += 1
+        return (text, mark)
+    }
+    /// A button label, an icon or a mark drawn in the accent.
+    static var accentInk: Color { accents.text }
+    /// A chip or tab ring or tint in the accent.
+    static var accentRing: Color { accents.mark }
+
     /// `base` drawn opaque over `terminal`, then moved away from it (toward white on a dark terminal, toward black on a
     /// light one) in 1% steps until the two are at least `minTerminalContrast` apart. A base already apart is kept.
     static func surface(base: Color, over terminal: Color) -> Color {

@@ -113,6 +113,8 @@ tag from the now-released section and put it on the new top draft.
   carry over on first launch. (#2012)
 - The notice for a message an agent sends to another session now shows which session sent it and the
   whole message. (#2047)
+- With Follow theme off, X-ray's accent-coloured buttons and marks stay readable on its dark surface
+  when a custom theme uses a dark accent. (#2043)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -1583,8 +1583,8 @@ struct XrayFilterChipView: View {
             }
             .foregroundStyle(chip.shown ? XrayInk.textPrimary : XrayInk.textSecondary)
             .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-            .background(Capsule().fill(chip.shown ? Neon.blue.opacity(0.2) : .clear))
-            .overlay(Capsule().stroke(chip.shown ? Neon.blue.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
+            .background(Capsule().fill(chip.shown ? XrayInk.accentRing.opacity(0.2) : .clear))
+            .overlay(Capsule().stroke(chip.shown ? XrayInk.accentRing.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
             .contentShape(Capsule())
             .fixedSize()
         }
@@ -1609,7 +1609,7 @@ struct XrayTabStrip: View {
                         .font(Neon.font(10.5, weight: .medium))
                         .foregroundStyle(t == panel.tab ? XrayInk.textPrimary : XrayInk.textSecondary)
                         .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-                        .background(Capsule().fill(t == panel.tab ? Neon.blue.opacity(0.2) : .clear))
+                        .background(Capsule().fill(t == panel.tab ? XrayInk.accentRing.opacity(0.2) : .clear))
                         .contentShape(Capsule())
                         .fixedSize()
                 }
@@ -1689,7 +1689,7 @@ struct XrayTaskRowView: View {
                 Button("Answer") { answer?() }
                     .buttonStyle(.plain)
                     .font(Neon.font(XrayText.small, weight: .medium))
-                    .foregroundStyle(Neon.blue)
+                    .foregroundStyle(XrayInk.accentInk)
                     .opacity(answer == nil ? 0 : 1)   // drawn on every row so the columns stay put
                     .disabled(answer == nil)
                     .accessibilityHidden(answer == nil)
@@ -1763,7 +1763,7 @@ struct XraySearchRowView: View {
             HStack(spacing: sz(6)) {
                 Text(verbatim: row.who).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
                 if let a = row.age { Text(verbatim: a).foregroundStyle(XrayInk.textSecondary).fixedSize() }
-                if row.answer { Text(verbatim: XraySearchRow.answerMark).foregroundStyle(Neon.blue).fixedSize() }   // #1611
+                if row.answer { Text(verbatim: XraySearchRow.answerMark).foregroundStyle(XrayInk.accentInk).fixedSize() }   // #1611
             }
             Text(verbatim: row.snippet).foregroundStyle(XrayInk.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }

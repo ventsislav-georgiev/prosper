@@ -253,8 +253,8 @@ struct XrayAnswerChipView: View {
             }
             .foregroundStyle(XrayInk.textPrimary)
             .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-            .background(Capsule().fill(chip.recommended ? Neon.blue.opacity(0.2) : .clear))
-            .overlay(Capsule().stroke(chip.recommended ? Neon.blue.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
+            .background(Capsule().fill(chip.recommended ? XrayInk.accentRing.opacity(0.2) : .clear))
+            .overlay(Capsule().stroke(chip.recommended ? XrayInk.accentRing.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
             .contentShape(Capsule())
             .fixedSize()
         }

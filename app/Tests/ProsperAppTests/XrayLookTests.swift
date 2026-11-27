@@ -246,4 +246,89 @@ final class XrayLookTests: XCTestCase {
             XCTAssertTrue(card.contains(s), "the card: \(s)")
         }
     }
+
+    // MARK: #2043 the accent on the black surface
+
+    func ratio(_ c: Color, _ s: Color) -> Double { Double(ThemeContrastTests.contrast(NSColor(c), on: NSColor(s))) }
+
+    /// `body` under the default palette with the accent set to `hex` (the palette and the Increase Contrast flag put back).
+    func withAccent(_ hex: String?, _ body: () -> Void) {
+        _ = ThemeStore.shared
+        let (saved, ic) = (ThemeRuntime.palette, ThemeRuntime.increaseContrast)
+        defer { ThemeRuntime.palette = saved; ThemeRuntime.increaseContrast = ic }
+        ThemeRuntime.increaseContrast = false
+        var p = ThemePalette.default
+        if let hex, let c = Color(hex: hex) { p.blue = c }
+        ThemeRuntime.palette = p
+        body()
+    }
+
+    /// Off, a dark accent (#1A237E, about 1.5:1 on black) is replaced where it is text, an icon or a mark (4.5:1: the answer
+    /// button, the Answer mark, the recap clock and its two buttons) and a ring or tint (3:1: the chip, the tab, the
+    /// recommended chip). Red at base: those sites drew Neon.blue (XrayPanel.swift:1586/1587/1612/1692/1766, XrayAnswer.swift:256/257,
+    /// XrayRecap.swift:286/290/300).
+    func testOffADarkAccentIsReplacedOnTheSurface() {
+        withAccent("#1A237E") {
+            let surface = XrayInk.surface
+            XCTAssertLessThan(ratio(Neon.blue, surface), 3, "the fixture: the accent alone is unreadable")
+            XCTAssertGreaterThanOrEqual(ratio(XrayInk.accentInk, surface), 4.5, "text and icon sites")
+            XCTAssertGreaterThanOrEqual(ratio(XrayInk.accentRing, surface), 3, "ring and tint sites")
+            XCTAssertFalse(same(XrayInk.accentInk, Neon.blue))
+        }
+    }
+
+    /// A mid accent (#707070, about 3.6:1 on the black surface): too faint for text (4.5:1), enough for a ring (3:1).
+    func testOffAMidAccentIsKeptOnlyWhereThreeToOneIsEnough() {
+        withAccent("#707070") {
+            let surface = XrayInk.surface
+            XCTAssertTrue((3..<4.5).contains(ratio(Neon.blue, surface)), "the fixture: between the two thresholds")
+            XCTAssertFalse(same(XrayInk.accentInk, Neon.blue), "text: replaced")
+            XCTAssertTrue(same(XrayInk.accentRing, Neon.blue), "ring: kept")
+        }
+    }
+
+    /// Off with the default theme the accent stays Neon.blue (same look as before).
+    func testOffTheDefaultAccentIsUnchanged() {
+        withAccent(nil) {
+            XCTAssertTrue(same(XrayInk.accentInk, Neon.blue))
+            XCTAssertTrue(same(XrayInk.accentRing, Neon.blue))
+        }
+    }
+
+    /// On, the accent is the theme's whatever its contrast.
+    func testOnKeepsTheAccentWhateverTheTheme() {
+        Preferences.xrayFollowsTheme = true
+        withAccent("#1A237E") {
+            XCTAssertTrue(same(XrayInk.accentInk, Neon.blue))
+            XCTAssertTrue(same(XrayInk.accentRing, Neon.blue))
+        }
+    }
+
+    /// The check runs once per theme or setting change, never per row per frame.
+    func testTheAccentIsCheckedOncePerChange() {
+        withAccent("#1A237E") {
+            _ = XrayInk.accentInk
+            let start = XrayInk.accentResolves
+            for _ in 0..<100 { _ = XrayInk.accentInk; _ = XrayInk.accentRing }
+            XCTAssertEqual(XrayInk.accentResolves, start, "200 reads, no new check")
+            ThemeRuntime.palette.blue = Color(hex: "#0D1B5E") ?? .blue
+            for _ in 0..<100 { _ = XrayInk.accentInk }
+            XCTAssertEqual(XrayInk.accentResolves, start + 1, "one theme change, one check")
+        }
+    }
+
+    /// Every listed site draws through XrayInk and none through the raw accent (source anchors: the views live in the window).
+    func testTheAccentSitesRouteThroughXrayInk() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentWindow")
+        let want: [(String, String, Int)] = [("XrayPanel.swift", ".foregroundStyle(XrayInk.accentInk)", 2),
+                                             ("XrayPanel.swift", "XrayInk.accentRing.opacity", 3),
+                                             ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2),
+                                             ("XrayRecap.swift", ".foregroundStyle(XrayInk.accentInk)", 3)]
+        for (f, needle, n) in want {
+            let src = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
+            XCTAssertEqual(src.components(separatedBy: needle).count - 1, n, "\(f): \(needle)")
+            XCTAssertFalse(src.contains("foregroundStyle(Neon.blue)") || src.contains("Neon.blue.opacity"), "\(f): no raw accent")
+        }
+    }
 }
