@@ -64,6 +64,13 @@
    "old": ".send(message, codex: AgentIsland.runsCodex(s, records: read([s])))",
    "new": ".send(message)",
    "expect": "killed"
+  },
+  {
+   "name": "codex-before-nomirror",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "if shown.isEmpty && io.noMirror(key) { return lite }",
+   "new": "if codex { return shown.isEmpty ? AgentWindowText.unconfirmed : nil }; if shown.isEmpty && io.noMirror(key) { return lite }",
+   "expect": "killed"
   }
  ]
 }

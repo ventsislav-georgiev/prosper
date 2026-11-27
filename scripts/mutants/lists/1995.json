@@ -1,0 +1,13 @@
+{
+ "entry": "1995",
+ "filter": "AgentIslandControlsTests",
+ "mutants": [
+  {
+   "name": "notutf8-ignores-agent",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "o.agent == \"codex\" ? \"codex resume\" : \"claude --resume\"",
+   "new": "\"claude --resume\"",
+   "expect": "killed"
+  }
+ ]
+}

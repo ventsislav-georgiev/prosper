@@ -1,6 +1,6 @@
 {
  "entry": "1992",
- "filter": "AgentNewSessionTests|AgentWindowD1Tests|ControlSessionsTests|ControlSessionsHistoryTests|ControlRemoteTests|AgentIslandSayFirstTests|AgentWindowUnsentFirstTests|AgentWindowNewSessionFormTests|AgentWindowNewSessionSidekickTests",
+ "filter": "AgentNewSessionTests|AgentWindowD1Tests|ControlSessionsTests|ControlSessionsHistoryTests|ControlRemoteTests|AgentIslandSayFirstTests|AgentWindowUnsentFirstTests",
  "mutants": [
   {
    "name": "codex_any_wrapper",
