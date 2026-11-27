@@ -194,7 +194,7 @@ enum ControlSessions {
         if let cwd = string(args, "cwd") { m.setNewSessionFolder(cwd) }
         // claude: the form's own command when it runs a Claude (the person's saved flags), else plain claude.
         switch agent {
-        case "codex": m.pickNewSessionAgent(.codex)   // #1997: the Codex command setting, else codex
+        case "codex": m.pickNewSessionAgent(.codex); if !m.newSessionCodex { m.setNewSessionCommand("codex") }   // #1997: the Codex command setting, else codex
         case "shell": m.pickNewSessionAgent(.shell)
         default: if !m.newSessionClaude { m.setNewSessionCommand("claude") }
         }

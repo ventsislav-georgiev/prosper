@@ -407,6 +407,33 @@ final class ControlSessionsTests: XCTestCase {
         }
     }
 
+    /// #1997 L1: a Codex setting that is not a Codex argv (`env K=V codex`) would drop the prompt, so sessions.new
+    /// falls back to a bare codex and the prompt is delivered; a Codex-shaped setting is kept as is.
+    /// Red without `if !m.newSessionCodex { m.setNewSessionCommand("codex") }`: argv starts with env, no prompt said.
+    @MainActor
+    func testSessionsNewCodexNonCodexSettingFallsBackToBareCodex() throws {
+        try base.withNewSessionPrefs {
+            let st = base.store([]), spawns = AgentWindowD1Tests.SpawnCalls()
+            let m = base.newSessionModel(st, spawns)
+            defer { m.close() }
+            var said: [String] = []
+            m.sayFirst = { _, text, _, _ in said.append(text) }
+            try withSeams(model: m) {
+                Preferences.agentIslandCodexCommand = "env K=V codex"
+                _ = try ControlSessions.new(args(["agent": "codex", "name": "web", "cwd": "/Users/example/web", "prompt": "hello"]))
+                XCTAssertEqual(spawns.calls.last?.argv.first, "codex")
+                spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+                XCTAssertEqual(said, ["hello"])
+                XCTAssertEqual(Preferences.agentIslandCodexCommand, "env K=V codex", "unchanged")
+                m.cancelNewSession()
+                Preferences.agentIslandCodexCommand = "codex --search"
+                _ = try ControlSessions.new(args(["agent": "codex", "name": "web2", "cwd": "/Users/example/web"]))
+                XCTAssertEqual(Array(spawns.calls.last?.argv.prefix(2) ?? []), ["codex", "--search"], "kept as is")
+                m.cancelNewSession()
+            }
+        }
+    }
+
     /// #1846 n135: sessions.focus and layout.set refuse over an open New session form, as sessions.new does (a pick
     /// would close it); the form stays open and nothing is selected or laid out.
     @MainActor
