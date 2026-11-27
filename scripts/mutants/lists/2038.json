@@ -1,0 +1,13 @@
+{
+ "entry": "2038",
+ "filter": "XrayFollowSchedulesTests",
+ "mutants": [
+  {
+   "name": "durable-ended-too",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySchedules.swift",
+   "old": " where r.schedules[i].pending && !r.schedules[i].durable {",
+   "new": " where r.schedules[i].pending {",
+   "expect": "killed"
+  }
+ ]
+}
