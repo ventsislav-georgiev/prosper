@@ -2047,6 +2047,17 @@ final class ExtensionRegistry: ObservableObject {
 
     // MARK: - Privilege (system tier) gate
 
+    /// #2012: an extension whose id changed keeps its state: each persisted id set (enabled, disabled, trusted,
+    /// privileged) that holds `old` holds `new` instead. Run before `discover()`, which reads these sets.
+    static func carryRecord(from old: String, to new: String, in defaults: UserDefaults) {
+        for key in [enabledKey, disabledKey, trustedKey, privilegedKey] {
+            guard var ids = defaults.stringArray(forKey: key), let i = ids.firstIndex(of: old) else { continue }
+            ids.remove(at: i)
+            if !ids.contains(new) { ids.append(new) }
+            defaults.set(ids.sorted(), forKey: key)
+        }
+    }
+
     private func privilegedIDs() -> Set<String> {
         Set(defaults.stringArray(forKey: Self.privilegedKey) ?? [])
     }

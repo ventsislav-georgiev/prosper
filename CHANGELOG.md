@@ -110,6 +110,9 @@ tag from the now-released section and put it on the new top draft.
   keep rounded corners. (#2046)
 - The Agent Sessions window's Standard style keeps its title bar above the sidebar and painted like
   the theme, also after switching to it from another style. (#2045)
+- The account pool is now the Agent Account Pool: its settings, island link and control commands use
+  the new name (pool.*, with ccpool.* kept for one release), and your accounts, toggles and history
+  carry over on first launch. (#2012)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

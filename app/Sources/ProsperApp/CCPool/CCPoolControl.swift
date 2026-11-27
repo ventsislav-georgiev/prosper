@@ -8,7 +8,7 @@ enum CCPoolControl {
     /// Seam: the running app's pane model; nil while ccpool is off (never built). Rows put a rig's model here.
     static var model: () -> CCPoolPaneModel? = { CCPoolRuntime.shared?.model }
 
-    static let off = "ccpool is off"
+    static let off = "the Agent Account Pool is off"
     static let badSession = "session must be 1 to 128 characters of A-Z, a-z, 0-9, - and _"
     static let badSince = "since must be an epoch in seconds within the last 14 days"
     /// Per-session rows in a usage reply, biggest first.

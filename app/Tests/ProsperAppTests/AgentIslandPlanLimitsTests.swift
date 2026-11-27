@@ -492,7 +492,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertEqual(buttons.count, 1, "read only: the settings link is the one control; got \(buttons.map(\.names))")
         XCTAssertTrue(buttons.first?.reads(AgentPlanLimits.settingsLink) == true)
         XCTAssertEqual(opened, 0, "drawing opens nothing")
-        XCTAssertEqual(AgentPlanLimits.settingsPane, "ext:com.prosper.ccpool|ccpool")
+        XCTAssertEqual(AgentPlanLimits.settingsPane, "ext:com.prosper.agentpool|agentpool")
     }
 }
 

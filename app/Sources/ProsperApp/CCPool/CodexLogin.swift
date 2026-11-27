@@ -225,9 +225,9 @@ enum CodexLogin {
         } catch let e as CCPoolStoreError {
             return .failed(e.description)
         } catch let e as CCPoolSecretsError {
-            return .failed("ccpool: \(e.description)")
+            return .failed("Agent Account Pool: \(e.description)")
         } catch {
-            return .failed("ccpool: the account could not be stored")
+            return .failed("Agent Account Pool: the account could not be stored")
         }
         logger.note(label, "codex account added")
         return .added(label)

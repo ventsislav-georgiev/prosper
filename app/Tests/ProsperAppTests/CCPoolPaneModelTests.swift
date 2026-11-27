@@ -347,8 +347,8 @@ final class CCPoolPaneModelTests: XCTestCase {
         let r = try ccpoolPaneRig()
         let m = r.model
         XCTAssertTrue(m.routeAgentSessions, "#1890: on by default")
-        XCTAssertNil(r.defaults.object(forKey: "ccpoolRouteAgentSessions"))
-        XCTAssertEqual(CCPoolPaneModel.routeKey, "ccpoolRouteAgentSessions")
+        XCTAssertNil(r.defaults.object(forKey: "poolRoute.claude"))
+        XCTAssertEqual(CCPoolPaneModel.routeKey, "poolRoute.claude")
         XCTAssertEqual(m.proxyText, "Stopped")
         XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
         try r.add(["a"])

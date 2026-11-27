@@ -909,7 +909,7 @@ private struct SettingsRootView: View {
             })
         // ccpool (#871): the account pool pane as the FOOTER. The page exists only while the
         // extension is live, and going live built the owner (AppDelegate's onEnabledChanged).
-        case "com.prosper.ccpool": footer = CCPoolRuntime.shared.map { AnyView(CCPoolPane(model: $0.model)) }
+        case "com.prosper.agentpool": footer = CCPoolRuntime.shared.map { AnyView(CCPoolPane(model: $0.model)) }
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,
@@ -3945,7 +3945,14 @@ func settingsKitRecord(registry: ExtensionRegistry, selection: String) -> Extens
 
 /// The selection, or General when the sidebar no longer shows it (a vanished ext section or kit, a hidden category).
 func settingsHealedSelection(_ selection: String, groups: [(String, [SettingsTab])]) -> String {
-    groups.contains(where: { $0.1.contains { $0.id == selection } }) ? selection : "general"
+    let selection = settingsPaneAlias(selection)
+    return groups.contains(where: { $0.1.contains { $0.id == selection } }) ? selection : "general"
+}
+
+/// #2012: a renamed pane's old sidebar id opens its new pane (a stored selection, a link or an opener built before).
+// shortcut: one entry per renamed pane; drop the ccpool one when nothing older than #2012 is supported.
+func settingsPaneAlias(_ selection: String) -> String {
+    selection == "ext:com.prosper.ccpool|ccpool" ? AgentPlanLimits.settingsPane : selection
 }
 
 /// #918 S5: the kit pane in its Settings tab; one model per shown tab, over the app's KitRuntimes.

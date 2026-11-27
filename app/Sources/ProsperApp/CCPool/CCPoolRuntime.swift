@@ -242,20 +242,22 @@ final class CCPoolRuntime {
     /// holder is taken over, another program's port is left alone (start logs it), a running proxy stays as it is.
     /// Only while the proxy should run (the extension live, an account in the pool). No window, no activation.
     @discardableResult
+    /// #2012: prosper://agentpool/… and its alias prosper://ccpool/… (one release) both come here; the log names the one used.
     static func openLink(_ url: URL, runtime: CCPoolRuntime? = shared) -> Task<Void, Never>? {
+        let link = "prosper://\(url.host == "ccpool" ? "ccpool" : "agentpool")"
         guard url.path == "/takeover" else {
-            CCPoolOSLog().note(nil, "prosper://ccpool: unknown path; nothing done")
+            CCPoolOSLog().note(nil, "\(link): unknown path; nothing done")
             return nil
         }
         guard let runtime else {
-            CCPoolOSLog().note(nil, "prosper://ccpool/takeover: the ccpool extension is off; nothing done")
+            CCPoolOSLog().note(nil, "\(link)/takeover: the Agent Account Pool extension is off; nothing done")
             return nil
         }
         guard runtime.lifecycle.shouldRun else {
-            runtime.service.logger.note(nil, "prosper://ccpool/takeover: the extension is off or the pool has no account; nothing done")
+            runtime.service.logger.note(nil, "\(link)/takeover: the extension is off or the pool has no account; nothing done")
             return nil
         }
-        runtime.service.logger.note(nil, "prosper://ccpool/takeover")
+        runtime.service.logger.note(nil, "\(link)/takeover")
         return runtime.model.takeOverProxy(pid: nil)
     }
 

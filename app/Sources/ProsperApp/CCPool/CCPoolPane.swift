@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// #871 P2a: the ccpool Settings pane, mounted (P2b-1) as the footer of the bundled ccpool
+/// #871 P2a: the Agent Account Pool Settings pane (#2012; it was ccpool), mounted (P2b-1) as the footer of the bundled ccpool
 /// extension's Settings page on `CCPoolRuntime.shared.model`. House Neon components and `sz()` throughout; rows that may not fit at a small UI scale
 /// fall back to a stacked layout through `ViewThatFits`. No NSAlert: Remove confirms inline.
 struct CCPoolPane: View {
     @ObservedObject var model: CCPoolPaneModel
 
-    static let mintHint = "Get one by running claude setup-token in a terminal while signed in to that account."
+    static let mintHint = "Get a Claude token by running claude setup-token in a terminal while signed in to that account."
     /// Errata C6: the label is stored in the clear.
     static let labelHint = "Labels are not secret: other programs on this Mac can see them (in the proxy's status reply, its state file "
         + "and the Keychain item name). Tokens stay in the Keychain."
-    static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
+    /// #2012: per harness, as each account's request goes to its own provider.
+    static let refreshHint = "Costs one tiny request per account, straight to Anthropic (Claude) or OpenAI (Codex)."
+    static let addClaudeTitle = "Add Claude account"
     static let routeTitle = "Start new Claude sessions through the pool"
     static let codexRouteTitle = "Start new Codex sessions through the pool"
     /// #2009: the routed-but-silent detector's caption (CCPool.CodexReach).
@@ -156,7 +158,7 @@ struct CCPoolPane: View {
     // MARK: Add
 
     private var addSection: some View {
-        NeonSection("Add account") {
+        NeonSection(Self.addClaudeTitle) {
             VStack(alignment: .leading, spacing: sz(10)) {
                 NeonRow("Label") {
                     TextField("work, personal…", text: $model.labelDraft).textFieldStyle(.roundedBorder).frame(maxWidth: sz(260))

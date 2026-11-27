@@ -1341,7 +1341,7 @@ struct AgentPlanUsage: Equatable, Sendable {
             guard let u else { return nil }
             return "\(name): \(Self.percent(u)) used" + (r.map { ", resets \(f.string(from: Date(timeIntervalSince1970: Double($0))))" } ?? "")
         }
-        return (["\(plan) plan usage (account pool, current account)"]
+        return (["\(plan) plan usage (Agent Account Pool, current account)"]
                 + [line("Session limit", session, sessionReset), line("Weekly limit", week, weekReset)].compactMap { $0 })
             .joined(separator: "\n")
     }
@@ -1541,9 +1541,9 @@ struct AgentPlanLimits: Equatable, Sendable {
             return PoolPart(name: String(head[..<sp]), free: String(head[head.index(after: sp)...]), more: more)
         }
     }
-    static let settingsLink = "Account pool settings\u{2026}"
+    static let settingsLink = "Agent pool settings\u{2026}"
     /// The Account pool pane's Settings id ("ext:<extension id>|<section id>", the sidebar's rule).
-    static let settingsPane = "ext:com.prosper.ccpool|ccpool"
+    static let settingsPane = "ext:com.prosper.agentpool|agentpool"
 
     /// #1898 words kept: "Free across all accounts: ..."; a named harness: "Free across all Codex accounts: ...".
     static func spokenPool(_ pool: String, title: String?) -> String { "Free across all \(title.map { $0 + " " } ?? "")accounts: \(pool)" }

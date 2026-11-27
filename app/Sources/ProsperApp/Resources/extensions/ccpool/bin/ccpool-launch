@@ -35,7 +35,7 @@ code=$?
 if [ "$code" -eq 7 ]; then
     # Connection refused: nothing listens on the port.
     # The separator is U+203A, written as its UTF-8 bytes so this file stays ASCII.
-    printf 'ccpool-launch: the pool is not running; turn it on in Prosper Settings \342\200\272 Claude Account Pool\n' >&2
+    printf 'ccpool-launch: the pool is not running; turn it on in Prosper Settings \342\200\272 Agent Account Pool\n' >&2
     exit 1
 fi
 # A ccpool proxy names itself in the first token of its Server header, or as the service of its health answer.

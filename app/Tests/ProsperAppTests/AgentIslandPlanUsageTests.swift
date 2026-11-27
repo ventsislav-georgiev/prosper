@@ -59,14 +59,14 @@ final class AgentIslandPlanUsageTests: XCTestCase {
         let u = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.416, "seven_day": 0.1, "seven_day_opus": 0.9], at: now - 60,
                                              reset: ["five_hour": 1_800_007_200, "seven_day": 1_800_259_200], now: now))
         XCTAssertEqual(u.text, "5h 42% \u{00B7} week 10%")
-        XCTAssertEqual(u.help(timeZone: utc), "Claude plan usage (account pool, current account)\n"
+        XCTAssertEqual(u.help(timeZone: utc), "Claude plan usage (Agent Account Pool, current account)\n"
                        + "Session limit: 42% used, resets Fri 10:00\nWeekly limit: 10% used, resets Mon 08:00")
     }
 
     func testOneLimitAloneAndNoResetAreFormatted() throws {
         let u = try XCTUnwrap(AgentPlanUsage(util: ["seven_day": 1.0], at: now - 60, reset: [:], now: now))
         XCTAssertEqual(u.text, "week 100%")
-        XCTAssertEqual(u.help(timeZone: utc), "Claude plan usage (account pool, current account)\nWeekly limit: 100% used")
+        XCTAssertEqual(u.help(timeZone: utc), "Claude plan usage (Agent Account Pool, current account)\nWeekly limit: 100% used")
     }
 
     // MARK: - Stale is dropped

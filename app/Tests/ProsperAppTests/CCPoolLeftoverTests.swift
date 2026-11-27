@@ -347,8 +347,8 @@ final class CCPoolLeftoverTests: XCTestCase {
         XCTAssertTrue(enable.contains("CCPoolRuntime.setExtensionLive(self.ccpoolExtLive)"), "enable and disable push it")
         XCTAssertTrue(quit.contains("CCPoolRuntime.shared?.quit()"), "quit stops the proxy")
         XCTAssertEqual(text.components(separatedBy: "CCPoolRuntime.").count - 1, 4, "no other ccpool hook")
-        XCTAssertTrue(body("func handleOpenedLink(", indent: 4).contains(#"case "ccpool": CCPoolRuntime.openLink(u)"#), "the prosper://ccpool route lives in handleOpenedLink")
-        XCTAssertTrue(text.contains(#"record(id: "com.prosper.ccpool")?.isLive ?? false"#), "live = enabled and trusted")
+        XCTAssertTrue(body("func handleOpenedLink(", indent: 4).contains(#"case "agentpool", "ccpool": CCPoolRuntime.openLink(u)"#), "the prosper://agentpool route and its ccpool alias live in handleOpenedLink")
+        XCTAssertTrue(text.contains(#"record(id: "com.prosper.agentpool")?.isLive ?? false"#), "live = enabled and trusted")
     }
 
     /// R1205-q939: one request through account A (picked first: `current` is nil, A leads the order) of a fake

@@ -26,7 +26,7 @@ extension CCPoolControl {
         guard !label.isEmpty else { throw ControlError("argument 'label' is empty") }
         if let why = m.storeProblem { throw ControlError(why) }
         guard let a = m.store.snapshot.accounts[label] else {
-            throw ControlError("no ccpool account named \(OutsideText.shown(label, max: 64)) (ccpool.status lists them)")
+            throw ControlError("no pool account named \(OutsideText.shown(label, max: 64)) (pool.status lists them)")
         }
         return (m, label, Bench(a))
     }
@@ -56,7 +56,7 @@ extension CCPoolControl {
         // n171: what the store applied (a longer limit already on the account wins), not what was asked.
         let applied = String(format: "%.1f", (Double(held) - m.clock()) / 3600)
         return ControlChange(summary: "hold \(OutsideText.shown(label, max: 64)) for \(applied) h", result: .string(label),
-                             verb: "held a ccpool account", undo: undo(m, label, before, after: Bench(a)))
+                             verb: "held a pool account", undo: undo(m, label, before, after: Bench(a)))
     }
 
     /// Release the account: every cooldown, a hold and a token refusal go (the Release button).
@@ -70,6 +70,6 @@ extension CCPoolControl {
         m.release(label)
         let after = m.store.snapshot.accounts[label].map(Bench.init)
         return ControlChange(summary: "release \(OutsideText.shown(label, max: 64))", result: .string(label),
-                             verb: "released a ccpool account", undo: undo(m, label, before, after: after))
+                             verb: "released a pool account", undo: undo(m, label, before, after: after))
     }
 }

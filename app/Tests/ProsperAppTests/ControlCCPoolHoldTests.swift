@@ -35,7 +35,7 @@ final class ControlCCPoolHoldTests: XCTestCase {
 
     func testBothAreChangesWithTheirArgs() {
         let reg = registry()
-        XCTAssertEqual(reg.commands.keys.sorted(), ["ccpool.hold", "ccpool.release"])
+        XCTAssertEqual(reg.commands.keys.sorted(), ["ccpool.hold", "ccpool.release", "pool.hold", "pool.release"])  // #2012
         XCTAssertTrue(reg.commands.values.allSatisfy(\.mutates))
         XCTAssertEqual(reg.commands["ccpool.hold"]?.args["hours"]?.type, "number")
         XCTAssertEqual(reg.commands["ccpool.hold"]?.args["hours"]?.required, true)
@@ -108,10 +108,10 @@ final class ControlCCPoolHoldTests: XCTestCase {
         refused(try CCPoolControl.hold(label: "alpha", hours: .nan), CCPoolControl.badHours)
         refused(try CCPoolControl.hold(label: "alpha", hours: .infinity), CCPoolControl.badHours)
         refused(try CCPoolControl.hold(label: "alpha", hours: CCPoolControl.maxHours + 1), CCPoolControl.badHours)
-        refused(try CCPoolControl.hold(label: "nobody", hours: 1), "no ccpool account named nobody (ccpool.status lists them)")
+        refused(try CCPoolControl.hold(label: "nobody", hours: 1), "no pool account named nobody (pool.status lists them)")
         refused(try CCPoolControl.hold(label: "  ", hours: 1), "argument 'label' is empty")
         refused(try CCPoolControl.release(label: "alpha"), "alpha has no hold or limit to release")
-        refused(try CCPoolControl.release(label: "nobody"), "no ccpool account named nobody (ccpool.status lists them)")
+        refused(try CCPoolControl.release(label: "nobody"), "no pool account named nobody (pool.status lists them)")
         XCTAssertEqual(r.store.snapshot.accounts["alpha"]?.cooldown, [:], "a refusal changes nothing")
         XCTAssertNotNil(try? CCPoolControl.hold(label: "alpha", hours: CCPoolControl.maxHours), "the cap itself is allowed")
     }
@@ -138,7 +138,7 @@ final class ControlCCPoolHoldTests: XCTestCase {
             await reg.reply(to: try JSONEncoder().encode(ControlRequest(cmd: cmd, args: a))).error
         }
         let off = try await refusal("ccpool.hold", args("alpha", 1))
-        XCTAssertEqual(off, "ccpool is off")
+        XCTAssertEqual(off, "the Agent Account Pool is off")
         let noHours = try await refusal("ccpool.hold", args("alpha"))
         XCTAssertEqual(noHours, "missing argument 'hours' for ccpool.hold")
         let noLabel = try await refusal("ccpool.release", [:])

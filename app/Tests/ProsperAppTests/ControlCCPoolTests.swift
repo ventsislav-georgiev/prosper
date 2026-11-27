@@ -43,13 +43,34 @@ final class ControlCCPoolTests: XCTestCase {
 
     func testCCPoolCommandsAreReadsWithTheirArgs() {
         let reg = registry()
-        XCTAssertEqual(reg.commands.keys.sorted(), ["ccpool.pin", "ccpool.status", "ccpool.usage"])
+        XCTAssertEqual(reg.commands.keys.sorted(), ["ccpool.pin", "ccpool.status", "ccpool.usage", "pool.pin", "pool.status", "pool.usage"])  // #2012
         XCTAssertTrue(reg.commands.values.allSatisfy { !$0.mutates })
         XCTAssertEqual(reg.commands["ccpool.pin"]?.args["session"], ControlArg(type: "string", required: true,
                                                                                summary: "the Claude session id (1-128 of A-Z a-z 0-9 - _)"))
         XCTAssertEqual(reg.commands["ccpool.usage"]?.args["since"]?.type, "number")
         XCTAssertEqual(reg.commands["ccpool.usage"]?.args["since"]?.required, false)
         XCTAssertTrue(reg.commands["ccpool.usage"]?.runAsync != nil)
+    }
+
+    /// #2012: pool.* is the name, ccpool.* its alias for one release: the same reply, an alias summary, both in describe.
+    func testPoolCommandsAndTheirCcpoolAliasesAnswerTheSame() async throws {
+        _ = try pool()
+        let new = await call("pool.status"), old = await call("ccpool.status")
+        XCTAssertTrue(new.ok, new.error ?? "")
+        XCTAssertEqual(new.result, old.result, "the alias answers as pool.status")
+        XCTAssertTrue(list(obj(new)["accounts"]).allSatisfy { $0["harness"] != nil }, "each row names its harness (#2042)")
+        let reg = registry()
+        for verb in ["status", "usage", "pin"] {
+            XCTAssertEqual(reg.commands["ccpool.\(verb)"]?.summary, "Alias of pool.\(verb); removed after the next release.")
+            XCTAssertEqual(reg.commands["ccpool.\(verb)"]?.args, reg.commands["pool.\(verb)"]?.args)
+        }
+        guard case .object(let d) = ControlRegistry.standard().describe, case .array(let rows)? = d["commands"] else { return XCTFail("describe lists commands") }
+        let names = rows.compactMap { row -> String? in
+            if case .object(let o) = row, case .string(let n)? = o["name"] { return n } else { return nil }
+        }
+        for name in ["pool.status", "ccpool.status", "pool.hold", "ccpool.hold", "pool.release", "ccpool.release"] {
+            XCTAssertTrue(names.contains(name), name)
+        }
     }
 
     func testCCPoolOffIsAPlainError() async {
@@ -59,7 +80,7 @@ final class ControlCCPoolTests: XCTestCase {
         for (cmd, args) in calls {
             let r = await call(cmd, args)
             XCTAssertFalse(r.ok, cmd)
-            XCTAssertEqual(r.error, "ccpool is off", cmd)
+            XCTAssertEqual(r.error, "the Agent Account Pool is off", cmd)
         }
     }
 

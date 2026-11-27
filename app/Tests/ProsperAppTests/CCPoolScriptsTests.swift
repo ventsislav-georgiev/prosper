@@ -159,7 +159,7 @@ final class CCPoolScriptsTests: XCTestCase {
         let t = try tool()
         let r = try run("ccpool-launch", [t.path], env: ["CCPOOL_PORT": "\(freePort())"])
         XCTAssertEqual(r.status, 1)
-        XCTAssertEqual(r.err, "ccpool-launch: the pool is not running; turn it on in Prosper Settings \u{203A} Claude Account Pool\n")
+        XCTAssertEqual(r.err, "ccpool-launch: the pool is not running; turn it on in Prosper Settings \u{203A} Agent Account Pool\n")
         XCTAssertTrue(t.ran == nil, "TOOL ran with nothing listening")
     }
 

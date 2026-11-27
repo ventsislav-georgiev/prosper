@@ -13,18 +13,18 @@ import Foundation
 /// kept in any other property.
 @MainActor
 final class CCPoolPaneModel: ObservableObject {
-    nonisolated static let routeKey = "ccpoolRouteAgentSessions"
+    nonisolated static let routeKey = "poolRoute.claude"
     /// #1890 (operator 2026-11-23): on by default. Never set: on; a stored choice (true or false) stands.
     nonisolated static func routeValue(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: routeKey) == nil || defaults.bool(forKey: routeKey)
     }
     /// #2009: "Start new Codex sessions through the pool", stored like the Claude toggle: never set reads on.
-    nonisolated static let codexRouteKey = "ccpoolRouteCodexSessions"
+    nonisolated static let codexRouteKey = "poolRoute.codex"
     nonisolated static func codexRouteValue(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: codexRouteKey) == nil || defaults.bool(forKey: codexRouteKey)
     }
     /// #1670: "Move off an account at", a Double 0.5...1.0 (1.0 = only when the account is spent).
-    nonisolated static let exhaustedKey = "ccpoolExhaustedThreshold"
+    nonisolated static let exhaustedKey = "poolExhaustedThreshold"
     nonisolated static let exhaustedRange = 0.5...1.0
     /// A stored value as the proxy uses it: missing, non-finite or outside 0.5...1.0 reads as the default.
     nonisolated static func exhaustedValue(_ raw: Double?) -> Double {
@@ -446,9 +446,9 @@ final class CCPoolPaneModel: ObservableObject {
         } catch let e as CCPoolStoreError {
             return .failed(e.description)
         } catch let e as CCPoolSecretsError {
-            return .failed("ccpool: \(e.description)")
+            return .failed("Agent Account Pool: \(e.description)")
         } catch {
-            return .failed("ccpool: the account could not be stored")
+            return .failed("Agent Account Pool: the account could not be stored")
         }
         // #1219 (R1205-1): by the new account's id: a rename right after the add keeps the sample on it.
         if let p = probe {
@@ -643,9 +643,9 @@ final class CCPoolPaneModel: ObservableObject {
         do { return (nil, try service.removeAccount(label: label)) } catch let e as CCPoolStoreError {
             return (e.description, true)
         } catch let e as CCPoolSecretsError {
-            return ("ccpool: \(e.description)", true)
+            return ("Agent Account Pool: \(e.description)", true)
         } catch {
-            return ("ccpool: \(label) could not be removed", true)
+            return ("Agent Account Pool: \(label) could not be removed", true)
         }
     }
 

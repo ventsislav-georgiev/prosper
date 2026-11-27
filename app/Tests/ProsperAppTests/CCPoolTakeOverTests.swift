@@ -465,9 +465,11 @@ final class CCPoolTakeOverTests: XCTestCase {
         XCTAssertEqual(probe.calls, 0, "nothing probed")
         XCTAssertEqual(signals.sent, [])
 
-        let task = CCPoolRuntime.openLink(link, runtime: rt)
+        // #2012: the new host reaches the same handler as the ccpool alias above, and the log names the link used.
+        let task = CCPoolRuntime.openLink(URL(string: "prosper://agentpool/takeover")!, runtime: rt)
         XCTAssertTrue(task != nil)
         await task?.value
+        XCTAssertTrue((rt.service.logger as? CCPoolCapturingLogger)?.lines.contains("-: prosper://agentpool/takeover") == true)
         XCTAssertEqual(signals.sent, ["4242:\(SIGTERM)"], "the pane button's takeover ran")
         XCTAssertEqual(rt.model.stuckPid, 4242, "the pane shows the outcome")
         XCTAssertFalse(rt.model.proxyBusy)

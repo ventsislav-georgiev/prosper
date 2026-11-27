@@ -293,9 +293,9 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         let claude = AgentNewSession.argv("claude --chrome", shell: "/bin/zsh")
         let headroom = AgentNewSession.argv("headroom wrap claude", shell: "/bin/zsh")
         let shell = AgentNewSession.argv("", shell: "/bin/zsh")
-        XCTAssertEqual(AgentNewSession.viaPoolHint, "via ccpool")
+        XCTAssertEqual(AgentNewSession.viaPoolHint, "via the pool")
 
-        XCTAssertEqual(AgentNewSession.poolHint(claude, routing: pool.routing), "via ccpool")
+        XCTAssertEqual(AgentNewSession.poolHint(claude, routing: pool.routing), "via the pool")
         XCTAssertEqual(spawnedEnv(c, rec, claude, name: "api"), routedClaude)
         XCTAssertTrue(AgentNewSession.poolHint(headroom, routing: pool.routing) == nil, "headroom is never routed: no hint")
         XCTAssertEqual(spawnedEnv(c, rec, headroom, name: "api-2"), today)

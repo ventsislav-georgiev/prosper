@@ -150,6 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Discover extensions and expose the registry to the command router so
         // migrated system extensions (calc, …) handle their queries, with the
         // native engines as fallback. See docs/ADR-002-extensibility.md.
+        // #2012: the ccpool names move to the Agent Account Pool's (record sets, keys, folder) before discover() reads
+        // the record sets and before the pool runtime builds; after the first launch, one marker read.
+        AgentPoolMigration.migrateV1()
         extensions.discover()
         // System Stats menu-bar monitors. No-ops entirely when disabled (the
         // default) — no poller, no status items until the user opts in.
@@ -244,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the window. SettingsRootView binds the selection via @AppStorage, so
         // writing the default selects the pane whether the window is new or reused.
         LiveExtensionHostServices.shared.settingsOpener = { [weak self] selection in
-            Preferences.defaults.set(selection, forKey: "settingsSelectedPane")
+            Preferences.defaults.set(settingsPaneAlias(selection), forKey: "settingsSelectedPane")   // #2012
             self?.openSettings()
         }
         // Snippet auto-expand toggling on (with inline autocomplete off) must bring
@@ -721,8 +724,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let u = URL(string: urlString), u.scheme == "prosper" {
             switch u.host {
             case "sleep": SleepControl.sleepNow()
-            // #1665: prosper://ccpool/takeover, the pane's "Stop ccpool and start" without a window.
-            case "ccpool": CCPoolRuntime.openLink(u)
+            // #1665: prosper://agentpool/takeover, the pane's "Stop ccpool and start" without a window.
+            // shortcut: #2012 keeps prosper://ccpool/… as an alias for one release; drop "ccpool" here after the next release.
+            case "agentpool", "ccpool": CCPoolRuntime.openLink(u)
             default: break
             }
             return
@@ -1322,7 +1326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Whether the ccpool extension is enabled + trusted (#871). The proxy runs only while it is.
     private var ccpoolExtLive: Bool {
-        extensions.record(id: "com.prosper.ccpool")?.isLive ?? false
+        extensions.record(id: "com.prosper.agentpool")?.isLive ?? false
     }
 
     /// Whether the Mouse extension is enabled + trusted. Every mouse service (scroll

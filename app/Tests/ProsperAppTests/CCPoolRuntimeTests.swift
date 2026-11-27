@@ -69,18 +69,18 @@ final class CCPoolRuntimeTests: XCTestCase {
         let dir = extensionsDir.appendingPathComponent("ccpool", isDirectory: true)
         let loaded = try ExtensionLoader.load(directory: dir, isSystem: true, hostVersion: "0.0.0")
         let ext = loaded.manifest.extension
-        XCTAssertEqual(ext.id, "com.prosper.ccpool")
+        XCTAssertEqual(ext.id, "com.prosper.agentpool")
         XCTAssertEqual(ext.isSystem, true)
         XCTAssertEqual(ext.defaultDisabled, true)
         XCTAssertEqual(ext.version, "1.1.3")
-        XCTAssertEqual(loaded.manifest.contributes?.allSettingsSections.map(\.id), ["ccpool"])
+        XCTAssertEqual(loaded.manifest.contributes?.allSettingsSections.map(\.id), ["agentpool"])
 
         let system = tempDir("ccpool-ext").appendingPathComponent("system", isDirectory: true)
         try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: dir, to: system.appendingPathComponent("ccpool", isDirectory: true))
         let reg = GateFixture(systemDir: system, userDir: system.deletingLastPathComponent().appendingPathComponent("user"),
                               defaults: scratchDefaults("ccpool-ext")).registry()
-        let rec = try XCTUnwrap(reg.record(id: "com.prosper.ccpool"))
+        let rec = try XCTUnwrap(reg.record(id: "com.prosper.agentpool"))
         XCTAssertFalse(rec.enabled)
         XCTAssertFalse(rec.isLive, "a fresh install runs no proxy")
     }

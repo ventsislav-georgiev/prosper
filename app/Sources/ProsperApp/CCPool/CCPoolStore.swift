@@ -43,17 +43,17 @@ enum CCPoolStoreError: Error, Equatable, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .emptyLabel: return "ccpool: an account needs a label"
+        case .emptyLabel: return "Agent Account Pool: an account needs a label"
         // Review INFO 8: emoji sequences stay refused (they carry U+200D or U+FE0F); the hint says so.
         // QA #751 INFO-7: the limit counts code points (an accented letter typed in two parts is two).
-        case .badLabel: return "ccpool: a label is at most \(CCPoolStore.labelMax) code points, with no control or invisible characters "
+        case .badLabel: return "Agent Account Pool: a label is at most \(CCPoolStore.labelMax) code points, with no control or invisible characters "
             + "(emoji joined from several, like 👩‍💻 or ❤️, hold invisible ones)"
-        case .duplicateLabel: return "ccpool: an account with that label already exists"
-        case .emptyToken: return "ccpool: empty token, nothing stored"
-        case .noSuchAccount: return "ccpool: no such account"
-        case .stateWriteFailed: return "ccpool: the account list could not be saved; nothing changed"
+        case .duplicateLabel: return "Agent Account Pool: an account with that label already exists"
+        case .emptyToken: return "Agent Account Pool: empty token, nothing stored"
+        case .noSuchAccount: return "Agent Account Pool: no such account"
+        case .stateWriteFailed: return "Agent Account Pool: the account list could not be saved; nothing changed"
         case .stateUnreadable: return CCPoolStore.unreadableNote
-        case .readBackMismatch: return "ccpool: the Keychain did not return the login just stored; nothing added"
+        case .readBackMismatch: return "Agent Account Pool: the Keychain did not return the login just stored; nothing added"
         }
     }
 }
@@ -89,13 +89,13 @@ final class CCPoolStore: @unchecked Sendable {
     /// empty in memory, never writes the file, and refuses account changes.
     let unreadable: Bool
 
-    static let unreadableNote = "ccpool: the account list (state.json) exists but could not be read; "
+    static let unreadableNote = "Agent Account Pool: the account list (state.json) exists but could not be read; "
         + "Prosper will not change it. Fix or move the file, then relaunch."
 
-    /// Production default: ~/Library/Application Support/Prosper/ccpool. P1 has no caller.
+    /// Production default: ~/Library/Application Support/Prosper/agentpool (#2012: AgentPoolMigration moved the ccpool folder here).
     static var defaultDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Prosper/ccpool", isDirectory: true)
+            .appendingPathComponent("Prosper/agentpool", isDirectory: true)
     }
 
     var stateURL: URL { directory.appendingPathComponent("state.json") }

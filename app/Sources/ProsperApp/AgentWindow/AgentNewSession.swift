@@ -330,7 +330,7 @@ enum AgentNewSession {
         return words.isEmpty ? [loginShell(shell), "-l"] : AgentIsland.withModel(words, model: model, effort: effort)
     }
 
-    static let viaPoolHint = "via ccpool"
+    static let viaPoolHint = "via the pool"   // #2012
 
     /// spec 3.6: "via ccpool" beside the command when the pool's routing applies to `argv` (the form's argv, as
     /// Start spawns it). Decided by the routing value the spawn env applies, so the hint and the env cannot
