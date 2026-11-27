@@ -143,6 +143,9 @@ final class CCPoolRuntime {
         nonisolated(unsafe) let routeDefaults = defaults
         routeOn = { CCPoolPaneModel.routeValue(in: routeDefaults) }
         codexRouteOn = { CCPoolPaneModel.codexRouteValue(in: routeDefaults) }
+        // #2039: stale login scratch folders of an earlier quit or crash, off main.
+        let loginRoot = directory.appendingPathComponent("codex-login", isDirectory: true)
+        DispatchQueue.global(qos: .utility).async { CodexLogin.sweep(root: loginRoot) }
     }
 
     /// Launch, enable and disable: the proxy follows the extension (and the account list).

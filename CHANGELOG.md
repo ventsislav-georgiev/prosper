@@ -97,6 +97,8 @@ tag from the now-released section and put it on the new top draft.
   fight over the login, and an offer to delete that folder's auth.json) (#2008)
 - The Copy and Run buttons on a hovered command line in Agent Sessions stay shown while a session
   writes output, until you hover another command or the text scrolls. (#2040)
+- A Codex sign-in left unfinished by a quit or crash no longer leaves its login files or a running
+  Codex process behind. (#2039)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

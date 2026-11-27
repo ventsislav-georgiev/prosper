@@ -7,8 +7,10 @@ import Foundation
 /// back, listed; undone on failure) and the scratch folder is removed on every path. Nothing logs the item or the
 /// login's output: log lines carry the label and the outcome only.
 enum CodexLogin {
-    /// The words after the Codex command (checked against Codex 0.167.2's strings: `login`, `--device-auth`).
-    static let loginArgs = ["login", "--device-auth"]
+    /// The words after the Codex command (checked against Codex 0.167.2's strings: `login`, `--device-auth`,
+    /// `cli_auth_credentials_store`). #2039: the `-c` override is a top-level option, so it goes before `login`; one argv
+    /// word (no shell), so a managed config that forces the keyring cannot send the login to the Keychain.
+    static let loginArgs = ["-c", "cli_auth_credentials_store=\"file\"", "login", "--device-auth"]
     /// An auth.json is a few KB; anything above this is not one (outside data: a picked folder).
     static let maxAuthBytes = 1 << 20
     /// The login's lines kept for the pane (the code and the URL are in the first few).
@@ -93,6 +95,44 @@ enum CodexLogin {
         return "codex-\(n)"
     }
 
+    static let alreadyRunning = "A Codex sign-in is already running."
+
+    /// #2039: the one login of this process that is running (its scratch and its own stop), reachable by the quit hook
+    /// whatever pane model started it. Set after the scratch is made, cleared on every exit of signIn.
+    enum Live {
+        private static let lock = NSLock()
+        nonisolated(unsafe) private static var scratch: URL?
+        nonisolated(unsafe) private static var stop: (@Sendable () -> Void)?
+
+        static var isActive: Bool { lock.withLock { scratch != nil } }
+        /// Test-and-set: one login per process; false when one is already live (the slot is left alone).
+        static func begin(_ dir: URL) -> Bool { lock.withLock { if scratch != nil { return false }; scratch = dir; stop = nil; return true } }
+        static func started(_ s: @escaping @Sendable () -> Void) { lock.withLock { if scratch != nil { stop = s } } }
+        static func end() { lock.withLock { scratch = nil; stop = nil } }
+
+        /// applicationWillTerminate: SIGTERM to the live child (its own pid, through its stop), then its scratch goes.
+        /// Synchronous, no wait; a no-op with no login live.
+        static func terminate() {
+            let (dir, s) = lock.withLock { () -> (URL?, (@Sendable () -> Void)?) in
+                defer { scratch = nil; stop = nil }
+                return (scratch, stop)
+            }
+            s?()
+            if let dir { try? FileManager.default.removeItem(at: dir) }
+        }
+    }
+
+    /// #2039: removes every child of `root` (stale scratch folders of a quit or crash, with whatever they hold) unless a
+    /// login of this process is live (it keeps its scratch: the sweep is skipped while busy). A symlink child is
+    /// unlinked, never followed; a `root` that is not a plain folder is left alone. Run off main.
+    static func sweep(root: URL) {
+        let fm = FileManager.default
+        guard !Live.isActive,
+              (try? fm.attributesOfItem(atPath: root.path))?[.type] as? FileAttributeType == .typeDirectory,
+              let names = try? fm.contentsOfDirectory(atPath: root.path) else { return }
+        for name in names { try? fm.removeItem(atPath: root.appendingPathComponent(name).path) }
+    }
+
     /// A fresh 0700 folder under `root` (Prosper's own support folder, never ~/.codex); nil when it cannot be made.
     static func makeScratch(root: URL) -> URL? {
         let dir = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -109,9 +149,16 @@ enum CodexLogin {
                        output: @escaping @Sendable (String) -> Void) async -> Outcome {
         if let why = labelRefusal(label, store: store) { return .failed(why) }
         guard !command.isEmpty else { return .failed("No Codex command is set.") }
+        if Live.isActive { return .failed(alreadyRunning) }
+        sweep(root: scratchRoot)
         guard let scratch = makeScratch(root: scratchRoot) else { return .failed("Could not make a private folder for the login.") }
-        defer { try? FileManager.default.removeItem(at: scratch) }
-        let status = await runner(command + loginArgs, ["CODEX_HOME": scratch.path], handle.started, output)
+        guard Live.begin(scratch) else {
+            try? FileManager.default.removeItem(at: scratch)
+            return .failed(alreadyRunning)
+        }
+        defer { Live.end(); try? FileManager.default.removeItem(at: scratch) }
+        let status = await runner(command + loginArgs, ["CODEX_HOME": scratch.path], { s in Live.started(s); handle.started(s) },
+                                  output)
         if handle.isCancelled {
             logger.note(label, "codex login cancelled; nothing added")
             return .cancelled

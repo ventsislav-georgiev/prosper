@@ -1232,6 +1232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autocomplete.stop()
         hotKeys.forEach { $0.unregister() }
         BunHarness.shared.shutdown()
+        // #2039: an unfinished Codex sign-in does not outlive the app (no runtime may be built when the pool is off).
+        CodexLogin.Live.terminate()
         // ccpool (#871): the loopback proxy stops with the app (spec 3.2).
         CCPoolRuntime.shared?.quit()
         // codex app-server and the command it runs: SIGTERM, SIGKILL after 1 s, inline (#361).

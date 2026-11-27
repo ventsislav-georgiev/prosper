@@ -79,7 +79,8 @@ final class CodexLoginTests: XCTestCase {
         let r = rig(), seen = Seen()
         let outcome = await Self.signIn(r, runner: Self.fake(seen, auth: Self.authJSON, status: 0))
         XCTAssertEqual(outcome, .added("codex-1"))
-        XCTAssertEqual(seen.argv, ["codex", "login", "--device-auth"])
+        XCTAssertEqual(seen.argv, ["codex", "-c", #"cli_auth_credentials_store="file""#, "login", "--device-auth"],
+                       "#2039: the store override is one word, before `login`")
         let home = try XCTUnwrap(seen.home)
         XCTAssertTrue(home.hasPrefix(r.root.path + "/"), "CODEX_HOME under the pool's own folder: \(home)")
         XCTAssertFalse(home.contains("/.codex"))
@@ -348,5 +349,91 @@ final class CodexLoginTests: XCTestCase {
     func testCurrentOfAnotherTypeStillFailsTheDecode() {
         XCTAssertThrowsError(try JSONDecoder().decode(CCPoolState.self, from: Data(#"{"current": 3, "accounts": {}}"#.utf8)))
         XCTAssertEqual(try JSONDecoder().decode(CCPoolState.self, from: Data(#"{"current": null}"#.utf8)).currents, [:])
+    }
+
+    // MARK: #2039 sweep and quit
+
+    func testStartSweepRemovesStaleChildrenAndNeverFollowsALink() throws {
+        let r = rig(), fm = FileManager.default
+        let outside = tempDir().appendingPathComponent("outside", isDirectory: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: outside.appendingPathComponent("keep.txt"))
+        let stale = r.root.appendingPathComponent("stale-1", isDirectory: true)
+        try fm.createDirectory(at: stale, withIntermediateDirectories: true)
+        try Self.authJSON.write(to: stale.appendingPathComponent("auth.json"))
+        try Data("x".utf8).write(to: r.root.appendingPathComponent("loose-file"))
+        try fm.createSymbolicLink(at: r.root.appendingPathComponent("link"), withDestinationURL: outside)
+        let sibling = r.store.directory.appendingPathComponent("sibling.txt")
+        try Data("s".utf8).write(to: sibling)
+
+        CodexLogin.sweep(root: r.root)
+
+        XCTAssertEqual(scratchLeft(r), [], "every child of codex-login/ is gone, with what it held")
+        XCTAssertTrue(fm.fileExists(atPath: r.root.path), "the folder itself stays")
+        XCTAssertTrue(fm.fileExists(atPath: outside.appendingPathComponent("keep.txt").path), "the link's target stays")
+        XCTAssertTrue(fm.fileExists(atPath: sibling.path), "siblings of codex-login/ stay")
+    }
+
+    func testSweepLeavesARootThatIsALinkAlone() throws {
+        let fm = FileManager.default
+        let target = tempDir().appendingPathComponent("target", isDirectory: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("k".utf8).write(to: target.appendingPathComponent("k.txt"))
+        let root = tempDir().appendingPathComponent("codex-login")
+        try fm.createSymbolicLink(at: root, withDestinationURL: target)
+        CodexLogin.sweep(root: root)
+        XCTAssertTrue(fm.fileExists(atPath: target.appendingPathComponent("k.txt").path))
+    }
+
+    func testBeforeLoginSweepRemovesStaleScratchButNotTheLiveOne() async throws {
+        let r = rig(), child = Hanging(), handle = CodexLogin.Handle()
+        let stale = r.root.appendingPathComponent("stale", isDirectory: true)
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        let task = Task { await Self.signIn(r, runner: child.runner, handle: handle) }
+        let deadline = Date().addingTimeInterval(10)
+        while !child.running, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(child.running)
+        XCTAssertEqual(scratchLeft(r).count, 1, "the stale one went before the login, the live one is there")
+        XCTAssertFalse(scratchLeft(r).contains("stale"))
+        CodexLogin.sweep(root: r.root)
+        XCTAssertEqual(scratchLeft(r).count, 1, "a sweep while a login is live keeps its scratch")
+        handle.cancel()
+        _ = await task.value
+        XCTAssertEqual(scratchLeft(r), [])
+    }
+
+    func testQuitHookStopsTheLiveChildAndRemovesItsScratch() async throws {
+        let r = rig(), child = Hanging()
+        let task = Task { await Self.signIn(r, runner: child.runner) }
+        let deadline = Date().addingTimeInterval(10)
+        while !child.running, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(scratchLeft(r).count, 1)
+        CodexLogin.Live.terminate()
+        XCTAssertEqual(child.stops, 1, "the live child got its stop (SIGTERM to its own pid)")
+        XCTAssertEqual(scratchLeft(r), [], "the scratch is removed on the quit path itself")
+        _ = await task.value
+        XCTAssertFalse(CodexLogin.Live.isActive)
+    }
+
+    func testASecondSignInWhileOneIsLiveFailsAndLeavesTheFirstAlone() async throws {
+        let r = rig(), child = Hanging(), second = Hanging()
+        let task = Task { await Self.signIn(r, runner: child.runner) }
+        let deadline = Date().addingTimeInterval(10)
+        while !child.running, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(scratchLeft(r).count, 1)
+        let outcome = await Self.signIn(r, runner: second.runner, label: "codex-2")
+        XCTAssertEqual(outcome, .failed(CodexLogin.alreadyRunning))
+        XCTAssertFalse(second.running, "no second child")
+        XCTAssertEqual(scratchLeft(r).count, 1, "the first scratch stays")
+        XCTAssertTrue(CodexLogin.Live.isActive, "the first slot stays")
+        CodexLogin.Live.terminate()
+        XCTAssertEqual(child.stops, 1, "quit still stops the first child")
+        _ = await task.value
+    }
+
+    func testQuitHookWithNoLiveLoginIsANoOp() {
+        XCTAssertFalse(CodexLogin.Live.isActive)
+        CodexLogin.Live.terminate()
+        XCTAssertFalse(CodexLogin.Live.isActive)
     }
 }
