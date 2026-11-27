@@ -138,7 +138,7 @@ final class CodexLoginTests: XCTestCase {
         r.secrets.refuseStore = true
         let outcome = await Self.signIn(r, runner: Self.fake(Seen(), auth: Self.authJSON, status: 0))
         guard case .failed(let why) = outcome else { return XCTFail("\(outcome)") }
-        XCTAssertTrue(why.hasPrefix("ccpool:"), why)
+        XCTAssertTrue(why.hasPrefix("Agent Account Pool:"), why)
         assertNothingAdded(r, outcome)
     }
 
