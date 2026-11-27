@@ -74,10 +74,10 @@
    "expect": "killed"
   },
   {
-   "name": "set_aside_failure_no_return",
+   "name": "set_aside_failure_sets_marker",
    "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
    "old": "(errno \\(errno)); trying again next launch\")\n                return\n",
-   "new": "(errno \\(errno)); trying again next launch\")\n",
+   "new": "(errno \\(errno)); trying again next launch\")\n                defaults.set(1, forKey: markerKey); return\n",
    "expect": "killed"
   }
  ]
