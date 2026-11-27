@@ -17,7 +17,8 @@ struct AgentPromptOption: Hashable {
     /// 1-9: the one key a click sends.
     let digit: Int
     let label: String
-    /// A key hint the option carries, "esc" from "(esc)". Shown, never sent.
+    /// A key hint the option carries, "esc" from "(esc)". Shown, never sent; #2000: a Codex option's letter,
+    /// "y" from "(y)", is what `answer` types (`codexKey`).
     let hint: String?
     /// The option's other lines, trimmed: a wrapped label's continuation or an
     /// AskUserQuestion description (not told apart). Part of the compared
@@ -25,6 +26,12 @@ struct AgentPromptOption: Hashable {
     var detail: [String] = []
 
     enum Style { case accent, deny, plain }
+
+    /// #2000: a Codex option's shortcut letter, "y" from "(y)" (its `hint`); nil for "(esc)" (never sent).
+    var codexKey: String? {
+        guard let h = hint, h.count == 1, let c = h.first, c.isASCII, c.isLowercase else { return nil }
+        return h
+    }
 
     /// First option = accent, a "No…" option = deny (deny wins).
     func style(first: Bool) -> Style {
@@ -96,6 +103,8 @@ struct AgentPrompt: Hashable {
     /// QA #581 INFO-6: a text line sits right on top of the question at its column, so the question
     /// may have wrapped and `question` is only its tail. Always allow (`allowYes`) leaves it to the human.
     var questionWrapped = false
+    /// #2000: parsed by `codex`: `answer` types the option's `codexKey`, never the digit.
+    var codex = false
 
     /// Any hidden or reordering character anywhere the card shows (Trojan
     /// Source), or (#1251) a base with more than `maxMarks` combining
@@ -174,7 +183,7 @@ struct AgentPrompt: Hashable {
 /// What a blocked row shows under it.
 enum AgentCard: Equatable {
     case prompt(AgentPrompt)
-    /// Blocked with no numbered options (codex, cursor, opencode, multi-select):
+    /// Blocked with no numbered options (codex beyond its approvals (#2000), cursor, opencode, multi-select):
     /// the screen's last lines and Jump only — no guessed keys.
     case context([String])
     /// A click found a different prompt (or none) and sent nothing.
@@ -244,7 +253,7 @@ extension AgentPrompt {
     // MARK: - Parse
 
     static func card(screen: String) -> AgentCard {
-        parse(screen).map(AgentCard.prompt) ?? .context(tail(screen))
+        (parse(screen) ?? codex(screen)).map(AgentCard.prompt) ?? .context(tail(screen))
     }
 
     /// A numbered prompt, or nil. Rules: the bottom-most option line, walked up
@@ -486,6 +495,56 @@ extension AgentPrompt {
         return dedent(Array(lines.filter { !isBlankOrRule($0) }.suffix(maxContext)))
     }
 
+    // MARK: - Codex (#2000)
+
+    /// #2000: Codex 0.167's approval overlay (strings of openai/codex rust-v0.167.2, as in dch v1.185.0
+    /// tests/detect_codex_test.py), or nil. The last non-blank line is exactly `codexFooter`; above it, after blanks,
+    /// options 1…n (n ≥ 2) on consecutive lines, exactly one on Codex's "›" caret, each ending in its shortcut
+    /// ("(y)", a lowercase letter: `codexKey`) or "(esc)"; above them, up to the nearest `isCodexTitle` line (the
+    /// question), the overlay's own lines (reason, command, destination) are the context, edge blanks off. A title
+    /// line anywhere above that one (a command row reading like a title would hide the real head) fails, as does
+    /// everything else: the MCP form, request_user_input, trust, hooks and resume dialogs (no shortcuts, other
+    /// footers) and a cross-thread approval (its footer adds "or o to open thread") stay the context card.
+    static func codex(_ screen: String) -> AgentPrompt? {
+        guard screen.contains(codexFooter) else { return nil }   // every other screen: one scan, no split
+        let lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map { trimmedEnd(String($0)) }
+        guard var k = lines.lastIndex(where: { !isBlank($0) }),
+              lines[k].trimmingCharacters(in: .whitespaces) == codexFooter else { return nil }
+        k -= 1
+        while k >= 0, isBlank(lines[k]) { k -= 1 }
+        var options: [AgentPromptOption] = [], carets = 0
+        while k >= 0, let o = option(lines[k], mark: "›") {
+            let c = Array(o.label)
+            // " (y)": the shortcut, split off like splitHint's "(esc)" (which splitHint leaves to a letter).
+            let letter = c.count > 4 && c[c.count - 4] == " " && c[c.count - 3] == "(" && c[c.count - 1] == ")"
+                && c[c.count - 2].isASCII && c[c.count - 2].isLowercase
+            let (label, hint) = letter ? (String(c.dropLast(4)), String(c[c.count - 2])) : splitHint(o.label)
+            guard hint == "esc" || letter, !label.isEmpty else { return nil }
+            options.insert(AgentPromptOption(digit: o.digit, label: label, hint: hint), at: 0)
+            if o.caret { carets += 1 }
+            k -= 1
+        }
+        guard options.count >= 2, carets == 1, options.map(\.digit) == Array(1...options.count), k >= 0,
+              let title = lines[...k].lastIndex(where: isCodexTitle),
+              !lines[..<title].contains(where: isCodexTitle) else { return nil }
+        var body = Array(lines[(title + 1)..<(k + 1)])
+        while body.first.map(isBlank) == true { body.removeFirst() }
+        while body.last.map(isBlank) == true { body.removeLast() }
+        return AgentPrompt(question: lines[title].trimmingCharacters(in: .whitespaces), context: dedent(body),
+                           options: options, codex: true)
+    }
+
+    /// #2000: Codex 0.167's approval footer (dch README v1.185.0 :753: "a line starting 'Press enter to confirm or esc
+    /// to cancel'"); exact here: the cross-thread variant fails to the context card.
+    static let codexFooter = "Press enter to confirm or esc to cancel"
+
+    /// #2000: the approval titles of the dch samples (exec, apply_patch, network). Any other overlay: context card.
+    static func isCodexTitle(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t == "Would you like to run the following command?" || t == "Would you like to make the following edits?"
+            || (t.hasPrefix("Do you want to approve network access to \"") && t.hasSuffix("\"?"))
+    }
+
     // MARK: - Preview form (#526)
 
     // Claude Code 2.1.309 draws an AskUserQuestion whose options carry previews
@@ -598,10 +657,11 @@ extension AgentPrompt {
     static let minFrame = 30
 
     /// "  ❯ 2. Yes, and …" -> (2, "Yes, and …", caret). Single digit 1-9 only.
-    static func option(_ line: String) -> (digit: Int, label: String, caret: Bool)? {
+    /// #2000: `mark` "›" (U+203A) for Codex (`codex`); Claude's parse only ever passes "❯".
+    static func option(_ line: String, mark: Character = "❯") -> (digit: Int, label: String, caret: Bool)? {
         var s = Substring(line).drop(while: \.isWhitespace)
         var caret = false
-        if s.first == "❯" { caret = true; s = s.dropFirst().drop(while: \.isWhitespace) }
+        if s.first == mark { caret = true; s = s.dropFirst().drop(while: \.isWhitespace) }
         guard let d = s.first, d.isASCII, let digit = d.wholeNumberValue, digit >= 1,
               s.dropFirst().first == "." else { return nil }
         let rest = s.dropFirst(2)
@@ -751,16 +811,23 @@ extension AgentPrompt {
     /// #754: `stillOn` is asked last, after the dch calls, right before the send.
     /// #818: the re-read's caret must not be on an input row (`caretOnInput`): there Claude Code
     /// types the digit into the row as text, and nothing is answered.
+    /// #2000: a Codex prompt (`codex`) is re-read with `codex` and gets the option's shortcut letter instead of the
+    /// digit, through the same `dch --send` (dch README v1.185.0 :523 "Type text (joined with spaces), no enter"; dch
+    /// documents no digit that selects in Codex). Never Esc or Ctrl-C (README :545 "Nothing ever sends Ctrl-C or Esc to
+    /// Codex (one Ctrl-C quits an idle one)"): an option without a letter sends nothing.
     static func answer(_ key: AgentSessionKey, digit: Int, expected: AgentPrompt,
                        io: AgentPromptIO, card: Bool = true, stillOn: () -> Bool = { true }) -> AgentPromptAnswer {
         guard (1...9).contains(digit), expected.preview.isEmpty,
-              expected.options.contains(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
-              let read = parseScreen(io.read(key), multi: false), !read.caretOnInput,
-              case let now = read.prompt, now.sameDialog(expected),
+              let o = expected.options.first(where: { $0.digit == digit && (!card || expected.isEnabled($0)) }),
+              let typed = expected.codex ? o.codexKey : String(digit),
+              case let screen = io.read(key),
+              let now = expected.codex ? codex(screen)
+                : parseScreen(screen, multi: false).flatMap({ $0.caretOnInput ? nil : $0.prompt }),
+              now.sameDialog(expected),
               io.status(key).trimmingCharacters(in: .whitespacesAndNewlines) == "blocked",
               stillOn()
         else { return .changed }
-        return io.sent(key, String(digit)) ? .sent : .dropped
+        return io.sent(key, typed) ? .sent : .dropped
     }
 
     /// #784: the identity `answer` compares (the loop guard: `sameIdentity`, #791): the
@@ -804,7 +871,8 @@ extension AgentPrompt {
         let masked = countdown.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1m:ss$2")
         guard masked != s else { return p }
         return AgentPrompt(question: p.question, context: masked.components(separatedBy: "\n"), options: p.options,
-                           preview: p.preview, notes: p.notes, topFound: p.topFound, questionWrapped: p.questionWrapped)
+                           preview: p.preview, notes: p.notes, topFound: p.topFound, questionWrapped: p.questionWrapped,
+                           codex: p.codex)
     }
 
     // MARK: - Always allow (#751)

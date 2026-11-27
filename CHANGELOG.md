@@ -62,6 +62,8 @@ tag from the now-released section and put it on the new top draft.
 - New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
   command next to the Claude one; a command edited in the form is no longer saved as the default.
   (#1997)
+- A blocked Codex approval (run a command, edit files, network access) can be answered from the
+  island, as Claude's can. (#2000)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

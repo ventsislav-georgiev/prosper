@@ -1443,6 +1443,8 @@ struct AgentCardLayout: Equatable {
     /// terminal answers it (a digit on the feedback row is typed into it; "No, keep planning"
     /// with no feedback does nothing in Claude Code 2.1.318).
     let isPlan: Bool
+    /// #2000: a Codex prompt's options with no shortcut letter (its "(esc)" decline): always off, nothing to type.
+    let keyless: Set<Int>
     /// #526: a preview form's preview rows as drawn (hidden characters escaped,
     /// clipped with "…" below the floor, capped at `maxContext` plus "… N more
     /// lines"), all in `previewFont`, `previewLine` tall each. Empty without one.
@@ -1483,6 +1485,7 @@ struct AgentCardLayout: Equatable {
         (self.labels, self.details, self.tooWide) = (labels, details, tooWide)
         hidden = p.hasHiddenCharacters
         isPlan = AgentPlanForm.isPlan(p)
+        keyless = p.codex ? Set(p.options.filter { $0.codexKey == nil }.map(\.digit)) : []
         (preview, previewFont) = Self.previewRows(p.preview)
         previewLine = (CTFontGetAscent(previewFont) + CTFontGetDescent(previewFont) + CTFontGetLeading(previewFont))
             .rounded(.up)
@@ -1501,7 +1504,7 @@ struct AgentCardLayout: Equatable {
     /// #823: so is a plan approval. #818: "Chat about this" is always off: Claude Code draws it
     /// outside the form's numbered rows, so its digit is no answer (the Agents window walks to it).
     func isEnabled(_ o: AgentPromptOption) -> Bool {
-        preview.isEmpty && !isPlan && AgentPlanForm.flat(o.label) != "Chataboutthis"
+        preview.isEmpty && !isPlan && AgentPlanForm.flat(o.label) != "Chataboutthis" && !keyless.contains(o.digit)
             && (o.style(first: false) == .deny || !(isOverCap || hidden || tooWide.contains(o.digit) || o.isModeChange))
     }
 
