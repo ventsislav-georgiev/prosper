@@ -1978,7 +1978,8 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(AgentIsland.strippingModel(["claude", "--chrome", "--", "--model", "x"]),
                        ["claude", "--chrome", "--", "--model", "x"], "after a bare --: left alone")
         let other = agentRecord("cx", ended: 5, cwd: "/a", launch: ["codex", "--model", "x"])
-        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [other]), ["codex", "--model", "x"], "not claude: unchanged")
+        XCTAssertTrue(AgentIsland.inferredCommand(live: [], history: [other]) == nil, "#1997: a Codex record is no source")
+        XCTAssertEqual(AgentIsland.strippingModel(["codex", "--model", "x"]), ["codex", "--model", "x"], "not claude: unchanged")
         XCTAssertEqual(AgentIsland.strippingName(["claude", "--model", "x"]), ["claude", "--model", "x"],
                        "strippingName (naming, the form's typed command) keeps a typed model")
     }
@@ -2067,7 +2068,8 @@ final class AgentIslandControlsTests: XCTestCase {
         let bare = agentRecord("api", ended: 5, cwd: "/a", launch: ["claude", "fix the bug", "--chrome"])
         XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [bare]), ["claude", "--chrome"], "a positional prompt too")
         let other = agentRecord("cx", ended: 5, cwd: "/a", launch: ["codex", "--", "task"])
-        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [other]), ["codex", "--", "task"], "another agent: whole")
+        XCTAssertTrue(AgentIsland.inferredCommand(live: [], history: [other]) == nil, "#1997: a Codex record is no source")
+        XCTAssertEqual(AgentIsland.strippingPrompt(["codex", "--", "task"], agent: false), ["codex", "--", "task"], "another agent: whole")
         var live = agentRecord("l", ended: 0, cwd: "/z", launch: ["claude"], argv: ["claude", "--chrome", "--", "task"])
         live.end = ""
         XCTAssertEqual(AgentIsland.inferredCommand(live: [live], history: []), ["claude", "--chrome"],
@@ -2106,6 +2108,34 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude --chrome")
         XCTAssertEqual(AgentIslandPane.commit(""), "")
         XCTAssertNil(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand"), "cleared: unset")
+    }
+
+    /// #1997: the Codex command setting: stored trimmed; blank removes the key (unset: codex); the field's commit shows
+    /// what was stored. Red at base: no such setting.
+    @MainActor
+    func testCodexCommandPreferenceTrimsAndEmptyUnsets() {
+        defer { Preferences.agentIslandCodexCommand = "" }
+        Preferences.agentIslandCodexCommand = ""
+        XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandCodexCommand") == nil, "unset")
+        XCTAssertEqual(AgentIslandPane.commitCodex("  headroom wrap codex --search \n"), "headroom wrap codex --search")
+        XCTAssertEqual(Preferences.defaults.string(forKey: "agentIslandCodexCommand"), "headroom wrap codex --search", "stored trimmed")
+        XCTAssertEqual(AgentIslandPane.commitCodex(" \t "), "")
+        XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandCodexCommand") == nil, "blank: the key is gone")
+        XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "the Claude setting is not touched")
+    }
+
+    /// #1997: the #606 inference (stored as the Claude command) skips a Codex record, bare or wrapped, for the next
+    /// one. Red at base: the Codex record's argv came back.
+    func testInferredCommandSkipsACodexRecord() {
+        let codex = agentRecord("cx", ended: 9, cwd: "/a", launch: ["codex", "--search"])
+        let wrapped = agentRecord("cw", ended: 8, cwd: "/a", launch: ["headroom", "wrap", "codex"])   // typed into a shell
+        let claude = agentRecord("c", ended: 5, cwd: "/a", launch: ["claude", "--chrome"])
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [], history: [codex, wrapped, claude]), ["claude", "--chrome"],
+                       "the Codex records are skipped for the next one")
+        var live = codex
+        live.end = ""
+        XCTAssertEqual(AgentIsland.inferredCommand(live: [live], history: [claude]), ["claude", "--chrome"], "a live Codex too")
+        XCTAssertTrue(AgentIsland.inferredCommand(live: [live], history: [codex]) == nil, "only Codex: no source (claude, nothing stored)")
     }
 
     /// #606 visual evidence: the pane with the operator's command at UI scale

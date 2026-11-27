@@ -59,6 +59,9 @@ tag from the now-released section and put it on the new top draft.
   hand (ships dch 1.181.0). (#1995)
 - Ships dch 1.185.0: a Codex started at a session's shell prompt is recognised too, so messages to
   it skip Claude's screen check. (#1996)
+- New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
+  command next to the Claude one; a command edited in the form is no longer saved as the default.
+  (#1997)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

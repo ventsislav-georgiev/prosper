@@ -455,6 +455,7 @@ enum Preferences {
         static let agentIslandSessionGroupsUpdated = "agentIslandSessionGroupsUpdated"   // #1756: ms, per Mac
         static let agentIslandDchGroupsAdoptChecked = "agentIslandDchGroupsAdoptChecked"   // #1788: Bool, per Mac
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
+        static let agentIslandCodexCommand = "agentIslandCodexCommand"   // #1997
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
         static let agentIslandDefaultEffort = "agentIslandDefaultEffort"   // #1454, per Mac
         // #1820: agentIslandSidekickSuffix and agentIslandSidekickPrompt (#847) are no longer read; a stored value stays.
@@ -1453,6 +1454,17 @@ enum Preferences {
             let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandNewSessionCommand) }
             else { defaults.set(v, forKey: Keys.agentIslandNewSessionCommand) }
+        }
+    }
+
+    /// #1997: what the New session form's Codex pick and sessions.new agent codex run; "" = unset (codex).
+    /// Stored trimmed; empty removes the key.
+    static var agentIslandCodexCommand: String {
+        get { defaults.string(forKey: Keys.agentIslandCodexCommand) ?? "" }
+        set {
+            let v = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { defaults.removeObject(forKey: Keys.agentIslandCodexCommand) }
+            else { defaults.set(v, forKey: Keys.agentIslandCodexCommand) }
         }
     }
 

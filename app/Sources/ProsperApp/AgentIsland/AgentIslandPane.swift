@@ -20,6 +20,8 @@ struct AgentIslandPane: View {
     @AppStorage(AgentIslandPane.isolateKey, store: Preferences.defaults) var isolate = false
     /// #606: the New session command field; saved on commit.
     @State private var command = Preferences.agentIslandNewSessionCommand
+    /// #1997: the Codex command field; saved on commit like the Claude one.
+    @State private var codexCommand = Preferences.agentIslandCodexCommand
     /// #751: Always allow permission prompts.
     @State private var autoAllow = Preferences.agentIslandAutoAllow
     /// #1228: the Default model field, and why its last commit was refused (nil: saved).
@@ -81,13 +83,19 @@ struct AgentIslandPane: View {
         c.autoAllowChanged()   // QA #581 F3: off drops every hold now
     }
 
-    static let newSessionFooter = "What New session runs in the chosen folder, e.g. claude or headroom wrap claude --chrome."
+    static let newSessionFooter = "What New session's Claude and Codex picks run in the chosen folder, e.g. headroom wrap claude --chrome."
 
     /// #606: the field's commit: stored trimmed, empty = unset; the field shows
     /// what was stored.
     static func commit(_ text: String) -> String {
         Preferences.agentIslandNewSessionCommand = text
         return Preferences.agentIslandNewSessionCommand
+    }
+
+    /// #1997: the Codex field's commit, the same way: stored trimmed, empty = unset (codex).
+    static func commitCodex(_ text: String) -> String {
+        Preferences.agentIslandCodexCommand = text
+        return Preferences.agentIslandCodexCommand
     }
 
     /// #529 (QA #333 L-3): saved on every pick, not on change. With the stored
@@ -139,11 +147,18 @@ struct AgentIslandPane: View {
         }
         .onChange(of: autoAllow) { _, v in Self.autoAllowToggled(v) }
         NeonSection("New session", footer: Self.newSessionFooter) {
-            NeonRow("Command") {
+            NeonRow("Claude command") {
                 // Unset: inferred once from the sessions you run (and stored), else claude.
                 // #1250: our own field, sized from its font at this scale (a SwiftUI TextField could keep the last scale's height).
                 ScaledTextField(placeholder: "claude", text: $command, onSubmit: { command = Self.commit(command) })
                     .frame(width: sz(260))
+                    .accessibilityLabel("Claude command")
+            }
+            NeonDivider()
+            NeonRow("Codex command") {
+                ScaledTextField(placeholder: "codex", text: $codexCommand, onSubmit: { codexCommand = Self.commitCodex(codexCommand) })
+                    .frame(width: sz(260))
+                    .accessibilityLabel("Codex command")
             }
             NeonDivider()
             // The subtitle is one slot: the hint, or the refusal in its place (nothing moves).
@@ -182,6 +197,7 @@ struct AgentIslandPane: View {
         }
         .onDisappear {
             _ = Self.commit(command)
+            _ = Self.commitCodex(codexCommand)
             if model != modelSaved { _ = Self.commitModel(model) }
         }
     }

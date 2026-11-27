@@ -383,6 +383,30 @@ final class ControlSessionsTests: XCTestCase {
         }
     }
 
+    /// #1997: sessions.new with agent codex runs the Codex command setting, else plain codex; it saves nothing.
+    /// Red at base: a bare codex whatever the setting.
+    @MainActor
+    func testSessionsNewCodexRunsTheCodexCommandSetting() throws {
+        try base.withNewSessionPrefs {
+            let st = base.store([]), spawns = AgentWindowD1Tests.SpawnCalls()
+            let m = base.newSessionModel(st, spawns)
+            defer { m.close() }
+            try withSeams(model: m) {
+                Preferences.agentIslandCodexCommand = "headroom wrap codex --search"
+                _ = try ControlSessions.new(args(["agent": "codex", "name": "web", "cwd": "/Users/example/web"]))
+                XCTAssertEqual(Array(spawns.calls.last?.argv.prefix(4) ?? []), ["headroom", "wrap", "codex", "--search"])
+                spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
+                XCTAssertEqual(Preferences.agentIslandCodexCommand, "headroom wrap codex --search", "unchanged")
+                m.cancelNewSession()
+                Preferences.agentIslandCodexCommand = ""
+                _ = try ControlSessions.new(args(["agent": "codex", "name": "web2", "cwd": "/Users/example/web"]))
+                XCTAssertEqual(spawns.calls.last?.argv.first, "codex", "unset: plain codex")
+                XCTAssertEqual(spawns.calls.count, 2)
+                m.cancelNewSession()
+            }
+        }
+    }
+
     /// #1846 n135: sessions.focus and layout.set refuse over an open New session form, as sessions.new does (a pick
     /// would close it); the form stays open and nothing is selected or laid out.
     @MainActor

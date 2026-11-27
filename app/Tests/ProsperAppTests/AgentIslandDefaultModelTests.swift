@@ -214,8 +214,8 @@ final class AgentIslandDefaultModelTests: XCTestCase {
                     XCTAssertTrue(menu != nil, "the aliases menu, named, at \(scale)")
                     XCTAssertTrue(sub != nil, "\(line) at \(scale)")
                     XCTAssertTrue(title != nil, "the row's title at \(scale)")
-                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.count, 2,
-                                   "Command and Default model at \(scale) (#1820: the Sidekick suffix and prompt fields are gone)")
+                    XCTAssertEqual(tree.filter { $0.role == "AXTextField" }.count, 3,
+                                   "Claude command, Codex command (#1997) and Default model at \(scale) (#1820: the Sidekick suffix and prompt fields are gone)")
                     XCTAssertFalse(tree.contains { $0.label.hasPrefix("Sidekick") }, "#1820: no Pairs or Sidekick prompt field at \(scale)")
                     guard let f = field?.frame, let o = other?.frame, let m = menu?.frame, let ti = title?.frame, let s = sub?.frame
                     else { continue }

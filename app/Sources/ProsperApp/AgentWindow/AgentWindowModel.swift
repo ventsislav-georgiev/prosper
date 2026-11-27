@@ -2684,6 +2684,9 @@ final class AgentWindowModel: ObservableObject {
 
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
 
+    /// #1997: the Command menu's pick sets the whole field from that agent's setting (AgentNewSession.command).
+    func pickNewSessionAgent(_ a: AgentNewSession.Agent) { setNewSessionCommand(AgentNewSession.command(for: a)) }
+
 
     /// #1809: `draft: false` (an agent's sessions.new) fills the form only: the person's kept draft stays.
     func setNewSessionPrompt(_ s: String, draft: Bool = true) {
@@ -2880,7 +2883,7 @@ final class AgentWindowModel: ObservableObject {
     }
 
     /// Start or Return: nothing runs unless every check passes now. #1846 n132: `persist` false (an agent's start over the
-    /// control channel) leaves the person's saved folder and command as they are.
+    /// control channel) leaves the person's saved folder as it is. #1997: no Start saves the command (Settings does).
     @discardableResult
     func startNewSession(persist: Bool = true) -> Bool {
         guard let f = newSession, canStartNewSession else { return false }
@@ -2889,7 +2892,7 @@ final class AgentWindowModel: ObservableObject {
         }
         // #847 D6.1: the prompt only for a Claude (#1992: or a Codex); it never joins the spawn's argv.
         return spawn(AgentNewSession.expand(f.folder, home: home), AgentNewSession.argv(f.command, shell: shell),
-                     name: newSessionName, command: f.command, prompt: newSessionTakesPrompt ? f.prompt : "", persist: persist)
+                     name: newSessionName, prompt: newSessionTakesPrompt ? f.prompt : "", persist: persist)
     }
 
     /// ⇧⌘N, [>_] and the form's New shell: the login shell. With the form open, in its folder and name;
@@ -2906,24 +2909,23 @@ final class AgentWindowModel: ObservableObject {
             }
             let folder = AgentNewSession.expand(f.folder, home: home)   // #1919: empty Name: what ⇧⌘N would pick for it
             let name = typed.isEmpty ? AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: dir) : typed
-            return spawn(folder, argv, name: name, command: nil)
+            return spawn(folder, argv, name: name)
         }
         guard store?.resumeGate.isOK == true else {
             store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887 (QA #747 INFO-3): Shift-Command-N says why
             return false
         }
         let folder = newSessionDefaultFolder
-        return spawn(folder, argv, name: AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: island().spawnDir()),
-                     command: nil)
+        return spawn(folder, argv, name: AgentNewSession.shellName(folder: folder, taken: spawnTaken, dir: island().spawnDir()))
     }
 
-    private func spawn(_ folder: String, _ argv: [String], name: String, command: String?, prompt: String = "",
+    private func spawn(_ folder: String, _ argv: [String], name: String, prompt: String = "",
                        persist: Bool = true) -> Bool {
         requests += 1
         unlisted = nil
         let request = newSession == nil ? nil : requests, asked = now()   // nil: a quick shell, no form's
         guard let key = spawnSession(folder, argv, name, { [weak self] key, failure in
-            self?.spawned(key, failure, name: name, folder: folder, command: command, request: request, asked: asked,
+            self?.spawned(key, failure, name: name, folder: folder, request: request, asked: asked,
                           prompt: prompt, codex: AgentIsland.isInteractiveCodex(argv), persist: persist)
         }) else {
             let why = spawnRefusal(name)
@@ -3002,11 +3004,11 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
-    /// The runner's answer. Success keeps the folder and (OQ-3) a typed command as the one shared setting,
+    /// The runner's answer. Success keeps the folder (#1997: never the command, a form edit is for that form only),
     /// selects the session once its row shows (R2 F5: the form stays "Starting…" over the pane until then);
     /// failure re-enables the form with dch's line.
     /// QA #713 INFO-4: an answer touches the form only when it answers the open form's own request.
-    private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String, command: String?,
+    private func spawned(_ key: AgentSessionKey?, _ failure: String?, name: String, folder: String,
                          request: Int?, asked: TimeInterval, prompt: String, codex: Bool, persist: Bool) {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
@@ -3018,11 +3020,6 @@ final class AgentWindowModel: ObservableObject {
         }
         claimed[name] = now()
         if persist { Preferences.agentWindowNewSessionFolder = folder }
-        if persist, let command, !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // #847 D7.2: a typed -n/--name would name every later session; else the text as typed.
-            let words = AgentIsland.shellWords(command), kept = AgentIsland.strippingName(words)
-            Preferences.agentIslandNewSessionCommand = kept == words ? command : AgentIsland.shellLine(kept)
-        }
         if request != nil {
             guard mine else { return }   // closed or replaced meanwhile: the human moved on (no message)
             newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands

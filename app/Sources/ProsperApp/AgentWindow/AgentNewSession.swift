@@ -232,6 +232,21 @@ enum AgentNewSession {
     struct Recent: Equatable { var shown: String; var set: String }
     static let recentsMenuID = "agent.newSession.recents"
 
+    /// #1997: the Command menu beside the field. The form opens on Claude; a pick sets the whole field.
+    enum Agent: String, CaseIterable { case claude = "Claude", codex = "Codex", shell = "Login shell" }
+    static let agentsMenuID = "agent.newSession.agents"
+    static let agentsMenuTitle = "Agent"
+
+    /// #1997: what a pick sets: the Settings command, else the agent's binary; Login shell: empty. Claude's unset
+    /// setting is plain claude: the form open already ran the #606 inference, which stores what it finds.
+    static func command(for a: Agent) -> String {
+        switch a {
+        case .claude: let c = Preferences.agentIslandNewSessionCommand; return c.isEmpty ? "claude" : c
+        case .codex: let c = Preferences.agentIslandCodexCommand; return c.isEmpty ? "codex" : c
+        case .shell: return ""
+        }
+    }
+
     /// #1540: this Mac's folders are shown and set abbreviated; #1323: another Mac's path is shown through
     /// OutsideText and set raw.
     static func recents(_ folders: [String], remote: Bool, home: String) -> [Recent] {
@@ -242,8 +257,8 @@ enum AgentNewSession {
         }
     }
 
-    static func recentFoldersChevron() -> NSImage {
-        NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Recent folders") ?? NSImage()
+    static func recentFoldersChevron(_ title: String = "Recent folders") -> NSImage {
+        NSImage(systemSymbolName: "chevron.down", accessibilityDescription: title) ?? NSImage()
     }
 
     /// The menu's label around `chevron` (the tests draw the old symbol image through it too).
@@ -393,14 +408,28 @@ struct AgentRecentFoldersMenu: View {
     }
 }
 
+/// #1997: the New session form's Command menu (Claude, Codex, Login shell), built like the Recent folders one.
+struct AgentCommandMenu: View {
+    @ObservedObject var liveTheme = ThemeStore.shared
+    let choose: (AgentNewSession.Agent) -> Void
+
+    var body: some View {
+        StableMenu(AgentNewSession.agentsMenuID, entries: AgentNewSession.Agent.allCases, run: choose) { all, run in
+            ForEach(all, id: \.self) { a in Button(a.rawValue) { run(a) } }
+        } label: { _ in
+            AgentNewSession.recentFoldersLabel(Image(nsImage: AgentNewSession.recentFoldersChevron(AgentNewSession.agentsMenuTitle)))
+        }
+    }
+}
+
 extension View {
     /// The Recent folders menu's style, size and names (#887), shared with the #1429 pixel row.
-    func recentFoldersMenuStyle(disabled: Bool) -> some View {
+    func recentFoldersMenuStyle(disabled: Bool, title: String = "Recent folders") -> some View {
         menuStyle(.borderlessButton).menuIndicator(.hidden)
             .frame(width: sz(18), height: sz(18))
             .disabled(disabled)
-            .help("Recent folders")
-            .accessibilityLabel("Recent folders")
+            .help(title)
+            .accessibilityLabel(title)
     }
 }
 
@@ -484,9 +513,13 @@ struct AgentNewSessionView: View {
             }
             field("Command", error: nil) {
                 VStack(alignment: .leading, spacing: sz(4)) {
-                    TextField("Empty: your login shell", text: Binding(get: { form.command }, set: { model.setNewSessionCommand($0) }))
-                        .focused($focus, equals: .command)
-                        .accessibilityLabel("Command")
+                    HStack(spacing: sz(6)) {
+                        TextField("Empty: your login shell", text: Binding(get: { form.command }, set: { model.setNewSessionCommand($0) }))
+                            .focused($focus, equals: .command)
+                            .accessibilityLabel("Command")
+                        AgentCommandMenu { model.pickNewSessionAgent($0) }
+                            .recentFoldersMenuStyle(disabled: false, title: AgentNewSession.agentsMenuTitle)
+                    }
                     let runs = model.newSessionRuns
                     HStack(spacing: sz(6)) {
                         Text(verbatim: "Runs: " + runs).font(Neon.font(10.5, design: .monospaced)).foregroundStyle(Neon.textSecondary)

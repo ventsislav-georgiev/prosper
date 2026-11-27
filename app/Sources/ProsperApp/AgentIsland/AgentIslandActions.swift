@@ -1069,8 +1069,12 @@ extension AgentIsland {
     /// #847 D7.3: and without a recorded `--name` (a record of a named spawn carries one).
     /// #867: and without Claude's one-shot prompt, dch's way for that record (strippingPrompt's `agent`).
     /// #1228: and without a recorded model (the Default model has its own setting; a stored one would win over it).
+    /// #1997: never a Codex record's (the result is stored as the Claude command): the next record instead.
     static func inferredCommand(live: [DchHistoryRecord], history: [DchHistoryRecord]) -> [String]? {
-        (live + history).lazy.compactMap { r in recordCommand(r).map { strippingResume($0, agent: r.agent?.kind == "claude") } }
+        (live + history).lazy.compactMap { r -> [String]? in
+            guard let c = recordCommand(r), !isInteractiveCodex(c) else { return nil }
+            return strippingResume(c, agent: r.agent?.kind == "claude")
+        }
             .first.map { strippingModel(strippingName($0)) }
     }
 

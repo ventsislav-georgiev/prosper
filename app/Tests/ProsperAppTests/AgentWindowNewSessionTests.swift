@@ -15,7 +15,8 @@ extension AgentWindowD1Tests {
 
     static let newSessionPrefs = ["agentWindowNewSessionFolder", "agentIslandNewSessionCommand", "agentIslandDefaultModel", modePref,
                                   "agentIslandSidekickSuffix", "agentIslandSidekickPrompt",   // #907
-                                  "agentIslandDefaultEffort"]   // #1454
+                                  "agentIslandDefaultEffort",   // #1454
+                                  "agentIslandCodexCommand"]   // #1997
 
     @MainActor
     func withNewSessionPrefs(_ body: () throws -> Void) rethrows {
@@ -239,17 +240,17 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionStatus, "Starting api…", "R2 F5: success waits for the row over the pane")
             XCTAssertEqual(m.pendingSpawn?.key, AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api", "the expanded folder")
-            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --x", "OQ-3: the one shared command")
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude", "#1997: a form edit is never saved (was OQ-3's shared command)")
             XCTAssertFalse(SyncedKeys.isSynced("agentWindowNewSessionFolder"), "per Mac")
             st.sessions = [mapped("api")]
             XCTAssertNil(m.newSession, "the row lands: the form closes")
         }
     }
 
-    /// #847 T8 (D7.2, D7.4): Runs shows the named argv; the shared command never keeps a typed name, and a
-    /// command with none is stored byte-identical (no requoting).
+    /// #847 T8 (D7.2, D7.4): Runs shows the named argv. #1997: a Start stores no command at all (was: stored
+    /// without its name, else byte-identical).
     @MainActor
-    func testAgentWindowNewSessionStoresTheCommandWithoutItsName() throws {
+    func testAgentWindowNewSessionStartStoresNoCommand() throws {
         try withNewSessionPrefs {
             let st = store([]), spawns = SpawnCalls(), m = newSessionModel(st, spawns)
             defer { m.close() }
@@ -259,13 +260,13 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSession?.command, "claude --name x --chrome", "the field keeps what was typed")
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
-            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "#1997: not saved")
             st.sessions = [mapped("api")]   // its row lands: the form closes
             m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude  \"--chrome\"  'my x'")
             XCTAssertTrue(m.startNewSession())
             spawns.done[1](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
-            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude  \"--chrome\"  'my x'", "byte-identical")
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "#1997: not saved")
             XCTAssertNil(m.newSession, "listed already: it lands at the answer")
             m.openNewSessionNamed(folder: "/Users/example/api")
             m.setNewSessionCommand("claude -p 'one shot' -n x")
@@ -287,6 +288,46 @@ extension AgentWindowD1Tests {
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
             XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "headroom wrap claude")
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api")
+        }
+    }
+
+    /// #1997: the Command menu (Claude, Codex, Login shell): each pick sets the whole field from its setting, set and
+    /// unset (claude, codex; the shell: empty); a later hand edit runs for this form only, and Start saves neither
+    /// setting. Red at base: no menu (pickNewSessionAgent).
+    @MainActor
+    func testAgentWindowNewSessionAgentMenuSetsTheCommandFromItsSetting() {
+        withNewSessionPrefs {
+            XCTAssertEqual(AgentNewSession.Agent.allCases.map(\.rawValue), ["Claude", "Codex", "Login shell"])
+            Preferences.agentIslandNewSessionCommand = "headroom wrap claude --chrome"
+            Preferences.agentIslandCodexCommand = "codex --search"
+            let spawns = SpawnCalls(), m = newSessionModel(store([]), spawns)
+            defer { m.close() }
+            m.openNewSessionNamed(folder: "/Users/example/api")
+            XCTAssertEqual(m.newSession?.command, "headroom wrap claude --chrome", "opens on Claude")
+            m.pickNewSessionAgent(.codex)
+            XCTAssertEqual(m.newSession?.command, "codex --search", "Codex: its setting")
+            m.pickNewSessionAgent(.shell)
+            XCTAssertEqual(m.newSession?.command, "", "Login shell: empty")
+            m.pickNewSessionAgent(.claude)
+            XCTAssertEqual(m.newSession?.command, "headroom wrap claude --chrome", "Claude: its setting")
+            Preferences.agentIslandNewSessionCommand = ""
+            Preferences.agentIslandCodexCommand = ""
+            m.pickNewSessionAgent(.codex)
+            XCTAssertEqual(m.newSession?.command, "codex", "Codex unset: codex")
+            m.pickNewSessionAgent(.claude)
+            XCTAssertEqual(m.newSession?.command, "claude", "Claude unset: claude (the form open already ran the inference)")
+            m.pickNewSessionAgent(.shell)
+            XCTAssertEqual(m.newSession?.command, "", "Login shell: empty")
+            m.pickNewSessionAgent(.codex)
+            m.setNewSessionCommand("codex --oss")
+            XCTAssertEqual(m.newSession?.command, "codex --oss", "a hand edit after a pick stays")
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertEqual(spawns.calls.last?.argv.first, "codex")
+            XCTAssertEqual(spawns.calls.last?.argv.contains("--oss"), true, "the edited command runs")
+            spawns.done.last?(AgentSessionKey(dir: "/tmp/dch-test", name: "api"), nil)
+            XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandCodexCommand") == nil, "the edit is not saved as Codex's")
+            XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandNewSessionCommand") == nil, "nor as Claude's")
+            XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api", "the folder is still kept")
         }
     }
 
@@ -377,7 +418,7 @@ extension AgentWindowD1Tests {
     }
 
     /// Review F1: the form closed (Esc) while its spawn starts, then the spawn succeeds: the human moved on, so
-    /// nothing is selected or focused later; the folder and the command are still kept.
+    /// nothing is selected or focused later; the folder is still kept (#1997: never the command).
     @MainActor
     func testAgentWindowNewSessionSuccessAfterTheFormClosedSelectsNothing() throws {
         try withNewSessionPrefs {
@@ -392,7 +433,7 @@ extension AgentWindowD1Tests {
             XCTAssertNil(m.pendingSpawn, "closed meanwhile: no pending selection")
             XCTAssertNil(m.newSession)
             XCTAssertEqual(Preferences.agentWindowNewSessionFolder, "/Users/example/api", "still kept")
-            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --y", "still kept")
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "#1997: a form edit is never saved")
             st.sessions = [other, mapped("api")]
             XCTAssertEqual(m.selection, .live(other.key), "the row shows: nothing moves")
             XCTAssertFalse(m.terminal.focusPending, "no focus asked")
