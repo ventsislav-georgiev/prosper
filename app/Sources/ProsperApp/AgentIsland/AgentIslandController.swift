@@ -338,6 +338,7 @@ final class AgentIslandController {
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort)
         store?.sessionGroups = Self.groups
+        store?.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
         onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
@@ -445,6 +446,7 @@ final class AgentIslandController {
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
         store.sessionGroups = Self.groups
+        store.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
         refreshCards()
         layout()
     }
@@ -807,7 +809,7 @@ final class AgentIslandController {
     /// an outcome ("Killed") outlives the refusal. Goes once the job that refused it ends.
     private func refuseBusy(_ key: AgentSessionKey, _ text: String) {
         if let now = store?.actions[key], ![AgentIsland.restartBusyText, AgentIsland.stopBusyText, AgentIsland.killBusyText,
-                                            AgentIsland.renameBusyText, AgentIsland.messageBusyText,
+                                            AgentIsland.renameBusyText, AgentIsland.messageBusyText, AgentIsland.groupSetBusyText,
                                             AgentIsland.autoAllowedText, AgentIsland.notInFrontText].contains(now) {
             return
         }
@@ -967,6 +969,29 @@ final class AgentIslandController {
             self.refreshList()
         }
         if !started { refuseBusy(key, AgentIsland.renameBusyText) }
+        return started
+    }
+
+    /// #2062: Move to group / Automatic (by name): `dch --group-set <name> <group>|--auto --json` on the row's key with its
+    /// dir's control env, as rename runs. A failure is the row's line (AgentIsland.groupSetFailure), never retried; any
+    /// answer asks the poller for a list now, which moves the row under its header (no local move before it).
+    /// False: nothing ran (not live, no dch, a name dch reads as a flag, or a busy row, which says so).
+    @discardableResult
+    func setGroup(_ s: AgentSession, group: String?) -> Bool {
+        guard let store, let dch = store.controlDch?.path,
+              let live = store.sessions.first(where: { $0.key == s.key }),
+              let args = AgentIsland.groupSetArgs(live.name, group) else { return false }
+        let key = live.key
+        let started = run(key, dch: dch, args: args, running: nil) { [weak self] r in
+            guard let self, let store = self.store else { return }
+            if let failed = AgentIsland.groupSetFailure(r) {
+                store.actions[key] = failed
+            } else if store.actions[key].map(AgentIsland.isGroupSetFailure) == true {
+                store.actions[key] = nil   // an earlier move's failure goes with the move that worked
+            }
+            self.refreshList()
+        }
+        if !started { refuseBusy(key, AgentIsland.groupSetBusyText) }
         return started
     }
 

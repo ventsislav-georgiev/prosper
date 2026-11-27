@@ -121,7 +121,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
 
     // MARK: The item list and its order
 
-    /// G9's order with every gate open: New session > (recent, -, Choose folder...), -, the four list-wide verbs that
+    /// G9's order with every gate open: New session > (recent, -, Choose folder...), New group... (#2062), -, the four list-wide verbs that
     /// ask (an ellipsis each), -, Resume interrupted (n), its no-message twin, Clear unpinned..., -, Sort >, Row
     /// details >, Always allow (checked as the setting), Agent Island Settings....
     @MainActor
@@ -130,7 +130,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(st.resumeAllButton, AgentIsland.resumeAllLabel(1), "precondition: one record to resume")
         let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: true)
         XCTAssertEqual(titles(e), [
-            AgentIsland.newSessionLabel, "-",
+            AgentIsland.newSessionLabel, AgentIsland.newGroupLabel, "-",
             "Restart stale agents" + Self.ellipsis, "Restart all agents (force)" + Self.ellipsis,
             AgentIsland.stopAllGlobalLabel, AgentIsland.killAllGlobalLabel, "-",
             "Resume interrupted (1)", "Resume interrupted (1) without the message", "Clear unpinned" + Self.ellipsis, "-",

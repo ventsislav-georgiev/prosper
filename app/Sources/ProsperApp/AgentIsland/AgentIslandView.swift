@@ -279,6 +279,9 @@ final class AgentIslandStore: ObservableObject {
     @Published var sort: AgentIslandSort
     /// #1757: the groups the list splits by ([] = tabs off); the controller gives only groups with a pattern.
     @Published var sessionGroups: [SessionGroup] { didSet { resetTab(); dropStaleQuestions() } }
+    /// #2062: how many groups the list stores (with or without a pattern): New group… is off at SessionGroup.maxCount.
+    /// Set with sessionGroups by the controller, so no menu decodes Preferences per draw.
+    var storedGroupCount = 0
     /// The one Sidekicks group's pattern, the #571 single-pattern form (rows and single-pattern callers).
     var sidekickPattern: String {
         get { sessionGroups.first?.pattern ?? "" }

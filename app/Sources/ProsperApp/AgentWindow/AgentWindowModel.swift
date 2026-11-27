@@ -1198,12 +1198,52 @@ final class AgentWindowModel: ObservableObject {
     func runSidebar(_ v: AgentSidebarVerb) {
         // R897-q1: Always allow ON asks first (the strip); nothing is written before its Turn on. OFF stays immediate.
         if v == .autoAllow, !Preferences.agentIslandAutoAllow { askingAlwaysAllow = true; return }
+        if v == .newGroup { newGroup = NewGroupAsk(); return }   // #2062: the name field first
         AgentWindowControls.runSidebar(v, island: island(), openSettings: openIslandSettings)
     }
 
     /// #2060: a group header's "\u{22EF}" item: the island's ask scoped to the group's rows.
     func runGroup(_ v: AgentSidebarVerb, name: String, rows: [AgentSession]) {
         AgentWindowControls.runGroup(v, name: name, rows: rows, island: island())
+    }
+
+    /// #2062: a row's Move to group item: the island's --group-set (nil: --auto), or New group… for this session.
+    func runMove(_ v: AgentSidebarVerb, _ s: AgentSession) {
+        switch v {
+        case .moveToGroup(let g): setGroup(s, g)
+        case .newGroup: newGroup = NewGroupAsk(session: s)
+        default: break
+        }
+    }
+
+    /// #2062: New group…'s name field in the sidebar; `session`, the row whose menu asked (moved into the group once added).
+    struct NewGroupAsk: Equatable {
+        var session: AgentSession? = nil
+        var name = ""
+        var refused: String? = nil
+    }
+    @Published var newGroup: NewGroupAsk?
+    /// #2062 seams: the island's --group-set; the stored list and its save as Settings saves it (the island regroups, then
+    /// writes dch's group lines).
+    lazy var setGroup: (AgentSession, String?) -> Void = { [weak self] s, g in self?.island().setGroup(s, group: g) }
+    var storedGroups: () -> [SessionGroup] = { Preferences.agentIslandSessionGroups }
+    lazy var saveGroups: ([SessionGroup]) -> Void = { [weak self] list in
+        Preferences.editSessionGroups(list)
+        self?.island().rowDetailsChanged()
+    }
+
+    /// #2062: the field's Create (or Return) and Cancel. A refused name stays in the field with its reason; an added
+    /// group is stored with an empty pattern and, from a row's menu, that row is moved into it (one --group-set).
+    func answerNewGroup(_ create: Bool) {
+        guard let ask = newGroup else { return }
+        guard create else { newGroup = nil; return }
+        switch AgentWindowControls.addingGroup(ask.name, to: storedGroups()) {
+        case .failure(let f): newGroup?.refused = f.reason
+        case .success(let list):
+            newGroup = nil
+            saveGroups(list)
+            if let s = ask.session, let g = list.last { setGroup(s, g.name) }
+        }
     }
 
     /// R897-q1: the Always allow question is up in the sidebar (the store's question type cannot carry it: window state).

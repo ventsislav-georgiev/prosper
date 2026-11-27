@@ -2147,6 +2147,18 @@ struct DchListRow: Equatable, Sendable {
     /// #1996: dch 1.182's `agent` (DchListRow.agent(_:)): "claude", "codex", "" when dch says neither runs, nil when
     /// the key is left out (an older dch, a --remote row from a host before 1.182).
     var agent: String? = nil
+    /// #2062: dch 1.196's `group` (effective: its manual group while that config group exists, else the first pattern match)
+    /// and `group_manual` (the stored one), as `groupName(_:)` reads them; nil when the key is left out (an older dch).
+    var group: String? = nil
+    var groupManual: String? = nil
+
+    /// #2062: a group name; `null` (no group) or a name dch would not keep (outside text: SessionGroup.validName) is "";
+    /// a key left out or of another JSON type is nil (dch did not say: the pattern places the row).
+    static func groupName(_ v: Any?) -> String? {
+        if v is NSNull { return "" }
+        guard let s = v as? String else { return nil }
+        return SessionGroup.validName(s) ? s : ""
+    }
 
     /// #1996: `null` or a word other than claude/codex is "" (dch looked: neither of the two runs); a key left out or
     /// of another JSON type is nil (dch did not say), so runsCodex falls back to the record.
@@ -2608,7 +2620,8 @@ enum DchCommand {
                               version: o["version"] as? String ?? "",
                               autoAllowed: DchAutoAllowed(json: o["auto_allowed"]),
                               cwd: o["cwd"] as? String ?? "", harness: harness, shells: DchShell.list(o["shells"]),
-                              agent: DchListRow.agent(o["agent"]))
+                              agent: DchListRow.agent(o["agent"]),
+                              group: DchListRow.groupName(o["group"]), groupManual: DchListRow.groupName(o["group_manual"]))
         }
     }
 

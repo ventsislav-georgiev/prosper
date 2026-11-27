@@ -483,6 +483,39 @@ extension AgentIsland {
         return "Couldn't rename \(shown): \(line ?? (r.status < 0 ? "dch could not be run" : "dch exited \(r.status)"))"
     }
 
+    // MARK: - Session groups (#2062)
+
+    /// #2062 (#2059 contract): dch 1.196.0 takes `--group-set` and lists `group`/`group_manual`.
+    static let groupSetMinimum = [1, 196, 0]
+    static let moveToGroupLabel = "Move to group"
+    static let automaticGroupLabel = "Automatic (by name)"
+    static let newGroupLabel = "New group\u{2026}"
+    static let groupSetBusyText = "Move not run: another job is running"
+    static let groupsFullText = "New group (all \(SessionGroup.maxCount) groups in use)"
+
+    /// `--group-set <name> <group>|--auto --json`; nil `group` is --auto. nil (nothing runs) for a name dch would read as a flag.
+    static func groupSetArgs(_ name: String, _ group: String?) -> [String]? {
+        named("--group-set", [name], [group ?? "--auto", "--json"])
+    }
+
+    static let noGroupText = "That group no longer exists", groupSetFailedPrefix = "Couldn't move to the group: "
+    static func isGroupSetFailure(_ t: String) -> Bool {
+        [noGroupText, "That session is no longer running", "Couldn't save the group: dch could not write it"].contains(t)
+            || t.hasPrefix(groupSetFailedPrefix)
+    }
+
+    /// nil when dch said ok; else the row's line: dch's reason in words, or how the call ended. Never retried.
+    static func groupSetFailure(_ r: DchActionResult) -> String? {
+        let last = r.json.last { $0.isFinal }
+        if last?.result == "ok", r.status == 0 { return nil }
+        switch last?.reason {
+        case "no_group": return noGroupText
+        case "no_session": return "That session is no longer running"
+        case "io_error": return "Couldn't save the group: dch could not write it"
+        default: return groupSetFailedPrefix + (r.stopped ? "dch timed out" : r.status < 0 ? "dch could not be run" : "dch exited \(r.status)")
+        }
+    }
+
     // MARK: - Restart (#579)
 
     static let restartingText = "Restarting…"

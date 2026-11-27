@@ -84,11 +84,14 @@ enum AgentMenuSymbol {
     /// #1469: the Model and Effort submenus.
     static let model = "cpu", effort = "speedometer"
     static let xray = "rectangle.righthalf.inset.filled"
+    /// #2062: Move to group and its groups; Automatic (by name).
+    static let group = "rectangle.stack", autoGroup = "wand.and.stars"
 
     /// Every name above, for the test that resolves each one (a typo draws no image).
     static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
                                    chapters, splitRight, splitDown, zoom, equalize, closePane, swap, newSession, folder, chooseFolder,
-                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, model, effort, xray]
+                                   sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, model, effort, xray,
+                                   group, autoGroup]
 }
 
 extension AgentWindowVerb {
@@ -149,6 +152,8 @@ extension AgentSidebarVerb {
         case .autoAllow: AgentMenuSymbol.autoAllow
         case .settings: AgentMenuSymbol.settings
         case .diagnostics: AgentMenuSymbol.diagnostics
+        case .moveToGroup(let g): g == nil ? AgentMenuSymbol.autoGroup : AgentMenuSymbol.group
+        case .newGroup: AgentMenuSymbol.newSession
         }
     }
 }
@@ -163,7 +168,8 @@ extension AgentSidebarMenuEntry {
             // catches it. Upgrade: a submenu kind enum.
             title == AgentIsland.newSessionLabel ? AgentMenuSymbol.newSession
                 : title == AgentWindowControls.sortLabel ? AgentMenuSymbol.sort
-                : title == AgentWindowControls.rowDetailsLabel ? AgentMenuSymbol.rowDetails : nil
+                : title == AgentWindowControls.rowDetailsLabel ? AgentMenuSymbol.rowDetails
+                : title == AgentIsland.moveToGroupLabel ? AgentMenuSymbol.group : nil
         case .divider, .note: nil
         }
     }
@@ -509,6 +515,8 @@ enum AgentSidebarVerb: Equatable {
     case settings
     /// #923: the window's Diagnostics pane (AgentsWindow presents it; the island has nothing to run).
     case diagnostics
+    /// #2062: a row's Move to group: the group's name, nil for Automatic (by name). New group…: the window asks for a name.
+    case moveToGroup(String?), newGroup
 }
 
 /// One sidebar "..." entry, a value (rows read the list; no menu is popped).
@@ -553,6 +561,7 @@ extension AgentWindowControls {
         var out: [AgentSidebarMenuEntry] = [
             .submenu(AgentIsland.newSessionLabel, enabled: g.on, recent + (recent.isEmpty ? [] : [.divider])
                      + [.item(AgentIsland.chooseFolderLabel, enabled: true, checked: nil, verb: .chooseFolder)]),
+            newGroupItem(store),   // #2062
             .divider,
             ask(AgentIsland.restartAllLabel, g.restart, .restartAll(force: false)),
             ask(AgentIsland.restartAllForceLabel, g.restart, .restartAll(force: true)),
@@ -586,6 +595,48 @@ extension AgentWindowControls {
         if let why = m.refused { out += [.divider, .note("Controls \(why)")] }
         return out
     }
+
+    /// #2062: New group…, off with its reason once the list holds SessionGroup.maxCount groups (store.storedGroupCount).
+    @MainActor
+    static func newGroupItem(_ store: AgentIslandStore) -> AgentSidebarMenuEntry {
+        store.storedGroupCount < SessionGroup.maxCount
+            ? .item(AgentIsland.newGroupLabel, enabled: true, checked: nil, verb: .newGroup)
+            : .item(AgentIsland.groupsFullText, enabled: false, checked: nil, verb: .newGroup)
+    }
+
+    /// #2062: a live row's "Move to group": the groups dch is given (the store's), the manual one checked, a divider,
+    /// Automatic (by name) checked while none is set, New group…. Empty (no item): a row from a dch before 1.196 (no
+    /// `group` key), a control dch before it, or a name dch would read as a flag. A remote row has no session menu.
+    @MainActor
+    static func moveToGroupMenu(_ s: AgentSession, store: AgentIslandStore) -> [AgentSidebarMenuEntry] {
+        guard s.group != nil, AgentIsland.passable(s.name),
+              store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }
+        let manual = SessionGroup.nameKey(s.groupManual ?? "")
+        let groups: [AgentSidebarMenuEntry] = store.sessionGroups.map {
+            .item($0.name, enabled: true, checked: !manual.isEmpty && SessionGroup.nameKey($0.name) == manual, verb: .moveToGroup($0.name))
+        }
+        return [.submenu(AgentIsland.moveToGroupLabel, enabled: true, groups + (groups.isEmpty ? [] : [.divider]) + [
+            .item(AgentIsland.automaticGroupLabel, enabled: true, checked: manual.isEmpty, verb: .moveToGroup(nil)),
+            newGroupItem(store),
+        ])]
+    }
+
+    /// #2062: New group…'s name: nil when it can be added, else why not (Settings' words, the same rules).
+    static func newGroupRefusal(_ name: String, stored: [SessionGroup]) -> String? {
+        if stored.count >= SessionGroup.maxCount { return AgentIsland.groupsFullText }
+        if SessionGroup.isReserved(name) { return "dch uses this name for its own tab" }
+        guard SessionGroup.validName(name) else { return "A name is 1-32 bytes, without \"=\"" }
+        if stored.contains(where: { SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }) { return "Another group has this name" }
+        return nil
+    }
+
+    /// #2062: the list with `name` appended (trimmed, an empty pattern, a new short id), or the refusal; nothing stored here.
+    static func addingGroup(_ name: String, to stored: [SessionGroup]) -> Result<[SessionGroup], NewGroupRefused> {
+        if let why = newGroupRefusal(name, stored: stored) { return .failure(NewGroupRefused(reason: why)) }
+        return .success(stored + [SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(),
+                                               name: name.trimmingCharacters(in: .whitespaces), pattern: "")])
+    }
+    struct NewGroupRefused: Error, Equatable { let reason: String }
 
     /// #2060: a group header's "\u{22EF}": the window menu's restart, stop and end items, for `rows` (the group's section
     /// as the sidebar draws it) only, with the same gates read over those rows. Clear unpinned is History's (records, not
@@ -640,6 +691,7 @@ extension AgentWindowControls {
         case .autoAllow: AgentIslandPane.autoAllowToggled(!Preferences.agentIslandAutoAllow, c)
         case .settings: openSettings()
         case .diagnostics: break   // the window's own pane (AgentSidebarTitleRow)
+        case .moveToGroup, .newGroup: break   // #2062: a row's (AgentWindowModel.runMove) and the window's name field
         }
     }
 
@@ -994,6 +1046,35 @@ struct AgentAlwaysAllowStrip: View {
         if model.askingAlwaysAllow {
             AgentConfirmStrip(text: AgentWindowControls.alwaysAllowQuestion, action: AgentWindowControls.alwaysAllowAction,
                               confirm: { model.answerAlwaysAllow(true) }, cancel: { model.answerAlwaysAllow(false) })
+        }
+    }
+}
+
+/// #2062: New group…'s name field under the sidebar title while the model asks (AgentWindowModel.newGroup); a refused
+/// name shows its reason under the field. Nothing otherwise.
+struct AgentNewGroupStrip: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
+    @ObservedObject var model: AgentWindowModel
+
+    var body: some View {
+        if let ask = model.newGroup {
+            VStack(alignment: .leading, spacing: sz(6)) {
+                TextField("Group name", text: Binding(get: { model.newGroup?.name ?? "" },
+                                                      set: { model.newGroup?.name = $0; model.newGroup?.refused = nil }))
+                    .textFieldStyle(.roundedBorder).font(Neon.font(11.5))
+                    .onSubmit { model.answerNewGroup(true) }
+                if let why = ask.refused {
+                    Text(verbatim: why).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                }
+                HStack(spacing: sz(8)) {
+                    AgentPillButton(title: "Cancel", icon: "xmark", tint: Neon.textSecondary) { model.answerNewGroup(false) }
+                        .keyboardShortcut(.cancelAction)
+                    AgentPillButton(title: "Create", icon: AgentMenuSymbol.newSession, tint: Neon.blue) { model.answerNewGroup(true) }
+                }
+            }
+            .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(ask.session.map { "New group for \($0.title)" } ?? "New group")
         }
     }
 }

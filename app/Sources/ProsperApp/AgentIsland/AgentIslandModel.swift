@@ -122,6 +122,10 @@ struct AgentSession: Equatable, Identifiable {
     /// #1996: dch 1.182's `agent` (DchListRow.agent): "claude", "codex", "" (dch says neither), nil (dch did not say).
     /// "" and nil differ for runsCodex: "" is an answer (no record read), nil falls back to the record's argv.
     var agent: String? = nil
+    /// #2062: DchListRow.group / groupManual: dch's effective group ("" none) and the manual one ("" none: Automatic);
+    /// nil from a dch before 1.196 (the pattern places the row, and the row has no Move to group).
+    var group: String? = nil
+    var groupManual: String? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -260,14 +264,24 @@ enum AgentIsland {
 
     /// #1757: a session goes into the first group whose pattern matches it (as `matching`), else the main list.
     /// Each group searches only what the groups before it left; a pattern is compiled once (sidekickCache).
+    /// #2062: a row dch 1.196 groups (`group` set) goes where dch says, its manual group winning: the group of that name
+    /// (any case), else the main list (none, or a group these groups do not have); only the other rows are matched.
     static func split(_ list: [AgentSession], groups: [SessionGroup]) -> Split {
-        var rest = list, out: [(group: SessionGroup, sessions: [AgentSession])] = []
-        for g in groups {
+        var rest = list.filter { $0.group == nil }, at: [AgentSessionKey: Int] = [:]
+        for (i, g) in groups.enumerated() {
             let m = matching(rest, pattern: g.pattern)
             rest = m.rest
-            out.append((g, m.hits))
+            for s in m.hits { at[s.key] = i }
         }
-        return Split(primary: rest, groups: out)
+        var index: [String: Int] = [:]
+        for (i, g) in groups.enumerated() where index[SessionGroup.nameKey(g.name)] == nil { index[SessionGroup.nameKey(g.name)] = i }
+        var primary: [AgentSession] = [], hits = Array(repeating: [AgentSession](), count: groups.count)
+        for s in list {
+            // #1109 R9: an editor session is never in a group, whoever names one.
+            let i: Int? = if let g = s.group { TerminalEditor.isEditSession(s.key.name) ? nil : index[SessionGroup.nameKey(g)] } else { at[s.key] }
+            if let i { hits[i].append(s) } else { primary.append(s) }
+        }
+        return Split(primary: primary, groups: zip(groups, hits).map { (group: $0, sessions: $1) })
     }
 
     /// The one Sidekicks group with `pattern` ("" = no group).
@@ -834,7 +848,8 @@ enum AgentIsland {
                              transcriptPath: edit ? nil : mapping[row.name]?.path,
                              claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
                              wireState: edit ? "idle" : row.state, pty: ptys[row.name],
-                             shells: edit ? [] : row.shells ?? [], agent: row.agent)
+                             shells: edit ? [] : row.shells ?? [], agent: row.agent,
+                             group: row.group, groupManual: row.groupManual)
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }
