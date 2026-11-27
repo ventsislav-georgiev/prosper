@@ -79,6 +79,8 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var fiveHour: CCPoolLimit?
     var status = 0
     var limits: [String: CCPoolLimit] = [:]
+    /// #2006: a Codex 429's response headers, kept for its spent check once the body snippet is in.
+    var upstreamHeaders: [String: String] = [:]
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
@@ -549,6 +551,9 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         let (limits, unknown) = harness.parseLimits(headers)
         if !unknown.isEmpty { log.note(label, "unknown claim window \(unknown.joined(separator: ",")); not benching on it") }
+        // #2006: a Codex limit id other than the default is recorded and shown, never benched (Claude's are all benchable).
+        let codex = harness.id == CCPoolCodexHarness.id
+        let benchable = codex ? CCPoolCodexHarness.benchable(limits) : limits
         // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
         let id = ex.accountID, code = response.statusCode
@@ -575,7 +580,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
         if response.statusCode == 429 {
             ex.shouldRetry = CCPoolThrottleShape.shouldRetry(headers["x-should-retry"])
-            var spent = CCPoolCore.exhaustedClaims(limits, now: now)
+            var spent = CCPoolCore.exhaustedClaims(benchable, now: now)
             let retry = headers["retry-after"]
             let wait = CCPoolCore.retryAfterSeconds(retry)
             let unified = !limits.isEmpty
@@ -605,6 +610,7 @@ final class CCPoolConnection: @unchecked Sendable {
                 ex.pendingPrivate = privateDetail
                 // Header-safe: one line, printable ASCII only.
                 ex.retryAfter = retry.map { String($0.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7f }) }
+                if codex { ex.upstreamHeaders = headers }
                 return decide(.allow)
             }
             log.note(label, line, private: privateDetail)
@@ -633,7 +639,7 @@ final class CCPoolConnection: @unchecked Sendable {
                     + "attempt=\(attempts); retry=\(throttleRetries); outcome=\(word)")
             }
             // Retire before streaming: the body can take a minute to drain (B15).
-            let spent = CCPoolCore.exhaustedClaims(limits, now: now)
+            let spent = CCPoolCore.exhaustedClaims(benchable, now: now)
             let retired = store.mutate { st -> String? in
                 guard let owner = st.label(ofID: id) else { return nil }
                 st.recordResets(owner, limits: limits, now: now)
@@ -663,8 +669,10 @@ final class CCPoolConnection: @unchecked Sendable {
         switch ex.mode {
         case .deciding: return
         case .snippet:
-            ex.snippet.append(data.prefix(Self.snippetCap - ex.snippet.count))
-            if ex.snippet.count >= Self.snippetCap { finishSnippet(ex) }
+            // #2006: a Codex 429 body is read up to 4 KiB for its usage_limit_reached type (still only on a 429).
+            let cap = harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.bodyCap : Self.snippetCap
+            ex.snippet.append(data.prefix(cap - ex.snippet.count))
+            if ex.snippet.count >= cap { finishSnippet(ex) }
         case .streaming:
             var frame = Data(String(data.count, radix: 16, uppercase: true).utf8)
             frame.append(contentsOf: [13, 10])
@@ -730,11 +738,11 @@ final class CCPoolConnection: @unchecked Sendable {
         guard let usage = ex.tap?.result(), let row = ex.fiveHour.map({ [CCPoolCore.fiveHour: $0] }),
               let util = CCPoolCore.utils(row)[CCPoolCore.fiveHour],
               let reset = CCPoolCore.resets(row)[CCPoolCore.fiveHour] else { return }
-        let id = ex.accountID, m = model.map(Self.capped)
+        let id = ex.accountID, m = model.map(Self.capped), h = harness
         store.mutate { st in
             guard st.label(ofID: id) != nil else { return }
             st.capacity[id] = CCPoolCapacity.learn(st.capacity[id] ?? CCPoolCapacityState(), model: m, usage: usage,
-                                                   utilization: util, reset: Double(reset))
+                                                   utilization: util, reset: Double(reset), table: h.prices)
             // Bounded by the account set: a removed account's numbers go.
             let ids = Set(st.accounts.values.map(\.id))
             st.capacity = st.capacity.filter { ids.contains($0.key) }
@@ -762,10 +770,10 @@ final class CCPoolConnection: @unchecked Sendable {
     }
 
     private func addRow(acct: String, st: Int, done: Bool, usage: CCPoolTokenUsage?, lim: [String: CCPoolLimit]) {
-        // shortcut: P2 stub, Phase 3 (#2006) fills it (a Codex exchange writes no usage row yet)
-        guard let record, harness.id == ClaudeHarness.id else { return }
+        guard let record else { return }
         let end = store.now
-        let keyed = head.flatMap({ harness.pinKey($0) }) != nil
+        // #2006: a Codex row carries no session id (its session_id is never written); the account and model word only.
+        let keyed = harness.id == ClaudeHarness.id && head.flatMap({ harness.pinKey($0) }) != nil
         let ms = (end - startedAt) * 1000
         record.add(CCPoolUsageRow(t: end, acct: acct, model: CCPoolUsageRow.modelWord(model),
                                   sess: keyed ? head?.header("x-claude-code-session-id") : nil,
@@ -781,6 +789,7 @@ final class CCPoolConnection: @unchecked Sendable {
         guard ex === exchange else { return }
         exchange = nil
         ex.task?.cancel()
+        if harness.id == CCPoolCodexHarness.id, rotateSpentCodex(ex) { return }
         // #1263 (R1263-a): what this 429 leads to is decided ONCE; its word is logged and the switch below acts on it.
         // Each later `if` overrides the earlier ones: retry beats pinned-back beats move beats returned. #1855: re-placed is
         // for quota checks only, which never retry or move.
@@ -843,6 +852,35 @@ final class CCPoolConnection: @unchecked Sendable {
         case .returned:
             answerThrottle(ex)
         }
+    }
+
+    /// #2006: a Codex 429 that its limits did not show as spent, but its reached-type header or a usage_limit_reached
+    /// body does: the account's claims are benched until the reset (the body's, else the fullest window's, else the
+    /// Retry-After, else the short unconfirmed bench) and the request goes to the next account before the first byte,
+    /// as a spent claim does in onResponse. False: a throttle (or a body above the replay cap), handled as before.
+    private func rotateSpentCodex(_ ex: CCPoolExchange) -> Bool {
+        let now = store.now
+        let found = CCPoolCodexHarness.spent429(headers: ex.upstreamHeaders, body: ex.snippet, now: now)
+        guard found.spent, now.isFinite, (0...1e11).contains(now) else { return false }
+        let wait = CCPoolCore.retryAfterSeconds(ex.retryAfter)
+        let until = found.reset.flatMap { Double($0) > now ? $0 : nil }
+            ?? Int(now) + (wait > 0 ? wait : CCPoolCore.unconfirmedBench)
+        let claims = harness.claims(for: model).sorted()
+        let id = ex.accountID
+        let benched = store.mutate { st -> String? in
+            guard let owner = st.label(ofID: id) else { return nil }
+            for claim in claims { st.bench(owner, claim: claim, until: until, now: now) }
+            return owner
+        }
+        if let benched { for claim in claims { event(.bench, acct: benched, claim: claim, reset: until) } }
+        log.note(ex.label, ex.pendingNote + "reason=usage limit reached", private: ex.pendingPrivate)
+        guard replayable else {
+            log.note(ex.label, "out on \(claims.joined(separator: ",")); request body above the replay cap, passing the 429 through")
+            return false
+        }
+        log.note(ex.label, "out on \(claims.joined(separator: ",")); rotating to another account and retrying request")
+        attempt(rotatingFrom: ex.label)
+        return true
     }
 
     /// #1263: what a throughput 429 leads to; the raw value is the logged outcome word.

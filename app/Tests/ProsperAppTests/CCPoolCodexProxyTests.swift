@@ -197,7 +197,7 @@ final class CCPoolCodexProxyTests: XCTestCase {
     }
 
     // Neither the access token nor the account id reaches the log, on a served reply or a refused one; a Codex
-    // exchange writes no usage row and no usage sample (the Claude one beside it does).
+    // exchange without limit headers writes no usage sample; #2006: it writes usage rows like the Claude one beside it.
     func testCodexExchangeLogsNoCredentialAndWritesNoUsage() throws {
         let r = try rig()
         XCTAssertEqual(r.codex()?.status, 200)
@@ -216,7 +216,8 @@ final class CCPoolCodexProxyTests: XCTestCase {
         r.service.usageRecord.flush()
         let files = (try? FileManager.default.contentsOfDirectory(at: r.store.usageDirectory, includingPropertiesForKeys: nil)) ?? []
         let rows = files.filter { $0.lastPathComponent.hasPrefix("usage-") }.flatMap { (try? String(contentsOf: $0, encoding: .utf8))?.split(separator: "\n") ?? [] }
-        XCTAssertEqual(rows.count, 1, "only the Claude request wrote a row: \(rows)")
+        XCTAssertEqual(rows.count, 3, "Codex's 200, the pool's all-benched 429 after the spent one, and Claude's: \(rows)")
+        XCTAssertFalse(rows.contains { $0.contains(Self.accessToken) || $0.contains(Self.accountID) }, "\(rows)")
     }
 
     // Under XCTest the OpenAI hosts are refused like Claude's, and a Codex request with the default upstream is
@@ -255,9 +256,9 @@ final class CCPoolCodexProxyTests: XCTestCase {
         XCTAssertTrue(h.stripRequest.isSuperset(of: ["chatgpt-account-id", "openai-organization", "openai-project", "cookie"]))
         XCTAssertTrue(h.stripRequest.isDisjoint(with: ["originator", "version", "session_id", "openai-beta", "user-agent"]))
         XCTAssertTrue(h.parseLimits(["x-codex-primary-used-percent": "50"]).limits.isEmpty)
-        XCTAssertEqual(h.claims(for: "gpt-5-codex"), [])
+        XCTAssertEqual(h.claims(for: "gpt-5-codex"), ["five_hour", "seven_day"])
         XCTAssertFalse(h.isQuotaCheck(["max_tokens": 1]))
-        XCTAssertTrue(h.pinKey(CCPoolRequestHead(method: "POST", path: "/codex/responses", headers: [(name: "session_id", value: "s")])) == nil)
+        XCTAssertEqual(h.pinKey(CCPoolRequestHead(method: "POST", path: "/codex/responses", headers: [(name: "session_id", value: "s")])), "codex/s")
         var tap = h.usageTap(contentType: "application/json")
         tap.feed(Data(#"{"usage":{"input_tokens":5}}"#.utf8))
         XCTAssertTrue(tap.result() == nil, "no Anthropic parsing of an OpenAI reply")

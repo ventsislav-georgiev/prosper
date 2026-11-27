@@ -87,11 +87,13 @@ enum CCPoolCapacity {
     /// List-price dollars of one response, or nil when a count is negative, non-finite or absurd.
     /// An unknown or missing model is priced as opus (:181). Overflow: five counts <= 1e12, each times
     /// a factor <= 40 (cache writes at most 8 x 2), five terms: the sum stays below 1e14, far inside Double.
-    static func dollars(model: String?, usage u: CCPoolTokenUsage) -> Double? {
+    /// #2006: `table` is the harness's (Codex's has no opus row: its unknown model takes the table's last row).
+    static func dollars(model: String?, usage u: CCPoolTokenUsage,
+                        table: [(family: String, input: Double, output: Double, read: Double)] = prices) -> Double? {
         guard okCount(u.input), okCount(u.output), okCount(u.cacheRead),
-              okCount(u.cacheWrite5m), okCount(u.cacheWrite1h) else { return nil }
-        let p = model.flatMap { m in prices.first { m.contains($0.family) } }
-            ?? prices.first { $0.family == "opus" }!
+              okCount(u.cacheWrite5m), okCount(u.cacheWrite1h),
+              let p = model.flatMap({ m in table.first { m.contains($0.family) } })
+                ?? table.first(where: { $0.family == "opus" }) ?? table.last else { return nil }
         let plain: Double = u.input * p.input
         let w5: Double = u.cacheWrite5m * p.input * 1.25
         let w1: Double = u.cacheWrite1h * p.input * 2
@@ -103,12 +105,13 @@ enum CCPoolCapacity {
     /// The learn step (:191-212). `utilization` and `reset` are the window's five-hour fields after the
     /// response; `usage` nil counts no dollars. A bad number returns the state unchanged.
     static func learn(_ state: CCPoolCapacityState, model: String?, usage: CCPoolTokenUsage?,
-                      utilization: Double, reset: Double) -> CCPoolCapacityState {
+                      utilization: Double, reset: Double,
+                      table: [(family: String, input: Double, output: Double, read: Double)] = prices) -> CCPoolCapacityState {
         guard utilization.isFinite, utilization >= 0, utilization <= maxUtilization,
               reset.isFinite, reset >= 0 else { return state }
         var spent = 0.0
         if let usage {
-            guard let d = dollars(model: model, usage: usage) else { return state }
+            guard let d = dollars(model: model, usage: usage, table: table) else { return state }
             spent = d
         }
         var s = state

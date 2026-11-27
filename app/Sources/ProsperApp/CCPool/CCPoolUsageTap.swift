@@ -10,6 +10,8 @@ struct CCPoolUsageTap: Sendable {
     static let maxBuffer = 512 << 10
 
     let stream: Bool
+    /// #2006: an OpenAI Responses reply (Codex): `response.completed` ends the stream and its `response.usage` counts.
+    let codex: Bool
     private(set) var dead = false
     private var buf = Data()
     /// An event stream counts only once its message_stop arrived: a cut stream learns nothing.
@@ -20,15 +22,9 @@ struct CCPoolUsageTap: Sendable {
     /// The `cache_creation` object: present = its split replaces the unsplit count (Python dollars()).
     private var split: (w5: Double?, w1: Double?)?
 
-    init(contentType: String?) {
+    init(contentType: String?, codex: Bool = false) {
         stream = contentType?.lowercased().contains("event-stream") ?? false
-    }
-
-    /// #2005: a tap that reads nothing (feed returns at once, result is nil), for a harness without a usage tap yet.
-    static var idle: CCPoolUsageTap {
-        var t = CCPoolUsageTap(contentType: nil)
-        t.dead = true
-        return t
+        self.codex = codex
     }
 
     mutating func feed(_ chunk: Data) {
@@ -57,7 +53,7 @@ struct CCPoolUsageTap: Sendable {
         var tap = self
         if !tap.dead, !tap.stream {
             guard let obj = try? JSONSerialization.jsonObject(with: tap.buf) as? [String: Any] else { return nil }
-            tap.take(obj)
+            if tap.codex { tap.takeCodex(obj["usage"]) } else { tap.take(obj) }
         }
         guard !tap.dead, !tap.stream || tap.stopped, !tap.counts.isEmpty || tap.split != nil else { return nil }
         let c = tap.counts
@@ -77,6 +73,14 @@ struct CCPoolUsageTap: Sendable {
 
     private mutating func line(_ l: Data) {
         let data = Data("data:".utf8)
+        if codex {
+            guard l.starts(with: data), l.range(of: Data("\"usage\"".utf8)) != nil else { return }
+            // Only the completed event counts: usage on an earlier event (in_progress) is not the reply's.
+            guard let obj = try? JSONSerialization.jsonObject(with: l.dropFirst(data.count)) as? [String: Any] else { return giveUp() }
+            guard obj["type"] as? String == "response.completed" else { return }
+            stopped = true
+            return takeCodex((obj["response"] as? [String: Any])?["usage"])
+        }
         guard l.starts(with: data), l.range(of: Data("\"usage\"".utf8)) != nil || l.range(of: Data("message_stop".utf8)) != nil
         else { return }
         guard let obj = try? JSONSerialization.jsonObject(with: l.dropFirst(data.count)) as? [String: Any] else { return giveUp() }
@@ -105,6 +109,21 @@ struct CCPoolUsageTap: Sendable {
               let w1 = field("ephemeral_1h_input_tokens", in: d) else { return giveUp() }
         // R1260-b: Python `cc.get(key, unsplit)` then `w5 or 0`: a null counts 0; only an absent key takes the unsplit count.
         split = (d["ephemeral_5m_input_tokens"] is NSNull ? 0 : w5, w1)
+    }
+
+    /// #2006: Responses `usage` -> input (uncached), cacheRead (cached), output; Codex writes no cache. Absent or
+    /// null usage counts nothing; a present value that is not a count, or more cached than input, gives up.
+    private mutating func takeCodex(_ raw: Any?) {
+        guard let raw, !(raw is NSNull) else { return }
+        guard let u = raw as? [String: Any], let input = u["input_tokens"].flatMap(Self.count),
+              let output = u["output_tokens"].flatMap(Self.count) else { return giveUp() }
+        var cached = 0.0
+        if let d = u["input_tokens_details"], !(d is NSNull), let c = (d as? [String: Any])?["cached_tokens"], !(c is NSNull) {
+            guard let n = Self.count(c) else { return giveUp() }
+            cached = n
+        }
+        guard cached <= input else { return giveUp() }
+        counts = ["input_tokens": input - cached, "output_tokens": output, "cache_read_input_tokens": cached]
     }
 
     /// A token count: a JSON number (not a bool), finite, 0...CCPoolCapacity.maxTokens; anything else is nil.
