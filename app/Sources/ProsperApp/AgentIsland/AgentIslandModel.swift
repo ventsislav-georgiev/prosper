@@ -1609,8 +1609,11 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// #2062 (dch #721): a blank pattern is a manual-only group, `group = <name> =`: it never matches by name, sessions
-    /// reach it only by --group-set.
-    var isManual: Bool { pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// reach it only by --group-set. Not the legacy Sidekicks group (sidekicksID, the #571 pattern key): blank, it is `isOff`.
+    var isManual: Bool { id != Self.sidekicksID && pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// #2062 round 4: a blank Sidekicks pattern means "no split", as before #2062: no tab, no line, not in Move to group.
+    var isOff: Bool { id == Self.sidekicksID && pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// A name as dch and the editor compare it: trimmed, ignoring case.
     static func nameKey(_ name: String) -> String { name.trimmingCharacters(in: .whitespaces).lowercased() }

@@ -245,7 +245,8 @@ final class AgentEndSymbolTests: XCTestCase {
                      "pin.slash", "trash", "plus.square.on.square", "sidebar.right", "list.bullet", "rectangle.split.2x1",
                      "rectangle.split.1x2", "arrow.up.left.and.arrow.down.right", "equal.square", "xmark.rectangle", "arrow.left.arrow.right", "plus",
                      "folder", "folder.badge.plus", "arrow.up.arrow.down", "clock", "textformat", "list.bullet.rectangle",
-                     "checkmark.shield", "gearshape", "stethoscope", "cpu", "speedometer", "rectangle.righthalf.inset.filled"]
+                     "checkmark.shield", "gearshape", "stethoscope", "cpu", "speedometer", "rectangle.righthalf.inset.filled",
+                     "rectangle.stack", "wand.and.stars"]
         XCTAssertEqual(Set(names), AgentMenuSymbol.all)
         for n in names { XCTAssertTrue(NSImage(systemSymbolName: n, accessibilityDescription: nil) != nil, "\(n) does not resolve") }
     }

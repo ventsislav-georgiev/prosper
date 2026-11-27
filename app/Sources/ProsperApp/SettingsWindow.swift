@@ -1245,7 +1245,7 @@ struct AgentIslandListSection: View {
                         .focused($focus, equals: row.id + ".name").onSubmit(commit)
                         .accessibilityLabel("Name of group \(title)")
                     // #2062: empty = a manual-only group (sessions join it only by Move to group), so the placeholder says so.
-                    TextField("Manual only", text: g.pattern).frame(width: sz(180))
+                    TextField(row.isOff ? "None" : "Manual only", text: g.pattern).frame(width: sz(180))
                         .focused($focus, equals: row.id + ".pattern").onSubmit(commit)
                         .accessibilityLabel("Pattern of group \(title)")
                         .accessibilityHint(AgentIsland.sidekickHint(row.pattern).text ?? "")
@@ -1324,7 +1324,8 @@ struct SessionGroupsEditor: Equatable {
 
     private func patternReason(_ g: SessionGroup) -> String? {
         let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        if p.isEmpty { return nil }   // #2062 (dch #721): a manual-only group, saved
+        // #2062 (dch #721): a manual-only group, saved; a blank Sidekicks is off, not saved, as before #2062.
+        if p.isEmpty { return g.isOff ? "No pattern yet: not saved" : nil }
         // #1777 (QA n96): never store a pattern the phone's 0x2d/0x2f cannot echo.
         if g.pattern.utf8.count > DchSidekickOps.maxBytes { return "Pattern over \(DchSidekickOps.maxBytes) bytes: not saved" }
         switch AgentIsland.sidekickMatch(p) {
@@ -1335,7 +1336,7 @@ struct SessionGroupsEditor: Equatable {
     }
 
     private func stored(_ id: String, in stored: [SessionGroup]) -> SessionGroup? {
-        stored.first { $0.id == id }   // #2062: a stored manual-only group is kept as well
+        stored.first { $0.id == id && !$0.isOff }   // #2062: a stored manual-only group is kept as well, a blank Sidekicks is not
     }
 
     /// Ids of the rows that are not saved. A row that is not saved is stored under its stored name, so a duplicate is

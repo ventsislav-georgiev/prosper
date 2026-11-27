@@ -1415,7 +1415,7 @@ extension DchConfigWriterTests {
         }
         Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$"), Self.group("Blank", ""), Self.group("QA", "-qa$")]
         for (v, want) in [([1, 123, 9], "auto_allow = false\nsidekick_pattern = -rev$\n"),
-                          ([1, 124, 0], "auto_allow = false\nsidekick_pattern = -rev$\ngroup = Rev = -rev$\ngroup = QA = -qa$\n")] {
+                          ([1, 124, 0], "auto_allow = false\nsidekick_pattern = -rev$\ngroup = Rev = -rev$\ngroup = Blank =\ngroup = QA = -qa$\n")] {
             let file = tempDir("groupsGate").appendingPathComponent("config").path
             let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
             c.syncDchConfig()
@@ -1429,6 +1429,33 @@ extension DchConfigWriterTests {
         c.syncDchConfig()
         c.queue.sync {}
         XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \n", "the empty list: an empty key, never a missing one")
+    }
+
+    /// #2062 round 4: a blank legacy Sidekicks group (sidekicksID, the #571 key) is "no split", as before #2062, never a
+    /// manual-only group: a stored [Sidekicks "", Ops ""] writes only `group = Ops =`, gives Sidekicks no tab and the
+    /// Settings editor does not save it; Ops (a fresh id) stays manual.
+    @MainActor func testABlankSidekicksGroupIsOffNotManual() {
+        usePattern(tabs: true, "-qa")
+        let saved = Preferences.defaults.object(forKey: "agentIslandSessionGroups")
+        addTeardownBlock {
+            if let saved { Preferences.defaults.set(saved, forKey: "agentIslandSessionGroups") } else {
+                Preferences.defaults.removeObject(forKey: "agentIslandSessionGroups")
+            }
+        }
+        let sk = SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: ""), ops = Self.group("Ops", "")
+        XCTAssertTrue(sk.isOff && !sk.isManual && ops.isManual && !ops.isOff)
+        XCTAssertEqual(DchConfigWriter.groupValues([sk, ops]), ["Ops ="])
+        Preferences.agentIslandSessionGroups = [sk, ops]
+        let file = tempDir("blankSidekicks").appendingPathComponent("config").path
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 199, 0], build: "full", config: file)
+        c.syncDchConfig()
+        c.queue.sync {}
+        XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \ngroup = Ops =\n")
+        c.rowDetailsChanged()
+        XCTAssertEqual(c.store?.sessionGroups.map(\.name), ["Ops"], "no Sidekicks tab, not in Move to group")
+        let e = SessionGroupsEditor([sk, ops])
+        XCTAssertEqual(e.reason(sk, stored: []), "No pattern yet: not saved")
+        XCTAssertEqual(e.saved(stored: [sk, ops]), [ops], "the editor's save leaves the blank Sidekicks out, stored or not")
     }
 
     /// #1765: auto_allow = false lands before the dch probe returns; the group lines follow in a second write for

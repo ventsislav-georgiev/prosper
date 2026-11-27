@@ -37,8 +37,8 @@
   {
    "name": "manual-group-filtered",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups : []",
-   "new": "Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups.filter { !$0.isManual } : []",
+   "old": "Preferences.agentIslandSessionGroups.filter { !$0.isOff } : []",
+   "new": "Preferences.agentIslandSessionGroups.filter { !$0.isOff && !$0.isManual } : []",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit"
   },
@@ -53,8 +53,8 @@
   {
    "name": "editor-drops-manual",
    "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "if p.isEmpty { return nil }   // #2062",
-   "new": "if p.isEmpty { return \"No pattern yet: not saved\" }   // #2062",
+   "old": "if p.isEmpty { return g.isOff ? \"No pattern yet: not saved\" : nil }",
+   "new": "if p.isEmpty { return \"No pattern yet: not saved\" }",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit"
   },
@@ -137,6 +137,30 @@
    "new": "case \"no_group\": return noGroupText",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testNoGroupForAManualGroupSaysItNeedsANewerDch"
+  },
+  {
+   "name": "blank-sidekicks-manual",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "var isManual: Bool { id != Self.sidekicksID && pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }",
+   "new": "var isManual: Bool { pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testTheControllerWritesGroupsOnlyForADchThatReadsThem|DchConfigWriterTests/testProspersPreviousLinesAreNeverAdoptedAfterTheFirstCheck|DchConfigWriterTests/testABlankSidekicksGroupIsOffNotManual"
+  },
+  {
+   "name": "blank-sidekicks-tab",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "Preferences.agentIslandSessionGroups.filter { !$0.isOff } : []",
+   "new": "Preferences.agentIslandSessionGroups : []",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testABlankSidekicksGroupIsOffNotManual"
+  },
+  {
+   "name": "blank-sidekicks-saved",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if p.isEmpty { return g.isOff ? \"No pattern yet: not saved\" : nil }",
+   "new": "if p.isEmpty { return nil }",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testABlankSidekicksGroupIsOffNotManual"
   }
  ]
 }

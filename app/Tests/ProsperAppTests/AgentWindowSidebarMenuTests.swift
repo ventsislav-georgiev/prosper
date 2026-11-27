@@ -172,19 +172,20 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
     // MARK: Enablement, one row per island gate
 
     /// The base gate (no control dch): every list-wide item off with the island's title, New session off, Resume and
-    /// Clear absent (their buttons are), and the island's "Controls <why>" note last. Settings items stay on.
+    /// Clear absent (their buttons are), and the island's "Controls <why>" note last. Settings items stay on, and so does
+    /// New group… (#2062: it only stores a group in Prosper's list, no dch call; the config write follows when a dch is found).
     @MainActor
     func testSidebarMenuBaseGateRefusedTurnsTheListWideItemsOff() throws {
         let st = store([session("api")], history: [crashed("old")], dch: nil)
         let why = try XCTUnwrap(st.resumeGate.refusal)
         let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
         XCTAssertEqual(titles(e), [
-            AgentIsland.newSessionLabel, "-", "Restart stale agents", "Restart all agents (force)",
+            AgentIsland.newSessionLabel, AgentIsland.newGroupLabel, "-", "Restart stale agents", "Restart all agents (force)",
             AgentIsland.stopAllGlobalLabel, AgentIsland.killAllGlobalLabel, "-",
             "Sort", "Row details", "Always allow permission prompts", "Agent Island Settings" + Self.ellipsis,
             "Diagnostics" + Self.ellipsis, "-", "note: Controls \(why)",
         ])
-        XCTAssertEqual(enabled(e), [false, false, false, false, false, true, true, true, true, true])
+        XCTAssertEqual(enabled(e), [false, true, false, false, false, false, true, true, true, true, true])
     }
 
     /// The restart gate (a 1.24.0 control dch): Restart and Stop all off, naming the version; Kill all needs only the
@@ -194,12 +195,12 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         let st = store([session("api", version: "1.24.0")], dch: bin([1, 24, 0]))
         XCTAssertEqual(st.restartNeeds, "needs dch 1.24.1")
         let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
-        XCTAssertEqual(Array(titles(e).prefix(6)), [
-            AgentIsland.newSessionLabel, "-", "Restart stale agents (needs dch 1.24.1)",
+        XCTAssertEqual(Array(titles(e).prefix(7)), [
+            AgentIsland.newSessionLabel, AgentIsland.newGroupLabel, "-", "Restart stale agents (needs dch 1.24.1)",
             "Restart all agents (force) (needs dch 1.24.1)", "Stop all\(Self.ellipsis) (needs dch 1.24.1)",
             AgentIsland.killAllGlobalLabel,
         ])
-        XCTAssertEqual(Array(enabled(e).prefix(5)), [true, false, false, false, true])
+        XCTAssertEqual(Array(enabled(e).prefix(6)), [true, true, false, false, false, true])
     }
 
     /// No live session: Restart, Stop all and Kill all off (nothing to act on); New session on.
@@ -207,11 +208,11 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
     func testSidebarMenuWithNothingLiveTurnsStopKillAndRestartOff() throws {
         let st = store([], dch: bin([1, 38, 0]))
         let e = AgentWindowControls.sidebarMenu(store: st, autoAllow: false)
-        XCTAssertEqual(Array(titles(e).prefix(6)), [
-            AgentIsland.newSessionLabel, "-", "Restart stale agents", "Restart all agents (force)",
+        XCTAssertEqual(Array(titles(e).prefix(7)), [
+            AgentIsland.newSessionLabel, AgentIsland.newGroupLabel, "-", "Restart stale agents", "Restart all agents (force)",
             AgentIsland.stopAllGlobalLabel, AgentIsland.killAllGlobalLabel,
         ])
-        XCTAssertEqual(Array(enabled(e).prefix(5)), [true, false, false, false, false])
+        XCTAssertEqual(Array(enabled(e).prefix(6)), [true, true, false, false, false, false])
         let island = AgentIslandController.controlGates(st)
         XCTAssertFalse(island.stop(global: true) || island.kill(global: true) || island.restart, "the island's own rule")
     }

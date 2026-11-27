@@ -454,10 +454,10 @@ final class AgentIslandController {
     }
 
     /// #571, #1757: the groups the store splits by and dch's config gets; none while the tabs are off. #2062: a manual-only
-    /// group (no pattern) is kept: its tab, its Move to group item, its `group = <name> =` line. Read on a Settings or phone
-    /// change only (Preferences decodes the list).
+    /// group (no pattern) is kept: its tab, its Move to group item, its `group = <name> =` line; a blank Sidekicks (isOff) is
+    /// left out, as before #2062. Read on a Settings or phone change only (Preferences decodes the list).
     private static var groups: [SessionGroup] {
-        Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups : []
+        Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups.filter { !$0.isOff } : []
     }
 
     /// #571: a Sessions or group tab click (#1759: the group's id; nil: Sessions). Only the shown rows get cards.
