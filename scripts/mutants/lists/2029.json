@@ -1,0 +1,41 @@
+{
+ "entry": "2029",
+ "filter": "ControlSessionsTalkTests|AgentCodexWindowTests",
+ "mutants": [
+  {
+   "name": "ctl-say-codex-false",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "AgentWindowText.working,\n                                                     codex: AgentIsland.runsCodex(s, records: [])))",
+   "new": "AgentWindowText.working,\n                                                     codex: false))",
+   "expect": "killed"
+  },
+  {
+   "name": "ctl-interrupt-codex-false",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": "AgentWindowText.notWorking, codex: AgentIsland.runsCodex(s, records: []))) }",
+   "new": "AgentWindowText.notWorking, codex: false)) }",
+   "expect": "killed"
+  },
+  {
+   "name": "driver-interrupt-codex-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "AgentWindowText.named(AgentWindowText.notWorking, codex: codex)) }\n        io.keys",
+   "new": "AgentWindowText.notWorking) }\n        io.keys",
+   "expect": "killed"
+  },
+  {
+   "name": "act-notice-codex-false",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "self.notice = AgentWindowText.named(why, codex: codex)",
+   "new": "self.notice = AgentWindowText.named(why, codex: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "stop-daemon-sentence-flipped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "is paused and the session ends. Resume it later from History.\"\n                + (codex ? codexDaemonSentence : \"\")",
+   "new": "is paused and the session ends. Resume it later from History.\"\n                + (codex ? \"\" : codexDaemonSentence)",
+   "expect": "killed"
+  }
+ ]
+}
