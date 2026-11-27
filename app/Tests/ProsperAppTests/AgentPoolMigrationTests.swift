@@ -104,7 +104,7 @@ final class AgentPoolMigrationTests: XCTestCase {
         XCTAssertEqual(files(support.appendingPathComponent("ccpool")).count, 4, "the source is left")
         XCTAssertEqual(files(target), ["state.json"], "the target untouched")
         XCTAssertEqual(files(support).filter { $0.hasPrefix("agentpool-replaced-") }, [], "nothing set aside")
-        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both; the agentpool folder already holds the pool's state"])
+        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both folders; nothing moved"])
         XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
     }
 
@@ -135,8 +135,25 @@ final class AgentPoolMigrationTests: XCTestCase {
         XCTAssertEqual(files(support.appendingPathComponent("agentpool")), ["codex-scratch"])
         XCTAssertEqual(files(support.appendingPathComponent("ccpool")), ["usage"])
         XCTAssertTrue(files(support).filter { $0.hasPrefix("agentpool-replaced-") }.isEmpty, "nothing set aside")
-        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both; the agentpool folder already holds the pool's state"])
+        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both folders; nothing moved"])
         XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
+    }
+
+    /// QA R2012c: the by-product cannot be set aside (UF_IMMUTABLE on it: the move gives EEXIST, the set-aside EPERM):
+    /// no marker, both folders as they were, nothing set aside, so the next launch tries again.
+    func testATargetThatCannotBeSetAsideLeavesTheMarkerUnset() throws {
+        let d = scratchDefaults("agentpool-mig-immutable"), support = tempDir(), log = CCPoolCapturingLogger()
+        try oldState(d, support)
+        let target = support.appendingPathComponent("agentpool", isDirectory: true)
+        try FileManager.default.createDirectory(at: target.appendingPathComponent("codex-scratch"), withIntermediateDirectories: true)
+        XCTAssertEqual(chflags(target.path, UInt32(UF_IMMUTABLE)), 0)
+        defer { chflags(target.path, 0) }
+        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
+        XCTAssertEqual(log.lines, ["-: agent pool migration: the agentpool folder could not be set aside (errno \(EPERM)); trying again next launch"])
+        XCTAssertTrue(d.object(forKey: AgentPoolMigration.markerKey) == nil)
+        XCTAssertEqual(files(target), ["codex-scratch"])
+        XCTAssertEqual(files(support.appendingPathComponent("ccpool")).count, 4)
+        XCTAssertTrue(files(support).filter { $0.hasPrefix("agentpool-replaced-") }.isEmpty, "nothing set aside")
     }
 
     /// The other-errno branch, driven by a read-only parent (EACCES): the marker stays unset for the next launch.

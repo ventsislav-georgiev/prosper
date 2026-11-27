@@ -72,6 +72,13 @@
    "old": "if moved == EEXIST, !hasState(to), hasState(from) {",
    "new": "if moved == EEXIST, !hasState(to) {",
    "expect": "killed"
+  },
+  {
+   "name": "set_aside_failure_no_return",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "(errno \\(errno)); trying again next launch\")\n                return\n",
+   "new": "(errno \\(errno)); trying again next launch\")\n",
+   "expect": "killed"
   }
  ]
 }

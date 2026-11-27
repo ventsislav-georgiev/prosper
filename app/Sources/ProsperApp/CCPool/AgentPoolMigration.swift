@@ -60,7 +60,7 @@ enum AgentPoolMigration {
         case 0: logger.note(nil, setAside ? "agent pool migration: set aside the agentpool folder, then moved the ccpool folder to agentpool"
                                           : "agent pool migration: moved the ccpool folder to agentpool")
         case ENOENT: break   // no old folder (a fresh install, or nothing was ever stored)
-        case EEXIST: logger.note(nil, "agent pool migration: kept both; the agentpool folder already holds the pool's state")
+        case EEXIST: logger.note(nil, "agent pool migration: kept both folders; nothing moved")
         default:
             // Marker unset. This launch's pool runs on a missing agentpool folder and its writes may create one; the next
             // launch's EEXIST branch above sets that by-product aside and moves the ccpool folder then.
