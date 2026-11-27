@@ -219,9 +219,19 @@ final class CCPoolStore: @unchecked Sendable {
 
     // MARK: Accounts
 
-    /// QA #739 F1: the pool lists an account the proxy can pick. The routing gate and the pane's
-    /// toggle both read this, from the state the proxy picks from.
+    /// QA #739 F1: the pool lists an account the proxy can pick, of any harness (the proxy runs for it).
     var hasAccounts: Bool { read { st in st.order.contains { st.accounts[$0] != nil } } }
+    /// #2009 (design #2003 section 1): a listed Claude account. Claude routing and the Claude toggle read this, so a
+    /// pool of Codex accounts only never routes `claude`.
+    var hasClaudeAccounts: Bool {
+        let claude = ClaudeHarness()
+        return read { st in st.order.contains { st.accounts[$0].map { $0.harness == claude.id && claude.accepts(kind: $0.kind) } ?? false } }
+    }
+    /// #2009: a listed Codex account whose login kind may serve (CCPoolConnection's rule); Codex routing needs one.
+    var hasCodexAccounts: Bool {
+        let codex = CCPoolCodexHarness()
+        return read { st in st.order.contains { st.accounts[$0].map { $0.harness == codex.id && codex.accepts(kind: $0.kind) } ?? false } }
+    }
 
     static let labelMax = 64
 

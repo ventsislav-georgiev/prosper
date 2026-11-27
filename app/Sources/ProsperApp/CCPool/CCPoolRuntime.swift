@@ -104,6 +104,8 @@ final class CCPoolRuntime {
     let model: CCPoolPaneModel
     /// P2b-2: the person's toggle as the pane writes it (the model's defaults), readable off main.
     private let routeOn: @Sendable () -> Bool
+    /// #2009: "Start new Codex sessions through the pool", stored beside it.
+    private let codexRouteOn: @Sendable () -> Bool
     /// #1890: the session's inherited ANTHROPIC_BASE_URL (CCPool.InheritedBaseURL); always nil without a probe (XCTest).
     private let inherited: @Sendable (_ wait: Bool) -> String?
     /// #1892: Prosper's own ANTHROPIC_BASE_URL, read once at init (the spawn env's source).
@@ -140,6 +142,7 @@ final class CCPoolRuntime {
         // UserDefaults is thread-safe; held the way Preferences.defaults is.
         nonisolated(unsafe) let routeDefaults = defaults
         routeOn = { CCPoolPaneModel.routeValue(in: routeDefaults) }
+        codexRouteOn = { CCPoolPaneModel.codexRouteValue(in: routeDefaults) }
     }
 
     /// Launch, enable and disable: the proxy follows the extension (and the account list).
@@ -151,7 +154,7 @@ final class CCPoolRuntime {
 
     /// P2b-2: what new Agent Sessions route on (AgentIslandController.sessionEnvContributors, the New session
     /// form's hint): the pane's toggle, this proxy's status and this pool's accounts, read at each call.
-    var routing: CCPool.Routing { service.routing(on: routeOn, inherited: inherited, own: own) }
+    var routing: CCPool.Routing { service.routing(on: routeOn, inherited: inherited, own: own, codexOn: codexRouteOn) }
 
     /// #1537: the Agent Island's plan usage line: the current account's last usage sample (relayed replies or a
     /// Refresh) and its reset stamps, as a plain island value. nil without a current account or a sample.

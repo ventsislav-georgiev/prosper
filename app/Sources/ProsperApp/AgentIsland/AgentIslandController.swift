@@ -40,6 +40,8 @@ private final class FirstClickHostingView<V: View>: NSHostingView<V> {
 typealias SessionEnvContributor = @Sendable (_ argv: [String], _ env: [String: String]) -> [String: String]
 /// #1499: the --revive flags (`--unset K`, `--env K=V`) that carry a command's routing past dch's login-shell env.
 typealias ReviveEnvFlags = @Sendable (_ argv: [String]) -> [String]
+/// #2009: a new session's command with words added after argv[0] (the pool's Codex provider); the argv unchanged when none.
+typealias SessionArgvContributor = @Sendable (_ argv: [String]) -> [String]
 
 /// #1185 (b1): the seed socket dirs the poll does not list, scanned by AgentDirScanner's rule (one stat per dir per
 /// tick, a readdir only when its mtime moved). A dch client's own files move the mtime too, so only the .sock set
@@ -253,6 +255,9 @@ final class AgentIslandController {
     /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
     /// and run on the runner's queue like a contributor. No runtime: none.
     var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
+    /// #2009: the argv contributors of the next --spawn, asked on main at each spawn and run on the runner's queue (the
+    /// pool's Codex routing; no runtime: none). --revive takes no argv: a Resume gets none.
+    var sessionArgvContributors: @MainActor () -> [SessionArgvContributor] = { CCPoolRuntime.shared.map { [$0.routing.argvContributor] } ?? [] }
     /// #1684: the live kits' bins for a Resume's `--env PATH=`, read on main like the spawn's (none while KitRuntimes is unset, as under XCTest).
     var reviveKitBins: @MainActor () -> [String] = { KitRuntimes.shared?.liveBins() ?? [] }
     /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
@@ -1358,7 +1363,13 @@ final class AgentIslandController {
         let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken,
                                               name: name ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: dir))
         let key = AgentSessionKey(dir: dir, name: args[1])
-        let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: command) { [weak self] r in
+        // #2009: the argv contributors run on the runner's queue, under the job's hold; none: the args as built.
+        let argvContributors = sessionArgvContributors()
+        let prepare: (@Sendable () -> (args: [String]?, out: Data))? = argvContributors.isEmpty ? nil : { @Sendable () -> (args: [String]?, out: Data) in
+            (AgentIsland.newSessionArgs(folder: folder, command: argvContributors.reduce(command) { $1($0) }, taken: taken,
+                                        name: key.name), Data())
+        }
+        let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: command, prepare: prepare) { [weak self] r in
             guard let store = self?.store else { return }
             let failed = AgentIsland.spawnText(r, name: key.name)
             if let failed { store.actions[AgentSessionKey(dir: dir, name: "")] = failed }

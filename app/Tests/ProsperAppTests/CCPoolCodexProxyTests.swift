@@ -77,6 +77,7 @@ final class CCPoolCodexProxyTests: XCTestCase {
     // account id and cookie never go upstream; Codex's own headers pass through.
     func testCodexResponsesCarriesThePoolLoginOnly() throws {
         let r = try rig()
+        XCTAssertTrue(r.service.config.codexReach.lastServed == nil, "#2009: no /codex request served yet")
         let resp = try XCTUnwrap(r.codex(headers: [
             ("Authorization", "Bearer client-token-should-be-replaced"),
             ("ChatGPT-Account-Id", "client-account-should-be-replaced"),
@@ -86,6 +87,7 @@ final class CCPoolCodexProxyTests: XCTestCase {
             ("OpenAI-Beta", "responses=experimental"), ("User-Agent", "codex-example/1"),
         ]))
         XCTAssertEqual(resp.status, 200, resp.text)
+        XCTAssertTrue(r.service.config.codexReach.lastServed != nil, "#2009: the served /codex request reaches the detector")
         let heads = r.fake.heads
         XCTAssertEqual(heads.count, 1)
         let h = try XCTUnwrap(heads.last)
@@ -157,6 +159,7 @@ final class CCPoolCodexProxyTests: XCTestCase {
         XCTAssertEqual(resp.status, 429, resp.text)
         XCTAssertTrue(resp.text.contains("all pooled accounts are rate limited"), resp.text)
         XCTAssertEqual(r.fake.heads.count, 0)
+        XCTAssertTrue(r.service.config.codexReach.lastServed == nil, "#2009: a request at the root is not a /codex one")
     }
 
     // No Codex account (none at all, or only one of a kind Phase 2 does not route) answers 503 and sends nothing.

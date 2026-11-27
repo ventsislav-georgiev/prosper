@@ -336,7 +336,8 @@ enum AgentNewSession {
     /// Start spawns it). Decided by the routing value the spawn env applies, so the hint and the env cannot
     /// disagree. nil routing (the ccpool runtime not built): no hint.
     static func poolHint(_ argv: [String], routing: CCPool.Routing?) -> String? {
-        guard let routing, !routing.delta(argv).isEmpty else { return nil }
+        // #2009: or when the spawn would add the pool's Codex words (the same Routing value's codexWords).
+        guard let routing, !routing.delta(argv).isEmpty || !routing.codexWords(argv).isEmpty else { return nil }
         return viaPoolHint
     }
 

@@ -115,7 +115,7 @@ enum CCPool {
 
     /// `command` is the user's command value (argv) BEFORE any login-shell wrap: the wrapped argv
     /// starts with the shell and would never route (errata C8). Off, the proxy not healthy, or a
-    /// pool with no account (QA #739 F1; `CCPoolStore.hasAccounts`): no change at all. `claude` gets ANTHROPIC_BASE_URL
+    /// pool with no Claude account (QA #739 F1, #2009; `CCPoolStore.hasClaudeAccounts`): no change at all. `claude` gets ANTHROPIC_BASE_URL
     /// only: OQ-132 keeps the person's API key and tokens in the env (the proxy replaces the client's auth header, S10).
     /// `headroom` is not routed in v1 (#1200): it reads its upstream address in its own proxy process, shared by every
     /// headroom session, so it cannot be set per session; the environment stays as it is, credentials kept. Anything else
@@ -129,6 +129,80 @@ enum CCPool {
         return rule.programs.contains(programName(first)) ? EnvDelta(set: [rule.key: base]) : EnvDelta()
     }
 
+    /// #2009 (design #2003 section 9): the pool's provider name in Codex's config.
+    static let codexProvider = "prosperpool"
+
+    /// #2009: the words a routed `codex` gets after argv[0]: one `-c` per key (dotted path, TOML value), defining a pool
+    /// provider over HTTP+SSE (no WebSocket: the proxy answers an upgrade 501), then choosing it. Only the loopback URL and
+    /// this pool's port: never a token, an account id or a session id.
+    static func codexArgs(port: UInt16) -> [String] {
+        let p = "model_providers.\(codexProvider)."
+        return ["-c", p + "name=\"Prosper pool\"",
+                "-c", p + "base_url=\"\(baseURL(port: port))\(CCPoolCodexHarness.pathPrefix)\"",
+                "-c", p + "wire_api=\"responses\"",
+                "-c", p + "requires_openai_auth=true",
+                "-c", p + "supports_websockets=false",
+                "-c", "model_provider=\"\(codexProvider)\""]
+    }
+
+    /// #2009: a codex argv the pool leaves alone. Its own provider choice (`--profile`/`-p`, `-c model_provider...`, `-c
+    /// model_providers...`, `--oss`) is kept. A `--remote` Codex runs on a server that ignores `-c` ("config overrides were
+    /// provided and ignored"), so it is not routed either. A plain `codex` is routed: dch adds `--no-daemon` itself to a
+    /// TUI launch (dch README, Codex 0.167 daemon), so `-c` holds without it. Words after `--` are the prompt, not read.
+    static func codexKeepsOwn(_ argv: [String]) -> Bool {
+        let words = argv.dropFirst().prefix { $0 != "--" }
+        var config = false
+        for w in words {
+            defer { config = w == "-c" || w == "--config" }
+            // a `-c`/`--config` value: the next word, `--config=V` or `-cV`
+            let value = config ? w : w.hasPrefix("--config=") ? String(w.dropFirst(9)) : w.hasPrefix("-c") ? String(w.dropFirst(2)) : ""
+            if value.hasPrefix("model_provider") || value.hasPrefix("profile=") { return true }
+            if w == "--profile" || w.hasPrefix("--profile=") || w.hasPrefix("-p") || w == "--oss" || w == "--remote" || w.hasPrefix("--remote=") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// #2009: whether routed Codex sessions reach the pool. A routed spawn starts a wait; the next /codex request the proxy
+    /// serves ends it. Still waiting 10 minutes after the first routed spawn since the last request: the pane says Codex
+    /// is not reaching the pool. A clock is injected; no timer runs (the pane reads it when it redraws).
+    /// Isolation: none; the lock guards the fields (spawns on the runner's queue, requests on the proxy's).
+    final class CodexReach: @unchecked Sendable {
+        static let silentAfter: Double = 600
+        private let lock = NSLock()
+        private let now: @Sendable () -> Double
+        private var waitingSince: Double?, routed_ = 0, lastServed_: Double?
+        /// The Codex sessions routed since launch, and when the last /codex request was served.
+        var routedCount: Int { lock.withLock { routed_ } }
+        var lastServed: Double? { lock.withLock { lastServed_ } }
+
+        init(now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 }) { self.now = now }
+
+        /// A Codex session was routed (the argv contributor, at its spawn).
+        func routed() {
+            let t = now()
+            lock.withLock {
+                routed_ += 1
+                if waitingSince == nil { waitingSince = t }
+            }
+        }
+
+        /// The proxy served a /codex request (once per request, never per chunk).
+        func served() {
+            let t = now()
+            lock.withLock {
+                lastServed_ = t
+                waitingSince = nil
+            }
+        }
+
+        var silent: Bool {
+            let t = now()
+            return lock.withLock { waitingSince.map { t - $0 >= Self.silentAfter } ?? false }
+        }
+    }
+
     /// spec 3.6 at spawn time: the person's toggle, the proxy's status and the pool's accounts, each read
     /// when a session starts. One value feeds both the spawn env (`contributor`) and the New session form's
     /// "via ccpool" hint (AgentNewSession.poolHint), so the two cannot disagree.
@@ -136,12 +210,37 @@ enum CCPool {
     struct Routing: Sendable {
         var on: @Sendable () -> Bool
         var status: @Sendable () -> CCPoolService.Status
+        /// Whether the pool lists a Claude account (#2009: CCPoolService passes `CCPoolStore.hasClaudeAccounts`).
         var hasAccounts: @Sendable () -> Bool
         /// #1890: the session's inherited ANTHROPIC_BASE_URL (InheritedBaseURL.read; `wait` only off main); nil: not known.
         var inherited: @Sendable (_ wait: Bool) -> String? = { _ in nil }
 
         /// #1892: Prosper's own ANTHROPIC_BASE_URL (the source of the spawn env); none by default.
         var own: @Sendable () -> String? = { nil }
+        /// #2009: "Start new Codex sessions through the pool", whether the pool lists a Codex account, and where a routed
+        /// spawn is counted. Off, none and nil by default.
+        var codexOn: @Sendable () -> Bool = { false }
+        var hasCodexAccounts: @Sendable () -> Bool = { false }
+        var reach: CodexReach?
+
+        /// #2009: the words a codex argv gets after argv[0] ([]: none). The toggle is read first, then the status and the
+        /// store, as for Claude. Pure: the form's hint reads it too; the spawn's argvContributor also counts the routing.
+        func codexWords(_ argv: [String]) -> [String] {
+            guard let first = argv.first, programName(first) == CCPoolCodexHarness.id, codexOn(),
+                  case .running(let port) = status(), hasCodexAccounts(), !codexKeepsOwn(argv) else { return [] }
+            return codexArgs(port: port)
+        }
+
+        /// #2009: the --spawn argv contributor (runs on the runner's queue). A new session only: --revive takes no argv,
+        /// and dch's `codex resume` keeps the original's `-c` words (cargv.c dch_codex_resume).
+        var argvContributor: SessionArgvContributor {
+            { [self] argv in
+                let words = codexWords(argv)
+                guard let first = argv.first, !words.isEmpty else { return argv }
+                reach?.routed()
+                return [first] + words + argv.dropFirst()
+            }
+        }
 
         /// The toggle is read first: off, neither the status nor the store is read, so turning it off holds
         /// for the next spawn whatever they would say. Only `.running` routes (stopped, held, failed: no).

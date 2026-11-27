@@ -7,6 +7,9 @@ struct CCPoolServiceConfig: Sendable {
     var upstream: URL = CCPoolService.productionUpstream
     /// #2005: the Codex (ChatGPT login) upstream that `/codex/...` is relayed to, a test seam only.
     var codexUpstream: URL = CCPoolCodexHarness.upstream
+    /// #2009: routed Codex spawns against served /codex requests, shared by every copy of this config (a class, like
+    /// thresholdBox); tests inject one with their own clock.
+    var codexReach = CCPool.CodexReach()
     /// Request bodies up to this are buffered and can be replayed on another account; larger ones
     /// are streamed upstream once (errata C1).
     var replayCap: Int = 32 << 20
@@ -142,10 +145,10 @@ final class CCPoolService: @unchecked Sendable {
     /// The published listener (tests deliver its state changes through its own handler, A6).
     var currentListener: CCPoolListener? { lock.withLock { listener } }
 
-    /// QA #739 F1: new sessions route only while the listener runs AND the pool lists an account.
+    /// QA #739 F1: new Claude sessions route only while the listener runs AND the pool lists a Claude account (#2009).
     var routable: Bool {
         guard case .running = status else { return false }
-        return store.hasAccounts
+        return store.hasClaudeAccounts
     }
 
     /// The env delta for a new Agent Session (P2b's one call): base URL, health and accounts all
@@ -158,8 +161,10 @@ final class CCPoolService: @unchecked Sendable {
     /// #1890: `inherited` is the session's own ANTHROPIC_BASE_URL (CCPool.InheritedBaseURL; none by default).
     func routing(on: @escaping @Sendable () -> Bool,
                  inherited: @escaping @Sendable (_ wait: Bool) -> String? = { _ in nil },
-                 own: @escaping @Sendable () -> String? = { nil }) -> CCPool.Routing {
-        CCPool.Routing(on: on, status: { [self] in status }, hasAccounts: { [self] in store.hasAccounts }, inherited: inherited, own: own)
+                 own: @escaping @Sendable () -> String? = { nil },
+                 codexOn: @escaping @Sendable () -> Bool = { false }) -> CCPool.Routing {
+        CCPool.Routing(on: on, status: { [self] in status }, hasAccounts: { [self] in store.hasClaudeAccounts }, inherited: inherited, own: own,
+                       codexOn: codexOn, hasCodexAccounts: { [self] in store.hasCodexAccounts }, reach: config.codexReach)
     }
 
     /// Under XCTest the proxy never binds the production port and never dials the production

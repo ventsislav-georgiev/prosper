@@ -12,6 +12,9 @@ struct CCPoolPane: View {
         + "and the Keychain item name). Tokens stay in the Keychain."
     static let refreshHint = "Costs one tiny request per account, straight to Anthropic."
     static let routeTitle = "Start new Claude sessions through the pool"
+    static let codexRouteTitle = "Start new Codex sessions through the pool"
+    /// #2009: the routed-but-silent detector's caption (CCPool.CodexReach).
+    static let codexSilentLine = "Codex sessions are not reaching the pool"
     /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1). #1219 step 2: a single Resume is
     /// routed as a new session; Resume interrupted (one --revive --all per folder) runs with the control environment only.
     static let routeScope = "New sessions started from Prosper that run claude. "
@@ -194,6 +197,14 @@ struct CCPoolPane: View {
                         .labelsHidden()
                         .accessibilityLabel(Self.routeTitle)
                 }
+                if model.hasCodexAccounts {
+                    NeonRow(Self.codexRouteTitle, subtitle: "Applies to sessions started after the change.") {
+                        Toggle("", isOn: Binding(get: { model.routeCodexSessions }, set: { model.routeCodexSessions = $0 }))
+                            .labelsHidden()
+                            .accessibilityLabel(Self.codexRouteTitle)
+                    }
+                }
+                if model.codexNotReaching { caption(Self.codexSilentLine) }
                 if let url = model.foreignBaseURL { caption(Self.foreignLine(url)) }
                 caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))
             }

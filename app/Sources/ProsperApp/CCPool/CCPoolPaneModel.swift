@@ -18,6 +18,11 @@ final class CCPoolPaneModel: ObservableObject {
     nonisolated static func routeValue(in defaults: UserDefaults) -> Bool {
         defaults.object(forKey: routeKey) == nil || defaults.bool(forKey: routeKey)
     }
+    /// #2009: "Start new Codex sessions through the pool", stored like the Claude toggle: never set reads on.
+    nonisolated static let codexRouteKey = "ccpoolRouteCodexSessions"
+    nonisolated static func codexRouteValue(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: codexRouteKey) == nil || defaults.bool(forKey: codexRouteKey)
+    }
     /// #1670: "Move off an account at", a Double 0.5...1.0 (1.0 = only when the account is spent).
     nonisolated static let exhaustedKey = "ccpoolExhaustedThreshold"
     nonisolated static let exhaustedRange = 0.5...1.0
@@ -320,9 +325,9 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
-    /// What the toggle shows (QA #739 F1): off while the pool has no account, the stored choice
+    /// What the toggle shows (QA #739 F1): off while the pool has no Claude account (#2009), the stored choice
     /// otherwise. Turning it on is refused while disabled, so a stored true survives an empty pool.
-    var routeToggleShown: Bool { store.hasAccounts && routeAgentSessions }
+    var routeToggleShown: Bool { store.hasClaudeAccounts && routeAgentSessions }
 
     /// The toggle's write (O2, QA #751 INFO-3): off is always stored; on only while `routeDisabledReason` is nil.
     func setRouteAgentSessions(_ on: Bool) {
@@ -330,6 +335,20 @@ final class CCPoolPaneModel: ObservableObject {
         guard !on || routeDisabledReason == nil else { objectWillChange.send(); return }
         routeAgentSessions = on
     }
+
+    /// #2009: the Codex toggle (shown only while the pool lists a Codex account, which P5 adds).
+    var routeCodexSessions: Bool {
+        get { Self.codexRouteValue(in: defaults) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Self.codexRouteKey)
+        }
+    }
+
+    var hasCodexAccounts: Bool { store.hasCodexAccounts }
+
+    /// #2009: routed Codex sessions and no /codex request 10 minutes after the first of them (CCPool.CodexReach).
+    var codexNotReaching: Bool { service.config.codexReach.silent }
 
     /// #1890: the session's inherited ANTHROPIC_BASE_URL as CCPoolRuntime reads it (never waits here); none by default.
     var inheritedBaseURL: @Sendable (_ wait: Bool) -> String? = { _ in nil }
@@ -345,7 +364,7 @@ final class CCPoolPaneModel: ObservableObject {
     }
 
     var routeDisabledReason: String? {
-        if !store.hasAccounts { return "Add an account first." }
+        if !store.hasClaudeAccounts { return "Add an account first." }  // #2009: a Claude one (a Codex-only pool: none)
         if !proxyRunning { return "The proxy is not running." }
         return nil
     }

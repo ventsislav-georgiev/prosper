@@ -161,6 +161,28 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(pool.mainReads, 0, "the spawn reads the pool on the runner's queue, never main")
     }
 
+    /// #2009: the --spawn path runs the argv contributors on the runner's queue: a routed codex gets the pool's `-c` words
+    /// right after argv[0] and is counted once; claude's argv is untouched and keeps its env routing; a codex with its own
+    /// provider gets nothing.
+    func testCCPoolSpawnAddsTheCodexWordsAtTheRecorder() {
+        let rec = Recorder(), pool = Pool(), reach = CCPool.CodexReach(now: { 0 })
+        var routing = pool.routing
+        routing.codexOn = { true }
+        routing.hasCodexAccounts = { true }
+        routing.reach = reach
+        let c = controller(rec, routing: routing)
+        c.sessionArgvContributors = { [routing.argvContributor] }
+        _ = spawnedEnv(c, rec, ["codex", "--no-daemon"], name: "api")
+        XCTAssertEqual(rec.args.last, ["--spawn", "api", "--", "codex"] + CCPool.codexArgs(port: 41234) + ["--no-daemon"])
+        XCTAssertEqual(reach.routedCount, 1)
+        XCTAssertEqual(spawnedEnv(c, rec, ["claude"], name: "api-2"), routedClaude)
+        XCTAssertEqual(rec.args.last, ["--spawn", "api-2", "--", "claude", "--name", "api-2"], "claude's argv as today")
+        _ = spawnedEnv(c, rec, ["codex", "--no-daemon", "-p", "work"], name: "api-qa")
+        XCTAssertEqual(rec.args.last, ["--spawn", "api-qa", "--", "codex", "--no-daemon", "-p", "work"], "its own profile: unchanged")
+        XCTAssertEqual(reach.routedCount, 1, "only the routed spawn counts")
+        XCTAssertEqual(pool.mainReads, 0, "the spawn reads the pool on the runner's queue, never main")
+    }
+
     /// The island's own New session (no name, the stored command) goes through the same seam.
     func testCCPoolIslandNewSessionRoutesThroughTheSameSeam() {
         XCTAssertTrue(Preferences.defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")

@@ -318,6 +318,7 @@ final class CCPoolConnection: @unchecked Sendable {
                     sendText(501, "ccpool: Codex over WebSocket is not supported by the pool; use HTTP (SSE)")
                     return true
                 }
+                config.codexReach.served()   // #2009: once per request (the routed-but-silent detector)
             }
             let base = (codexRest == nil ? config.upstream : config.codexUpstream).absoluteString
             target = (base.hasSuffix("/") ? String(base.dropLast()) : base) + (codexRest ?? h.path)
