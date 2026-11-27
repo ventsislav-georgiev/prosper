@@ -1,0 +1,34 @@
+{
+ "entry": "2040",
+ "filter": "XrayCommandPillTests",
+ "mutants": [
+  {
+   "name": "output_hides_again",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        // #1724: the text under a Command hover",
+   "new": "        hideCommand()\n        // #1724: the text under a Command hover",
+   "expect": "killed"
+  },
+  {
+   "name": "click_reverify_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        guard commandStill((host?.viewportText() ?? \"\").components(separatedBy: \"\\n\")) else { hideCommand(); return nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "drain_check_off",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "if resized || pillUp && !commandStill(read) { hideCommand() }",
+   "new": "if resized { hideCommand() }",
+   "expect": "killed"
+  },
+  {
+   "name": "settle_gate_back",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
+   "old": "        guard commandsShown() else { return hideCommand() }",
+   "new": "        guard settle == nil, commandsShown() else { return hideCommand() }",
+   "expect": "killed"
+  }
+ ]
+}
