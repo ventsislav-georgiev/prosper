@@ -1,0 +1,34 @@
+{
+ "entry": 2031,
+ "filter": "CCPoolSessionRoutingTests|AgentIslandControlsTests/testRestartAllCarriesTheCodexWordsOnlyWithACodexRowOnDch1189|DchControlFramesTests/testCodexRestart",
+ "mutants": [
+  {
+   "name": "gate-removed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "&& store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.codexReviveMinimum) }) == true ? reviveCodexFlags() : nil",
+   "new": "? reviveCodexFlags() : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "drop-dropped-when-on",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "return [\"--codex-drop-provider\"] + stride",
+   "new": "return (w.isEmpty ? [\"--codex-drop-provider\"] : []) + stride",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-check-removed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "(r.codex != nil || AgentIsland.isInteractiveCodex(r.argv))\n                &&",
+   "new": "true\n                &&",
+   "expect": "killed"
+  },
+  {
+   "name": "restart-all-codex-check-removed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "rows.contains(where: { runsCodex($0, records: []) })",
+   "new": "true",
+   "expect": "killed"
+  }
+ ]
+}
