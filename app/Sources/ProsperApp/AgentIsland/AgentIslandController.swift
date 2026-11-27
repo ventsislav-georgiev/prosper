@@ -776,8 +776,9 @@ final class AgentIslandController {
     /// #829: false when nothing started; with `sayBusy` (the window's call) a busy row says so
     /// (refuseBusy). The island's own call stays silent, as before.
     @discardableResult
-    func restart(_ s: AgentSession, sayBusy: Bool = false) -> Bool {
-        guard let store, case .ok(let dch) = store.restartGate, let args = AgentIsland.restartArgs(s.name) else { return false }
+    /// #2060: `force` false: a group's Restart stale agents (only the session's stale agents restart).
+    func restart(_ s: AgentSession, sayBusy: Bool = false, force: Bool = true) -> Bool {
+        guard let store, case .ok(let dch) = store.restartGate, let args = AgentIsland.restartArgs(s.name, force: force) else { return false }
         let key = s.key
         // #990 (QA #665 INFO-3): an answer, key sequence or Always allow check in flight holds the session: refused, never queued.
         if inFlight.contains(key) {
@@ -992,12 +993,13 @@ final class AgentIslandController {
 
     /// The "⋯" menu's Stop all in <tab>, or (#744 `global`) Stop all: only asks (the inline line).
     /// QA #572 F2: the rows are fixed now; the answer acts on no other row.
-    func askStopAll(global: Bool = false) {
+    /// #2060: `group`, a group header's name and its rows: the question and its answer reach those rows only.
+    func askStopAll(global: Bool = false, group: (name: String, rows: [AgentSession])? = nil) {
         guard let store, store.restartGate.isOK else { return }
-        let t = store.stopTargets(global: global)
+        let t = store.stopTargets(global: global, in: group?.rows)
         guard !t.stop.isEmpty else { return }
         store.dropQuestions()
-        store.ask(t.stop, skipped: t.skipped, dashed: t.dashed, global: global)
+        store.ask(t.stop, skipped: t.skipped, dashed: t.dashed, global: global, group: group?.name)
         store.confirmingStopAll = true
         layout()
     }
@@ -1142,12 +1144,12 @@ final class AgentIslandController {
 
     /// The "⋯" menu's Kill all in <tab>, or Kill all (`global`): only asks.
     /// QA #572 F1: the rows are fixed now; the answer acts on no other row.
-    func askKillAll(global: Bool = false) {
+    func askKillAll(global: Bool = false, group: (name: String, rows: [AgentSession])? = nil) {
         guard let store, store.resumeGate.isOK else { return }
-        let t = store.killTargets(global: global)
+        let t = store.killTargets(global: global, in: group?.rows)
         guard !t.kill.isEmpty else { return }
         store.dropQuestions()
-        store.ask(t.kill, skipped: t.skipped, global: global)
+        store.ask(t.kill, skipped: t.skipped, global: global, group: group?.name)
         store.confirmingKillAll = true
         layout()
     }
@@ -1307,9 +1309,11 @@ final class AgentIslandController {
 
     /// The "⋯" menu's Restart stale agents, or (#700) Restart all agents (force):
     /// only asks (the inline line); one restart question at a time.
-    func askRestartAll(force: Bool = false) {
-        guard let store, store.restartGate.isOK, !store.sessions.isEmpty else { return }
+    /// #2060: `group`, a group header's name and its rows: the answer restarts those rows by name, never `--all`.
+    func askRestartAll(force: Bool = false, group: (name: String, rows: [AgentSession])? = nil) {
+        guard let store, store.restartGate.isOK, !store.sessions.isEmpty, group?.rows.isEmpty != true else { return }
         store.dropQuestions()
+        if let group { store.ask(group.rows, skipped: 0, global: false, group: group.name) }
         store.restartAllForce = force
         store.confirmingRestartAll = true
         layout()
@@ -1328,6 +1332,11 @@ final class AgentIslandController {
     /// the dir gets the summary.
     private func restartAll(force: Bool) {
         guard let store, case .ok(let dch) = store.restartGate else { return }
+        // #2060: a group's: each asked row still live, by name (`--all` would reach the dir's other sessions).
+        if store.asked.group {
+            for s in store.sessions where store.asked.keys.contains(s.key) { restart(s, sayBusy: true, force: force) }
+            return layout()
+        }
         for dir in Set(store.sessions.map(\.key.dir)).sorted() {
             let key = AgentSessionKey(dir: dir, name: "")
             // #1314: --all restarts every row: one a window action holds refuses the dir, which says so.

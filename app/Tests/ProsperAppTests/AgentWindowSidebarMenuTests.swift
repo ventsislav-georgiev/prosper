@@ -487,4 +487,110 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         pump { headerBodies > menu0 + 1 }
         XCTAssertEqual(headerBodies, menu0 + 2, "a changed gate rebuilds the menu once")
     }
+
+    // MARK: #2060: a group header's "\u{22EF}"
+
+    /// Two groups and ungrouped rows, every one idle (none in Needs you) and stoppable.
+    @MainActor
+    func groupedStore() -> AgentIslandStore {
+        let st = store([session("api"), session("web"), session("api-qa"), session("web-qa"), session("doc-a")], dch: bin([1, 38, 0]))
+        st.sessionGroups = [SessionGroup(id: "qa", name: "QA", pattern: "-qa$"), SessionGroup(id: "docs", name: "Docs", pattern: "^doc"),
+                            SessionGroup(id: "none", name: "Empty", pattern: "^zzz")]
+        return st
+    }
+
+    /// The rows the sidebar draws under `id`'s header, as its "\u{22EF}" gets them.
+    @MainActor
+    func groupRows(_ st: AgentIslandStore, _ id: String) throws -> [AgentSession] {
+        let sections = AgentSidebar.sections(sessions: st.sessions, history: st.history, sort: .name, groups: st.sessionGroups,
+                                             details: .all, now: Self.now)
+        let section = try XCTUnwrap(sections.first { $0.id == AgentSidebar.groupFold(id) })
+        return try XCTUnwrap(AgentSidebar.groupSessions(section))
+    }
+
+    /// Each item of the QA header's menu sends its verb for exactly QA's sessions: none of Docs', none of the ungrouped.
+    @MainActor
+    func testGroupMenuActsOnExactlyThatGroupsSessions() throws {
+        let st = groupedStore()
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        let sections = AgentSidebar.sections(sessions: st.sessions, history: [], sort: .name, groups: st.sessionGroups,
+                                             details: .all, now: Self.now)
+        let main = try XCTUnwrap(sections.first { $0.id == "Sessions" })
+        XCTAssertTrue(AgentSidebar.groupSessions(main) == nil, "no menu on Sessions")
+        let qa = try groupRows(st, "qa")
+        XCTAssertEqual(qa.map(\.name), ["api-qa", "web-qa"])
+        func run(_ v: AgentSidebarVerb, calls: Int) -> [[String]] {
+            rec.lock.withLock { rec.all = [] }
+            m.runGroup(v, name: "QA", rows: qa)
+            XCTAssertEqual(rec.args.count, 0, "asks first")
+            m.answerStoreQuestion(true)
+            settle { rec.args.count >= calls }
+            settle { !c.runner.hasJob(AgentSessionKey(dir: Self.dir, name: "")) && qa.allSatisfy { !c.runner.hasJob($0.key) } }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            return rec.args
+        }
+        let outside = ["api", "web", "doc-a", "--all"]
+        let stop = run(.stopAll, calls: 1)
+        XCTAssertEqual(stop.count, 1, "one --stop for the dir")
+        XCTAssertEqual(Set(stop.flatMap { $0 }), ["--stop", "api-qa", "web-qa", "--json"])
+        let kill = run(.killAll, calls: 2)
+        XCTAssertEqual(Set(kill), Set([AgentIsland.killArgs("api-qa"), AgentIsland.killArgs("web-qa")].compactMap { $0 }))
+        let stale = run(.restartAll(force: false), calls: 2)
+        XCTAssertEqual(Set(stale), Set([["--restart", "api-qa", "--include-agents", "--json"],
+                                        ["--restart", "web-qa", "--include-agents", "--json"]]), "by name, no -f, never --all")
+        let force = run(.restartAll(force: true), calls: 2)
+        XCTAssertEqual(Set(force), Set([AgentIsland.restartArgs("api-qa"), AgentIsland.restartArgs("web-qa")].compactMap { $0 }))
+        for args in stop + kill + stale + force { XCTAssertTrue(Set(args).isDisjoint(with: outside), "outside QA: \(args)") }
+    }
+
+    /// The question names the group and its count; the window-wide one after it is the island's own again.
+    @MainActor
+    func testGroupMenuQuestionNamesTheGroupAndTheCount() throws {
+        let st = groupedStore()
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        let qa = try groupRows(st, "qa"), docs = try groupRows(st, "docs")
+        m.runGroup(.stopAll, name: "QA", rows: qa)
+        XCTAssertEqual(AgentWindowControls.storeQuestion(st)?.text, "Stop 2 sessions in QA?")
+        m.runGroup(.killAll, name: "Docs", rows: docs)
+        XCTAssertEqual(AgentWindowControls.storeQuestion(st)?.text, "End 1 session in Docs? No pause message first.")
+        m.runGroup(.restartAll(force: false), name: "QA", rows: qa)
+        XCTAssertEqual(AgentWindowControls.storeQuestion(st)?.text, "Restart stale agents in 2 sessions in QA? Each pauses for up to minutes.")
+        m.runGroup(.restartAll(force: true), name: "QA", rows: qa)
+        XCTAssertEqual(AgentWindowControls.storeQuestion(st)?.text,
+                       "Restart every agent, busy ones too, in 2 sessions in QA? Each pauses for up to minutes.")
+        m.runSidebar(.restartAll(force: false))
+        XCTAssertEqual(AgentWindowControls.storeQuestion(st)?.text, AgentIsland.restartAllQuestion, "the window-wide one is unscoped")
+        m.answerStoreQuestion(false)
+        XCTAssertEqual(rec.args.count, 0, "nothing ran")
+    }
+
+    /// An empty group draws no header, and its menu is empty (no menu, not disabled items).
+    @MainActor
+    func testEmptyGroupShowsNoMenu() throws {
+        let st = groupedStore()
+        let sections = AgentSidebar.sections(sessions: st.sessions, history: [], sort: .name, groups: st.sessionGroups,
+                                             details: .all, now: Self.now)
+        XCTAssertFalse(sections.contains { $0.id == AgentSidebar.groupFold("none") })
+        XCTAssertEqual(AgentWindowControls.groupMenu(store: st, rows: []), [])
+    }
+
+    /// The items in order, pinned; each off by the window menu's rule over the group's rows.
+    @MainActor
+    func testGroupMenuItemsInOrder() throws {
+        let st = groupedStore()
+        let menu = AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"))
+        XCTAssertEqual(titles(menu), ["Restart stale agents" + Self.ellipsis, "Restart all agents (force)" + Self.ellipsis,
+                                      "Stop all" + Self.ellipsis, "End all" + Self.ellipsis])
+        let verbs = menu.compactMap { (e: AgentSidebarMenuEntry) -> AgentSidebarVerb? in
+            if case .item(_, _, _, let v) = e { return v }
+            return nil
+        }
+        XCTAssertEqual(verbs, [.restartAll(force: false), .restartAll(force: true), .stopAll, .killAll])
+        XCTAssertEqual(enabled(menu), [true, true, true, true])
+        st.sessions = [session("old-qa", version: "1.23.0")]
+        XCTAssertEqual(enabled(AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"))), [true, true, false, true],
+                       "an old master cannot stop: Stop all is off, as in the window menu")
+    }
 }

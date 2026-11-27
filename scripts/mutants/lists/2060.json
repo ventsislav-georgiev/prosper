@@ -1,0 +1,27 @@
+{
+ "entry": "2060",
+ "filter": "AgentWindowSidebarMenuTests",
+ "mutants": [
+  {
+   "name": "stop-scope-dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let t = store.stopTargets(global: global, in: group?.rows)",
+   "new": "let t = store.stopTargets(global: true)",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-item-removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "            ask(AgentIsland.restartAllForceLabel, restart, .restartAll(force: true)),\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "restart-group-all",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        if store.asked.group {\n            for s in store.sessions where",
+   "new": "        if false {\n            for s in store.sessions where",
+   "expect": "killed"
+  }
+ ]
+}

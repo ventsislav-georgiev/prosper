@@ -497,9 +497,16 @@ extension AgentIsland {
     static let restartAllForceLabel = "Restart all agents (force)"
     static let restartAllForceQuestion = "Restart every agent, busy ones too? Each pauses for up to minutes."
     static let restartAllForceRunningText = "Restarting all agents…"
+    /// #2060: a group header's Restart question: the group and its count ("Restart stale agents in 4 sessions in Sidekicks?").
+    static func restartGroupQuestion(_ n: Int, group: String, force: Bool) -> String {
+        "Restart \(force ? "every agent, busy ones too," : "stale agents") in \(n) session\(n == 1 ? "" : "s") in \(group)? Each pauses for up to minutes."
+    }
 
     /// An explicit row click: `-f`, so a current agent restarts too.
-    static func restartArgs(_ name: String) -> [String]? { named("--restart", [name], ["--include-agents", "-f", "--json"]) }
+    /// #2060: `force` false (a group's Restart stale agents): only the session's stale agents restart.
+    static func restartArgs(_ name: String, force: Bool = true) -> [String]? {
+        named("--restart", [name], ["--include-agents"] + (force ? ["-f"] : []) + ["--json"])
+    }
     /// No `-f`: only stale agents restart.
     static let restartAllArgs = ["--restart", "--all", "--include-agents", "--json"]
     /// #700: `-f`: current agents restart too.

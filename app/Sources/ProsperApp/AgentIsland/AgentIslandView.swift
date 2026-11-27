@@ -321,6 +321,8 @@ final class AgentIslandStore: ObservableObject {
         var dashed = 0
         /// The tab asked about; nil: every tab ("Stop all…", "Kill all…").
         var tab: String?
+        /// #2060: asked from a group header's "⋯" (`tab` is the group's name): the asked rows wherever the island's tab is.
+        var group = false
     }
     @Published var asked = Asked()
     /// #744: a row's Kill asks first: the row whose "Kill <name>?" line is up.
@@ -403,23 +405,25 @@ final class AgentIslandStore: ObservableObject {
 
     /// #580: Stop all's rows, the session tab's (#744: or every tab's) whose master can
     /// stop, and how many it leaves out; #749: `dashed` of those for a "-" name (the rest, an old dch).
-    func stopTargets(global: Bool) -> (stop: [AgentSession], skipped: Int, dashed: Int) {
-        let rows = global ? sessions : sessionTab.sessions
+    /// #2060: `in`, a group header's rows (the window sidebar's section), in place of the tab's.
+    func stopTargets(global: Bool, in group: [AgentSession]? = nil) -> (stop: [AgentSession], skipped: Int, dashed: Int) {
+        let rows = group ?? (global ? sessions : sessionTab.sessions)
         let stop = rows.filter { AgentIsland.canStop($0) && AgentIsland.passable($0.name) }
         return (stop, rows.count - stop.count, rows.filter { AgentIsland.canStop($0) && !AgentIsland.passable($0.name) }.count)
     }
 
     /// #744: Kill all's rows, the shown tab's or every tab's. Any master can be killed
     /// (dch's own SIGTERM); only a name killArgs refuses is skipped.
-    func killTargets(global: Bool) -> (kill: [AgentSession], skipped: Int) {
-        let rows = global ? sessions : sessionTab.sessions, kill = rows.filter { AgentIsland.killArgs($0.name) != nil }
+    func killTargets(global: Bool, in group: [AgentSession]? = nil) -> (kill: [AgentSession], skipped: Int) {
+        let rows = group ?? (global ? sessions : sessionTab.sessions), kill = rows.filter { AgentIsland.killArgs($0.name) != nil }
         return (kill, rows.count - kill.count)
     }
 
     /// QA #572 F1, F2: the question's own rows, still live in its scope (the asked tab
     /// only while it is the shown one): all the answer acts on.
-    var stopAllTargets: [AgentSession] { askedRows(stopTargets(global: asked.tab == nil).stop) }
-    var killAllTargets: [AgentSession] { askedRows(killTargets(global: asked.tab == nil).kill) }
+    /// #2060: a group's question scopes every live row, then keeps only the asked ones.
+    var stopAllTargets: [AgentSession] { askedRows(stopTargets(global: asked.tab == nil || asked.group).stop) }
+    var killAllTargets: [AgentSession] { askedRows(killTargets(global: asked.tab == nil || asked.group).kill) }
     /// #584: the composer's rows still live (Message all's only while its tab shows); asked only passable names.
     var messageTargets: [AgentSession] { askedRows(sessions) }
 
@@ -441,12 +445,20 @@ final class AgentIslandStore: ObservableObject {
     func typeMessage(_ text: String) { if messageDraft != nil { messageDraft = text } }
 
     private func askedRows(_ scope: [AgentSession]) -> [AgentSession] {
-        asked.tab == nil || asked.tab == sessionTab.label ? scope.filter { asked.keys.contains($0.key) } : []
+        asked.group || asked.tab == nil || asked.tab == sessionTab.label ? scope.filter { asked.keys.contains($0.key) } : []
     }
 
     /// Records a Stop all or Kill all question's rows; the caller sets its flag.
-    func ask(_ rows: [AgentSession], skipped: Int, dashed: Int = 0, global: Bool) {
-        asked = Asked(keys: Set(rows.map(\.key)), skipped: skipped, dashed: dashed, tab: global ? nil : sessionTab.label)
+    /// #2060: `group`, the name of the group header asked from.
+    func ask(_ rows: [AgentSession], skipped: Int, dashed: Int = 0, global: Bool, group: String? = nil) {
+        asked = Asked(keys: Set(rows.map(\.key)), skipped: skipped, dashed: dashed,
+                      tab: group ?? (global ? nil : sessionTab.label), group: group != nil)
+    }
+
+    /// #2060: the restart question up: a group's names the group and its count, else the island's.
+    var restartAllQuestion: String {
+        asked.group ? AgentIsland.restartGroupQuestion(asked.keys.count, group: asked.tab ?? "", force: restartAllForce)
+            : restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion
     }
 
     /// The Stop all and Kill all lines, from what was asked. #749 (QA #572 INFO-R6):
@@ -820,7 +832,7 @@ struct AgentIslandView: View {
             if store.messageDraft != nil {
                 AgentIslandComposer(store: store, onSend: onSendMessage, onCancel: onCancelMessage)
             } else if store.confirmingRestartAll {
-                Text(verbatim: store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion)
+                Text(verbatim: store.restartAllQuestion)
                     .foregroundStyle(Neon.faded(.white, 0.8))
                 Spacer(minLength: 0)
                 lineButton("Restart") { onConfirmRestartAll(true) }

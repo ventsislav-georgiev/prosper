@@ -119,6 +119,7 @@ tag from the now-released section and put it on the new top draft.
 - X-ray cards with Follow theme off: links, filter highlights, reference underlines and the
   reference card's selected tab now stay readable when the theme's accent is too dark for the dark
   card. (#2049)
+- Each session group has a ••• menu to restart, stop or end just the sessions in that group. (#2060)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

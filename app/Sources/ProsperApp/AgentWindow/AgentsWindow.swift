@@ -1174,7 +1174,10 @@ struct AgentSidebarView: View {
                                     AgentSectionHeader(title: section.title, count: items.reduce(0) { $0 + $1.rows.count },
                                                        collapsed: folded,
                                                        toggle: AgentSidebar.folds(section.id)
-                                                           ? { model.toggleCollapsed(section.id) } : nil)
+                                                           ? { model.toggleCollapsed(section.id) } : nil,
+                                                       group: AgentSidebar.groupSessions(section).flatMap { rows in
+                                                           model.store.map { (store: $0, rows: rows) } },
+                                                       runGroup: { model.runGroup($0, name: section.title, rows: $1) })
                                 }
                                 if !folded {
                                     ForEach(items) { item in
@@ -1592,17 +1595,44 @@ struct AgentSectionHeader: View {
     var collapsed = false
     /// #828: nil for a section that never folds (Needs you): no chevron, no button.
     var toggle: (() -> Void)?
+    /// #2060: a group section's rows (AgentSidebar.groupSessions): its "\u{22EF}" and right-click menu; nil, none.
+    var group: (store: AgentIslandStore, rows: [AgentSession])? = nil
+    var runGroup: (AgentSidebarVerb, [AgentSession]) -> Void = { _, _ in }
+    /// StableMenuProbe.bodies key.
+    static let groupMenuID = "agent.sidebar.group"
 
     var body: some View {
-        if let toggle {
-            Button(action: toggle) { content }
-                .buttonStyle(.plain)
-                .help(collapsed ? "Show \(title)" : "Hide \(title)")
-                .accessibilityLabel("\(title), \(count)")
-                .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
-        } else {
-            content
+        let entries = group.map { AgentWindowControls.groupMenu(store: $0.store, rows: $0.rows) } ?? []
+        let rows = group?.rows ?? [], run = { (v: AgentSidebarVerb) in runGroup(v, rows) }
+        Group {
+            if let toggle {
+                Button(action: toggle) { content }
+                    .buttonStyle(.plain)
+                    .help(collapsed ? "Show \(title)" : "Hide \(title)")
+                    .accessibilityLabel("\(title), \(count)")
+                    .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
+            } else {
+                content
+            }
         }
+        // #2060: the sidebar title row's "\u{22EF}" look, always shown; a right-click opens the same items.
+        .padding(.trailing, entries.isEmpty ? 0 : sz(20))
+        .overlay(alignment: .trailing) {
+            if !entries.isEmpty {
+                StableMenu(Self.groupMenuID, entries: entries, run: run) { e, r in
+                    AgentSidebarMenuEntries(entries: e, run: r)
+                } label: { _ in
+                    Image(systemName: "ellipsis").font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden)
+                .frame(width: sz(18), height: sz(18))
+                .padding(.top, sz(8))   // the title's line: the header's top padding is sz(8) more than its bottom
+                .help("Restart, stop or end the sessions in \(title)")
+                .accessibilityLabel("\(title) actions")
+            }
+        }
+        .contextMenu { if !entries.isEmpty { AgentSidebarMenuEntries(entries: entries, run: run) } }
     }
 
     var content: some View {

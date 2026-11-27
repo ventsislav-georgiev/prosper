@@ -587,6 +587,38 @@ extension AgentWindowControls {
         return out
     }
 
+    /// #2060: a group header's "\u{22EF}": the window menu's restart, stop and end items, for `rows` (the group's section
+    /// as the sidebar draws it) only, with the same gates read over those rows. Clear unpinned is History's (records, not
+    /// live sessions), so it is not here. No rows: no menu (the header of an empty group is not drawn either).
+    @MainActor
+    static func groupMenu(store: AgentIslandStore, rows: [AgentSession]) -> [AgentSidebarMenuEntry] {
+        guard !rows.isEmpty else { return [] }
+        let g = AgentIslandController.controlGates(store), needs = g.needs
+        let restart = g.on && needs == nil, stop = restart && !store.stopTargets(global: false, in: rows).stop.isEmpty
+        let kill = g.on && !store.killTargets(global: false, in: rows).kill.isEmpty
+        func ask(_ label: String, _ on: Bool, _ verb: AgentSidebarVerb) -> AgentSidebarMenuEntry {
+            .item(on ? (label.hasSuffix("\u{2026}") ? label : label + "\u{2026}") : AgentIsland.label(label, needs: needs),
+                  enabled: on, checked: nil, verb: verb)
+        }
+        return [
+            ask(AgentIsland.restartAllLabel, restart, .restartAll(force: false)),
+            ask(AgentIsland.restartAllForceLabel, restart, .restartAll(force: true)),
+            ask(AgentIsland.stopAllGlobalLabel, stop, .stopAll),
+            .item(AgentIsland.killAllGlobalLabel, enabled: kill, checked: nil, verb: .killAll),
+        ]
+    }
+
+    /// #2060: a group menu item's run: the island's ask with the group's name and rows (its answer reaches no other row).
+    @MainActor
+    static func runGroup(_ v: AgentSidebarVerb, name: String, rows: [AgentSession], island c: AgentIslandController) {
+        switch v {
+        case .restartAll(let force): c.askRestartAll(force: force, group: (name, rows))
+        case .stopAll: c.askStopAll(group: (name, rows))
+        case .killAll: c.askKillAll(group: (name, rows))
+        default: break
+        }
+    }
+
     /// The item's run: the island's own call. The list-wide verbs only ask (the store's question); the settings
     /// items write the setting as Settings does and tell the island. `openSettings`: the Settings pane seam.
     @MainActor
@@ -615,8 +647,7 @@ extension AgentWindowControls {
     @MainActor
     static func storeQuestion(_ store: AgentIslandStore) -> (kind: AgentStoreQuestion, text: String, action: String)? {
         if store.confirmingRestartAll {
-            return (.restartAll, store.restartAllForce ? AgentIsland.restartAllForceQuestion : AgentIsland.restartAllQuestion,
-                    "Restart")
+            return (.restartAll, store.restartAllQuestion, "Restart")
         }
         if store.confirmingStopAll { return (.stopAll, store.stopAllQuestion, "Stop") }
         if store.confirmingKillAll { return (.killAll, store.killAllQuestion, "End") }

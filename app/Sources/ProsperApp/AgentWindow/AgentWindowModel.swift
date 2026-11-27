@@ -245,6 +245,10 @@ enum AgentSidebar {
     static let collapsible: Set<String> = ["Sessions", "Other machines", "History", "Layouts"]   // #901 B3 step 4b: Layouts
     /// #1759: a session group's section folds by its id, never its name; the stored fold set keeps this string form.
     static func groupFold(_ id: String) -> String { "group:" + id }
+    /// #2060: a group section's live sessions, the rows its header's "\u{22EF}" acts on; nil for any other section.
+    static func groupSessions(_ section: Section) -> [AgentSession]? {
+        section.id.hasPrefix("group:") ? section.rows.compactMap(\.session) : nil
+    }
     /// #1759: what a header click folds: a fixed title above or any group's section.
     static func folds(_ id: String) -> Bool { collapsible.contains(id) || id.hasPrefix("group:") }
 
@@ -1195,6 +1199,11 @@ final class AgentWindowModel: ObservableObject {
         // R897-q1: Always allow ON asks first (the strip); nothing is written before its Turn on. OFF stays immediate.
         if v == .autoAllow, !Preferences.agentIslandAutoAllow { askingAlwaysAllow = true; return }
         AgentWindowControls.runSidebar(v, island: island(), openSettings: openIslandSettings)
+    }
+
+    /// #2060: a group header's "\u{22EF}" item: the island's ask scoped to the group's rows.
+    func runGroup(_ v: AgentSidebarVerb, name: String, rows: [AgentSession]) {
+        AgentWindowControls.runGroup(v, name: name, rows: rows, island: island())
     }
 
     /// R897-q1: the Always allow question is up in the sidebar (the store's question type cannot carry it: window state).
