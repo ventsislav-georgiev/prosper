@@ -1,0 +1,34 @@
+{
+ "entry": "2015",
+ "filter": "CCPoolCodexRotationTests",
+ "mutants": [
+  {
+   "name": "match-always-true",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "    static func encryptedError(_ body: Data) -> Bool {\n",
+   "new": "    static func encryptedError(_ body: Data) -> Bool {\n        if true { return true }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "compaction-guard-removed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "if type == \"compaction\" || (sealed && type != \"reasoning\") { return .blocked }",
+   "new": "if false { return .blocked }",
+   "expect": "killed"
+  },
+  {
+   "name": "once-guard-removed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if codex, code == 400, !strippedReplay, replayable {",
+   "new": "if codex, code == 400, replayable {",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-check-removed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if codex, code == 400, !strippedReplay, replayable {",
+   "new": "if code == 400, !strippedReplay, replayable {",
+   "expect": "killed"
+  }
+ ]
+}
