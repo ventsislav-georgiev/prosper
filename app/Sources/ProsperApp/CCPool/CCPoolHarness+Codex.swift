@@ -90,9 +90,10 @@ struct CCPoolCodexHarness: PoolHarness {
             }
         }
         var limits: [String: CCPoolLimit] = [:]
-        var used: [String: Double] = [:]
+        var used: [String: (pct: Double, reset: Double)] = [:]
         var unknown: [String] = []
-        for (name, f) in groups {
+        // Sorted by slot name: at equal use and reset the first name ("primary") stands, whatever the Dictionary order.
+        for (name, f) in groups.sorted(by: { $0.key < $1.key }) {
             guard let minutes = number(f["window-minutes"], 1...5_256_000), minutes == minutes.rounded() else {
                 unknown.append(name); continue
             }
@@ -100,19 +101,17 @@ struct CCPoolCodexHarness: PoolHarness {
             let base = Self.claim(minutes: Int(minutes))
             let key = id == defaultLimit ? base : "\(id).\(base)"
             let pct = number(f["used-percent"], 0...1e6)
-            // Two slots on one window: the fuller one stands.
-            if let had = used[key], had >= (pct ?? -1) { continue }
+            let at = number(f["reset-at"], 0...1e11)
+                ?? number(f["reset-after-seconds"], 0...1e9).flatMap { a in now.isFinite && (0...1e11).contains(now) ? now + a : nil }
+            // Two slots on one window: the fuller one stands, at equal use the later reset (#2025 n4), then the first name.
+            if let had = used[key], (had.pct, had.reset) >= (pct ?? -1, at ?? -1) { continue }
+            used[key] = (pct ?? -1, at ?? -1)
             var row = CCPoolLimit()
             if let pct {
                 row.utilization = "\(pct / 100)"
                 row.status = pct >= 100 ? "rejected" : "allowed"
-                used[key] = pct
             }
-            if let at = number(f["reset-at"], 0...1e11) {
-                row.reset = "\(Int(at))"
-            } else if let after = number(f["reset-after-seconds"], 0...1e9), now.isFinite, (0...1e11).contains(now) {
-                row.reset = "\(Int(now + after))"
-            }
+            if let at { row.reset = "\(Int(at))" }
             limits[key] = row
         }
         return (limits, unknown.sorted())

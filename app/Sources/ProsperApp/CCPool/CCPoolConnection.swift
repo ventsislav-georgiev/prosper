@@ -874,11 +874,9 @@ final class CCPoolConnection: @unchecked Sendable {
             return owner
         }
         if let benched { for claim in claims { event(.bench, acct: benched, claim: claim, reset: until) } }
+        // #2025 (QA R2006 n2): above the replay cap the throttle path logs this exchange once (its reason is in that line).
+        guard replayable else { return false }
         log.note(ex.label, ex.pendingNote + "reason=usage limit reached", private: ex.pendingPrivate)
-        guard replayable else {
-            log.note(ex.label, "out on \(claims.joined(separator: ",")); request body above the replay cap, passing the 429 through")
-            return false
-        }
         log.note(ex.label, "out on \(claims.joined(separator: ",")); rotating to another account and retrying request")
         attempt(rotatingFrom: ex.label)
         return true
@@ -925,7 +923,25 @@ final class CCPoolConnection: @unchecked Sendable {
         log.note(nil, "every account is benched.\(hint)")
         event(.allBenched, reset: when)
         recordAnswer(429, acct: "")
+        if h.id == CCPoolCodexHarness.id { return failCodexLimit(reset: when) }
         fail(429, "all pooled accounts are rate limited.\(hint)", type: "rate_limit_error")
+    }
+
+    /// #2025 (QA R2006 n1): the answer the Codex CLI understands when no Codex account can serve: usage_limit_reached,
+    /// with the pool's next Codex reset as resets_at / resets_in_seconds and Retry-After. No known reset: none of the
+    /// three is sent (no time is invented).
+    private func failCodexLimit(reset: Int?) {
+        var err: [String: Any] = ["type": "usage_limit_reached", "message": "ccpool: all pooled Codex accounts are rate limited."]
+        var extra: [(String, String)] = []
+        let now = store.now
+        if let reset, now.isFinite, (0...1e11).contains(now) {
+            let secs = Int(max(0, min(1e9, Double(reset) - now)))
+            err["resets_at"] = reset
+            err["resets_in_seconds"] = secs
+            extra = [("retry-after", "\(secs)")]
+        }
+        let body = (try? JSONSerialization.data(withJSONObject: ["error": err], options: [.sortedKeys])) ?? Data()
+        sendComplete(429, contentType: "application/json", body: body, headers: extra)
     }
 
     // MARK: Writers

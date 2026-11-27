@@ -58,7 +58,7 @@ final class CCPoolCodexRotationTests: XCTestCase {
     }
 
     /// `claude`: Claude accounts by label; `codex`: Codex accounts by label, in this order.
-    private func rig(claude: [String] = [], codex: [String] = ["a", "b"]) throws -> Rig {
+    private func rig(claude: [String] = [], codex: [String] = ["a", "b"], replayCap: Int = 32 << 20) throws -> Rig {
         let fake = CCPoolCodexAccountsFake()
         let up = try CCPoolFakeServer { h, b in fake.reply(h, b) }
         XCTAssertNotEqual(up.port, 0)
@@ -72,6 +72,7 @@ final class CCPoolCodexRotationTests: XCTestCase {
         let log = CCPoolCapturingLogger()
         var cfg = CCPoolServiceConfig()
         cfg.port = 0
+        cfg.replayCap = replayCap
         cfg.upstream = URL(string: "http://127.0.0.1:\(up.port)")!
         cfg.codexUpstream = URL(string: "http://127.0.0.1:\(up.port)/backend-api/codex")!
         let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: log)
@@ -103,6 +104,51 @@ final class CCPoolCodexRotationTests: XCTestCase {
         let lines = r.log.lines
         XCTAssertTrue(lines.contains("a: out on five_hour,seven_day; rotating to another account and retrying request"), "\(lines)")
         XCTAssertFalse(r.log.publicLines.contains { $0.contains("The usage limit") }, "the body is never public: \(r.log.publicLines)")
+    }
+
+    // #2025 (QA R2006 n2): a spent 429 whose request body is above the replay cap cannot be replayed: A is benched and
+    // the 429 passes through, and the exchange is logged ONCE (not by rotateSpentCodex and again by the throttle path).
+    func testSpentAboveReplayCapLogsOneLine() throws {
+        let r = try rig(replayCap: 64 << 10)
+        r.fake.answer(Self.token("a"), (429, [("content-type", "application/json")],
+                                        Data(#"{"error":{"type":"usage_limit_reached","resets_in_seconds":3600}}"#.utf8)))
+        let big = #"{"model":"gpt-5-codex","stream":true,"pad":""# + String(repeating: "x", count: 70_000) + #""}"#
+        XCTAssertEqual(r.codex(body: big)?.status, 429)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a")], "never replayed")
+        XCTAssertEqual(r.cooldown("a")["five_hour"], Self.now + 3600, "still benched")
+        let mine = r.log.lines.filter { $0.hasPrefix("a: ") && ($0.contains("usage limit reached") || $0.contains("out on") || $0.contains("outcome=")) }
+        XCTAssertEqual(mine.count, 1, "\(r.log.lines)")
+    }
+
+    // #2025 (QA R2006 n1): every Codex account benched: Codex's answer is usage_limit_reached with the pool's next Codex
+    // reset (resets_at, resets_in_seconds, Retry-After), never Claude's rate_limit_error; nothing is sent upstream.
+    func testAllBenchedAnswersCodexUsageLimitReached() throws {
+        let r = try rig()
+        r.store.mutate { st in
+            st.accounts["a"]?.cooldown = ["five_hour": Self.now + 600, "seven_day": Self.now + 900]
+            st.accounts["b"]?.cooldown = ["five_hour": Self.now + 700, "seven_day": Self.now + 800]
+        }
+        let resp = try XCTUnwrap(r.codex())
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertFalse(resp.text.contains("rate_limit_error"), resp.text)
+        let err = try XCTUnwrap(((try? JSONSerialization.jsonObject(with: resp.body)) as? [String: Any])?["error"] as? [String: Any])
+        XCTAssertEqual(err["type"] as? String, "usage_limit_reached")
+        XCTAssertEqual(err["resets_at"] as? Int, Self.now + 600)
+        XCTAssertEqual(err["resets_in_seconds"] as? Int, 600)
+        XCTAssertTrue((err["message"] as? String)?.isEmpty == false)
+        XCTAssertEqual(resp.headers.first { $0.0.lowercased() == "retry-after" }?.1, "600")
+        XCTAssertEqual(r.fake.heads.count, 0)
+    }
+
+    // #2025 (QA R2006 n1), Claude's half: the same state on a Claude request keeps Claude's rate_limit_error answer.
+    func testAllBenchedClaudeAnswerIsUnchanged() throws {
+        let r = try rig(claude: ["c"], codex: [])
+        let until = Self.now + 600
+        r.store.mutate { st in st.accounts["c"]?.cooldown = Dictionary(uniqueKeysWithValues: ClaudeHarness().claims(for: "claude-opus-5").map { ($0, until) }) }
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertTrue(resp.text.contains("rate_limit_error") && resp.text.contains("all pooled accounts are rate limited"), resp.text)
+        XCTAssertFalse(resp.text.contains("usage_limit_reached"), resp.text)
     }
 
     // QA #2005 n1, second half: a 429 whose headers show the default window spent (used 100%) is never retried on the
@@ -278,6 +324,19 @@ final class CCPoolCodexLimitsTests: XCTestCase {
             let got = parse(headers)
             XCTAssertEqual(got.limits, limits, name)
             XCTAssertEqual(got.unknown, unknown, name)
+        }
+        // #2025 (QA R2006 n4): two slots on one window at equal use: the later reset, then the first slot name, whatever the
+        // swap of the two slots (Dictionary order is not stable); a fuller slot still beats a later reset.
+        func slots(_ p: (String, String), _ q: (String, String), first: Bool) -> [String: CCPoolLimit] {
+            let a: [(String, String)] = [("x-codex-primary-used-percent", p.0), ("x-codex-primary-window-minutes", "300"), ("x-codex-primary-reset-at", p.1),
+                                         ("x-codex-secondary-used-percent", q.0), ("x-codex-secondary-window-minutes", "300"), ("x-codex-secondary-reset-at", q.1)]
+            return parse(Dictionary(uniqueKeysWithValues: first ? a : a.reversed())).limits
+        }
+        for first in [true, false] {
+            XCTAssertEqual(slots(("50", "1800001000"), ("50", "1800002000"), first: first)["five_hour"]?.reset, "1800002000", "later reset wins")
+            XCTAssertEqual(slots(("50", "1800002000"), ("50", "1800001000"), first: first)["five_hour"]?.reset, "1800002000", "later reset wins")
+            XCTAssertEqual(slots(("50", "1800001000"), ("60", "1800000500"), first: first)["five_hour"]?.utilization, "0.6", "fuller wins")
+            XCTAssertEqual(slots(("50", "1800001000"), ("50", "1800001000"), first: first)["five_hour"], L(status: "allowed", utilization: "0.5", reset: "1800001000"))
         }
         XCTAssertEqual(Array(CCPoolCodexHarness.benchable(parse(rows.last(where: { $0.0 == "another limit id" })!.1).limits).keys), [])
     }

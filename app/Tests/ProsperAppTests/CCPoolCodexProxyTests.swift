@@ -189,6 +189,19 @@ final class CCPoolCodexProxyTests: XCTestCase {
         }
     }
 
+    // #2025 (QA R2006 n1): every Codex account unusable with no reset known (an item that does not decode): Codex's
+    // usage_limit_reached, with no resets_at, resets_in_seconds or Retry-After invented.
+    func testNoUsableCodexAccountWithoutResetAnswersUsageLimitReachedWithoutTime() throws {
+        let r = try rig(codex: [("cx", "at-example-raw-secret", CCPoolCodexHarness.chatgptKind)])
+        let resp = try XCTUnwrap(r.codex())
+        XCTAssertEqual(resp.status, 429, resp.text)
+        let err = try XCTUnwrap(((try? JSONSerialization.jsonObject(with: resp.body)) as? [String: Any])?["error"] as? [String: Any])
+        XCTAssertEqual(err["type"] as? String, "usage_limit_reached")
+        XCTAssertTrue(err["resets_at"] == nil && err["resets_in_seconds"] == nil, resp.text)
+        XCTAssertTrue(resp.headers.first { $0.0.lowercased() == "retry-after" } == nil)
+        XCTAssertFalse(resp.text.contains("rate_limit_error"), resp.text)
+    }
+
     // A WebSocket upgrade on a Codex path answers 501 and is never relayed.
     func testCodexWebSocketUpgradeAnswers501() throws {
         let r = try rig()
@@ -200,8 +213,9 @@ final class CCPoolCodexProxyTests: XCTestCase {
     }
 
     // Neither the access token nor the account id reaches the log, on a served reply or a refused one; a Codex
-    // exchange without limit headers writes no usage sample; #2006: it writes usage rows like the Claude one beside it.
-    func testCodexExchangeLogsNoCredentialAndWritesNoUsage() throws {
+    // exchange without limit headers writes no usage sample; #2006: it writes usage rows like the Claude one beside it
+    // (#2025 n3: renamed from ...WritesNoUsage, which no longer said what it pins).
+    func testCodexExchangeLogsNoCredentialAndWritesUsageRows() throws {
         let r = try rig()
         XCTAssertEqual(r.codex()?.status, 200)
         r.fake.set { $0.status = 429; $0.headers = [("content-type", "application/json"), ("retry-after", "0")]
