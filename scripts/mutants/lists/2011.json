@@ -1,0 +1,132 @@
+{
+ "entry": "2011",
+ "filter": "AgentIslandPlanLimitsTests|AgentIslandPlanUsageTests",
+ "mutants": [
+  {
+   "name": "harness-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "Self.planHarnesses.first(where: { $0.id == acct.harness })",
+   "new": "Self.planHarnesses.first",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-current-from-claude",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "isCurrent: st.currents[h.id] == label",
+   "new": "isCurrent: st.current == label",
+   "expect": "killed"
+  },
+  {
+   "name": "claim-name-claude",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.displayName(claim) : harness.display[claim] ?? claim",
+   "new": "harness.display[claim] ?? claim",
+   "expect": "killed"
+  },
+  {
+   "name": "pool-cells-raw",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": ".map { var c = $0; c.claim = Self.claimName(c.claim, harness: h); return c }",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "live-shared",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "live[h.id, default: []].append",
+   "new": "live[ClaudeHarness.id, default: []].append",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-group-kept",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "guard let list = accounts[h.id] else { return nil }",
+   "new": "let list = accounts[h.id] ?? []",
+   "expect": "killed"
+  },
+  {
+   "name": "usage-harness-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "guard let label = st.currents[harness],",
+   "new": "guard let label = st.current,",
+   "expect": "killed"
+  },
+  {
+   "name": "usage-harness-check",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "account.harness == harness,\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "plan-title",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "u?.plan = Self.planTitles[harness] ?? harness",
+   "new": "_ = harness",
+   "expect": "killed"
+  },
+  {
+   "name": "help-plan",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "\"\\(plan) plan usage (account pool, current account)\"",
+   "new": "\"Claude plan usage (account pool, current account)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "account-harness",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "self.harness = harness",
+   "new": "self.harness = AgentPlanLimits.claude",
+   "expect": "killed"
+  },
+  {
+   "name": "accounts-claude-only",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "var accounts: [Account] { group(Self.claude)?.accounts ?? [] }",
+   "new": "var accounts: [Account] { groups.flatMap(\\.accounts) }",
+   "expect": "killed"
+  },
+  {
+   "name": "groups-unsorted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "g.accounts = Self.sorted(g.accounts); ",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "pace-first-group",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "for g in out.groups.indices {",
+   "new": "for g in out.groups.indices.prefix(1) {",
+   "expect": "killed"
+  },
+  {
+   "name": "focus-harness",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "return AgentIsland.runsCodex(s, records: []) ? \"codex\" : \"claude\"",
+   "new": "return \"claude\"",
+   "expect": "killed"
+  },
+  {
+   "name": "seam-harness",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "planUsage(now, planHarness) ??",
+   "new": "planUsage(now, \"claude\") ??",
+   "expect": "killed"
+  },
+  {
+   "name": "claude-fallback",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "(planHarness == \"claude\" ? nil : planUsage(now, \"claude\"))",
+   "new": "nil",
+   "expect": "killed"
+  },
+  {
+   "name": "open-focused-reread",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        readPlanUsage()   // #2011: the line follows the focused row's harness\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

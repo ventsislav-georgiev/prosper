@@ -61,7 +61,7 @@
   {
    "name": "M9-not-current",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
-   "old": "guard let label = st.current, let account",
+   "old": "guard let label = st.currents[harness], let account",
    "new": "guard let label = st.order.first(where: { store.usageSample($0) != nil }), let account",
    "expect": "killed"
   },
