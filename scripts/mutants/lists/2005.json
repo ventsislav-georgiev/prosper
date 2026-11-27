@@ -87,16 +87,9 @@
    "expect": "killed"
   },
   {
-   "name": "codex-usage-row",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "guard let record, harness.id == ClaudeHarness.id else { return }",
-   "new": "guard let record else { return }",
-   "expect": "killed"
-  },
-  {
    "name": "codex-anthropic-tap",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "-> CCPoolUsageTap { .idle }",
+   "old": "-> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType, codex: true) }",
    "new": "-> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType) }",
    "expect": "killed"
   },
