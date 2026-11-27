@@ -51,6 +51,20 @@
    "old": "selection == \"ext:com.prosper.ccpool|ccpool\" ? AgentPlanLimits.settingsPane : selection",
    "new": "selection",
    "expect": "killed"
+  },
+  {
+   "name": "set_aside_skipped",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "        if moved == EEXIST, !hasState(to), hasState(from) {",
+   "new": "        if false, moved == EEXIST, !hasState(to), hasState(from) {",
+   "expect": "killed"
+  },
+  {
+   "name": "state_check_inverted",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "        if moved == EEXIST, !hasState(to), hasState(from) {",
+   "new": "        if moved == EEXIST, hasState(to), hasState(from) {",
+   "expect": "killed"
   }
  ]
 }
