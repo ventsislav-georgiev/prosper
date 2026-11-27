@@ -261,6 +261,12 @@ final class CCPoolRuntime {
     /// Built by the first live push (AppDelegate), kept for the life of the process.
     private(set) static var shared: CCPoolRuntime?
 
+    /// #2031: the Codex --revive/--restart rule with this instance's routing; none built: the rule with no pool words.
+    static var reviveCodexFlags: CodexReviveFlags {
+        if let shared { return shared.routing.reviveCodexFlags }
+        return { argvs in CCPool.codexReviveFlags(argvs, words: []) }
+    }
+
     /// AppDelegate's push of the extension's live flag, at launch and on every enable/disable.
     /// #915: and host.ccpool.status() reads this instance's service from then on (the off answer while none is built).
     static func setExtensionLive(_ live: Bool) {

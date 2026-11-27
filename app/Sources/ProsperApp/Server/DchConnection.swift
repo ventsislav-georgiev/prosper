@@ -1554,8 +1554,8 @@ struct DchControlOps: Sendable {
     /// expiry): a phone job and an island job on one row or dir exclude each other.
     var runner = DchActionRunner.shared
     /// #2031: a Codex restart's --codex-drop-provider and pool words (AgentIsland.withCodexRestartFlags); read on main.
-    var codexFlags: ReviveEnvFlags = { argv in
-        let read: @MainActor () -> [String] = { (CCPoolRuntime.shared?.routing.reviveCodexFlags ?? { _ in ["--codex-drop-provider"] })(argv) }
+    var codexFlags: CodexReviveFlags = { argvs in
+        let read: @MainActor () -> [String] = { AgentIslandController.poolCodexFlags()(argvs) }
         return Thread.isMainThread ? MainActor.assumeIsolated(read) : DispatchQueue.main.sync { MainActor.assumeIsolated(read) }
     }
     var now: @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -1804,8 +1804,9 @@ struct DchControlOps: Sendable {
         case .all:
             let version = binary()?.version, flags = codexFlags
             let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { dir in   // #2031
-                (AgentSessionKey(dir: dir, name: ""),
-                 AgentIsland.withCodexRestartFlags(AgentIsland.restartAllArgs, rows: live.filter { $0.key.dir == dir }, dch: version, flags: flags))
+                let rows = live.filter { $0.key.dir == dir }
+                return (AgentSessionKey(dir: dir, name: ""),
+                        AgentIsland.withCodexRestartFlags(AgentIsland.restartAllArgs, rows: rows, records: liveRecords(rows), dch: version, flags: flags))
             }
             run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, rows: Dictionary(grouping: live.map(\.key), by: \.dir).mapValues { $0.map(\.name) },
                 reply) { Self.answer(all: $0, .restart) }
@@ -1815,7 +1816,7 @@ struct DchControlOps: Sendable {
             case .success(let rows):
                 let version = binary()?.version, flags = codexFlags
                 run(rows.map { row in   // #2031
-                    (row.key, AgentIsland.restartArgs(row.name).map { AgentIsland.withCodexRestartFlags($0, rows: [row], dch: version, flags: flags) })
+                    (row.key, AgentIsland.restartArgs(row.name).map { AgentIsland.withCodexRestartFlags($0, rows: [row], records: liveRecords([row]), dch: version, flags: flags) })
                 }, path: path, bound: DchActionRunner.restartBound,
                     yields: true, reply) { Self.answer(named: Array(zip(rows.map(\.name), $0)), .restart) }
             }

@@ -417,6 +417,23 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(restartedArgs(none, version: [1, 189, 0], ["all": true]), [AgentIsland.restartAllArgs])
     }
 
+    /// #2031 n2: the ctl --all reads the rows' records (liveRecords): a routed row beside one with its own provider -> no
+    /// Codex flags for the dir; the routed row alone -> the drop and the words.
+    func testCodexRestartAllPassesNoFlagsWhenADirRowKeepsItsOwnProvider() {
+        let routed = ["codex", "-c", "model_provider=\"prosperpool\""], own = ["codex", "-c", "model_provider=\"mine\""]
+        func restarted(_ argvs: [String: [String]]) -> [[String]] {
+            let f = Fake()
+            f.ls["/d"] = Self.lsAgents(argvs.keys.sorted().map { ($0, "codex") })
+            var o = ops(f, binary: DchCommand.Binary(path: "/fake/dch", version: [1, 189, 0]))
+            o.codexFlags = { CCPool.codexReviveFlags($0, words: ["-c", "w1", "-c", "w2"]) }
+            o.liveRecords = { rows in rows.compactMap { s in argvs[s.name].map { var r = DchHistoryRecord(key: s.key); r.argv = $0; return r } } }
+            _ = call(o, DchFrame.restart, ["all": true])
+            return f.launchedArgs
+        }
+        XCTAssertEqual(restarted(["a": routed, "b": own]), [AgentIsland.restartAllArgs])
+        XCTAssertEqual(restarted(["a": routed]), [AgentIsland.restartAllArgs + Self.codexWords])
+    }
+
     func testRestartAllRunsRestartAllArgsPerLiveDir() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])

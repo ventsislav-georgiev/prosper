@@ -164,6 +164,39 @@ enum CCPool {
         return false
     }
 
+    /// #2031: one of the pool's own `-c` values (codexArgs): its provider choice, exactly, or a key of its provider table
+    /// (the base_url's port varies). A user's `model_provider="x"` or another table is not.
+    static func isCodexPoolWord(_ w: String) -> Bool {
+        w == "model_provider=\"\(codexProvider)\"" || w.hasPrefix("model_providers.\(codexProvider).")
+    }
+
+    /// #2031: a record argv without the pool's `-c` pairs, so codexKeepsOwn reads only the user's own words.
+    static func codexWithoutPoolWords(_ argv: [String]) -> [String] {
+        var out: [String] = [], skip = false
+        for (i, w) in argv.enumerated() {
+            if skip { skip = false; continue }
+            if w == "-c", i + 1 < argv.count, isCodexPoolWord(argv[i + 1]) { skip = true; continue }
+            out.append(w)
+        }
+        return out
+    }
+
+    /// #2031: the dch 1.189.0 --revive/--restart words for Codex records' argvs (one for a Resume or a row's Restart, the
+    /// dir's Codex rows for Restart all), `words` the pool's current codexArgs ([]: routing off or no runtime).
+    /// 1. a record that keeps its own provider (after the pool's words are removed): no flags, so dch never strips it;
+    ///    for Restart all one such row means none for the whole dir (shortcut: dch takes one set per dir, so the pool rows
+    ///    beside it keep their recorded, possibly stale words; upgrade when dch takes the words per record).
+    /// 2. a record that carries the pool's provider: the drop (the stale port goes), plus one --codex-config per word.
+    /// 3. a plain codex: the drop and the words while routing is on, else nothing (a `headroom wrap codex` is never routed).
+    static func codexReviveFlags(_ argvs: [[String]], words: [String]) -> [String] {
+        let own = argvs.map(codexWithoutPoolWords)
+        if own.contains(where: codexKeepsOwn) { return [] }
+        let routed = argvs.contains { a in zip(a, a.dropFirst()).contains { $0 == "-c" && $1 == "model_provider=\"\(codexProvider)\"" } }
+        let w = own.allSatisfy({ $0.first.map(programName) == CCPoolCodexHarness.id }) ? words : []
+        guard routed || !w.isEmpty else { return [] }
+        return ["--codex-drop-provider"] + stride(from: 1, to: w.count, by: 2).flatMap { ["--codex-config", w[$0]] }
+    }
+
     /// #2009: whether routed Codex sessions reach the pool. A routed spawn starts a wait; the next /codex request the proxy
     /// serves ends it. Still waiting 10 minutes after the first routed spawn since the last request: the pane says Codex
     /// is not reaching the pool. A clock is injected; no timer runs (the pane reads it when it redraws).
@@ -261,15 +294,9 @@ enum CCPool {
         /// unchanged, byte for byte.
         var contributor: SessionEnvContributor { { [self] argv, env in delta(argv, wait: true, env: env).applied(to: env) } }
 
-        /// #2031: dch 1.189.0's --revive/--restart words for a Codex record: always `--codex-drop-provider` (dch records the
-        /// argv it ran, so an earlier appended pool word would otherwise come back), then one `--codex-config K=V` per pool
-        /// word of codexWords (every second element, after its `-c`) while routing is on. Read on the runner's queue, so at the revive.
-        var reviveCodexFlags: ReviveEnvFlags {
-            { [self] argv in
-                let w = codexWords(argv)
-                return ["--codex-drop-provider"] + stride(from: 1, to: w.count, by: 2).flatMap { ["--codex-config", w[$0]] }
-            }
-        }
+        /// #2031: dch 1.189.0's --revive/--restart words for Codex records (CCPool.codexReviveFlags), with the pool's current
+        /// words while routing is on (codexWords of a plain codex). Read on the runner's queue, so at the revive.
+        var reviveCodexFlags: CodexReviveFlags { { [self] argvs in codexReviveFlags(argvs, words: codexWords(["codex"])) } }
 
         /// #1499: the same delta as --revive flags (AgentIslandController.resume, dch 1.94.0); read on the runner's queue too.
         var reviveFlags: ReviveEnvFlags { { [self] argv in delta(argv, wait: true, env: nil).reviveFlags } }

@@ -1197,12 +1197,15 @@ extension AgentIsland {
     }
 
     /// #2031: dch replays the argv it recorded on every restart, so a restart of any Codex row (Restart all, the control
-    /// server's) carries the same words as a Resume: `flags` of a plain ["codex"] argv (the several rows' record argvs may
-    /// differ in codexWords' keeps-own rule; one set is passed for all). Claude and shell rows alone, or a dch before
-    /// 1.189.0: `args` as they are.
-    static func withCodexRestartFlags(_ args: [String], rows: [AgentSession], dch: [Int]?, flags: ReviveEnvFlags) -> [String] {
-        guard let dch, DchCommand.isAtLeast(dch, codexReviveMinimum), rows.contains(where: { runsCodex($0, records: []) }) else { return args }
-        return args + flags(["codex"])
+    /// server's) carries the same words as a Resume: `flags` of the Codex rows' LIVE record argvs (`records`, read only
+    /// when needed; a row with none counts as a plain ["codex"]), one set for all of them (the rule's Restart all case).
+    /// Claude and shell rows alone, or a dch before 1.189.0: `args` as they are.
+    static func withCodexRestartFlags(_ args: [String], rows: [AgentSession], records: @autoclosure () -> [DchHistoryRecord],
+                                      dch: [Int]?, flags: CodexReviveFlags) -> [String] {
+        let codex = rows.filter { runsCodex($0, records: []) }
+        guard let dch, DchCommand.isAtLeast(dch, codexReviveMinimum), !codex.isEmpty else { return args }
+        let live = records()
+        return args + flags(codex.map { row in live.first { $0.key == row.key }?.argv ?? ["codex"] })
     }
 
     static func isInteractiveCodex(_ argv: [String]) -> Bool {

@@ -2489,6 +2489,31 @@ final class AgentIslandControlsTests: XCTestCase {
         XCTAssertEqual(try restarted(["codex"], version: [1, 188, 0]), [base])
     }
 
+    /// #2031 n2: the dir's Codex rows' records decide: a routed row beside one with its own provider -> no Codex flags for
+    /// the dir; a routed row alone -> the drop and the words; a Codex row with no record counts as plain codex.
+    @MainActor
+    func testRestartAllPassesNoCodexFlagsWhenADirRowKeepsItsOwnProvider() throws {
+        let routed = ["codex", "-c", "model_providers.prosperpool.wire_api=\"responses\"", "-c", "model_provider=\"prosperpool\""]
+        func restarted(_ argvs: [String: [String]], agents: [String]) throws -> [[String]] {
+            let f = FakeProc()
+            let v = DchCommand.Binary(path: "/fake/dch", version: [1, 189, 0])
+            let c = controller(f, Reads(), dch: v)
+            c.reviveCodexFlags = { { CCPool.codexReviveFlags($0, words: ["-c", "w1"]) } }
+            c.store?.controlDch = v
+            c.store?.sessions = agents.enumerated().map { i, a in var s = session("s\(i)", version: "1.189.0"); s.agent = a; return s }
+            let live = argvs.map { name, argv in var r = record(name); r.argv = argv; return r }
+            c.readLiveRecords = { _ in live }   // live records; store.history (ended only) is not read
+            c.askRestartAll()
+            c.confirmRestartAll(true)
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            return f.args
+        }
+        let base = AgentIsland.restartAllArgs, words = ["--codex-drop-provider", "--codex-config", "w1"]
+        XCTAssertEqual(try restarted(["s0": routed, "s1": ["codex", "-c", "model_provider=\"mine\""]], agents: ["codex", "codex"]), [base])
+        XCTAssertEqual(try restarted(["s0": routed], agents: ["codex", "claude"]), [base + words])
+        XCTAssertEqual(try restarted([:], agents: ["codex"]), [base + words], "no record: plain codex")
+    }
+
     /// phases once it reaches it, then its result; a row left on a phase is
     /// cleared; a skip with no phase leaves its row alone; the dir gets the summary.
     @MainActor

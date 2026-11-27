@@ -766,12 +766,16 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         return rec.args.last
     }
 
-    private func restartedCodex(agent: String, version: [Int], on: Bool) -> [String]? {
+    /// `argv`: the row's LIVE record (the readLiveRecords seam); `ended`: store.history's ended records, never read by a restart.
+    private func restartedCodex(agent: String, version: [Int], on: Bool, argv: [String] = ["codex"],
+                                ended: [DchHistoryRecord] = []) -> [String]? {
         let rec = Recorder()
         let c = controller(rec, routing: codexPool(on: on), version: version)
         var s = AgentSession(key: AgentSessionKey(dir: "/d", name: "api"), alias: "", activity: 1, state: .working, agents: 0)
         s.agent = agent
-        c.store?.history = [record("api", argv: ["codex"])]
+        let live = record("api", argv: argv)
+        c.readLiveRecords = { _ in [live] }
+        c.store?.history = ended
         _ = launchedEnv(c, rec, key: s.key) { XCTAssertTrue(c.restart(s), "the Restart started") }
         return rec.args.last
     }
@@ -783,10 +787,63 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(Self.codexWords.filter { $0 == "--codex-config" }.count, 6)
     }
 
-    /// Routing off at the revive: the drop alone (it removes the earlier appended words).
-    func testCodexResumeWithRoutingOffCarriesTheDropOnly() {
-        XCTAssertEqual(resumedCodex(record("api", argv: ["codex"]), version: [1, 189, 0], on: false),
+    /// Rule 3: a plain Codex record with routing off at the revive gets no Codex flag (it holds no pool word to drop).
+    func testPlainCodexResumeWithRoutingOffHasNoCodexFlags() {
+        XCTAssertEqual(resumedCodex(record("api", argv: ["codex"]), version: [1, 189, 0], on: false), ["--revive", "api", "--json"])
+    }
+
+    /// A record routed at spawn (#2009): the pool's words at an older port, so codexKeepsOwn alone would call it the user's.
+    private static let routedArgv = ["codex"] + CCPool.codexArgs(port: 40000)
+    private static let ownArgv = ["codex", "-c", "model_provider=\"mine\""]
+
+    /// Mutant pool-words-as-own (H2): a routed record's Resume and Restart get the drop and the current words, routing off the drop alone.
+    func testRoutedCodexRecordGetsTheDropAndTheCurrentWords() {
+        let base = AgentIsland.restartArgs("api") ?? []
+        XCTAssertEqual(resumedCodex(record("api", argv: Self.routedArgv), version: [1, 189, 0], on: true),
+                       ["--revive", "api", "--json"] + Self.codexWords)
+        XCTAssertEqual(resumedCodex(record("api", argv: Self.routedArgv), version: [1, 189, 0], on: false),
                        ["--revive", "api", "--json", "--codex-drop-provider"])
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: true, argv: Self.routedArgv), base + Self.codexWords)
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: false, argv: Self.routedArgv), base + ["--codex-drop-provider"])
+    }
+
+    /// Mutant own-provider-dropped (H3): a record with the user's own provider gets nothing, routing on or off.
+    func testOwnProviderCodexRecordGetsNoCodexFlags() {
+        let base = AgentIsland.restartArgs("api") ?? []
+        for on in [true, false] {
+            XCTAssertEqual(resumedCodex(record("api", argv: Self.ownArgv), version: [1, 189, 0], on: on), ["--revive", "api", "--json"], "on \(on)")
+            XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: on, argv: Self.ownArgv), base, "on \(on)")
+        }
+    }
+
+    /// Mutant restart-reads-ended-history: a live own-provider row whose ended history holds an older plain codex record of
+    /// the same key: its live record decides, routing on -> no Codex flags.
+    func testRestartReadsTheLiveRecordNotAnEndedOne() {
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: true, argv: Self.ownArgv, ended: [record("api", argv: ["codex"])]),
+                       AgentIsland.restartArgs("api") ?? [])
+    }
+
+    /// No runtime (the island's and the ctl's default): a routed record gets the drop alone, its own provider or plain nothing.
+    func testNoRuntimeDefaultDropsOnlyAPoolRecord() {
+        let flags = AgentIslandController.poolCodexFlags()
+        XCTAssertEqual(flags([Self.routedArgv]), ["--codex-drop-provider"])
+        XCTAssertEqual(flags([Self.ownArgv]), [])
+        XCTAssertEqual(flags([["codex"]]), [])
+        XCTAssertEqual(DchControlOps().codexFlags([Self.routedArgv]), ["--codex-drop-provider"])
+        XCTAssertEqual(DchControlOps().codexFlags([Self.ownArgv]), [])
+    }
+
+    /// The rule over a Restart all dir's rows: one own provider means none; a routed and a plain row share the words; a
+    /// pool word is matched exactly (another provider table is the user's); a headroom-wrapped codex is never given words.
+    func testCodexReviveRuleOverSeveralRecords() {
+        let words = CCPool.codexArgs(port: 41234)
+        XCTAssertEqual(CCPool.codexReviveFlags([Self.routedArgv, Self.ownArgv], words: words), [])
+        XCTAssertEqual(CCPool.codexReviveFlags([Self.routedArgv, ["codex"]], words: words), Array(Self.codexWords))
+        XCTAssertEqual(CCPool.codexReviveFlags([Self.routedArgv, ["codex"]], words: []), ["--codex-drop-provider"])
+        XCTAssertEqual(CCPool.codexReviveFlags([["codex", "-c", "model_providers.mine.base_url=\"x\""]], words: words), [])
+        XCTAssertEqual(CCPool.codexReviveFlags([["codex", "-c", "model_provider=\"prosperpool2\""]], words: words), [])
+        XCTAssertEqual(CCPool.codexReviveFlags([["headroom", "wrap", "codex"]], words: words), [])
+        XCTAssertEqual(CCPool.codexWithoutPoolWords(Self.routedArgv + ["-p", "x"]), ["codex", "-p", "x"])
     }
 
     /// Mutant codex-check-removed: a Claude record gets nothing new, routing on or off.
@@ -811,7 +868,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
     func testCodexRestartCarriesTheSameWords() {
         let base = AgentIsland.restartArgs("api") ?? []
         XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: true), base + Self.codexWords)
-        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: false), base + ["--codex-drop-provider"])
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: false), base, "rule 3: plain codex, routing off")
         XCTAssertEqual(restartedCodex(agent: "claude", version: [1, 189, 0], on: true), base)
         XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 188, 0], on: true), base)
     }
