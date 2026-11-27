@@ -86,6 +86,29 @@ final class ControlSessionsTests: XCTestCase {
         }
     }
 
+    /// #2001: `agent` is dch's --ls-json `agent` when the row has one ("" is dch's null: neither runs); a row from an
+    /// older dch (nil) keeps the claudeSessionID/harness rule. Red at base: the Codex row lists its harness title, the
+    /// Claude row null, the shell row "claude" (its claudeSessionID).
+    @MainActor
+    func testSessionsListAgentComesFromDch() throws {
+        let sid = "0b7c2f3e-1111-2222-3333-444455556666"
+        var cx = base.session("cx", .idle), cl = base.session("cl", .idle), sh = base.session("sh", .idle)
+        var old = base.session("old", .idle), oldC = base.session("old-c", .idle)
+        cx.agent = "codex"; cx.harness = "fix tests"
+        cl.agent = "claude"
+        sh.agent = ""; sh.claudeSessionID = sid
+        old.harness = "fix tests"
+        oldC.claudeSessionID = sid
+        try withSeams(store: base.store([cx, cl, sh, old, oldC])) {
+            let r = rows(try ControlSessions.list())
+            XCTAssertEqual(r["cx"]?["agent"], .string("codex"))
+            XCTAssertEqual(r["cl"]?["agent"], .string("claude"))
+            XCTAssertEqual(r["sh"]?["agent"], .null, "dch's null wins over the claudeSessionID rule")
+            XCTAssertEqual(r["old"]?["agent"], .string("fix tests"), "older dch: the harness title")
+            XCTAssertEqual(r["old-c"]?["agent"], .string("claude"), "older dch: a mapped Claude")
+        }
+    }
+
     // MARK: - sessions.stop / sessions.restart
 
     /// The confirm strip's path without the question: the menu's gate, then the model's Stop/Restart seam once with that
@@ -505,6 +528,8 @@ final class ControlSessionsTests: XCTestCase {
                         "sessions.stop"])
         XCTAssertEqual(reg.commands.values.filter(\.mutates).count, 6)
         XCTAssertEqual(reg.commands["sessions.list"]?.mutates, false)
+        // #2001: not Claude only (a Codex session stops too).
+        XCTAssertEqual(reg.commands["sessions.stop"]?.summary, "Stop a session (its agent is paused, the session ends; no undo).")
         let st = base.store([base.session("api", .idle)])
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow)
         defer { (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow) = saved }

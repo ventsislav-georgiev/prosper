@@ -204,6 +204,8 @@ enum ControlSessionsRead {
         let since = args["since"] == nil ? nil : UInt64(try whole(args, "since", 0...(1 << 53), fallback: 0))
         let wait = try seconds(args, fallback: readTimeout)
         guard let path = s.transcriptPath, !path.isEmpty else {
+            // #2001: dch's `agent` says Codex (an older dch that sends none keeps the text below).
+            if s.agent == "codex" { throw ControlError("\(s.title) is a Codex session: it has no Claude transcript; use xray.chapters") }
             throw ControlError("\(s.title) has no transcript Prosper can read (not a Claude Code session dch mapped)")
         }
         return try await within(wait, "sessions.transcript",

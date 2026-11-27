@@ -381,6 +381,24 @@ final class ControlSessionsReadTests: XCTestCase {
         XCTAssertEqual(slow.error, ControlXray.badTimeout)
     }
 
+    /// #2001: a Codex session (dch's `agent` "codex") is pointed at X-ray; a shell (dch's null) and a row from an older
+    /// dch (no `agent`) keep the old text. sessions.get carries sessions.list's `agent`. Red at base: the Codex row gets
+    /// "not a Claude Code session", and get's agent is the harness title.
+    func testTranscriptPointsCodexAtXray() async throws {
+        var cx = base.session("cx", .idle), sh = base.session("sh", .idle)
+        cx.agent = "codex"; cx.harness = "fix tests"
+        sh.agent = ""
+        use(base.store([cx, sh, base.session("old", .idle)]))
+        let c = await Self.call("sessions.transcript", name("cx"))
+        XCTAssertEqual(c.error, "cx is a Codex session: it has no Claude transcript; use xray.chapters")
+        let s = await Self.call("sessions.transcript", name("sh"))
+        XCTAssertEqual(s.error, "sh has no transcript Prosper can read (not a Claude Code session dch mapped)")
+        let o = await Self.call("sessions.transcript", name("old"))
+        XCTAssertEqual(o.error, "old has no transcript Prosper can read (not a Claude Code session dch mapped)")
+        XCTAssertEqual(obj(try ControlSessionsRead.get(name("cx")))["agent"], .string("codex"))
+        XCTAssertEqual(obj(try ControlSessionsRead.get(name("sh")))["agent"], .null)
+    }
+
     // MARK: - registry
 
     func testRegisteredAsReads() {

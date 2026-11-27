@@ -60,6 +60,18 @@ final class DchListModelEffortTests: XCTestCase {
         XCTAssertTrue(try wire(session(model: nil, effort: nil, activity: 59)) == #"[{"name":"api","state":"idle"}]"#, "minute 0: unknown")
     }
 
+    /// #2001: the phone row carries `agent` as dch serve does (serve.c:371-382@v1.186.0): "claude" or "codex", else the
+    /// key left out (dch's null, an older dch's none, any other word). Red at base: no "agent" key at all.
+    func testAgentIsSentAsDchServeSendsIt() throws {
+        func with(_ a: String?) -> AgentSession { var s = session(model: nil, effort: nil, claude: false, activity: 0); s.agent = a; return s }
+        XCTAssertEqual(try wire(with("codex")), #"[{"agent":"codex","name":"api","state":"idle"}]"#)
+        XCTAssertEqual(try wire(with("claude")), #"[{"agent":"claude","name":"api","state":"idle"}]"#)
+        XCTAssertEqual(try wire(with("")), #"[{"name":"api","state":"idle"}]"#, "a shell: dch's null, no key")
+        XCTAssertEqual(try wire(with(nil)), #"[{"name":"api","state":"idle"}]"#, "an older dch: no key")
+        let odd = DchListRow(name: "a", alias: "", activityEpoch: 0, state: "", agents: 0, agent: "gemini")
+        XCTAssertEqual(String(decoding: DchFrame.listPayload([odd]), as: UTF8.self), #"[{"name":"a"}]"#)
+    }
+
     /// The caps: a model over AgentModelEffort.maxModelLength bytes and an effort that is no level are left out.
     func testOutsideValuesAreCapped() {
         func payload(_ model: String, _ effort: String) -> String {

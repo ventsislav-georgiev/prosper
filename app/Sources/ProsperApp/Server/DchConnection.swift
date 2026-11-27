@@ -174,6 +174,8 @@ enum DchFrame {
                 o["harness"] = row.harness
             }
             if !row.state.isEmpty { o["state"] = row.state }   // working|idle|blocked|done
+            // #2001: as dch serve sends it (serve.c:371-382@v1.186.0): only "claude" or "codex", else the key is left out.
+            if let a = row.agent, a == "claude" || a == "codex" { o["agent"] = a }
             if row.agents > 0 { o["agents"] = row.agents }     // live subagents; absent from older dch
             if let cwd = row.wireCwd { o["cwd"] = cwd }        // #877: dch 1.52+, absent when unknown
             o.merge(row.metaWire) { $1 }                       // "meta"/"meta_epoch", dch 1.22+
@@ -1389,7 +1391,7 @@ final class DchWatchHub: @unchecked Sendable {
             let me = rule.modelEffort(model: label, effort: label == nil ? nil : s.effort)
             return DchListRow(name: s.name, alias: s.alias, activityEpoch: Int(s.activity), state: s.wireState ?? wireState(s.state),
                        agents: s.agents, meta: s.meta, metaEpoch: s.metaEpoch, version: s.version, cwd: s.cwd, harness: s.harness,
-                       model: me.model ?? "", effort: me.effort ?? "")
+                       model: me.model ?? "", effort: me.effort ?? "", agent: s.agent)
         }
         return Cache(dir: remote, rows: rows)
     }

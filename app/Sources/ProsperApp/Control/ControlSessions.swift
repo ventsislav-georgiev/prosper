@@ -62,7 +62,8 @@ enum ControlSessions {
     // MARK: - sessions.list
 
     /// {"sessions": [{name, title, state, agent, cwd, pane, action}]}: the store's order; `pane` the 1-based pane
-    /// of the window's active layout that shows it (null: none, or no window); `agent` "claude" when dch maps a Claude
+    /// of the window's active layout that shows it (null: none, or no window); `agent` dch's --ls-json `agent` (#1996):
+    /// "claude", "codex", or null when neither runs; from an older dch that sends none, "claude" when dch maps a Claude
     /// Code session, else dch's harness title, else null.
     static func list() throws -> ControlJSON {
         let st = try store(), layout = model()?.layout
@@ -70,7 +71,8 @@ enum ControlSessions {
             let pane = layout.flatMap { l in
                 l.pane(showing: .session(dir: s.key.dir, name: s.name)).flatMap { l.order.firstIndex(of: $0) }
             }
-            let agent = s.claudeSessionID?.isEmpty == false ? "claude" : (s.harness.isEmpty ? nil : s.harness)
+            let agent: String? = if let a = s.agent { a.isEmpty ? nil : a }
+                else { s.claudeSessionID?.isEmpty == false ? "claude" : (s.harness.isEmpty ? nil : s.harness) }
             return .object([
                 "name": .string(s.name), "title": .string(s.title), "state": .string(s.state.label),
                 "agent": agent.map { .string($0) } ?? .null, "cwd": s.cwd.isEmpty ? .null : .string(s.cwd),
@@ -390,7 +392,7 @@ extension ControlRegistry {
             "host": ControlArg(type: "string", summary: "another Mac from remote.list (canStart) to start it on; this Mac when absent"),
             "images": ControlArg(type: "array", summary: "image file paths (absolute) added to the prompt, as a paste adds them (claude on this Mac, with a prompt)"),
         ]) { reg, a in try ControlSessions.new(a, changes: reg.changes) })
-        r.register(.change(name: "sessions.stop", summary: "Stop a session (Claude Code paused, the session ends; no undo).",
+        r.register(.change(name: "sessions.stop", summary: "Stop a session (its agent is paused, the session ends; no undo).",
                            args: ["name": name]) { _, a in try ControlSessions.run(.stop, a) })
         r.register(.change(name: "sessions.restart", summary: "Restart a session's agent on the same conversation (no undo).",
                            args: ["name": name]) { _, a in try ControlSessions.run(.restart, a) })
