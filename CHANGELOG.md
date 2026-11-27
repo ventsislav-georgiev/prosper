@@ -64,8 +64,8 @@ tag from the now-released section and put it on the new top draft.
   (#1997)
 - A blocked Codex approval (run a command, edit files, network access) can be answered from the
   island, as Claude's can. (#2000)
-- Agent control and the phone now tell a Codex session from a Claude one, and asking for a Codex
-  session's transcript points you to X-ray instead (#2001)
+- Agent control now tells a Codex session from a Claude one, the Mac tells the phone which agent a
+  session runs, and asking for a Codex session's transcript points you to X-ray instead (#2001)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
