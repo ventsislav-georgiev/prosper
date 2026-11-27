@@ -184,11 +184,11 @@ enum AXCaret {
         // Cheap grounding: field label + window title (see CaretContext). Prefer the
         // field's DESCRIPTION/placeholder/title (never its value); the value is the
         // user's text, already carried by textBefore/textAfter.
-        let fieldLabel = [
+        let fieldLabel = firstLabel([
             kAXDescriptionAttribute as String,
             kAXPlaceholderValueAttribute as String,
             kAXTitleAttribute as String,
-        ].lazy.compactMap { cleanLabel(copyString(focused, $0)) }.first
+        ]) { copyString(focused, $0) }
         let windowTitle = copyElement(focused, kAXWindowAttribute as String)
             .flatMap { cleanLabel(copyString($0, kAXTitleAttribute as String)) }
 
@@ -368,6 +368,16 @@ enum AXCaret {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard s.count >= 2 else { return nil }
         return s.count > 120 ? String(s.prefix(120)) : s
+    }
+
+    /// First usable cleaned label over `attributes`, reading each at most once. A plain
+    /// loop on purpose: `.lazy.compactMap{…}.first` on an Array runs the closure twice
+    /// for the winner, and each read is an AX IPC round trip to the focused app.
+    static func firstLabel(_ attributes: [String], read: (String) -> String?) -> String? {
+        for attribute in attributes {
+            if let label = cleanLabel(read(attribute)) { return label }
+        }
+        return nil
     }
 
     private static func copyElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
