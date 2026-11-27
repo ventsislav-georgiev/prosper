@@ -526,6 +526,38 @@ final class AgentIslandMessageTests: XCTestCase {
         XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "b")], AgentWindowText.promptShown)
     }
 
+    /// #1996: Message all reads records only for the rows whose list gave no `agent`: "a" (codex, no record) goes to
+    /// --say, "b" (no agent, a Codex record) too through #1994's rule, "c" ("" = neither, a Codex record) keeps Claude's
+    /// check. Red if the group's read is not narrowed or the row's agent is ignored.
+    @MainActor
+    func testMessageAllReadsRecordsOnlyForRowsWithoutAgent() throws {
+        final class Asked: @unchecked Sendable { let lock = NSLock(); var names: [[String]] = [] }
+        let p = Proc()
+        p.screens = ["a": T.codexScreen, "b": T.codexScreen, "c": T.codexScreen]
+        p.out["/d"] = ([Self.say("a", "ok"), Self.say("b", "ok")].joined(separator: "\n"), 0)
+        var a = session("a"), cs = session("c")
+        let b = session("b")
+        a.agent = "codex"
+        cs.agent = ""
+        let c = controller(p, [a, b, cs])
+        let live = ["b", "c"].map { n -> DchHistoryRecord in
+            var r = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: n))
+            r.argv = ["codex"]
+            return r
+        }
+        let asked = Asked()
+        c.readLiveRecords = { s in asked.lock.withLock { asked.names.append(s.map(\.name)) }; return live }
+        let store = try XCTUnwrap(c.store)
+        c.askMessageAll()
+        store.typeMessage("go")
+        c.sendMessage()
+        let dir = AgentSessionKey(dir: "/d", name: "")
+        settle { store.actions[dir] != "Sending…" }
+        XCTAssertEqual(p.says, [["--say", "a", "b", "--json", "--", "go"]])
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "c")], AgentWindowText.promptShown)
+        XCTAssertEqual(asked.lock.withLock { asked.names }, [["b"]], "only the row without agent")
+    }
+
     /// Message all over three sessions, one on a plan approval with no footer: exactly the other two names go
     /// to `--say`, the refused row reads the window's words, and the dir line counts it as skipped.
     @MainActor

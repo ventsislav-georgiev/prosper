@@ -2129,6 +2129,17 @@ struct DchListRow: Equatable, Sendable {
     /// #1558: dch 1.101's `shells` (DchShell.list), newest first; nil when the key is left out (an older dch, no Claude,
     /// a --remote row): the row stays as before.
     var shells: [DchShell]? = nil
+    /// #1996: dch 1.182's `agent` (DchListRow.agent(_:)): "claude", "codex", "" when dch says neither runs, nil when
+    /// the key is left out (an older dch, a --remote row from a host before 1.182).
+    var agent: String? = nil
+
+    /// #1996: `null` or a word other than claude/codex is "" (dch looked: neither of the two runs); a key left out or
+    /// of another JSON type is nil (dch did not say), so runsCodex falls back to the record.
+    static func agent(_ v: Any?) -> String? {
+        if v is NSNull { return "" }
+        guard let w = v as? String else { return nil }
+        return w == "claude" || w == "codex" ? w : ""
+    }
 
     /// #877: listResp's "cwd" as dch serve writes it (serve.c:340, :358-359, :374-378@v1.54.0): the
     /// string as dch gave it, unchecked (no absolute or trailing-slash rule), nil when empty or when its
@@ -2581,7 +2592,8 @@ enum DchCommand {
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",
                               autoAllowed: DchAutoAllowed(json: o["auto_allowed"]),
-                              cwd: o["cwd"] as? String ?? "", harness: harness, shells: DchShell.list(o["shells"]))
+                              cwd: o["cwd"] as? String ?? "", harness: harness, shells: DchShell.list(o["shells"]),
+                              agent: DchListRow.agent(o["agent"]))
         }
     }
 

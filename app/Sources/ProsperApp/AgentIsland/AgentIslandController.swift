@@ -883,8 +883,10 @@ final class AgentIslandController {
             let line: (@MainActor @Sendable (String) -> Void)? = { [weak self] in self?.dirLine($0, dir: dir, .message, only: only) }
             let read = readLiveRecords
             let screens: @Sendable () -> (args: [String]?, out: Data) = {
-                // #1994: the rows' own dch records, read on the job's thread like the screens.
-                let records = read(group)
+                // #1994: the rows' own dch records, read on the job's thread like the screens. #1996: only the rows
+                // whose list gave no `agent` (an older dch); none, no read.
+                let unsaid = group.filter { $0.agent == nil }
+                let records = unsaid.isEmpty ? [] : read(unsaid)
                 let codex = Set(group.filter { AgentIsland.runsCodex($0, records: records) }.map(\.name))
                 let g = AgentIsland.messageScreens(io, dir: dir, names: names, codex: codex)
                 return (g.names.isEmpty ? nil : AgentIsland.messageArgs(g.names, text), g.out)

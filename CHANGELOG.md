@@ -57,6 +57,8 @@ tag from the now-released section and put it on the new top draft.
   them. (#1994)
 - A Codex record whose History file is not valid UTF-8 now names codex resume for resuming it by
   hand (ships dch 1.181.0). (#1995)
+- Ships dch 1.182.0: a Codex started at a session's shell prompt is recognised too, so messages to
+  it skip Claude's screen check. (#1996)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

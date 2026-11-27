@@ -21,7 +21,8 @@ enum ControlSessionsTalk {
         }
     }
 
-    /// #1994: the live sessions' own dch records (the controller's seam, none under XCTest), read off main in the say's job.
+    /// #1994: the live sessions' own dch records (the controller's seam, none under XCTest), read off main in the say's job;
+    /// #1996: only for a row whose list gave no `agent` (AgentIsland.runsCodex).
     static var liveRecords: @MainActor () -> @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
         AgentIslandController.shared.readLiveRecords
     }

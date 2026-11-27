@@ -169,6 +169,24 @@ final class ControlSessionsTalkTests: XCTestCase {
         }
     }
 
+    /// #1996: sessions.say on a row whose list says "codex" (a Codex typed at the shell prompt: no Codex record) skips
+    /// Claude's screen check and never reads the record.
+    @MainActor
+    func testSayTakesTheListsAgentAndReadsNoRecord() async throws {
+        final class Count: @unchecked Sendable { let lock = NSLock(); var n = 0 }
+        var s = base.session("api", .idle, alias: "API")
+        s.agent = "codex"
+        let st = base.store([s]), dch = FakeDch(), count = Count()
+        dch.screen = AgentWindowInteractionTests.codexScreen
+        try await withSeams(st, dch: dch) { changes in
+            ControlSessionsTalk.liveRecords = { { _ in count.lock.withLock { count.n += 1 }; return [] } }
+            let c = try await ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            XCTAssertEqual(c.result, .object(["delivered": .bool(true)]))
+            XCTAssertEqual(dch.said, ["go on"])
+            XCTAssertEqual(count.lock.withLock { count.n }, 0, "the list said: no record read")
+        }
+    }
+
     /// #1875: the outcome lands after say awaits (the real path hands it back on main later): the reply waits for it.
     @MainActor
     func testSayWaitsForAnOutcomeThatLandsLater() async throws {

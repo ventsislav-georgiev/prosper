@@ -1195,6 +1195,67 @@ final class AgentWindowInteractionTests: XCTestCase {
         }
     }
 
+    /// #1996: dch 1.182's --ls-json `agent` into the row, lenient: claude, codex, null (""), another word (""), a key left
+    /// out or of another type (nil: dch did not say). Red if the parse or list's hand-over to AgentSession is dropped.
+    func testListCarriesDchsAgentKind() {
+        let json = #"""
+        [{"name":"a","alias":"","activity_epoch":1,"state":"idle","agents":0,"agent":"claude","cwd":null},
+         {"name":"b","alias":"","activity_epoch":1,"state":"idle","agents":0,"agent":"codex","cwd":null},
+         {"name":"c","alias":"","activity_epoch":1,"state":"idle","agents":0,"agent":null,"cwd":null},
+         {"name":"d","alias":"","activity_epoch":1,"state":"idle","agents":0,"cwd":null},
+         {"name":"e","alias":"","activity_epoch":1,"state":"idle","agents":0,"agent":7,"cwd":null},
+         {"name":"f","alias":"","activity_epoch":1,"state":"idle","agents":0,"agent":"gemini","cwd":null}]
+        """#
+        let want: [String?] = ["claude", "codex", "", nil, nil, ""]
+        XCTAssertEqual(DchCommand.parseListJSON(Data(json.utf8)).map(\.agent), want)
+        XCTAssertEqual(AgentIsland.list(dirs: ["/tmp/dch-test"]) { _, _ in Data(json.utf8) }.map(\.agent), want)
+    }
+
+    /// #1996: the list's `agent` decides runsCodex and the record is never read: "codex" with a shell record (a Codex
+    /// typed at the prompt) is Codex; "claude" and "" (dch says neither) are not, whatever the record. Only a row
+    /// without it (an older dch) reads the record (#1994's rule).
+    func testRunsCodexTakesTheListsAgentWithoutReadingTheRecord() {
+        var reads = 0
+        func read(_ r: [DchHistoryRecord]) -> [DchHistoryRecord] { reads += 1; return r }
+        var shell = Self.codexRecord
+        shell.argv = ["zsh"]
+        var s = session(.idle)
+        s.agent = "codex"
+        XCTAssertTrue(AgentIsland.runsCodex(s, records: read([shell])), "a Codex typed at the shell prompt")
+        XCTAssertTrue(AgentIsland.runsCodex(s, records: read([])), "no record needed")
+        s.agent = "claude"
+        XCTAssertFalse(AgentIsland.runsCodex(s, records: read([Self.codexRecord])), "dch says Claude")
+        s.agent = ""
+        XCTAssertFalse(AgentIsland.runsCodex(s, records: read([Self.codexRecord])), "dch says neither runs")
+        XCTAssertEqual(reads, 0, "the list said: no record read")
+        s.agent = nil
+        XCTAssertTrue(AgentIsland.runsCodex(s, records: read([Self.codexRecord])), "an older dch: the record's argv")
+        XCTAssertFalse(AgentIsland.runsCodex(s, records: read([shell])), "an older dch: a shell record stays Claude's check")
+        XCTAssertEqual(reads, 2)
+    }
+
+    /// #1996: the window's send on a row whose list said its agent never calls readLiveRecords: "codex" goes to --say on
+    /// a caret-row screen, "" (neither) keeps Claude's check though the record says Codex.
+    @MainActor
+    func testWindowSendTakesTheListsAgentAndReadsNoRecord() {
+        final class Count: @unchecked Sendable { let lock = NSLock(); var n = 0 }
+        for agent in ["codex", ""] {
+            let f = MessageFake(statuses: ["idle", "working"], screens: [Self.codexScreen])
+            let c = controller(f.io), count = Count(), rec = Self.codexRecord
+            c.readLiveRecords = { _ in count.lock.withLock { count.n += 1 }; return [rec] }
+            let i = interaction(c)
+            var s = session(.idle)
+            s.agent = agent
+            i.follow(s)
+            i.draft = "go"
+            i.send()
+            until("sent \(agent)") { !i.busy }
+            XCTAssertEqual(f.says, agent == "codex" ? ["go"] : [], "agent \(agent)")
+            XCTAssertEqual(i.notice, agent == "codex" ? nil : AgentWindowText.promptShown, "agent \(agent)")
+            XCTAssertEqual(count.lock.withLock { count.n }, 0, "agent \(agent): no record read")
+        }
+    }
+
     /// #1994: the window's send reads the session's own record (the controller's readLiveRecords) and hands codex to the
     /// driver: with the Codex record the caret-row screen goes to --say; without it the window refuses as before.
     @MainActor

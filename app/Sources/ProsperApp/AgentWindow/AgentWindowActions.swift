@@ -1258,7 +1258,8 @@ final class AgentWindowInteraction: ObservableObject {
             return
         }
         let key = s.key, typed = draft, d = driver(s)
-        // #1994: the session's own dch record, read off main in the job (AgentIsland.runsCodex).
+        // #1994: the session's own dch record, read off main in the job (AgentIsland.runsCodex); #1996: only when the
+        // list gave no `agent`.
         let none: @Sendable ([AgentSession]) -> [DchHistoryRecord] = { _ in [] }
         let read = controller?.readLiveRecords ?? none
         act(s, prompt: nil, run: { io in d(io).send(text, codex: AgentIsland.runsCodex(s, records: read([s]))) }) { [weak self] in

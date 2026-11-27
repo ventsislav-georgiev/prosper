@@ -581,7 +581,7 @@ extension AgentIsland {
     }
 
     /// #714: dch 1.28.0's new revive and stop reasons in words; nil: dch's detail.
-    /// not_utf8 names the Claude id in a short line (dch's runs long and ends with
+    /// not_utf8 names the Claude id (#1995: the Codex thread for a Codex record) in a short line (dch's runs long and ends with
     /// it). An interruption keeps dch's detail (it says which step), plus the id
     /// when the detail lacks it, as dch's own text line does.
     static func reasonWords(_ o: DchJSONLine, _ verb: Verb) -> String? {
@@ -1181,9 +1181,12 @@ extension AgentIsland {
     /// still the TUI.
     /// #1994: a live session runs Codex as dch's --say finds it: no Claude under it (--ls-json's claude_session_id; --say
     /// tries Claude first, dch.c:9914-9918@v1.177.0) and its own live record's command an interactive Codex (the rule dch
-    /// records its Codex thread by). --ls-json names no agent kind: a Codex typed into a shell stays false (Claude's check).
-    static func runsCodex(_ s: AgentSession, records: [DchHistoryRecord]) -> Bool {
-        s.claudeSessionID?.isEmpty != false && records.contains { $0.key == s.key && isInteractiveCodex($0.argv) }
+    /// records its Codex thread by).
+    /// #1996: dch 1.182's --ls-json `agent` decides when the row has it (a Codex typed at the shell prompt too), and
+    /// `records` is then never evaluated (no file read); only a row without it (an older dch) falls back to #1994's rule.
+    static func runsCodex(_ s: AgentSession, records: @autoclosure () -> [DchHistoryRecord]) -> Bool {
+        if let agent = s.agent { return agent == "codex" }
+        return s.claudeSessionID?.isEmpty != false && records().contains { $0.key == s.key && isInteractiveCodex($0.argv) }
     }
 
     static func isInteractiveCodex(_ argv: [String]) -> Bool {

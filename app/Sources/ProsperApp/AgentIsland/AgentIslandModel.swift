@@ -119,6 +119,9 @@ struct AgentSession: Equatable, Identifiable {
     var pty: AgentSessionPty? = nil
     /// #1558: dch 1.101's `shells` (DchListRow.shells), newest first; [] when dch leaves the key out or runs none.
     var shells: [DchShell] = []
+    /// #1996: dch 1.182's `agent` (DchListRow.agent): "claude", "codex", "" (dch says neither), nil (dch did not say).
+    /// "" and nil differ for runsCodex: "" is an answer (no record read), nil falls back to the record's argv.
+    var agent: String? = nil
 
     var id: AgentSessionKey { key }
     var name: String { key.name }
@@ -831,7 +834,7 @@ enum AgentIsland {
                              transcriptPath: edit ? nil : mapping[row.name]?.path,
                              claudeForeground: foreground[row.name], cwd: row.cwd, harness: row.harness,
                              wireState: edit ? "idle" : row.state, pty: ptys[row.name],
-                             shells: edit ? [] : row.shells ?? [])
+                             shells: edit ? [] : row.shells ?? [], agent: row.agent)
                 return AgentModelEffort.carry(AgentModelEffort.resolve(s, previous: before[s.key], io: modelIO),
                                               previous: before[s.key])
             }
