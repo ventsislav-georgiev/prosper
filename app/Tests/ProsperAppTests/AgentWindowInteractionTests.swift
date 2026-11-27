@@ -1133,6 +1133,87 @@ final class AgentWindowInteractionTests: XCTestCase {
         XCTAssertEqual(r.calls.filter { $0[0] == "--send" || $0[0] == "--keys" }, [["--send", "s", "--", "-kl"], ["--keys", "s", "enter"]])
     }
 
+    // MARK: - #1994: a live Codex session
+
+    /// Codex output Claude's check refuses: a "❯ 1." caret row and no Claude composer ("›" is Codex's).
+    static let codexScreen = ["• Ran the tests", "", "❯ 1. fix the build", "  2. then run the tests", "",
+                              "› Ask Codex to do anything"].joined(separator: "\n")
+    static let codexRecord: DchHistoryRecord = {
+        var r = DchHistoryRecord(key: key)
+        r.argv = ["codex", "--yolo"]
+        return r
+    }()
+
+    /// #1994: a Codex session's send skips Claude's screen check and dch's --say decides (dch #664). Red on the parent
+    /// (send had no codex and ran Self.refusal: promptShown, nothing typed). The same screen on a Claude session is refused.
+    func testCodexSendSkipsClaudesScreenCheck() {
+        XCTAssertEqual(AgentWindowDriver.refusal(Self.codexScreen), AgentWindowText.promptShown, "Claude's check refuses it")
+        let f = MessageFake(statuses: ["idle", "working"], screens: [Self.codexScreen])
+        XCTAssertEqual(driver(f.io).send("go", codex: true), .done)
+        XCTAssertEqual(f.says, ["go"], "typed by dch's --say")
+        let g = MessageFake(statuses: ["idle", "working"], screens: [Self.codexScreen])
+        XCTAssertEqual(driver(g.io).send("go"), .failed(AgentWindowText.promptShown), "a Claude session: refused")
+        XCTAssertEqual(g.says, [])
+    }
+
+    /// #1994: dch's skipped prompt or draft below Codex's composer maps to the window's texts; an empty read still fails
+    /// closed (lite: noScreen) with nothing typed; the confirm reads are agent-neutral (dch's status, the head's count).
+    func testCodexSendMapsDchSkipsAndFailsClosedOnAnEmptyRead() {
+        for (reason, why) in [("prompt", AgentWindowText.blocked), ("draft", AgentWindowText.draft)] {
+            let f = MessageFake(statuses: ["idle", "working"], screens: [Self.codexScreen],
+                                reply: #"{"name":"s","result":"skipped","reason":"\#(reason)","detail":""}"#)
+            XCTAssertEqual(driver(f.io).send("go", codex: true), .failed(why), reason)
+            XCTAssertEqual(f.says, ["go"], reason)
+        }
+        for lite in [true, false] {
+            let f = MessageFake(statuses: ["idle", "working"], screens: [""])
+            f.lite = lite
+            XCTAssertEqual(driver(f.io).send("go", codex: true), .failed(lite ? AgentWindowText.noScreen : AgentWindowText.unconfirmed))
+            XCTAssertEqual(f.says, [], "lite \(lite): nothing typed")
+        }
+        let g = MessageFake(statuses: ["idle"], screens: [Self.codexScreen])
+        XCTAssertEqual(driver(g.io).send("go", codex: true), .failed(AgentWindowText.unconfirmed), "idle again, no echo")
+        XCTAssertEqual(g.says, ["go"])
+        let h = MessageFake(statuses: ["idle"], screens: [Self.codexScreen, Self.codexScreen + "\n› Fix the build please now"])
+        XCTAssertEqual(driver(h.io).send("Fix the build please now", codex: true), .done, "the head shows once more")
+    }
+
+    /// #1994: Codex only with no Claude under the session (--say tries Claude first) and its own live record's command an
+    /// interactive Codex. Red if either half is dropped.
+    func testRunsCodexNeedsNoClaudeAndTheSessionsOwnCodexRecord() {
+        let rec = Self.codexRecord
+        XCTAssertTrue(AgentIsland.runsCodex(session(.idle), records: [rec]))
+        XCTAssertFalse(AgentIsland.runsCodex(claudeSession(.idle), records: [rec]), "a Claude under it: --say types into Claude")
+        XCTAssertFalse(AgentIsland.runsCodex(session(.idle), records: []), "no record: Claude's check")
+        var other = DchHistoryRecord(key: AgentSessionKey(dir: Self.key.dir, name: "other"))
+        other.argv = rec.argv
+        XCTAssertFalse(AgentIsland.runsCodex(session(.idle), records: [other]), "another session's record")
+        for argv in [["zsh"], ["claude"], ["codex", "exec", "fix it"]] {
+            var r = rec
+            r.argv = argv
+            XCTAssertFalse(AgentIsland.runsCodex(session(.idle), records: [r]), "\(argv)")
+        }
+    }
+
+    /// #1994: the window's send reads the session's own record (the controller's readLiveRecords) and hands codex to the
+    /// driver: with the Codex record the caret-row screen goes to --say; without it the window refuses as before.
+    @MainActor
+    func testWindowSendReadsTheSessionsRecordForCodex() {
+        for codex in [true, false] {
+            let f = MessageFake(statuses: ["idle", "working"], screens: [Self.codexScreen])
+            let c = controller(f.io)
+            let rec = Self.codexRecord
+            c.readLiveRecords = { _ in codex ? [rec] : [] }
+            let i = interaction(c)
+            i.follow(session(.idle))
+            i.draft = "go"
+            i.send()
+            until("sent \(codex)") { !i.busy }
+            XCTAssertEqual(f.says, codex ? ["go"] : [], "codex \(codex)")
+            XCTAssertEqual(i.notice, codex ? nil : AgentWindowText.promptShown, "codex \(codex)")
+        }
+    }
+
     // MARK: - Through the controller: the window's click is the human's
 
     @MainActor

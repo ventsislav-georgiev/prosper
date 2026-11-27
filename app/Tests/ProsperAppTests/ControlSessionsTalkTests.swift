@@ -41,12 +41,14 @@ final class ControlSessionsTalkTests: XCTestCase {
     @MainActor
     func withSeams(_ store: AgentIslandStore?, dch: FakeDch = FakeDch(), _ body: (ControlChanges) async throws -> Void) async rethrows {
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow,
-                     ControlSessionsTalk.act, ControlSessionsTalk.read, ControlSessionsTalk.bound, ControlSessionsTalk.sleep)
+                     ControlSessionsTalk.act, ControlSessionsTalk.read, ControlSessionsTalk.bound, ControlSessionsTalk.sleep,
+                     ControlSessionsTalk.liveRecords)
         defer {
             (ControlSessions.model, ControlSessions.islandStore, ControlSessions.showWindow) = (saved.0, saved.1, saved.2)
             (ControlSessionsTalk.act, ControlSessionsTalk.read) = (saved.3, saved.4)
-            (ControlSessionsTalk.bound, ControlSessionsTalk.sleep) = (saved.5, saved.6)
+            (ControlSessionsTalk.bound, ControlSessionsTalk.sleep, ControlSessionsTalk.liveRecords) = (saved.5, saved.6, saved.7)
         }
+        ControlSessionsTalk.liveRecords = { { _ in [] } }
         // #1875: a lost outcome ends a row in seconds (the default sleep is cancelled once an outcome lands).
         ControlSessionsTalk.bound = 2
         ControlSessions.model = { nil }
@@ -142,6 +144,28 @@ final class ControlSessionsTalkTests: XCTestCase {
             XCTAssertEqual(c.verb, "messaged")
             XCTAssertTrue(c.undo == nil, "no inverse")
             XCTAssertEqual(notices, [], "a sent message adds no failure notice")
+        }
+    }
+
+    /// #1994: sessions.say on a Codex session (its own record an interactive Codex, no Claude) skips Claude's screen
+    /// check: a "❯ 1." caret row in Codex's output goes to --say. The same screen on a Claude session is refused.
+    @MainActor
+    func testSayToACodexSessionLeavesTheScreenToDch() async throws {
+        let st = base.store([base.session("api", .idle, alias: "API"), base.session("api-qa", .idle, alias: "QA")])
+        let dch = FakeDch()
+        dch.screen = AgentWindowInteractionTests.codexScreen
+        var rec = DchHistoryRecord(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"))
+        rec.argv = ["codex"]
+        let live = [rec]
+        try await withSeams(st, dch: dch) { changes in
+            ControlSessionsTalk.liveRecords = { { _ in live } }
+            let c = try await ControlSessionsTalk.say(args(["name": "api", "text": "go on"]), changes: changes)
+            XCTAssertEqual(c.result, .object(["delivered": .bool(true)]))
+            XCTAssertEqual(dch.said, ["go on"])
+            dch.status = "idle"
+            await refusedAsync({ try await ControlSessionsTalk.say(self.args(["name": "api-qa", "text": "go on"]), changes: changes) },
+                               "QA: not delivered: \(AgentWindowText.promptShown)")
+            XCTAssertEqual(dch.said, ["go on"], "nothing typed into the Claude session")
         }
     }
 

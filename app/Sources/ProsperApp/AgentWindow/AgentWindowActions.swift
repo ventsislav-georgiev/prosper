@@ -575,22 +575,26 @@ struct AgentWindowDriver: Sendable {
     }
 
     /// `refusal` for the read before a key; an empty one names a dch with no mirror (`lite`).
-    func refusal(_ shown: String, lite: String) -> String? {
-        shown.isEmpty && io.noMirror(key) ? lite : Self.refusal(shown)
+    /// #1994: `codex` (AgentIsland.runsCodex): Self.refusal reads Claude's screen ("❯" composer, caret rows), so a Codex
+    /// read is checked only for being empty (fails closed, as #1992's firstRun); dch's --say decides the rest (dch #664).
+    func refusal(_ shown: String, lite: String, codex: Bool = false) -> String? {
+        if shown.isEmpty && io.noMirror(key) { return lite }
+        return codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : Self.refusal(shown)
     }
 
     /// One message, only while dch says idle or done and the screen shows no prompt (`refusal`):
     /// `--say` types it as one bracketed paste and presses Enter once Claude's composer shows it.
     /// Confirmed by a read: Claude started working (or asks something), or the message's head
-    /// shows on screen more often than before.
-    func send(_ text: String) -> AgentWindowOutcome {
+    /// shows on screen more often than before. #1994: `codex`, the screen check is refusal(codex:)'s; the confirm reads
+    /// are agent-neutral (dch's working/blocked, the head's count on screen).
+    func send(_ text: String, codex: Bool = false) -> AgentWindowOutcome {
         let st = status()
         guard st == "idle" || st == "done" else {
             return .failed(st == "working" ? AgentWindowText.working
                            : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus)
         }
         let shown = io.read(key)
-        if let why = refusal(shown, lite: AgentWindowText.noScreen) { return .failed(why) }
+        if let why = refusal(shown, lite: AgentWindowText.noScreen, codex: codex) { return .failed(why) }
         let head = Self.head(text), before = Self.count(head, in: shown)
         if let why = Self.sayFailure(Self.sayReply(io.say(key, text)), shell: text.hasPrefix("!")) { return .failed(why) }
         for _ in 0..<confirmReads {
@@ -1254,7 +1258,10 @@ final class AgentWindowInteraction: ObservableObject {
             return
         }
         let key = s.key, typed = draft, d = driver(s)
-        act(s, prompt: nil, run: { io in d(io).send(text) }) { [weak self] in
+        // #1994: the session's own dch record, read off main in the job (AgentIsland.runsCodex).
+        let none: @Sendable ([AgentSession]) -> [DchHistoryRecord] = { _ in [] }
+        let read = controller?.readLiveRecords ?? none
+        act(s, prompt: nil, run: { io in d(io).send(text, codex: AgentIsland.runsCodex(s, records: read([s]))) }) { [weak self] in
             if self?.drafts[key] == typed { self?.drafts[key] = nil }
         }
     }

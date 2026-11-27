@@ -21,6 +21,11 @@ enum ControlSessionsTalk {
         }
     }
 
+    /// #1994: the live sessions' own dch records (the controller's seam, none under XCTest), read off main in the say's job.
+    static var liveRecords: @MainActor () -> @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
+        AgentIslandController.shared.readLiveRecords
+    }
+
     /// A message's cap: the island composer's (AgentIsland.messageCap, UTF-8 bytes).
     static let maxBytes = AgentIsland.messageCap
     /// A prompt line in a reply: at most this many characters (OutsideText.shown).
@@ -75,8 +80,10 @@ enum ControlSessionsTalk {
         guard s.state == .idle || s.state == .done else {
             throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)
         }
-        let key = s.key, once = Once<AgentWindowOutcome>()
-        try start(s, in: st, changes: changes, what: "message", run: { AgentWindowDriver(key: key, io: $0).send(message) },
+        let key = s.key, once = Once<AgentWindowOutcome>(), read = liveRecords()
+        try start(s, in: st, changes: changes, what: "message", run: {
+            AgentWindowDriver(key: key, io: $0).send(message, codex: AgentIsland.runsCodex(s, records: read([s])))
+        },
                   then: { once.give($0) })
         let sleep = Self.sleep, bound = Self.bound
         let timer = Task { @MainActor in await sleep(bound); once.give(nil) }

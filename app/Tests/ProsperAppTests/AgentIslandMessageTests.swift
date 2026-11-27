@@ -504,6 +504,28 @@ final class AgentIslandMessageTests: XCTestCase {
         }
     }
 
+    /// #1994: Message all over two sessions on the same Codex output (a "❯ 1." caret row): the one whose own record is an
+    /// interactive Codex goes to --say, the other (no record: Claude's check) is skipped as before. Red on the parent.
+    @MainActor
+    func testMessageAllLeavesACodexScreenToDch() throws {
+        let p = Proc()
+        p.screens = ["a": T.codexScreen, "b": T.codexScreen]
+        p.out["/d"] = (Self.say("a", "ok"), 0)
+        let c = controller(p, [session("a"), session("b")])
+        var rec = DchHistoryRecord(key: AgentSessionKey(dir: "/d", name: "a"))
+        rec.argv = ["codex"]
+        let live = [rec]
+        c.readLiveRecords = { _ in live }
+        let store = try XCTUnwrap(c.store)
+        c.askMessageAll()
+        store.typeMessage("go")
+        c.sendMessage()
+        let dir = AgentSessionKey(dir: "/d", name: "")
+        settle { store.actions[dir] != "Sending…" }
+        XCTAssertEqual(p.says, [["--say", "a", "--json", "--", "go"]])
+        XCTAssertEqual(store.actions[AgentSessionKey(dir: "/d", name: "b")], AgentWindowText.promptShown)
+    }
+
     /// Message all over three sessions, one on a plan approval with no footer: exactly the other two names go
     /// to `--say`, the refused row reads the window's words, and the dir line counts it as skipped.
     @MainActor
@@ -664,6 +686,16 @@ final class AgentIslandMessageTests: XCTestCase {
 
     private func skips(_ out: Data) -> [String] {
         AgentIsland.actionResult(status: 0, output: out).json.map { "\($0.name): \($0.detail ?? "")" }
+    }
+
+    /// #1994: a Codex name's read is checked only for being empty: the caret row Claude's check refuses is cleared for
+    /// dch's --say, the same screen on a Claude name is still skipped, and an empty Codex read is skipped unconfirmed.
+    func testScreenReadsLeaveACodexScreenToDch() {
+        let r = Reads()
+        r.screens = ["cx": [T.codexScreen], "cl": [T.codexScreen], "e": [""]]
+        let g = AgentIsland.messageScreens(r.io, dir: "/d", names: ["cx", "cl", "e"], codex: ["cx", "e"], clock: r.clock)
+        XCTAssertEqual(g.names, ["cx"])
+        XCTAssertEqual(skips(g.out), ["cl: \(AgentWindowText.promptShown)", "e: \(AgentWindowText.unconfirmed)"])
     }
 
     /// Items 2 and 4 (QA #836 INFO-4): a pass of reads slower than 2 s (a stuck session's 8 s timeout) is read once

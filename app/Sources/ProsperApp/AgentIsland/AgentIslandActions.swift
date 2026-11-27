@@ -822,7 +822,8 @@ extension AgentIsland {
     static let messageReadBudget: TimeInterval = 20
     static let messageRereadBy: TimeInterval = 40
 
-    static func messageScreens(_ io: AgentPromptIO, dir: String, names: [String],
+    /// #1994: `codex`, the names that run Codex (AgentIsland.runsCodex): refusal(codex:) checks their reads.
+    static func messageScreens(_ io: AgentPromptIO, dir: String, names: [String], codex: Set<String> = [],
                                clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) -> (names: [String], out: Data) {
         let start = clock()
         var out = Data()
@@ -832,7 +833,8 @@ extension AgentIsland {
                 var why = AgentWindowText.unconfirmed
                 if clock() - start < by {
                     let key = AgentSessionKey(dir: dir, name: name), shown = io.read(key)
-                    guard let refused = AgentWindowDriver(key: key, io: io).refusal(shown, lite: AgentWindowText.noScreen) else {
+                    guard let refused = AgentWindowDriver(key: key, io: io).refusal(shown, lite: AgentWindowText.noScreen,
+                                                                                            codex: codex.contains(name)) else {
                         clear.append(name)
                         continue
                     }
@@ -1177,6 +1179,13 @@ extension AgentIsland {
     /// nd = 1): `codex …` or `headroom wrap codex …` (no env or other wrapper), no --remote, and the first word that is
     /// not an option names no non-TUI subcommand (a prompt, `resume` and `fork` are the TUI). An explicit --no-daemon is
     /// still the TUI.
+    /// #1994: a live session runs Codex as dch's --say finds it: no Claude under it (--ls-json's claude_session_id; --say
+    /// tries Claude first, dch.c:9914-9918@v1.177.0) and its own live record's command an interactive Codex (the rule dch
+    /// records its Codex thread by). --ls-json names no agent kind: a Codex typed into a shell stays false (Claude's check).
+    static func runsCodex(_ s: AgentSession, records: [DchHistoryRecord]) -> Bool {
+        s.claudeSessionID?.isEmpty != false && records.contains { $0.key == s.key && isInteractiveCodex($0.argv) }
+    }
+
     static func isInteractiveCodex(_ argv: [String]) -> Bool {
         let at: Int
         if let a0 = argv.first, dchBase(a0, is: "codex") { at = 0 }

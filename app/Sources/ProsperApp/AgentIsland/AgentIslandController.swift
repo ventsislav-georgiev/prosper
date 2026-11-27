@@ -881,8 +881,12 @@ final class AgentIslandController {
             let dashed = tabRows.filter { $0.key.dir == dir && !AgentIsland.passable($0.name) }.count
             let key = all ? AgentSessionKey(dir: dir, name: "") : group[0].key
             let line: (@MainActor @Sendable (String) -> Void)? = { [weak self] in self?.dirLine($0, dir: dir, .message, only: only) }
+            let read = readLiveRecords
             let screens: @Sendable () -> (args: [String]?, out: Data) = {
-                let g = AgentIsland.messageScreens(io, dir: dir, names: names)
+                // #1994: the rows' own dch records, read on the job's thread like the screens.
+                let records = read(group)
+                let codex = Set(group.filter { AgentIsland.runsCodex($0, records: records) }.map(\.name))
+                let g = AgentIsland.messageScreens(io, dir: dir, names: names, codex: codex)
                 return (g.names.isEmpty ? nil : AgentIsland.messageArgs(g.names, text), g.out)
             }
             var started = false
