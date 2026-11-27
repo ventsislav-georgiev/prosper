@@ -1197,6 +1197,23 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         owner?.followFocus()
         show(wanted)
         if owner?.focusPending == true { owner?.focus() }
+        // #2058: back in the window it left with the keys, in the same pass, while nothing else took them: they stay here.
+        if let w = window, keysLeft == ObjectIdentifier(w), w.firstResponder === w, (w as? AgentsNSWindow)?.sidebarFocused != true {
+            AgentsNSWindow.focus(self)
+        }
+        keysLeft = nil
+    }
+
+    /// #2058: the window this view left as its first responder: a SwiftUI branch flip (a started session's pane to its
+    /// landed row's) re-parents it into a new slot, which drops the keys. Kept for that one pass only. An identity, not a
+    /// weak ref: a closing window's views leave it while it deallocates, and a weak ref to it then aborts.
+    private var keysLeft: ObjectIdentifier?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        guard newWindow !== window, let w = window, w.firstResponder === self else { return }
+        keysLeft = ObjectIdentifier(w)
+        DispatchQueue.main.async { [weak self] in self?.keysLeft = nil }   // a form shown meanwhile never gets them back later
     }
 
     /// #2065: a move to a screen of another scale (Retina to a 1x display and back). The wrapper re-applies the content

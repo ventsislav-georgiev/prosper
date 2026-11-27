@@ -1,6 +1,6 @@
 {
  "entry": "2058",
- "filter": "AgentWindowD1Tests/testAgentWindowNewSessionLaunch",
+ "filter": "AgentWindowD1Tests/testAgentWindowNewSessionLaunch|AgentWindowD1Tests/testAgentWindowNewSessionTerminalReattachesAndTakesTheKeysWhenTheFormCloses",
  "mutants": [
   {
    "name": "reveal-waits",
@@ -27,6 +27,13 @@
    "name": "failure-dangles",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
    "old": "                follow()   // #2058: the form again over the pane, its line saying why\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "landing-drops-keys",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        keysLeft = ObjectIdentifier(w)\n",
    "new": "",
    "expect": "killed"
   }
