@@ -67,6 +67,8 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.191.0, with fixes from QA of the X-ray answer and Codex resume features. (#2024, #2031)
 - Ships dch 1.193.0: dch's own terminal X-ray view keeps its Schedules tab right, and no longer
   crashes, when a session on an older host turns into a shell or a new Claude starts. (#2024)
+- Ships dch 1.199.0: session groups with a colour and a manual assignment, groups filled only by hand,
+  and a subagent list that marks interrupted agents failed and drops ones left from an earlier Claude. (#2059, #2062, #2053)
 - New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
   command next to the Claude one; a command edited in the form is no longer saved as the default.
   (#1997)
