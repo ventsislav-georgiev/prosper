@@ -106,6 +106,8 @@ tag from the now-released section and put it on the new top draft.
   Claude and Codex accounts in their own groups. (#2010)
 - The account pool's usage stats and its control replies tell Claude and Codex accounts apart; usage
   files from earlier builds still read. (#2042)
+- Settings shows Rounded corners as on for the Standard and No title bar window styles, which always
+  keep rounded corners. (#2046)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -433,6 +433,12 @@ final class AgentWindowStyleTests: XCTestCase {
             XCTAssertEqual(AgentSessionsSection.roundedHint(.borderless), "Off: square corners, filling the window to its edges.")
             XCTAssertEqual(AgentSessionsSection.roundedHint(.standard), "Borderless only: a window with a title bar keeps rounded corners.")
             XCTAssertEqual(AgentSessionsSection.roundedHint(.noTitleBar), AgentSessionsSection.roundedHint(.standard))
+            // #2046: titled styles show ON whatever is stored; Borderless shows the stored choice.
+            for style in AgentWindowStyle.allCases {
+                for stored in [true, false] {
+                    XCTAssertEqual(AgentSessionsSection.roundedShown(style: style, stored: stored), style == .borderless ? stored : true, "\(style) stored \(stored)")
+                }
+            }
         }
     }
 }

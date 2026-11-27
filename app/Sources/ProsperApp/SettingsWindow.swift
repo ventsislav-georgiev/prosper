@@ -1122,6 +1122,9 @@ struct AgentSessionsSection: View {
             : "Borderless only: a window with a title bar keeps rounded corners."
     }
 
+    /// #2046: what the toggle shows; a titled style always has rounded corners, so the stored choice only shows for Borderless.
+    static func roundedShown(style: AgentWindowStyle, stored: Bool) -> Bool { style == .borderless ? stored : true }
+
     var body: some View {
         NeonSection("Agent Sessions",
                     footer: "A program in a session's terminal can set the clipboard only while that session is selected in the Agent Sessions window and the window is on screen. It can never read your clipboard.") {
@@ -1136,7 +1139,7 @@ struct AgentSessionsSection: View {
             }
             NeonDivider()
             NeonRow(Self.roundedLabel, subtitle: Self.roundedHint(style)) {
-                Toggle("", isOn: $rounded).labelsHidden().accessibilityLabel(Self.roundedLabel).disabled(style != .borderless)
+                Toggle("", isOn: Binding(get: { Self.roundedShown(style: style, stored: rounded) }, set: { rounded = $0 })).labelsHidden().accessibilityLabel(Self.roundedLabel).disabled(style != .borderless)
             }
             NeonDivider()
             // #1379: applied to an open window at once (its model); the Go menu sets the same.
