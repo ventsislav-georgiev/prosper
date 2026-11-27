@@ -13,6 +13,9 @@ import os
 // memory block (the one-shot lines: header, rows, done line; the tasks header has `session`, memory's never), then deltas
 // `task` / `memory` by id (`gone` removes); a whole block again replaces the kept one. The Tasks and Memory polls stop
 // while such a follow runs. An older host refuses the form with exit 2: the follow starts again without it, once.
+// #2014 (dch #686, 1.188.0): `--schedules` adds a third block (header "block":"schedules", rows `schedule` by id, `gone`
+// removes); headers route on "block" first (a schedules header carries `source` and `session` too). An exit 2 before any
+// snapshot of a run that carried it (a host's older dch) starts the follow again without it, once.
 
 /// One target's follow and the state its lines built.
 @MainActor
@@ -24,6 +27,8 @@ final class XrayFollow: ObservableObject {
         /// #1475 c: the stream's tasks and memory blocks, parsed as the one-shot reads; nil: no block (yet).
         var tasks: XrayTasks? = nil
         var memory: XrayMemory? = nil
+        /// #2014: the stream's schedules block; nil: none (yet).
+        var schedules: XraySchedules? = nil
         /// #1566: the snapshot's corpus fields (the panel header's label, Cmd-K's session_id).
         var corpus: XrayChapters.Corpus? = nil
     }
@@ -79,6 +84,10 @@ final class XrayFollow: ObservableObject {
     /// #1475 c: this run carries `--tasks --memory` (the probed dch is 1.91.0 or newer and the host did not refuse it).
     private(set) var withTasks = false
     private var tasksRefused = false
+    /// #2014: this run carries `--schedules` (the probed dch is 1.188.0 or newer and the host did not refuse it).
+    private(set) var withSchedules = false
+    /// #2014: the host answered `--follow --schedules` with exit 2 (its dch is older): the Schedules tab says so.
+    private(set) var schedulesRefused = false
     private var dch = ""
     /// While it runs, the Tasks and Memory polls stay off (XrayPoller tick, select).
     var carriesTasks: Bool { running && withTasks }
@@ -96,8 +105,9 @@ final class XrayFollow: ObservableObject {
         failed = false
         self.dch = dch
         withTasks = !tasksRefused && XrayPanels.followTasksOK()
+        withSchedules = !schedulesRefused && XrayPanels.followSchedulesOK()
         offMain = Self.buildOffMain()
-        stopProcess = XrayPanels.follow(dch, target.followArgs(tasks: withTasks), target.env,
+        stopProcess = XrayPanels.follow(dch, target.followArgs(tasks: withTasks, schedules: withSchedules), target.env,
                                         Self.sink(builder, offMain, self), { [weak self] in self?.ended($0) })
     }
 
@@ -149,6 +159,8 @@ final class XrayFollow: ObservableObject {
     private func finish(_ status: Int32) {
         guard stopProcess != nil else { return }   // stopped by us: not news
         stopProcess = nil
+        // #2014: a host's dch before 1.188.0 exits 2 on `--follow --schedules` (dch README): again without it, once
+        if status == 2 || status == XrayPanels.followTasksRefused, withSchedules, !hasSnapshot { schedulesRefused = true; return start(dch) }
         // #1475 c: an older host's "bad usage: --tasks and --follow": the same follow without them, once; polls for those
         if status == XrayPanels.followTasksRefused, withTasks, !hasSnapshot { tasksRefused = true; return start(dch) }
         if !hasSnapshot { failed = true; onEnd(self) }   // never a snapshot: the panels go back to today's reads
@@ -232,6 +244,7 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
         var refKeys: Set<String>
         var task: XrayFollow.Block?
         var memory: XrayFollow.Block?
+        var schedule: XrayFollow.Block? = nil
     }
 
     /// The finished state and the work it took: the parts parsed, the ref rows parsed, whether it ran on main.
@@ -306,12 +319,16 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
             }
             if o["reset"] != nil {
                 object = ["schema": 1, "chapters": [Any](), "refs": [Any]()]; kept = 0; (chapterBytes, refBytes) = ([], [])
-                (blocks, openBlock, replaced) = ([:], nil, [:]); dirty = Self.whole.union(["task", "memory"])   // #1475 c: the blocks come again after it
+                (blocks, openBlock, replaced) = ([:], nil, [:]); dirty = Self.whole.union(Self.blockKeys)   // #1475 c: the blocks come again after it
                 taskCache.rows = [:]   // #1787: the rows' bytes go with their block
                 continue
             }
-            if o["source"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
-                let k = o["session"] != nil ? "task" : "memory"
+            if o["source"] != nil || o["block"] != nil {   // #1475 c: a tasks (with `session`) or memory header starts its block again
+                // #2014: "block" first (1.187.0+: a schedules header has `session` too); the old rule for a header without it
+                guard let k = Self.blockKey(o) else {   // a block Prosper does not read: the open one ends here (partial)
+                    if let cut = openBlock { dirty.insert(cut); replaced[cut] = nil; openBlock = nil }
+                    continue
+                }
                 if let cut = openBlock, cut != k { dirty.insert(cut); replaced[cut] = nil }   // a block with no done line ends here (partial)
                 replaced[k] = blocks[k]
                 blocks[k] = XrayFollow.Block(d); openBlock = k   // shown at its done line, not row by row
@@ -364,7 +381,8 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
         guard !dirty.isEmpty, let object else { return t }
         let job = Job(object: object, dirty: dirty, refKeys: refKeys,
                       task: dirty.contains("task") ? blocks["task"] : nil,
-                      memory: dirty.contains("memory") ? blocks["memory"] : nil)
+                      memory: dirty.contains("memory") ? blocks["memory"] : nil,
+                      schedule: dirty.contains("schedule") ? blocks["schedule"] : nil)
         (dirty, refKeys) = ([], [])
         t.built = build(job)
         return t
@@ -390,6 +408,16 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
 
     /// #1475 c: a block's row or done line, or a `task` / `memory` delta (by id; `gone` removes; a delta for no block
     /// yet has nothing to apply to). false: not one of these lines.
+    /// #2014: the row keys of the blocks the follow keeps (a row line's own key, as the one-shot rows).
+    static let blockKeys = ["task", "memory", "schedule"]
+
+    /// #2014: a header's block: its "block" (dch 1.187.0+), else the #1475 c rule (`session`: tasks; none: memory); nil: a
+    /// block Prosper does not read.
+    static func blockKey(_ o: [String: Any]) -> String? {
+        guard let b = o["block"] else { return o["session"] != nil ? "task" : "memory" }
+        return ["tasks": "task", "memory": "memory", "schedules": "schedule"][b as? String ?? ""]
+    }
+
     private func takeBlockLine(_ o: [String: Any], _ d: Data) -> Bool {
         if o["done"] != nil, let k = openBlock {
             blocks[k]?.done = d; blocks[k]?.bytes += d.count; openBlock = nil
@@ -398,7 +426,7 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
             dirty.insert(k)
             return true
         }
-        guard let k = ["task", "memory"].first(where: { o[$0] != nil }), let row = o[k] as? [String: Any] else { return false }
+        guard let k = Self.blockKeys.first(where: { o[$0] != nil }), let row = o[k] as? [String: Any] else { return false }
         guard var b = blocks[k] else { return true }
         let id = row["id"] as? String, gone = row["gone"] as? Bool == true
         if openBlock == k {
@@ -428,9 +456,11 @@ final class XrayStateBuilder: @unchecked Sendable {   // its vars are read and w
             anchors: chapters ? XrayPanelModel.anchors(j.object) : last?.anchors ?? [:],
             tasks: j.dirty.contains("task") ? j.task.map { XrayTasks.parse($0.lines, reusing: &taskCache) } : last?.tasks,
             memory: j.dirty.contains("memory") ? j.memory.map { XrayMemory.parse($0.data) } : last?.memory,
+            schedules: j.dirty.contains("schedule") ? j.schedule.map { XraySchedules.parse($0.lines) } : last?.schedules,
             corpus: all ? XrayChapters.corpus(j.object) : last?.corpus)
         last = s
         let blocks = (j.dirty.contains("task") && j.task != nil ? 1 : 0) + (j.dirty.contains("memory") && j.memory != nil ? 1 : 0)
+            + (j.dirty.contains("schedule") && j.schedule != nil ? 1 : 0)
         return Built(state: s, chapters: chapters, refs: refs, refRows: refCache.parses &- before, blocks: blocks,
                      taskRows: taskCache.parses &- taskBefore, onMain: Thread.isMainThread)
     }
@@ -503,8 +533,10 @@ final class XrayFollows {
 
 extension XrayTarget {
     /// #1475: dch README "dch --xray <n> --follow --json  # the same object, then its deltas as NDJSON"; #1475 c: with
-    /// `tasks`, dch 1.91.0's `--xray <n> --follow --tasks --memory --json`.
-    func followArgs(tasks: Bool) -> [String] { ["--xray", name, "--follow"] + (tasks ? ["--tasks", "--memory"] : []) + ["--json"] }
+    /// `tasks`, dch 1.91.0's `--xray <n> --follow --tasks --memory --json`; #2014: `schedules`, 1.188.0's `--schedules`.
+    func followArgs(tasks: Bool, schedules: Bool = false) -> [String] {
+        ["--xray", name, "--follow"] + (tasks ? ["--tasks", "--memory"] : []) + (schedules ? ["--schedules"] : []) + ["--json"]
+    }
 }
 
 extension XrayFollow {
@@ -513,6 +545,8 @@ extension XrayFollow {
     static let minimumDch = XrayTabs.minimumDch
     /// #1475 c: `--follow --tasks --memory` (dch #446).
     static let tasksDch = [1, 91, 0]
+    /// #2014: `--follow --schedules` (dch #686).
+    static let schedulesDch = [1, 188, 0]
 }
 
 extension XrayPanels {
@@ -531,6 +565,9 @@ extension XrayPanels {
 
     /// #1475 c: a follow carries Tasks and Memory on the probed dch 1.91.0 or newer (rows set `probed`).
     static var followTasksOK: @MainActor () -> Bool = { probed.map { DchCommand.isAtLeast($0.version, XrayFollow.tasksDch) } == true }
+
+    /// #2014: a follow carries Schedules on the probed dch 1.188.0 or newer (rows set `probed`).
+    static var followSchedulesOK: @MainActor () -> Bool = { probed.map { DchCommand.isAtLeast($0.version, XrayFollow.schedulesDch) } == true }
 
     /// #1475 c: streamLines' answer for exit 2 with "bad usage: --tasks and --follow" on stderr (an older host).
     nonisolated static let followTasksRefused = Int32.min + 1

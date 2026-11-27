@@ -12,9 +12,10 @@ import SwiftUI
 // #1389 (P6 step B): the same tabs for a Terminal-mode pane and a remote session, from `dch --xray <n> --json`'s chapters.
 
 /// The tabs in dch's order (xview.c xv_ord); #1415: Refs before Search. #1815 (operator 11-21): no Responses tab, a
-/// prompt's card shows its answer. #1974: Questions (dch 1.171.0's `--questions`) after Tasks.
+/// prompt's card shows its answer. #1974: Questions (dch 1.171.0's `--questions`) after Tasks. #2014: Schedules last, as dch.
 enum XrayTab: String, CaseIterable {
     case prompts = "Prompts", refs = "Refs", search = "Search", tasks = "Tasks", questions = "Questions", memory = "Memory"
+    case schedules = "Schedules"
 }
 
 /// The session a read names: a local one by name in its socket dir, a remote one as "host:name" (design 3.5).
@@ -241,6 +242,13 @@ final class XrayPanelModel: ObservableObject {
     @Published private(set) var memory: XrayMemory? {
         didSet { if memory != oldValue { memoryColsMemo = nil } }
     }
+    /// #2014: the follow's schedules block (XraySchedules.swift); nil: no block (or a shell's). Never read on its own.
+    @Published var schedules: XraySchedules?
+    /// #2014: why the Schedules tab has no rows (the host refused `--follow --schedules`); nil: none.
+    @Published var schedulesNote: String?
+    /// #2014: the countdowns' clock last sent (schedulesTick) and the redraws it sent (the cost row counts them).
+    var schedulesClock: Int?
+    var schedulesRedraws = 0
     /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
     @Published var dchChapters: [TranscriptOutline.Chapter]?
     /// #1566: the corpus fields of the same read or snapshot (the header's second line); nil: none said.
@@ -489,7 +497,11 @@ final class XrayPanelModel: ObservableObject {
         // #1972: the same rows as the open's reads publish nothing: the drawer does not redraw under the reader
         if let t = s.tasks { put(\.tasks, Self.tasksTab(t)) }
         if let m = s.memory { put(\.memory, m.count == 0 ? nil : m) }
-        if loaded, s.tasks != nil || s.memory != nil, !tabs.contains(tab), let first = tabs.first { tab = first }
+        if let sc = s.schedules { put(\.schedules, Self.schedulesTab(sc)) }   // #2014
+        if follow?.schedulesRefused == true {
+            put(\.schedulesNote, "needs dch \(DchCommand.versionString(XrayFollow.schedulesDch))")   // #2014: the host's older dch
+        }
+        if loaded, s.tasks != nil || s.memory != nil || s.schedules != nil, !tabs.contains(tab), let first = tabs.first { tab = first }
         guard !loaded else { return }
         if answered { finishOpen() } else if fallback == nil { loaded = true }   // the chip's list waits for its Tasks
     }
@@ -600,6 +612,7 @@ final class XrayPanelModel: ObservableObject {
             case .tasks: tasks != nil
             case .questions: questions != nil
             case .memory: memory != nil
+            case .schedules: schedules != nil || schedulesNote != nil   // #2014: from the follow only
             }
         }
     }
@@ -613,17 +626,20 @@ final class XrayPanelModel: ObservableObject {
         case .tasks: tasks?.open ?? 0
         case .questions: questions?.open ?? 0   // #1974: open questions, as Tasks counts open tasks
         case .memory: memory?.count ?? 0
+        case .schedules: schedules?.pendingCount ?? 0   // #2014: pending rows
         }
     }
     /// "Tasks 3" (open tasks), "Memory 2" (every row); #1355: "Search" before a search, "Search 50+" past dch's cap;
     /// #1415: "Refs \u{2265}3" while dch says its list is not complete.
     func title(_ tab: XrayTab) -> String {
-        tab == .search && search == nil ? tab.rawValue
+        tab == .schedules && schedules?.loopActive == true ? "\(tab.rawValue) \(count(tab)) \u{21BB}"   // #2014: the /loop marker
+            : tab == .search && search == nil ? tab.rawValue
             : "\(tab.rawValue) \(tab == .refs && refs?.complete == false ? "\u{2265}" : "")\(count(tab))\(tab == .search && search?.more == true ? "+" : "")"
     }
     /// VoiceOver: "Tasks, 3 open"; #1974 "Questions, 2 open"; "Memory, 2".
     func spoken(_ tab: XrayTab) -> String {
-        tab == .tasks || tab == .questions ? "\(tab.rawValue), \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ")
+        tab == .schedules ? "Schedules, \(count(tab)) pending" + (schedules?.loopActive == true ? ", loop active" : "")
+            : tab == .tasks || tab == .questions ? "\(tab.rawValue), \(count(tab)) open" : title(tab).replacingOccurrences(of: " ", with: ", ")
     }
 
     /// Design 3.2: case-insensitive, over id, title, note and label.
@@ -1238,6 +1254,8 @@ struct XrayPanelView: View {
             refsTab
         } else if panel.tab == .prompts {
             promptsTab
+        } else if panel.tab == .schedules {
+            schedulesTab
         } else if panel.tab == .questions {
             taskList(panel.questionLines, cols: panel.questionCols, filterLabel: "Filter questions", title: nil, footer: panel.goneFooter)
         } else {

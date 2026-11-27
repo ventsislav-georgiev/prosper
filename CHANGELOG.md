@@ -79,6 +79,9 @@ tag from the now-released section and put it on the new top draft.
   account can serve again rather than when its first limit ends (#2033)
 - `ctl sessions.say` and `sessions.interrupt`, and the window's late refusals, now name Codex rather
   than Claude when a Codex session is busy or not working (#2029)
+- X-ray has a Schedules tab: a session's crons, its /loop wake-up and Codex heartbeats, with a
+  countdown to each one's next run and a loop marker on the tab while a /loop is waiting (needs dch
+  1.188.0) (#2014)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
