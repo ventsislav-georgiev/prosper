@@ -82,8 +82,8 @@
   {
    "name": "nextreset-harness-filter",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
-   "old": "return state.accounts.values.filter { $0.harness == harness.id }.flatMap",
-   "new": "return state.accounts.values.flatMap",
+   "old": "return state.accounts.values.filter { $0.harness == harness.id }.compactMap",
+   "new": "return state.accounts.values.compactMap",
    "expect": "killed"
   },
   {

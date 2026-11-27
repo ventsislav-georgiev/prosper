@@ -27,6 +27,13 @@
    "name": "popover-filtered",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
    "old": "live[h.id, default: []].append(.init(util: sample?.util ?? [:], reset: acct.reset",
+   "new": "live[h.id, default: []].append(.init(util: Dictionary((accounts[h.id]?.last?.limits ?? []).map { ($0.claim, $0.util) }) { x, _ in x }, reset: acct.reset",
+   "expect": "killed"
+  },
+  {
+   "name": "popover-filtered-display",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "old": "live[h.id, default: []].append(.init(util: sample?.util ?? [:], reset: acct.reset",
    "new": "live[h.id, default: []].append(.init(util: sample?.util.filter { h.displayOrder.contains($0.key) } ?? [:], reset: acct.reset",
    "expect": "killed"
   }
