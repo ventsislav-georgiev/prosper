@@ -1,0 +1,69 @@
+{
+ "entry": "1994",
+ "filter": "AgentWindowInteractionTests|AgentIslandMessageTests|ControlSessionsTalkTests",
+ "mutants": [
+  {
+   "name": "drv-codex-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "return codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : Self.refusal(shown)",
+   "new": "return Self.refusal(shown)",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-empty-sends",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "return codex ? (shown.isEmpty ? AgentWindowText.unconfirmed : nil) : Self.refusal(shown)",
+   "new": "return codex ? nil : Self.refusal(shown)",
+   "expect": "killed"
+  },
+  {
+   "name": "send-pass-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "refusal(shown, lite: AgentWindowText.noScreen, codex: codex)",
+   "new": "refusal(shown, lite: AgentWindowText.noScreen)",
+   "expect": "killed"
+  },
+  {
+   "name": "window-wiring",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "d(io).send(text, codex: AgentIsland.runsCodex(s, records: read([s])))",
+   "new": "d(io).send(text)",
+   "expect": "killed"
+  },
+  {
+   "name": "runs-claude-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "s.claudeSessionID?.isEmpty != false && records.contains",
+   "new": "records.contains",
+   "expect": "killed"
+  },
+  {
+   "name": "runs-key-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "records.contains { $0.key == s.key && isInteractiveCodex",
+   "new": "records.contains { isInteractiveCodex",
+   "expect": "killed"
+  },
+  {
+   "name": "screens-pass-dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "codex: codex.contains(name)) else {",
+   "new": "codex: false) else {",
+   "expect": "killed"
+  },
+  {
+   "name": "island-wiring",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "names: names, codex: codex)",
+   "new": "names: names, codex: [])",
+   "expect": "killed"
+  },
+  {
+   "name": "talk-wiring",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
+   "old": ".send(message, codex: AgentIsland.runsCodex(s, records: read([s])))",
+   "new": ".send(message)",
+   "expect": "killed"
+  }
+ ]
+}
