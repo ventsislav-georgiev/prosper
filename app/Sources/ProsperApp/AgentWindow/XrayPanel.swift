@@ -498,7 +498,8 @@ final class XrayPanelModel: ObservableObject {
         if let t = s.tasks { put(\.tasks, Self.tasksTab(t)) }
         if let m = s.memory { put(\.memory, m.count == 0 ? nil : m) }
         if let sc = s.schedules { put(\.schedules, Self.schedulesTab(sc)) }   // #2014
-        if follow?.schedulesRefused == true {
+        // #2035: the note only for an agent session (the snapshot's corpus), never a shell
+        if follow?.schedulesRefused == true, let c = s.corpus?.corpus, c == "claude" || c == "codex" {
             put(\.schedulesNote, "needs dch \(DchCommand.versionString(XrayFollow.schedulesDch))")   // #2014: the host's older dch
         }
         if loaded, s.tasks != nil || s.memory != nil || s.schedules != nil, !tabs.contains(tab), let first = tabs.first { tab = first }

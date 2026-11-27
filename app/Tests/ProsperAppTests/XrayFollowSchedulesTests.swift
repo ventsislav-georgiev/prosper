@@ -236,4 +236,77 @@ final class XrayFollowSchedulesTests: XCTestCase {
             p.stop()
         }
     }
+
+    /// #2035 n1: a pending cron whose `next` passed reads "due" for good: the minute clock, no redraw per second. Red with
+    /// the `0 <` bound removed (XraySchedules scheduleClock): every tick of the five moves the clock (5 redraws, not 0).
+    func testAnOverduePendingRowKeepsNoPerSecondClock() async throws {
+        await withFollow { fake, panels in
+            let clock = XrayFollowTests.Clock()
+            let p = await panel(panels, clock: clock)
+            send(fake, [XrayFollowTests.snapshot()] + Self.schedules([Self.cron("c1", next: -30)]))
+            p.tab = .schedules
+            p.tick()
+            let r0 = p.schedulesRedraws
+            for s in 1...5 { clock.t = Self.base + TimeInterval(s); p.tick() }
+            XCTAssertEqual(p.schedulesRedraws, r0, "inside one minute: no redraw for an overdue row")
+            p.stop()
+        }
+    }
+
+    /// #2035 n2: an agent session whose schedules block has no rows has no tab (tasksTab's rule: an empty block is nil,
+    /// also when a block empties while shown). Red with the `!s.schedules.isEmpty` test removed (schedulesTab).
+    func testAnEmptyBlockForAClaudeSessionShowsNoTab() async throws {
+        await withFollow { fake, panels in
+            let p = await panel(panels)
+            send(fake, [XrayFollowTests.snapshot()] + Self.schedules([]))
+            XCTAssertTrue(p.schedules == nil)
+            XCTAssertFalse(p.tabs.contains(.schedules))
+            send(fake, Self.schedules([Self.cron("c1")]))
+            XCTAssertTrue(p.tabs.contains(.schedules))
+            fake.send(1, #"{"schedule":{"id":"c1","gone":true}}"#)
+            XCTAssertFalse(p.tabs.contains(.schedules), "the last row gone: the tab goes")
+            p.stop()
+        }
+    }
+
+    static let shellSnapshot = XrayFollowTests.snapshot(
+        XrayChaptersTests.json.replacingOccurrences(of: #""corpus":"claude""#, with: #""corpus":"shell""#))
+
+    /// #2035 n3: a shell on a host before 1.188.0 gets no tab and no note. Red with the agent-only test removed
+    /// (XrayPanel takeFollow `c == "claude" || c == "codex"`): the note and the tab show.
+    func testAShellOnAnOlderHostGetsNoTabAndNoNote() async throws {
+        await withFollow { fake, panels in
+            let p = await panel(panels)
+            fake.end(1, 2)
+            send(fake, [Self.shellSnapshot] + T.blocks(tasks: ["1"], memories: ["m1"]), to: 2)
+            XCTAssertEqual(p.dchChapters?.count, 6)
+            XCTAssertTrue(p.schedulesNote == nil)
+            XCTAssertFalse(p.tabs.contains(.schedules))
+            p.stop()
+        }
+    }
+
+    /// #2035 n3: the agent's session (the snapshot's corpus codex) gets the note and the tab, as before.
+    func testACodexSessionOnAnOlderHostGetsTheNoteAndTheTab() async throws {
+        await withFollow { fake, panels in
+            let p = await panel(panels)
+            fake.end(1, 2)
+            send(fake, [XrayFollowTests.snapshot(XrayChaptersTests.json.replacingOccurrences(of: #""corpus":"claude""#, with: #""corpus":"codex""#))]
+                 + T.blocks(tasks: ["1"], memories: ["m1"]), to: 2)
+            XCTAssertEqual(p.schedulesNote, "needs dch 1.188.0")
+            XCTAssertTrue(p.tabs.contains(.schedules))
+            p.stop()
+        }
+    }
+
+    /// #2035 n4: the tasks refusal (a host before 1.91) restarts once with neither flag. Red with the
+    /// `tasksRefused = true` line removed from finish (XrayFollow): a second restart, with --tasks.
+    func testATasksRefusalRestartsOnceWithNeitherFlag() async throws {
+        await withFollow { fake, panels in
+            let p = await panel(panels)
+            fake.end(1, XrayPanels.followTasksRefused)
+            XCTAssertEqual(fake.args, [Self.withSchedules, T.plain], "one restart, neither --schedules nor --tasks")
+            p.stop()
+        }
+    }
 }

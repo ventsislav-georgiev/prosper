@@ -147,13 +147,14 @@ struct XrayScheduleRow: Equatable {
 
 extension XrayPanelModel {
     /// #2014: a block shows as a tab for an agent's session (schema 1, a Claude or Codex source; a shell has none).
-    static func schedulesTab(_ s: XraySchedules) -> XraySchedules? { s.schema == 1 && s.source != "none" ? s : nil }
+    /// #2035: and at least one row (dch hides the tab for none, as tasksTab does for no tasks).
+    static func schedulesTab(_ s: XraySchedules) -> XraySchedules? { s.schema == 1 && s.source != "none" && !s.schedules.isEmpty ? s : nil }
 
     /// #2014: the countdowns' clock: the second while a pending row is due within the hour, else the minute.
     func scheduleClock() -> Int {
         let t = now().timeIntervalSince1970
         let soon = schedules?.schedules.contains { s in
-            s.pending && (s.next ?? s.expires).map { $0.timeIntervalSince1970 - t < 3600 } == true
+            s.pending && (s.next ?? s.expires).map { 0 < $0.timeIntervalSince1970 - t && $0.timeIntervalSince1970 - t < 3600 } == true   // #2035: an overdue row reads "due" for good
         } == true
         return Int(max(-1e12, min(soon ? t : t / 60, 1e12)).rounded(.down)) * (soon ? 1 : 60)
     }
@@ -170,8 +171,7 @@ extension XrayPanelView {
     var schedulesTab: some View {
         let now = panel.now(), rows = (panel.schedules?.schedules ?? []).map { XrayScheduleRow($0, now: now) }
         return VStack(alignment: .leading, spacing: sz(4)) {
-            if let n = panel.schedulesNote { faint(n) }
-            else if rows.isEmpty { faint("No schedules in this session") }
+            if let n = panel.schedulesNote { faint(n) }   // #2035: a block with no rows has no tab, so no empty text
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(zip(XrayScrollAnchor.unique(rows.map { "s:" + $0.id }), rows).map { ($0, $1) }, id: \.0) { id, r in

@@ -160,7 +160,12 @@ final class XrayFollow: ObservableObject {
         guard stopProcess != nil else { return }   // stopped by us: not news
         stopProcess = nil
         // #2014: a host's dch before 1.188.0 exits 2 on `--follow --schedules` (dch README): again without it, once
-        if status == 2 || status == XrayPanels.followTasksRefused, withSchedules, !hasSnapshot { schedulesRefused = true; return start(dch) }
+        // #2035: the tasks refusal (a host before 1.91) drops both in the one restart
+        if status == 2 || status == XrayPanels.followTasksRefused, withSchedules, !hasSnapshot {
+            schedulesRefused = true
+            if status == XrayPanels.followTasksRefused { tasksRefused = true }
+            return start(dch)
+        }
         // #1475 c: an older host's "bad usage: --tasks and --follow": the same follow without them, once; polls for those
         if status == XrayPanels.followTasksRefused, withTasks, !hasSnapshot { tasksRefused = true; return start(dch) }
         if !hasSnapshot { failed = true; onEnd(self) }   // never a snapshot: the panels go back to today's reads
