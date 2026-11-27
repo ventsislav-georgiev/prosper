@@ -29,6 +29,13 @@
    "old": "(title.map { [$0] } ?? []) + [OutsideText",
    "new": "[OutsideText",
    "expect": "killed"
+  },
+  {
+   "name": "plan-read-twice",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "if let v = planUsage(now, h) { u = v; break }",
+   "new": "if planUsage(now, h) != nil, let v = planUsage(now, h) { u = v; break }",
+   "expect": "killed"
   }
  ]
 }

@@ -110,15 +110,15 @@
   {
    "name": "seam-harness",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": ": [\"codex\", \"claude\"]).lazy",
-   "new": ": [\"claude\", \"codex\"]).lazy",
+   "old": ": [\"codex\", \"claude\"] { if let v",
+   "new": ": [\"claude\", \"codex\"] { if let v",
    "expect": "killed"
   },
   {
    "name": "claude-fallback",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": ": [\"codex\", \"claude\"]).lazy",
-   "new": ": [\"codex\"]).lazy",
+   "old": ": [\"codex\", \"claude\"] { if let v",
+   "new": ": [\"codex\"] { if let v",
    "expect": "killed"
   },
   {

@@ -5,8 +5,8 @@
   {
    "name": "ignore-pref",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "Preferences.agentIslandShowPlanUsage ? (planHarness == \"claude\" ? [\"claude\", \"codex\"] : [\"codex\", \"claude\"]).lazy.compactMap { self.planUsage(now, $0) }.first : nil",
-   "new": "(planHarness == \"claude\" ? [\"claude\", \"codex\"] : [\"codex\", \"claude\"]).lazy.compactMap { self.planUsage(now, $0) }.first",
+   "old": "if Preferences.agentIslandShowPlanUsage { for h in",
+   "new": "if true { for h in",
    "expect": "killed"
   }
  ]
