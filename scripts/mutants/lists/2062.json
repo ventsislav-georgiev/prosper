@@ -81,6 +81,62 @@
    "new": "var typingName: Bool { renaming != nil || layoutRenaming != nil }",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testTheNewGroupFieldStandsTheKeyChordsDown"
+  },
+  {
+   "name": "new-group-no-focus",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "onSubmit: { model.answerNewGroup(true) }, fontSize: 11.5, focusOnAppear: true,",
+   "new": "onSubmit: { model.answerNewGroup(true) }, fontSize: 11.5, focusOnAppear: false,",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheNewGroupFieldTakesTheKeysAndGivesThemBack"
+  },
+  {
+   "name": "new-group-keys-not-returned",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "let back = newGroupKeys\n",
+   "new": "let back: NSResponder? = nil\n",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheNewGroupFieldTakesTheKeysAndGivesThemBack"
+  },
+  {
+   "name": "group-flag-passes",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "guard group.map(passable) != false else { return nil }\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAGroupNameDchWouldReadAsAFlagIsRefusedAndNeverSent"
+  },
+  {
+   "name": "dash-name-allowed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "guard AgentIsland.passable(name) else { return AgentIsland.dashNameText }\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAGroupNameDchWouldReadAsAFlagIsRefusedAndNeverSent"
+  },
+  {
+   "name": "new-group-tabs-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "if !store.groupTabs { return .item(AgentIsland.groupTabsOffText, enabled: false, checked: nil, verb: .newGroup) }\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNewGroupIsOffWhileGroupTabsAreOff"
+  },
+  {
+   "name": "group-tabs-not-set",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        store.groupTabs = Preferences.agentIslandSidekickTabs\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNewGroupIsOffWhileGroupTabsAreOff"
+  },
+  {
+   "name": "manual-no-group-generic",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "case \"no_group\": return manual ? manualNoGroupText : noGroupText",
+   "new": "case \"no_group\": return noGroupText",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNoGroupForAManualGroupSaysItNeedsANewerDch"
   }
  ]
 }

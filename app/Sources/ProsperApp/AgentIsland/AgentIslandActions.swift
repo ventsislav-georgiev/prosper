@@ -492,24 +492,30 @@ extension AgentIsland {
     static let newGroupLabel = "New group\u{2026}"
     static let groupSetBusyText = "Move not run: another job is running"
     static let groupsFullText = "New group (all \(SessionGroup.maxCount) groups in use)"
+    static let groupTabsOffText = "New group (turn on Group tabs in Settings)"
+    static let dashNameText = "A name can't start with \"-\""
 
     /// `--group-set <name> <group>|--auto --json`; nil `group` is --auto. nil (nothing runs) for a name dch would read as a flag.
+    /// r3: a group dch would read as a flag is nil too ("--auto" would be Automatic).
     static func groupSetArgs(_ name: String, _ group: String?) -> [String]? {
-        named("--group-set", [name], [group ?? "--auto", "--json"])
+        guard group.map(passable) != false else { return nil }
+        return named("--group-set", [name], [group ?? "--auto", "--json"])
     }
 
     static let noGroupText = "That group no longer exists", groupSetFailedPrefix = "Couldn't move to the group: "
+    static let manualNoGroupText = "That group needs a newer dch (manual groups)"
     static func isGroupSetFailure(_ t: String) -> Bool {
-        [noGroupText, "That session is no longer running", "Couldn't save the group: dch could not write it"].contains(t)
+        [noGroupText, manualNoGroupText, "That session is no longer running", "Couldn't save the group: dch could not write it"].contains(t)
             || t.hasPrefix(groupSetFailedPrefix)
     }
 
     /// nil when dch said ok; else the row's line: dch's reason in words, or how the call ended. Never retried.
-    static func groupSetFailure(_ r: DchActionResult) -> String? {
+    /// r3: `manual`, the target is a manual-only group: no_group there means a dch before #721 (it skips that line).
+    static func groupSetFailure(_ r: DchActionResult, manual: Bool = false) -> String? {
         let last = r.json.last { $0.isFinal }
         if last?.result == "ok", r.status == 0 { return nil }
         switch last?.reason {
-        case "no_group": return noGroupText
+        case "no_group": return manual ? manualNoGroupText : noGroupText
         case "no_session": return "That session is no longer running"
         case "io_error": return "Couldn't save the group: dch could not write it"
         default: return groupSetFailedPrefix + (r.stopped ? "dch timed out" : r.status < 0 ? "dch could not be run" : "dch exited \(r.status)")

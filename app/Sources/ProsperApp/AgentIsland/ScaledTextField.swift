@@ -21,6 +21,8 @@ struct ScaledTextField: NSViewRepresentable {
     var focusOnAppear = false
     var onCancel: (() -> Void)?
     var onEndEditing: (() -> Void)?
+    /// #2062 r3: focusOnAppear took the keys; given who had them before (the caller hands them back on its close).
+    var onFocus: ((NSResponder?) -> Void)?
 
     /// Neon.font(.body, design: .monospaced) as an NSFont: the 13 pt body times the UI scale.
     static var monospacedBody: NSFont { .monospacedSystemFont(ofSize: 13 * ThemeRuntime.scale, weight: .regular) }
@@ -44,7 +46,13 @@ struct ScaledTextField: NSViewRepresentable {
             field.isBordered = false
             field.drawsBackground = false
         }
-        if focusOnAppear { DispatchQueue.main.async { field.window?.makeFirstResponder(field) } }
+        if focusOnAppear {
+            let c = context.coordinator
+            DispatchQueue.main.async {
+                let prior = field.window?.firstResponder
+                if field.window?.makeFirstResponder(field) == true { c.parent.onFocus?(prior) }
+            }
+        }
         update(field)
         return field
     }

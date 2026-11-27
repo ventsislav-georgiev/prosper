@@ -1223,6 +1223,13 @@ final class AgentWindowModel: ObservableObject {
         var refused: String? = nil
     }
     @Published var newGroup: NewGroupAsk?
+    /// #2062 r3: who had the keys when the name field took them (the terminal, usually); its close gives them back.
+    private(set) weak var newGroupKeys: NSResponder?
+    /// The field took the keys from `prior`. A field editor stands for its field, read now: the window's one editor is
+    /// the name field's next.
+    func newGroupTookKeys(_ prior: NSResponder?) {
+        if let t = prior as? NSTextView, t.isFieldEditor { newGroupKeys = t.delegate as? NSView } else { newGroupKeys = prior }
+    }
     /// #2062: a name field is up (a session's or a layout's rename, New group…): the window's key chords stand down for it.
     var typingName: Bool { renaming != nil || layoutRenaming != nil || newGroup != nil }
     /// #2062 seams: the island's --group-set (`configFirst`: dch's config is written before it runs, for a group just
@@ -1240,15 +1247,23 @@ final class AgentWindowModel: ObservableObject {
     /// group is stored with an empty pattern and, from a row's menu, that row is moved into it (one --group-set).
     func answerNewGroup(_ create: Bool) {
         guard let ask = newGroup else { return }
-        guard create else { newGroup = nil; return }
+        guard create else { return endNewGroup() }
         switch AgentWindowControls.addingGroup(ask.name, to: storedGroups()) {
         case .failure(let f): newGroup?.refused = f.reason
         case .success(let list):
-            newGroup = nil
+            endNewGroup()
             saveGroups(list)
             // #2062: the save's dch config write is debounced; this move writes it first, or dch has no such group yet.
             if let s = ask.session, let g = list.last { setGroup(s, g.name, true) }
         }
+    }
+
+    /// #2062 r3: the field goes; the keys go back where they were (the window itself: no view has them).
+    private func endNewGroup() {
+        newGroup = nil
+        let back = newGroupKeys
+        newGroupKeys = nil
+        if let v = back as? NSView, let w = v.window { w.makeFirstResponder(v) } else if let w = back as? NSWindow { w.makeFirstResponder(nil) }
     }
 
     /// R897-q1: the Always allow question is up in the sidebar (the store's question type cannot carry it: window state).

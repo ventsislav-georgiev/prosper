@@ -597,9 +597,11 @@ extension AgentWindowControls {
     }
 
     /// #2062: New group…, off with its reason once the list holds SessionGroup.maxCount groups (store.storedGroupCount).
+    /// r3: off with its reason while Group tabs is off too (dch is given no groups then, so the move could not find it).
     @MainActor
     static func newGroupItem(_ store: AgentIslandStore) -> AgentSidebarMenuEntry {
-        store.storedGroupCount < SessionGroup.maxCount
+        if !store.groupTabs { return .item(AgentIsland.groupTabsOffText, enabled: false, checked: nil, verb: .newGroup) }
+        return store.storedGroupCount < SessionGroup.maxCount
             ? .item(AgentIsland.newGroupLabel, enabled: true, checked: nil, verb: .newGroup)
             : .item(AgentIsland.groupsFullText, enabled: false, checked: nil, verb: .newGroup)
     }
@@ -626,6 +628,8 @@ extension AgentWindowControls {
         if stored.count >= SessionGroup.maxCount { return AgentIsland.groupsFullText }
         if SessionGroup.isReserved(name) { return "dch uses this name for its own tab" }
         guard SessionGroup.validName(name) else { return "A name is 1-32 bytes, without \"=\"" }
+        // r3: the move's rule (groupSetArgs): dch would read the name as a flag ("--auto" is Automatic).
+        guard AgentIsland.passable(name) else { return AgentIsland.dashNameText }
         if stored.contains(where: { SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }) { return "Another group has this name" }
         return nil
     }
@@ -1052,7 +1056,9 @@ struct AgentAlwaysAllowStrip: View {
 }
 
 /// #2062: New group…'s name field under the sidebar title while the model asks (AgentWindowModel.newGroup); a refused
-/// name shows its reason under the field. Nothing otherwise.
+/// name shows its reason under the field. Nothing otherwise. r3: the Layouts rename's field (ScaledTextField, the sidebar's
+/// own inline name field): it takes the keys once it is in the window, so typing never reaches the terminal; the model
+/// gives them back on Create, Cancel or Escape (newGroupKeys).
 struct AgentNewGroupStrip: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var model: AgentWindowModel
@@ -1060,10 +1066,12 @@ struct AgentNewGroupStrip: View {
     var body: some View {
         if let ask = model.newGroup {
             VStack(alignment: .leading, spacing: sz(6)) {
-                TextField("Group name", text: Binding(get: { model.newGroup?.name ?? "" },
-                                                      set: { model.newGroup?.name = $0; model.newGroup?.refused = nil }))
-                    .textFieldStyle(.roundedBorder).font(Neon.font(11.5))
-                    .onSubmit { model.answerNewGroup(true) }
+                ScaledTextField(placeholder: "Group name",
+                                text: Binding(get: { model.newGroup?.name ?? "" },
+                                              set: { model.newGroup?.name = $0; model.newGroup?.refused = nil }),
+                                onSubmit: { model.answerNewGroup(true) }, fontSize: 11.5, focusOnAppear: true,
+                                onCancel: { model.answerNewGroup(false) }, onFocus: { model.newGroupTookKeys($0) })
+                    .accessibilityLabel("Group name")
                 if let why = ask.refused {
                     Text(verbatim: why).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
                 }

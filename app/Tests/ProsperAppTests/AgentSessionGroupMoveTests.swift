@@ -354,4 +354,135 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         guard case .success(let list) = AgentWindowControls.addingGroup(" Ops ", to: [work]) else { return XCTFail("added") }
         XCTAssertEqual(list.last?.name, "Ops")
     }
+
+    // MARK: - Round 3: the field takes the keys, flag-like group names, Group tabs off, a manual group on an older dch
+
+    /// Stands in for the terminal: counts the keys it is handed.
+    final class KeyRecorder: NSView {
+        var downs = 0
+        override var acceptsFirstResponder: Bool { true }
+        override func keyDown(with event: NSEvent) { downs += 1 }
+    }
+
+    @MainActor
+    func fields(_ v: NSView) -> [NSTextField] { ((v as? NSTextField).map { [$0] } ?? []) + v.subviews.flatMap(fields) }
+
+    /// F1: New group… (the sidebar's and a row's) puts the field up with the keys: a typed key reaches the field, never
+    /// the terminal; Escape and Create give the keys back to the terminal. A window of the window's own class, never shown.
+    @MainActor
+    func testTheNewGroupFieldTakesTheKeysAndGivesThemBack() throws {
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
+        m.runtimes.values.forEach(m.onNewRuntime)
+        var stored = [work], moves: [(String, String?)] = []
+        m.storedGroups = { stored }
+        m.saveGroups = { stored = $0 }
+        m.setGroup = { s, g, _ in moves.append((s.name, g)) }
+        let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 200), styleMask: [.titled],
+                                 backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.model = m
+        defer { win.close() }
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        let terminal = KeyRecorder(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
+        let host = NSHostingView(rootView: AgentNewGroupStrip(model: m))
+        host.frame = CGRect(x: 0, y: 20, width: 320, height: 180)
+        root.addSubview(terminal)
+        root.addSubview(host)
+        win.contentView = root
+        XCTAssertTrue(win.makeFirstResponder(terminal), "premise: the terminal has the keys")
+        func key(_ code: UInt16, _ chars: String) -> NSEvent {
+            NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: win.windowNumber,
+                             context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
+        }
+        func spin() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))   // SwiftUI's update and the field's focus hop
+        }
+        func open(_ ask: () -> Void) throws -> NSTextView {
+            ask()
+            spin()
+            let f = try XCTUnwrap(fields(host).first { $0.placeholderString == "Group name" }, "the field is up")
+            let editor = try XCTUnwrap(f.currentEditor() as? NSTextView, "the field is editing")
+            XCTAssertTrue(win.firstResponder === editor, "the field has the keys")
+            return editor
+        }
+        var editor = try open { m.runSidebar(.newGroup) }
+        win.sendEvent(key(31, "o"))
+        XCTAssertEqual(editor.string, "o", "typing lands in the field")
+        XCTAssertEqual(m.newGroup?.name, "o")
+        XCTAssertEqual(terminal.downs, 0, "never in the terminal")
+        editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertTrue(m.newGroup == nil, "Escape cancels")
+        XCTAssertTrue(win.firstResponder === terminal, "Escape gives the keys back")
+        spin()
+        XCTAssertTrue(fields(host).isEmpty, "the field is gone")
+        editor = try open { m.runMove(.newGroup, session("api", group: "")) }
+        for (code, c) in [(UInt16(31), "O"), (35, "p"), (1, "s")] { win.sendEvent(key(code, c)) }
+        XCTAssertEqual(editor.string, "Ops")
+        XCTAssertEqual(terminal.downs, 0, "never in the terminal")
+        m.answerNewGroup(true)
+        XCTAssertEqual(stored.map(\.name), ["Work", "Ops"])
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves.last?.1, "Ops", "the row moves into the group typed in the field")
+        XCTAssertTrue(win.firstResponder === terminal, "Create gives the keys back")
+        XCTAssertFalse(win.isVisible, "never shown")
+    }
+
+    /// F2: a name dch would read as a flag ("--auto" would be Automatic) is refused by New group… and never sent: the
+    /// args are nil and nothing launches.
+    @MainActor
+    func testAGroupNameDchWouldReadAsAFlagIsRefusedAndNeverSent() {
+        for bad in ["-x", "--auto", " -x"] {
+            XCTAssertEqual(AgentWindowControls.addingGroup(bad, to: [work]), .failure(.init(reason: AgentIsland.dashNameText)), bad)
+        }
+        XCTAssertTrue(AgentIsland.groupSetArgs("api", "-x") == nil)
+        XCTAssertTrue(AgentIsland.groupSetArgs("api", "--auto") == nil)
+        XCTAssertEqual(AgentIsland.groupSetArgs("api", "x-1"), ["--group-set", "api", "x-1", "--json"])
+        XCTAssertEqual(AgentIsland.groupSetArgs("api", nil), ["--group-set", "api", "--auto", "--json"])
+        let s = session("api", group: ""), rec = Launches(), c = controller(store([s]), rec)
+        XCTAssertFalse(c.setGroup(s, group: "-x"), "nothing runs")
+        c.queue.sync {}
+        XCTAssertTrue(rec.args.isEmpty)
+    }
+
+    /// n2: with Group tabs off dch is given no groups, so New group… is off in both menus with the reason; on again, back.
+    @MainActor
+    func testNewGroupIsOffWhileGroupTabsAreOff() {
+        useGroups([work])
+        Preferences.agentIslandSidekickTabs = false
+        let s = session("api", group: ""), st = store([s]), c = controller(st, Launches())
+        c.rowDetailsChanged()
+        let off = AgentSidebarMenuEntry.item(AgentIsland.groupTabsOffText, enabled: false, checked: nil, verb: .newGroup)
+        XCTAssertEqual(items(AgentWindowControls.moveToGroupMenu(s, store: st)).last, off)
+        XCTAssertEqual(AgentWindowControls.sidebarMenu(store: st, autoAllow: false).dropFirst().first, off, "the sidebar's too")
+        Preferences.agentIslandSidekickTabs = true
+        c.rowDetailsChanged()
+        XCTAssertEqual(items(AgentWindowControls.moveToGroupMenu(s, store: st)).last,
+                       .item(AgentIsland.newGroupLabel, enabled: true, checked: nil, verb: .newGroup))
+    }
+
+    /// n3: no_group for a manual-only group (an older dch skips `group = <name> =`) names that cause; for a pattern group
+    /// it stays "no longer exists". Only no_group changes.
+    @MainActor
+    func testNoGroupForAManualGroupSaysItNeedsANewerDch() {
+        let s = session("api", group: ""), rec = Launches(), st = store([s]), c = controller(st, rec)
+        st.sessionGroups = [work, ops]
+        rec.status = 1
+        rec.output = #"{"name":"api","group":null,"result":"failed","reason":"no_group"}"# + "\n"
+        for (g, line) in [("ops", AgentIsland.manualNoGroupText), ("Work", AgentIsland.noGroupText)] {
+            let n = rec.args.count
+            XCTAssertTrue(c.setGroup(s, group: g))
+            settle(c) { rec.args.count > n && !c.runner.isBusy(s.key) && st.actions[s.key] == line }
+            XCTAssertEqual(st.actions[s.key], line, g)
+        }
+        XCTAssertEqual(AgentIsland.manualNoGroupText, "That group needs a newer dch (manual groups)")
+        XCTAssertTrue(AgentIsland.isGroupSetFailure(AgentIsland.manualNoGroupText), "a move that works drops it")
+        let gone = DchActionResult(status: 1, json: [DchJSONLine(name: "api", result: "failed", reason: "no_session")])
+        XCTAssertEqual(AgentIsland.groupSetFailure(gone, manual: true), "That session is no longer running")
+    }
 }

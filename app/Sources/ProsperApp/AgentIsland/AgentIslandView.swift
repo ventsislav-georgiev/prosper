@@ -282,6 +282,8 @@ final class AgentIslandStore: ObservableObject {
     /// #2062: how many groups the list stores (with or without a pattern): New group… is off at SessionGroup.maxCount.
     /// Set with sessionGroups by the controller, so no menu decodes Preferences per draw.
     var storedGroupCount = 0
+    /// #2062 r3: Group tabs is on (dch is given the groups); off, New group… is off. Set with storedGroupCount.
+    var groupTabs = true
     /// The one Sidekicks group's pattern, the #571 single-pattern form (rows and single-pattern callers).
     var sidekickPattern: String {
         get { sessionGroups.first?.pattern ?? "" }

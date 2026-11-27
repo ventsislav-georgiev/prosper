@@ -339,6 +339,7 @@ final class AgentIslandController {
                                  sort: Preferences.agentIslandSort)
         store?.sessionGroups = Self.groups
         store?.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
+        store?.groupTabs = Preferences.agentIslandSidekickTabs
         onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
         queue.async { poller.hidden = hidden }
@@ -447,6 +448,7 @@ final class AgentIslandController {
         store.sort = Preferences.agentIslandSort
         store.sessionGroups = Self.groups
         store.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
+        store.groupTabs = Preferences.agentIslandSidekickTabs
         refreshCards()
         layout()
     }
@@ -984,6 +986,10 @@ final class AgentIslandController {
               let live = store.sessions.first(where: { $0.key == s.key }),
               let args = AgentIsland.groupSetArgs(live.name, group) else { return false }
         let key = live.key, q = queue
+        // r3: a manual-only target (dch #721) that dch answers no_group: an older dch skipped its line.
+        let manual = group.map { g in
+            store.sessionGroups.contains { $0.isManual && SessionGroup.nameKey($0.name) == SessionGroup.nameKey(g) }
+        } ?? false
         var prepare: (@Sendable () -> (args: [String]?, out: Data))?
         if configFirst {
             dchConfigGen += 1   // the pending debounced write stands down: this one writes the same list
@@ -992,7 +998,7 @@ final class AgentIslandController {
         }
         let started = run(key, dch: dch, args: args, running: nil, prepare: prepare) { [weak self] r in
             guard let self, let store = self.store else { return }
-            if let failed = AgentIsland.groupSetFailure(r) {
+            if let failed = AgentIsland.groupSetFailure(r, manual: manual) {
                 store.actions[key] = failed
             } else if store.actions[key].map(AgentIsland.isGroupSetFailure) == true {
                 store.actions[key] = nil   // an earlier move's failure goes with the move that worked
