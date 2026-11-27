@@ -1,4 +1,5 @@
 import AppKit
+import Charts
 import SwiftUI
 
 /// Renders an `ExtensionViewNode` tree as native SwiftUI. The extension supplies
@@ -48,6 +49,7 @@ struct ExtensionRenderedView: View {
                 case .detail(let n): DetailRender(node: n, onAction: onAction)
                 case .form(let n):   FormRender(node: n, onAction: onAction)
                 case .grid(let n):   GridRender(node: n, onAction: onAction)
+                case .chart(let n):  ChartRender(node: n)
                 case .loading, .converter: EmptyView()  // handled above
                 }
             }
@@ -235,6 +237,94 @@ private struct GridRender: View {
             }
             .padding(sz(12))
         }
+    }
+}
+
+// MARK: - Chart
+
+/// `host.ui.chart` (#2023): Swift Charts line or bar marks, one colour per series
+/// from the theme accents, a legend, axis labels and a light grid. It draws once per
+/// node: no timers, no selection state. Swift Charts gives each mark its own
+/// accessibility value; the container carries the title, series and point counts.
+/// Not private: the runner draws it inline too.
+struct ChartRender: View {
+    let node: ChartNode
+
+    var body: some View {
+        Group {
+            if node.isEmpty {
+                Text(node.emptyMessage)
+                    .font(Neon.font(.caption))
+                    .foregroundStyle(Neon.textSecondary)
+                    .frame(maxWidth: .infinity, minHeight: sz(180))
+            } else {
+                chart
+                    .frame(maxWidth: .infinity, minHeight: sz(200))
+                    .padding(sz(12))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(node.accessibilitySummary)
+    }
+
+    private var xName: String { node.xLabel ?? "x" }
+    private var yName: String { node.yLabel ?? "y" }
+
+    private var chart: some View {
+        Chart {
+            ForEach(node.series.indices, id: \.self) { si in
+                let s = node.series[si]
+                ForEach(s.points.indices, id: \.self) { pi in
+                    mark(s.name, s.points[pi])
+                }
+            }
+        }
+        .chartForegroundStyleScale { (name: String) in Self.colour(node.series.firstIndex { $0.name == name } ?? 0) }
+        .chartXAxisLabel { if let l = node.xLabel { Text(l) } }
+        .chartYAxisLabel { if let l = node.yLabel { Text(l) } }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 6)) { _ in
+                AxisGridLine().foregroundStyle(Neon.stroke)
+                AxisValueLabel().foregroundStyle(Neon.textSecondary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                AxisGridLine().foregroundStyle(Neon.stroke)
+                AxisValueLabel().foregroundStyle(Neon.textSecondary)
+            }
+        }
+    }
+
+    @ChartContentBuilder
+    private func mark(_ series: String, _ p: ChartNode.Point) -> some ChartContent {
+        if node.kind == .bar {
+            if node.isNumericX {
+                BarMark(x: .value(xName, p.x.number), y: .value(yName, p.y))
+                    .foregroundStyle(by: .value("Series", series))
+                    .position(by: .value("Series", series))
+            } else {
+                BarMark(x: .value(xName, p.x.label), y: .value(yName, p.y))
+                    .foregroundStyle(by: .value("Series", series))
+                    .position(by: .value("Series", series))
+            }
+        } else {
+            if node.isNumericX {
+                LineMark(x: .value(xName, p.x.number), y: .value(yName, p.y))
+                    .foregroundStyle(by: .value("Series", series))
+            } else {
+                LineMark(x: .value(xName, p.x.label), y: .value(yName, p.y))
+                    .foregroundStyle(by: .value("Series", series))
+            }
+        }
+    }
+
+    /// The theme accents in turn; after each full round the same accents fade, so up
+    /// to `ChartNode.maxSeries` series stay apart and follow a theme switch.
+    static func colour(_ index: Int) -> Color {
+        let accents = [Neon.blue, Neon.magenta, Neon.terminal, Neon.indigo, Neon.blueBright]
+        let round = index / accents.count
+        return accents[index % accents.count].opacity(round == 0 ? 1 : round == 1 ? 0.6 : 0.35)
     }
 }
 

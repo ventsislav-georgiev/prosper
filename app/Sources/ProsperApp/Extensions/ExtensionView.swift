@@ -7,7 +7,7 @@ import Foundation
 /// extension describes *structure*, never pixels, and ships no UI code. Inspired
 /// by Raycast's component model and VSCode's strict contribution surface.
 ///
-/// The supported root components are `list`, `detail`, `form`, and `grid`. This
+/// The supported root components are `list`, `detail`, `form`, `grid` and `chart`. This
 /// is the entire v1 (api_level 1) UI surface — intentionally small, native, and
 /// strictly typed so the look stays consistent and fast.
 enum ExtensionViewNode: Decodable, Equatable {
@@ -17,6 +17,7 @@ enum ExtensionViewNode: Decodable, Equatable {
     case grid(GridNode)
     case loading(LoadingNode)
     case converter(ConverterNode)
+    case chart(ChartNode)
 
     private enum TypeKey: String, CodingKey { case type }
 
@@ -29,6 +30,7 @@ enum ExtensionViewNode: Decodable, Equatable {
         case "grid":      self = .grid(try GridNode(from: decoder))
         case "loading":   self = .loading(try LoadingNode(from: decoder))
         case "converter": self = .converter(try ConverterNode(from: decoder))
+        case "chart":     self = .chart(try ChartNode(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -56,6 +58,7 @@ enum ExtensionViewNode: Decodable, Equatable {
         case .grid(let n):      return n.title
         case .loading(let n):   return n.title
         case .converter(let n): return n.title
+        case .chart(let n):     return n.title
         }
     }
 
@@ -67,7 +70,7 @@ enum ExtensionViewNode: Decodable, Equatable {
         case .grid(let n):    return n.items.first?.title ?? ""
         case .detail(let n):  return n.markdown
         case .converter(let n): return n.right.value ?? ""
-        case .form, .loading: return ""
+        case .form, .loading, .chart: return ""
         }
     }
 }
@@ -216,4 +219,119 @@ struct ConverterNode: Decodable, Equatable {
     let mono: Bool?
 
     var isMonospaced: Bool { mono ?? true }
+}
+
+/// A line or bar chart, built by `host.ui.chart{ title=, kind="line"|"bar", x_label=,
+/// y_label=, series={ {name=, points={ {x=, y=}, ... }}, ... }, empty_text= }` (#2023).
+/// The tree comes from an extension, so decoding is the trust boundary: more than
+/// `maxSeries` series or `maxPoints` points in one series is a decode error (the
+/// count is checked before any element is decoded), and a point whose x or y is
+/// null (Lua's NaN/inf encode as null) or non-finite is dropped.
+struct ChartNode: Decodable, Equatable {
+    static let maxSeries = 12
+    static let maxPoints = 1000
+
+    enum Kind: String, Decodable, Equatable { case line, bar }
+
+    /// x is categorical text (a date or tier label) or a number.
+    enum X: Equatable {
+        case text(String)
+        case number(Double)
+
+        var label: String {
+            switch self {
+            case .text(let s): return s
+            case .number(let d): return d.formatted()
+            }
+        }
+        var number: Double {
+            if case .number(let d) = self { return d }
+            return 0
+        }
+    }
+
+    struct Point: Equatable {
+        let x: X
+        let y: Double
+    }
+
+    struct Series: Equatable {
+        let name: String
+        let points: [Point]
+    }
+
+    let title: String?
+    let kind: Kind
+    let xLabel: String?
+    let yLabel: String?
+    let series: [Series]
+    let emptyText: String?
+    /// A numeric x axis only when every point's x is a number; otherwise every x is drawn as text.
+    let isNumericX: Bool
+
+    var emptyMessage: String { emptyText ?? "No data" }
+    /// At most maxSeries * maxPoints, so the sum cannot overflow.
+    var pointCount: Int { series.reduce(0) { $0 + $1.points.count } }
+    var isEmpty: Bool { pointCount == 0 }
+    var accessibilitySummary: String {
+        "\(title ?? "Chart"), \(series.count) series, \(pointCount) points"
+    }
+
+    private enum Keys: String, CodingKey { case title, kind, series, x_label, y_label, empty_text }
+    private enum SeriesKeys: String, CodingKey { case name, points }
+    private enum PointKeys: String, CodingKey { case x, y }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        xLabel = try c.decodeIfPresent(String.self, forKey: .x_label)
+        yLabel = try c.decodeIfPresent(String.self, forKey: .y_label)
+        emptyText = try c.decodeIfPresent(String.self, forKey: .empty_text)
+
+        var out: [Series] = []
+        if var sc = try Self.list(c, .series) {
+            guard (sc.count ?? 0) <= Self.maxSeries else {
+                throw DecodingError.dataCorruptedError(
+                    in: sc, debugDescription: "chart has more than \(Self.maxSeries) series")
+            }
+            while !sc.isAtEnd {
+                let s = try sc.nestedContainer(keyedBy: SeriesKeys.self)
+                var points: [Point] = []
+                if var pc = try Self.list(s, .points) {
+                    guard (pc.count ?? 0) <= Self.maxPoints else {
+                        throw DecodingError.dataCorruptedError(
+                            in: pc, debugDescription: "chart series has more than \(Self.maxPoints) points")
+                    }
+                    points.reserveCapacity(pc.count ?? 0)
+                    while !pc.isAtEnd {
+                        let p = try pc.nestedContainer(keyedBy: PointKeys.self)
+                        // A missing x or y key throws; null (Lua NaN/inf) or non-finite drops the point.
+                        if try p.decodeNil(forKey: .x) || p.decodeNil(forKey: .y) { continue }
+                        let y = try p.decode(Double.self, forKey: .y)
+                        let x: X
+                        if let text = try? p.decode(String.self, forKey: .x) {
+                            x = .text(text)
+                        } else {
+                            x = .number(try p.decode(Double.self, forKey: .x))
+                        }
+                        guard y.isFinite, x.number.isFinite else { continue }
+                        points.append(Point(x: x, y: y))
+                    }
+                }
+                out.append(Series(name: try s.decodeIfPresent(String.self, forKey: .name) ?? "", points: points))
+            }
+        }
+        series = out
+        isNumericX = out.allSatisfy { $0.points.allSatisfy { if case .number = $0.x { true } else { false } } }
+    }
+
+    /// The list at `key`, or nil when absent, null, or `{}` (Lua encodes an empty table as an object).
+    private static func list<K: CodingKey>(
+        _ c: KeyedDecodingContainer<K>, _ key: K
+    ) throws -> UnkeyedDecodingContainer? {
+        guard c.contains(key), try !c.decodeNil(forKey: key) else { return nil }
+        if (try? c.decode([String: Bool].self, forKey: key))?.isEmpty == true { return nil }
+        return try c.nestedUnkeyedContainer(forKey: key)
+    }
 }

@@ -2102,6 +2102,11 @@ struct ExtensionHost {
         -- spinner; a number in 0..1 => determinate bar. `title`/`subtitle`
         -- optional. Render while awaiting; replace with the result node.
         loading = tag("loading"),
+        -- A line or bar chart (#2023): x is text or a number, y a number.
+        --   host.ui.chart{ title=, kind="line"|"bar", x_label=, y_label=,
+        --                  series={ { name=, points={ {x=, y=}, ... } }, ... }, empty_text= }
+        -- At most 12 series of 1000 points; a NaN/inf point is dropped.
+        chart   = tag("chart"),
         -- Native encode: a view command serialises its result tree on every
         -- keystroke, so this is the hot path that most benefits from going native.
         render  = raw_json_encode,

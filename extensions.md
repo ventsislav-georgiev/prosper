@@ -166,7 +166,7 @@ Built-in **retry + exponential backoff** on transient failures (no response / 5x
 
 - `host.window.frame()` → `{ x, y, w, h, screen = { x, y, w, h } } | nil` — focused-window geometry via Accessibility; nil when no window is focused, Accessibility permission is missing, or macOS reports a non-finite frame · `host.window.set(x,y,w,h)` → bool (move/resize). A missing argument becomes 0; a non-finite one makes it return false. Powers [`window`](app/Sources/ProsperApp/Resources/extensions/window/).
 - `host.window.open(node)` opens a standalone host-rendered window from a `host.ui.*` node; `host.window.close()` dismisses it (used by form/dialog submit handlers).
-- `host.ui.{list,detail,form,grid,converter,loading,render}` build native SwiftUI trees — **no HTML, the host owns every pixel.** Renderer: [`ExtensionViewRenderer.swift`](app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift).
+- `host.ui.{list,detail,form,grid,chart,converter,loading,render}` build native SwiftUI trees — **no HTML, the host owns every pixel.** Renderer: [`ExtensionViewRenderer.swift`](app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift).
 - `host.ui.chooseApp()` → `{ bundleID=, name= }` | nil — native app picker (used by [`inputswitch`](app/Sources/ProsperApp/Resources/extensions/inputswitch/)).
 - `host.ui.settings.*` — the Settings-pane builders (§8).
 
@@ -175,6 +175,18 @@ A list item's `actions` are the per-row verbs the runner surfaces (Enter runs th
 `host.ui.loading{ title=, subtitle=, progress= }` renders an Apple-style loading state — an **infinite** spinner when `progress` is absent, a **progressive** bar (0…1 with a percentage) when set. The host also shows this spinner automatically while an async view action is in flight, so every async operation gets a polished loading state for free.
 
 `host.ui.converter{ title=, left={label,placeholder,value}, right={…}, forward=, backward=, mono= }` is a live bidirectional two-pane transform window (open it via `host.window.open`): `forward`/`backward` name global Lua functions (text → text) — editing the left pane runs `forward` into the right, editing the right runs `backward` into the left. [`base64`](app/Sources/ProsperApp/Resources/extensions/base64/) is the worked example. The transforms run on the extension's background lane, like window button actions, so typing stays responsive while a large paste converts and the latest edit wins; they do not see globals that a main-thread command set, so keep a transform a pure function of its input.
+
+`host.ui.chart{ title=, kind="line"|"bar", x_label=, y_label=, series={ { name=, points={ {x=, y=}, … } }, … }, empty_text= }` draws a native line or bar chart (Swift Charts) with axis labels, a light grid, and a legend with one theme colour per series. `x` is text (a date or label, drawn in the order given) or a number (a numeric axis, used only when every `x` in the chart is a number); `y` is a number. A point whose `x` or `y` is NaN or infinite is dropped. More than 12 series, or more than 1000 points in one series, is an error like any malformed view. With no points the chart shows `empty_text` (default "No data"). A chart is a top-level node: return it from a view command or open it with `host.window.open`.
+
+```lua
+return host.ui.render(host.ui.chart{
+    title = "Closed per day", kind = "line", x_label = "Day", y_label = "Closed",
+    series = {
+        { name = "opus",   points = { { x = "11-25", y = 4 }, { x = "11-26", y = 6 } } },
+        { name = "sonnet", points = { { x = "11-25", y = 2 }, { x = "11-26", y = 3 } } },
+    },
+})
+```
 
 ### Async & timeouts
 

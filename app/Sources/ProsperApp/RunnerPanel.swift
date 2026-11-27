@@ -1383,8 +1383,8 @@ private func buildRows(from outcome: RunnerOutcome) -> [ResultRow] {
             return [ResultRow(id: 0, icon: "doc.plaintext", primary: n.markdown,
                               secondary: "", category: n.title ?? "Result",
                               copyValue: n.markdown, isMeta: false)]
-        case .form, .loading, .converter:
-            // Forms/loading/converter aren't inline-listable; converter is a
+        case .form, .loading, .converter, .chart:
+            // Forms/loading/converter/chart aren't inline-listable; converter is a
             // standalone window (host.window.open), never an inline result.
             return []
         }
@@ -1792,6 +1792,14 @@ private struct RunnerView: View {
         case .grid(let n): cardList(header: n.title, accessory: nil, rows: rows)
         case .form:        resultRowList(rows: rows)
         case .converter:   EmptyView()  // standalone window only (host.window.open)
+        case .chart(let n):
+            VStack(alignment: .leading, spacing: 0) {
+                if let t = n.title {
+                    Text(t).font(Neon.font(11, weight: .bold)).foregroundColor(Neon.textSecondary)
+                        .padding(.horizontal, sz(12)).padding(.top, sz(8))
+                }
+                ChartRender(node: n).frame(maxHeight: sz(360))
+            }
         }
     }
 
