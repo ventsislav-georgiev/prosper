@@ -1110,6 +1110,12 @@ struct AgentSessionsSection: View {
     @State private var sidebar = Preferences.agentSidebarMode
     @State private var colours = Preferences.agentTerminalColours
     @State private var github = Preferences.xrayGithubLookups
+    @State private var docked = Preferences.xrayDocked
+    @State private var openWithNew = Preferences.xrayOpenWithNewSessions
+    static let dockedLabel = "Dock the X-ray drawer (the terminal makes room)"   // #2055
+    static let dockedHint = "Off: the drawer opens over the terminal."
+    static let openWithNewLabel = "Open the X-ray drawer with new sessions"   // #2055
+    static let openWithNewHint = "Each session remembers whether you left its drawer open."
     static let roundedLabel = "Rounded corners"
     static let githubLabel = "Look up issues and pull requests on GitHub"   // #1623
     static let githubHint = "Read-only, through gh; a remote host uses its own gh login. Off covers this Mac and hosts with dch 1.113.0 or later."
@@ -1159,7 +1165,16 @@ struct AgentSessionsSection: View {
             }
             NeonDivider()
             NeonRow(Self.githubLabel, subtitle: Self.githubHint) { Toggle("", isOn: $github).labelsHidden().accessibilityLabel(Self.githubLabel) }
+            NeonDivider()
+            // #2055: applied to an open window at once (XrayPanels.docked)
+            NeonRow(Self.dockedLabel, subtitle: Self.dockedHint) { Toggle("", isOn: $docked).labelsHidden().accessibilityLabel(Self.dockedLabel) }
+            NeonDivider()
+            NeonRow(Self.openWithNewLabel, subtitle: Self.openWithNewHint) {
+                Toggle("", isOn: $openWithNew).labelsHidden().accessibilityLabel(Self.openWithNewLabel)
+            }
         }
+        .onChange(of: docked) { _, v in XrayPanels.shared.docked = v }
+        .onChange(of: openWithNew) { _, v in Preferences.xrayOpenWithNewSessions = v }
         .onChange(of: github) { _, v in Preferences.xrayGithubLookups = v }
         .onChange(of: clipboard) { _, v in Preferences.agentWindowClipboardWrites = v }
         .onChange(of: colours) { _, v in Preferences.agentTerminalColours = v; AgentTerminalLook.refresh(AgentTerminalLook.controller) }

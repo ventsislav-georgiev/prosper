@@ -1,0 +1,46 @@
+{
+ "entry": "2055",
+ "filter": "XrayRemoteChipTests/testXrayDock|AgentWindowD1Tests/testXrayDock",
+ "mutants": [
+  {
+   "name": "dock-forced-overlay",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "open && docked ? min(XrayDrawerWidth.width(",
+   "new": "open && false ? min(XrayDrawerWidth.width(",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testXrayDock"
+  },
+  {
+   "name": "dock-no-restore",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        panels.remembered[target] = true   // #2055\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDock"
+  },
+  {
+   "name": "dock-new-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "remembered[target] ?? Preferences.xrayOpenWithNewSessions }",
+   "new": "remembered[target] ?? false }",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDock"
+  },
+  {
+   "name": "dock-resize-per-tick",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "var settled: CGFloat { start.map { $0 / ThemeRuntime.scale } ?? points }",
+   "new": "var settled: CGFloat { points }",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testXrayDock"
+  },
+  {
+   "name": "dock-close-not-remembered",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "p.close = { panels.remembered[target] = false; panels.close(pane) }",
+   "new": "p.close = { panels.close(pane) }",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDock"
+  }
+ ]
+}

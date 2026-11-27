@@ -71,6 +71,18 @@ final class XrayPanels: ObservableObject {
 
     func close(_ pane: UUID) { open[pane] = nil }
 
+    /// #2055: the drawer docks beside the terminal, which makes room (Preferences.xrayDocked; the Settings toggle sets it).
+    @Published var docked = Preferences.xrayDocked {
+        didSet { if docked != oldValue { Preferences.xrayDocked = docked } }
+    }
+
+    /// #2055: each session's drawer as the person left it, open or closed (toggleXray, the panel's close); in memory only.
+    var remembered: [XrayTarget: Bool] = [:]
+
+    /// #2055: `target` is shown in a pane: open when its drawer was open there last; a session with no remembered state
+    /// opens when "Open the X-ray drawer with new sessions" is on.
+    func wants(_ target: XrayTarget) -> Bool { remembered[target] ?? Preferences.xrayOpenWithNewSessions }
+
     /// #1416: the one --ref read in flight (XrayRefCard.swift runRef / closeRef); a new one or a card close cancels it.
     var refReading: Task<Void, Never>?
 
@@ -1136,6 +1148,9 @@ final class XrayDrawerWidth: ObservableObject {
     /// The drawn width when the drag began; nil between drags.
     private var start: CGFloat?
     var dragging: Bool { start != nil }
+    /// #2055: the stored points as they were when the drag began (the stored points between drags): what a docked drawer's
+    /// terminal makes room for, so it resizes once, at the drag's end, never per tick.
+    var settled: CGFloat { start.map { $0 / ThemeRuntime.scale } ?? points }
 
     /// The drawn width: the stored points times the scale, at most `share` of `offered` but not under the minimum, and
     /// never past `offered` (R1351-n1: the overlay is offered the pane's width, or the pane area's in splits).
@@ -1173,6 +1188,7 @@ struct XrayDrawer: View {
 
     var body: some View {
         if let p = panels.open[pane], p.target == target {
+            let docked = panels.docked
             GeometryReader { g in
                 XrayPanelView(panel: p)
                     .modifier(XrayIslandScheme())   // #2041: off, the dark scheme for its native controls
@@ -1183,7 +1199,8 @@ struct XrayDrawer: View {
                     .background(XrayDrawerFrame())   // #1760: a card goes beside the drawer, never over it
                     // #2041: the outline on the terminal side, and a soft shadow cast onto the terminal (a gradient strip, no blur pass)
                     .overlay(alignment: .leading) { Rectangle().fill(XrayInk.edge).frame(width: 1) }
-                    .overlay(alignment: .leading) { XrayDrawer.shade.frame(width: sz(8)).offset(x: -sz(8)).allowsHitTesting(false) }
+                    // #2055: docked, nothing is under it: no shade
+                    .overlay(alignment: .leading) { if !docked { XrayDrawer.shade.frame(width: sz(8)).offset(x: -sz(8)).allowsHitTesting(false) } }
                     .overlay(alignment: .leading) { handle(offered: g.size.width) }
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -1216,6 +1233,63 @@ struct XrayDrawer: View {
                 width.ended()
             }
     }
+}
+
+/// #2055: a mount site's drawer. Docked (XrayPanels.docked, the default): the content gives up the drawer's width on its
+/// trailing side, so the terminal there shrinks and reflows through its own resize path; overlay: drawn over the content as
+/// before (#1351). The room is made for XrayDrawerWidth.settled: during a drag the drawer previews over the terminal and the
+/// terminal resizes once, at the drag's end. `on` (from the content's size; compact panes: false): no drawer at all.
+/// `drawer` false: the content draws the drawer itself (the pane area, so its question card stays over it), in the room.
+struct XrayDock: ViewModifier {
+    @ObservedObject var panels = XrayPanels.shared
+    @ObservedObject var width = XrayDrawerWidth.shared
+    let pane: UUID
+    let target: XrayTarget?
+    let drawer: Bool
+    let on: @MainActor (CGSize) -> Bool
+    @State private var size: CGSize = .zero
+
+    init(pane: UUID, target: XrayTarget?, drawer: Bool = true, on: @escaping @MainActor (CGSize) -> Bool) {
+        (self.pane, self.target, self.drawer, self.on) = (pane, target, drawer, on)
+    }
+
+    /// The trailing room the content gives up: docked and open for the session shown, the drawer's settled width as drawn
+    /// in `offered` (XrayDrawerWidth.width's bounds), never more than its `share` of `offered`: the terminal keeps 40% of the
+    /// pane even where the drawer's minimum is wider (a narrow pane: the drawer covers the rest, as overlay did); else 0.
+    static func inset(open: Bool, docked: Bool, settled: CGFloat, offered: CGFloat, scale: CGFloat = ThemeRuntime.scale) -> CGFloat {
+        open && docked ? min(XrayDrawerWidth.width(stored: settled, offered: offered, scale: scale), offered * XrayDrawerWidth.share) : 0
+    }
+
+    func body(content: Content) -> some View {
+        let shown = on(size)
+        let open = shown && target != nil && panels.open[pane]?.target == target
+        let inset = Self.inset(open: open, docked: panels.docked, settled: width.settled, offered: size.width)
+        content
+            .padding(.trailing, inset)
+            .environment(\.xrayDockInset, inset)
+            .onGeometryChange(for: CGSize.self, of: { $0.size }) { size = $0 }   // the whole site, room included: no loop
+            .overlay(alignment: .trailing) {
+                if shown && drawer { XrayDrawer(pane: pane, target: target) }
+            }
+    }
+}
+
+private struct XrayDockInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+
+extension EnvironmentValues {
+    /// #2055: the room an XrayDock above gave its drawer (the pane area adds it back for its whole size).
+    var xrayDockInset: CGFloat {
+        get { self[XrayDockInsetKey.self] }
+        set { self[XrayDockInsetKey.self] = newValue }
+    }
+}
+
+/// #2055: a GeometryReader whose content also gets the room an XrayDock around it gave its drawer (read here, below the
+/// modifier: the pane area's own environment is its parent's).
+struct XrayDockGeometry<Content: View>: View {
+    @Environment(\.xrayDockInset) private var inset
+    @ViewBuilder let content: (GeometryProxy, CGFloat) -> Content
+    var body: some View { GeometryReader { content($0, inset) } }
 }
 
 struct XrayPanelView: View {

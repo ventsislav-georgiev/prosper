@@ -493,6 +493,10 @@ enum Preferences {
         static let xrayLastTab = "xrayLastTab"
         // #1473: the X-ray drawer's width in points at UI scale 1.0, shared by every pane; per Mac, not in SyncedKeys.
         static let xrayDrawerWidth = "xrayDrawerWidth"
+        // #2055: whether the X-ray drawer docks beside the terminal (the terminal makes room); on unless set off; per Mac, not in SyncedKeys.
+        static let xrayDocked = "xrayDocked"
+        // #2055: whether a session newly shown in a pane opens with its X-ray drawer; off unless set on; per Mac, not in SyncedKeys.
+        static let xrayOpenWithNewSessions = "xrayOpenWithNewSessions"
         // #1923: the Agent Sessions Full sidebar's dragged width in points at UI scale 1.0; per Mac, not in SyncedKeys.
         static let agentSidebarWidth = "agentSidebarWidth"
         // #1623: whether an X-ray ref read may look an issue or PR up through the user's gh login (dch 1.111.0+); on unless set off; per Mac, not in SyncedKeys.
@@ -1526,6 +1530,18 @@ enum Preferences {
             if let newValue { defaults.set(newValue, forKey: Keys.agentSidebarWidth) }
             else { defaults.removeObject(forKey: Keys.agentSidebarWidth) }
         }
+    }
+
+    /// #2055: the X-ray drawer docks beside the terminal, which makes room for it; on unless set off (off: over it, #1351).
+    static var xrayDocked: Bool {
+        get { defaults.object(forKey: Keys.xrayDocked) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.xrayDocked) }
+    }
+
+    /// #2055: a session newly shown in a pane (one with no remembered drawer state) opens with its drawer; off unless set on.
+    static var xrayOpenWithNewSessions: Bool {
+        get { defaults.object(forKey: Keys.xrayOpenWithNewSessions) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.xrayOpenWithNewSessions) }
     }
 
     /// #1473: the X-ray drawer's width in points at UI scale 1.0, nil when unset (the default). Outside data (another build

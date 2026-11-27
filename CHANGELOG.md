@@ -126,6 +126,8 @@ tag from the now-released section and put it on the new top draft.
   non-Retina display. (#2065)
 - A notice for a message from a session with a long title keeps the target and the action visible.
   (#2064)
+- The X-ray drawer docks beside the terminal, which makes room for it, and can open with every new
+  session; each session remembers whether its drawer was open. (#2055)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

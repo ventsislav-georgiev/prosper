@@ -645,12 +645,14 @@ final class AgentsNSWindow: NSWindow {
         let target = model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil
         if let open = panels.open[pane] {
             panels.close(pane)
+            if open.target == target { panels.remembered[open.target] = false }   // #2055: this session's drawer, closed by the person
             if open.target == target || target == nil { return true }
         }
         guard let target else { return true }
+        panels.remembered[target] = true   // #2055
         for other in model.layout.order where other != pane { panels.close(other) }   // #1476: one drawer per window
         let p = XrayPanelModel(target: target, tab: tab ?? Preferences.xrayLastTab)
-        p.close = { panels.close(pane) }
+        p.close = { panels.remembered[target] = false; panels.close(pane) }   // #2055: the panel's own close is the person's too
         p.fallback = fallback
         p.isCurrent = { [weak model, weak p] in
             guard let model, let p else { return false }
@@ -692,6 +694,19 @@ final class AgentsNSWindow: NSWindow {
         guard let model, old != model.layout.focused, let open = XrayPanels.shared.open[old] else { return }
         XrayPanels.shared.close(old)
         toggleXray(on: open.tab)
+    }
+
+    /// #2055: the focused pane shows another session (or none): the drawer takes that session's own state (XrayPanels.wants),
+    /// the one it leaves keeps its own (remembered when it was toggled). Nothing to show, or not wanted: closed.
+    func xrayShown() {
+        guard let model else { return }
+        let pane = model.layout.focused, panels = XrayPanels.shared, open = panels.open[pane]
+        let target = model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil
+        if let target, panels.wants(target) {
+            if open?.target != target { toggleXray(on: open?.tab) }   // closes the other session's panel, opens this one's
+        } else if open != nil {
+            panels.close(pane)
+        }
     }
 
     /// Q3: the Todos chip opens the panel on Tasks when X-ray is there and the read finds a Tasks tab; else (the list
@@ -2628,8 +2643,8 @@ struct AgentDetailView: View {
                             .overlay(alignment: .top) { overTop(row, s) }
                     }
                 }
-                // #1351: over, never resizing. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
-                .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: id, target: XrayTarget.of(row)) } }
+                // #1351: over, never resizing; #2055: docked, beside. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
+                .modifier(XrayDock(pane: id, target: XrayTarget.of(row)) { _ in !compact })
             }
         } else if let row = model.selectedRow, let r = row.remote {
             // #836 (b): another machine's session: Terminal only, under a header whose transcript controls are off.
@@ -2641,7 +2656,7 @@ struct AgentDetailView: View {
                     .frame(minHeight: 0, maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "terminal"))
                     .overlay(alignment: .top) { XrayRecapStrip(pane: model.layout.focused, target: XrayTarget.of(row)) }   // #1625
-                    .overlay(alignment: .trailing) { if !compact { XrayDrawer(pane: model.layout.focused, target: XrayTarget.of(row)) } }
+                    .modifier(XrayDock(pane: model.layout.focused, target: XrayTarget.of(row)) { _ in !compact })   // #2055
             }
         } else if let row = model.selectedRow, let r = row.record {
             titled(row.title) {
@@ -2971,12 +2986,14 @@ struct AgentPaneArea: View {
     static var probe: ((String, UUID, CGRect) -> Void)?
     /// R900-5a-2, pure: the resize cursor of a divider: left-right for columns (a vertical line), up-down for rows.
     static func cursor(_ axis: PaneNode.Axis) -> NSCursor { axis == .columns ? .resizeLeftRight : .resizeUpDown }
+    /// #2055: more than one pane in the whole area (the drawer's room included, so docking never flips it).
+    @MainActor static func compact(_ m: AgentWindowModel, _ size: CGSize) -> Bool { drawn(m, in: CGRect(origin: .zero, size: size)).count > 1 }
 
     var body: some View {
-        GeometryReader { proxy in
+        XrayDockGeometry { proxy, dockInset in   // #2055: a GeometryReader that also reads the room the drawer took
             let area = CGRect(origin: .zero, size: proxy.size)
             let frames = Self.drawn(model, in: area)
-            let compact = frames.count > 1
+            let compact = Self.compact(model, CGSize(width: proxy.size.width + dockInset, height: proxy.size.height))
             let twoLines = Set(frames.values.map { ($0.minY * 1000).rounded() }).count > 1
             let ids = model.layout.order.filter { frames[$0] != nil }
             ZStack(alignment: .topLeading) {
@@ -3033,23 +3050,42 @@ struct AgentPaneArea: View {
                         .position(x: d.hitArea.midX, y: d.hitArea.midY)
                 }
             }
-            // #1476 (operator: "One for the window"): several panes: one X-ray drawer at the area's trailing edge, under the
-            // top row's headers, for the focused pane; one pane: the pane draws it as before (AgentDetailView).
+            // #2055: the whole site (the docked drawer's room included); 0: the area's own frame, as before
+            .frame(width: proxy.size.width + dockInset, height: proxy.size.height, alignment: .topLeading)
+            // #1476 (operator: "One for the window"): several panes: one X-ray drawer at the area's trailing edge for the
+            // focused pane, under the top row's headers (#2055 docked: full height, in the room the panes made); one pane:
+            // the pane draws it as before (AgentDetailView).
             .overlay(alignment: .trailing) {
                 if compact {
-                    XrayDrawer(pane: model.layout.focused, target: model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil)
-                        .padding(.top, AgentCompactHeader.height + 1)
+                    XrayDrawer(pane: model.layout.focused, target: shownTarget)
+                        .padding(.top, dockInset > 0 ? 0 : AgentCompactHeader.height + 1)
                         .environment(\.agentPaneID, model.layout.focused)   // its links and probe: the focused pane's, as in the pane
                 }
             }
             .overlay(alignment: .topLeading) { confirmCard(frames, in: area) }   // #1930: over everything in the area
-            .onChange(of: model.layout.focused) { old, new in
-                (AgentsNSWindow.window(of: old) ?? AgentsNSWindow.window(of: new))?.xrayFollow(from: old)
+            // #2055: one change of the focused pane or of the session it shows: a focus move keeps #1476's follow; the
+            // same pane showing another session takes that session's drawer state (xrayShown)
+            .onChange(of: XrayShown(pane: model.layout.focused, target: shownTarget)) { old, new in
+                let w = AgentsNSWindow.window(of: old.pane) ?? AgentsNSWindow.window(of: new.pane)
+                if old.pane != new.pane { w?.xrayFollow(from: old.pane) } else { w?.xrayShown() }
             }
             .coordinateSpace(.named(agentPaneAreaSpace))
             .onAppear { feed(area) }
             .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
         }
+        // #2055: the room for the window's docked drawer (drawn above, in it)
+        .modifier(XrayDock(pane: model.layout.focused, target: shownTarget, drawer: false) {
+            Self.compact(model, $0)
+        })
+    }
+
+    /// The focused pane's session, nil under the New session form (the drawer's target, toggleXray's rule).
+    var shownTarget: XrayTarget? { model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil }
+
+    /// #2055: what the area's onChange compares (the focused pane and the session it shows).
+    struct XrayShown: Equatable {
+        let pane: UUID
+        let target: XrayTarget?
     }
 
     /// #900 B2 step 3 (7.4, R1.1): the frames this view draws (and the window hit-tests) in `area`: the model's tiling;
@@ -3337,10 +3373,8 @@ struct AgentPaneTerminalColumn: View {
                         .overlay(alignment: .top) { if focused, case let .local(row, s, _) = shown { detail.overTop(row, s) } }
                 }
             }
-            // #1351: over, never resizing. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
-            .overlay(alignment: .trailing) {
-                if focused && !compact { XrayDrawer(pane: runtime.pane, target: XrayTarget.of(row)) }
-            }
+            // #1351: over, never resizing; #2055: docked, beside. #1476: several panes: the window's one drawer (AgentPaneArea) instead.
+            .modifier(XrayDock(pane: runtime.pane, target: XrayTarget.of(row)) { _ in focused && !compact })
         }
     }
 
