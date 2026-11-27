@@ -1,0 +1,118 @@
+{
+ "entry": "2005",
+ "filter": "CCPoolCodexProxyTests",
+ "mutants": [
+  {
+   "name": "codex-no-dispatch",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "let codexRest = CCPoolCodexHarness.rest(of: h.path)",
+   "new": "let codexRest: String? = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "rest-keeps-prefix",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "rest.hasPrefix(\"?\") ? rest : nil",
+   "new": "rest.hasPrefix(\"?\") ? path : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-no-cookie",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "\"openai-project\", \"cookie\"]",
+   "new": "\"openai-project\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "strip-no-account-id",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "union([\"chatgpt-account-id\", ",
+   "new": "union([",
+   "expect": "killed"
+  },
+  {
+   "name": "authorize-no-account-id",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "        req.setValue(item.account_id, forHTTPHeaderField: \"chatgpt-account-id\")\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "authorize-empty-ok",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "!item.access_token.isEmpty, !item.account_id.isEmpty else",
+   "new": "true else",
+   "expect": "killed"
+  },
+  {
+   "name": "send-ignores-authorize",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "guard harness.authorize(&req, token: token) else { return skip(\"token unavailable; skipping this account\") }",
+   "new": "harness.authorize(&req, token: token)",
+   "expect": "killed"
+  },
+  {
+   "name": "kind-filter-off",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "$0.value.harness == h.id && !h.accepts(kind: $0.value.kind)",
+   "new": "false",
+   "expect": "killed"
+  },
+  {
+   "name": "no-503",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if h.id == CCPoolCodexHarness.id,",
+   "new": "if false, h.id == CCPoolCodexHarness.id,",
+   "expect": "killed"
+  },
+  {
+   "name": "ws-relayed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if h.header(\"upgrade\")?.lowercased().contains(\"websocket\") == true {",
+   "new": "if false {",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-upstream-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "(codexRest == nil ? config.upstream : config.codexUpstream)",
+   "new": "config.upstream",
+   "expect": "killed"
+  },
+  {
+   "name": "openai-hosts-allowed",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "old": "return host == productionUpstream.host || openAIHosts.contains(host)",
+   "new": "return host == productionUpstream.host",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-usage-row",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "guard let record, harness.id == ClaudeHarness.id else { return }",
+   "new": "guard let record else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-anthropic-tap",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "-> CCPoolUsageTap { .idle }",
+   "new": "-> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType) }",
+   "expect": "killed"
+  },
+  {
+   "name": "claude-kind-filter",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness.swift",
+   "old": "func accepts(kind: String?) -> Bool { true }",
+   "new": "func accepts(kind: String?) -> Bool { kind != nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "log-account-id",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "        if streamed {\n            req.httpBodyStream = bodyIn",
+   "new": "        log.note(label, req.value(forHTTPHeaderField: \"chatgpt-account-id\") ?? \"\")\n        if streamed {\n            req.httpBodyStream = bodyIn",
+   "expect": "killed"
+  }
+ ]
+}
