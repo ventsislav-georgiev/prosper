@@ -1677,7 +1677,7 @@ struct AgentSidebarRowView: View, Equatable {
     /// The row's one accessibility label (#1379: Mini's tooltip and label too).
     var accessibilityWords: String {
         ([row.title, row.record?.pinned == true ? "pinned" : nil,
-          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail,
+          AgentPaneLayout.splitsEnabled && inView ? "in view" : nil, row.detail, row.agentKind?.rawValue,
           show.modelWords(model: row.model, effort: row.effort)] + row.countWords
          + [ageShown ? AgentIsland.ago(row.age) : nil]).compactMap { $0 }.joined(separator: ", ")
     }
@@ -2275,6 +2275,11 @@ extension AgentSidebarRowView {
                 Text(row.detail).font(Neon.font(10.5))
                     .foregroundStyle(row.state == .blocked ? ink(.blocked) : ink(.quiet))
                     .lineLimit(1)
+            }
+            // #2002 (gap 3): the agent's symbol in the counts' quiet ink (the row's one label reads its name).
+            if let k = row.agentKind {
+                Image(systemName: k.symbol).font(Neon.font(9.5)).foregroundStyle(ink(.quiet)).help(k.rawValue)
+                    .modifier(AgentSidebarRowProbe(kind: "agent.\(k)", title: row.title))
             }
             AgentCountGroups(counts: row.counts + (open > 0 ? [(AgentSidebar.Count.open, open)] : []), size: 10.5,
                              quiet: ink(.quiet), open: ink(.blue), tinted: true, ownCard: inks != nil, selected: selected,

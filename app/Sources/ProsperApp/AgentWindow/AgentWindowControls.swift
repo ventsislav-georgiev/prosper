@@ -435,6 +435,8 @@ enum AgentWindowControls {
     }
 
     static let blockedSentence = " It's waiting on a prompt: answer it first."
+    /// #2002: dch stops or restarts only a --no-daemon Codex (README codex_daemon); one attached to its daemon is skipped.
+    static let codexDaemonSentence = " A Codex attached to its daemon (started without --no-daemon) is skipped and keeps running."
 
     /// The strip's line, naming the session by title.
     /// #1289 (G5): a URL chip's accessibility name: the PR by its full name ("Open pull request acme/api#12").
@@ -442,12 +444,17 @@ enum AgentWindowControls {
 
     static func question(_ v: AgentWindowVerb, _ s: AgentSession) -> String {
         let blocked = s.state == .blocked ? blockedSentence : ""
+        // #2002 (gap 5): a Codex row names Codex (AgentIsland.runsCodex, no record read on main); Claude and a shell keep
+        // today's words. --ls-json does not say whether a Codex is attached to its daemon, so every Codex Restart and Stop warns
+        // (dch skips such a Codex for both, codex_daemon).
+        let codex = AgentIsland.runsCodex(s, records: []), agent = codex ? "Codex" : "Claude Code"
         switch v {
         case .restart:
-            return "Restart \(s.title)? Claude Code is paused, then relaunched on the same conversation. This can take minutes."
-                + blocked
+            return "Restart \(s.title)? \(agent) is paused, then relaunched on the same conversation. This can take minutes."
+                + (codex ? codexDaemonSentence : "") + blocked
         case .stop:
-            return "Stop \(s.title)? Claude Code is paused and the session ends. Resume it later from History." + blocked
+            return "Stop \(s.title)? \(agent) is paused and the session ends. Resume it later from History."
+                + (codex ? codexDaemonSentence : "") + blocked
         case .kill:
             return AgentIsland.killQuestion(s.title)
         case .resume, .resumeNoMessage, .pin, .remove, .rename, .switchTo:

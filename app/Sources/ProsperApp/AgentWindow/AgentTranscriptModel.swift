@@ -375,6 +375,8 @@ struct AgentTranscriptSource: Equatable {
     var dchState: String
     var sessionId: String?
     var transcriptPath: String?
+    /// #2002 (gap 6): the session runs Codex, which has no transcript view here (AgentSidebar.source).
+    var codex = false
 }
 
 enum AgentWindowMode: Equatable {
@@ -741,6 +743,9 @@ final class AgentTranscriptModel: ObservableObject {
         if m != mode { mode = m }
     }
 
+    /// #2002 (gap 6): the reason on a Codex session, which dch maps to no transcript.
+    nonisolated static let codexNoTranscript = "Codex sessions have no transcript view here; open X-ray for its chapters"
+
     /// Rules 5 and 6 as one pure decision.
     nonisolated static func mode(source: AgentTranscriptSource?, hasView: Bool, nullSince: Date?, missing: Bool,
                      live: TierCounts, lastGrowth: Date?, toolPending: Bool, now: Date) -> AgentWindowMode {
@@ -751,7 +756,7 @@ final class AgentTranscriptModel: ObservableObject {
         }
         if let since = nullSince {
             if hasView && now.timeIntervalSince(since) < nullGrace { return .waiting("Waiting for the next turn") }
-            return .terminalFirst("No transcript matched this session")
+            return .terminalFirst(s.codex ? codexNoTranscript : "No transcript matched this session")
         }
         if missing { return .terminalFirst("The transcript file is missing") }
         let simplified = live.degraded + live.failed

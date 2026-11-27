@@ -67,6 +67,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent control now tells a Codex session from a Claude one, the Mac tells the phone which agent a
   session runs, and asking for a Codex session's transcript points you to X-ray instead (#2001)
 - Extensions can now draw line and bar charts in their views (#2023)
+- The agent window and island now mark Claude and Codex rows, and on a Codex session the Stop and
+  Restart questions, the message notices and the conversation pane name Codex; folders used only
+  with Codex now show under recent folders (#2002)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -80,6 +80,18 @@ enum AgentSidebar {
         case remote(host: String, name: String)
     }
 
+    /// #2002 (gap 3): the agent a live row runs, a small symbol on line two that VoiceOver reads by name; nil for a shell.
+    enum AgentKind: String {
+        case claude = "Claude Code", codex = "Codex"
+        var symbol: String { self == .codex ? "chevron.left.forwardslash.chevron.right" : "sparkle" }
+        /// dch's `agent` through AgentIsland.runsCodex with no record read (main thread); a row without it (an older
+        /// dch) keeps today's rule: Claude by its session id, never Codex.
+        static func of(_ s: AgentSession) -> AgentKind? {
+            if AgentIsland.runsCodex(s, records: []) { return .codex }
+            return s.agent == "claude" || (s.agent == nil && s.claudeSessionID?.isEmpty == false) ? .claude : nil
+        }
+    }
+
     /// #836: one `dch --ls-json --remote` row that carries a "host" key: dch writes the plain name and the host apart
     /// (dch.c:16380-16397 at v1.74.0); `stale` is dch's own two-minute cache of a host that missed its probe.
     struct Remote: Equatable {
@@ -130,6 +142,8 @@ enum AgentSidebar {
         /// #1203: the short name of the last answer's model ("Opus 4.7") and its effort word; effort only with a model.
         var model: String?
         var effort: String?
+        /// #2002 (gap 3): the live row's agent marker; nil for a shell, History and remote rows.
+        var agentKind: AgentKind?
 
         /// #1203: "Opus 4.7 · high", "Opus 4.7", or "" when the model is unknown.
         var modelText: String { model.map { m in effort.map { "\(m) · \($0)" } ?? m } ?? "" }
@@ -317,7 +331,8 @@ enum AgentSidebar {
         return Row(id: .live(s.key), title: s.title, state: s.state, detail: AgentWindowControls.lock(action) ?? s.state.label,
                    age: AgentIsland.age(of: s, now: now), prs: prs, prCount: chips.count + more, prLinks: Array(chips.prefix(2)),
                    agents: details.agents ? max(0, s.agents) : 0, merged: details.merged ? max(0, s.meta?.merged ?? 0) : 0,
-                   shells: details.shells ? s.shells : [], session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort)
+                   shells: details.shells ? s.shells : [], session: s, modelSlot: claude, model: model, effort: model == nil ? nil : s.effort,
+                   agentKind: AgentKind.of(s))
     }
 
     static func row(_ r: DchHistoryRecord, now: TimeInterval) -> Row {
@@ -390,7 +405,8 @@ enum AgentSidebar {
         case .idle: "idle"
         }
         return AgentTranscriptSource(key: s.key, dchVersion: s.version, dchState: state,
-                                     sessionId: s.claudeSessionID, transcriptPath: s.transcriptPath)
+                                     sessionId: s.claudeSessionID, transcriptPath: s.transcriptPath,
+                                     codex: AgentIsland.runsCodex(s, records: []))   // #2002: dch's `agent`, no record read
     }
 }
 

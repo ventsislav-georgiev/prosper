@@ -1037,9 +1037,10 @@ extension AgentIsland {
 
     /// Distinct folders of the agent records that still exist, newest first
     /// (`history` is), at most 8. One stat per distinct folder, stopping at 8.
+    /// #2002 (gap 9): a Codex record (dch's `codex` object) is an agent record too.
     static func recentFolders(_ history: [DchHistoryRecord], exists: (String) -> Bool = isFolder) -> [String] {
         var seen = Set<String>(), out: [String] = []
-        for r in history where r.agent != nil && out.count < recentFoldersMax {
+        for r in history where (r.agent != nil || r.codex != nil) && out.count < recentFoldersMax {
             let f = folder(r)
             if !f.isEmpty, seen.insert(f).inserted, exists(f) { out.append(f) }
         }

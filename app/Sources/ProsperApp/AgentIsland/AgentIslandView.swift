@@ -1327,7 +1327,8 @@ struct AgentIslandRow: View {
     /// (Row.modelWords) and the open count (Count.open, as Row.countWords; the agents and merged counts are spoken already).
     static func accessibilityLabel(_ s: AgentSession, now: TimeInterval, show: AgentIslandRowDetails) -> String {
         let row = AgentSidebar.row(s, details: show, now: now)
-        return ([AgentIsland.rowAccessibilityLabel(s, now: now, show: show), show.modelWords(model: row.model, effort: row.effort)]
+        return ([AgentIsland.rowAccessibilityLabel(s, now: now, show: show), row.agentKind?.rawValue,   // #2002: the agent's name
+                 show.modelWords(model: row.model, effort: row.effort)]
                 + [row.prCount > 0 ? AgentSidebar.Count.open.words(row.prCount) : nil]).compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -1338,7 +1339,7 @@ struct AgentIslandRow: View {
         guard let notice else { return r }
         return AgentSidebar.Row(id: r.id, title: r.title, state: r.state, detail: notice, age: r.age, prs: r.prs,
                                 prCount: r.prCount, prLinks: r.prLinks, agents: r.agents, merged: r.merged, shells: r.shells, session: r.session,
-                                modelSlot: r.modelSlot, model: r.model, effort: r.effort)
+                                modelSlot: r.modelSlot, model: r.model, effort: r.effort, agentKind: r.agentKind)
     }
 
     /// #525: the PR line. Open PRs as "repo#12" chips in the agents capsule's

@@ -314,6 +314,22 @@ enum AgentWindowText {
     /// #854: dch 1.46's interrupted (nothing typed) and withdrawn (typed, then taken back out): Claude's input is as it was.
     static let notSent = "Not sent: dch was stopped before it sent the message. Try again"
     static let notWorking = "Claude isn't working, so there's nothing to interrupt"
+    /// #2002 (gap 7): a notice above in Codex's name on a Codex row (dch's --say gives Codex the same reasons); any
+    /// other text, and every text on a Claude or shell row, as is.
+    static func named(_ text: String, codex: Bool) -> String {
+        guard codex else { return text }
+        switch text {
+        case working: return "Codex is working. Send when it's done, or interrupt it"
+        case draft: return "Codex's input already holds a draft. Open in terminal"
+        case shellMode: return "Codex's input is already in shell mode. Open in terminal"
+        case notSubmitted: return "The message is in Codex's input but wasn't sent. Open in terminal"
+        case shellNotRun: return "The command didn't run; nothing was left in Codex's input"
+        case shellLeft: return "The command may still be in Codex's input in shell mode; clear it before pressing Enter"
+        case draftLeft: return "The message may still be in Codex's input, but it wasn't sent. Open in terminal"
+        case notWorking: return "Codex isn't working, so there's nothing to interrupt"
+        default: return text
+        }
+    }
     /// #820: a prompt on screen that dch reported as idle or working (a message could pick a row, Esc answers it).
     static let promptShown = "Claude is showing a prompt. Open in terminal to answer it"
     static let busy = "Another answer is in flight. Try again in a moment"
@@ -1254,7 +1270,8 @@ final class AgentWindowInteraction: ObservableObject {
         guard let s = actionSession, let text = AgentWindowDriver.message(draft) else { return }
         // The list's state first: a blocked session's prompt must never be marked the human's by a message.
         guard s.state == .idle || s.state == .done else {
-            notice = s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working
+            notice = AgentWindowText.named(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working,
+                                           codex: AgentIsland.runsCodex(s, records: []))
             return
         }
         let key = s.key, typed = draft, d = driver(s)
@@ -1274,7 +1291,8 @@ final class AgentWindowInteraction: ObservableObject {
     func runOff(_ s: AgentSession?) -> String? {
         guard let s else { return AgentWindowText.notRunning }
         if s.state == .idle || s.state == .done { return nil }
-        return s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working
+        return AgentWindowText.named(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working,
+                                     codex: AgentIsland.runsCodex(s, records: []))
     }
 
     /// "! <command>" for Run: one line, nothing hidden (sessions.say's check, LF and tab refused too); nil: refused whole.
@@ -1358,7 +1376,9 @@ final class AgentWindowInteraction: ObservableObject {
     private func act(_ s: AgentSession, prompt: AgentPrompt?, run: @escaping @Sendable (AgentPromptIO) -> AgentWindowOutcome,
                      sent: (@MainActor () -> Void)? = nil, tell: (@MainActor (AgentWindowOutcome) -> Void)? = nil) {
         // #1469: `tell` (a switch from a menu, whose session need not be the followed one) gets every notice instead.
-        func say(_ why: String) { if let tell { tell(.failed(why)) } else { notice = why } }
+        // #2002 (gap 7): the pane's notices name Codex on a Codex row (dch's `agent`, no record read on main).
+        let codex = AgentIsland.runsCodex(s, records: [])
+        func say(_ why: String) { if let tell { tell(.failed(why)) } else { notice = AgentWindowText.named(why, codex: codex) } }
         let row = if let rowText { rowText(s.key) } else { controller?.store?.actions[s.key] }
         if let lock = AgentWindowControls.lock(row),
            prompt == nil || ![AgentIsland.restartingText, AgentIsland.stoppingText].contains(lock) {
@@ -1383,7 +1403,7 @@ final class AgentWindowInteraction: ObservableObject {
             if r == .done { sent?() }
             if let tell { return tell(r) }
             guard self.session?.key == key else { return }
-            if case .failed(let why) = r { self.notice = why }
+            if case .failed(let why) = r { self.notice = AgentWindowText.named(why, codex: codex) }
             if prompt != nil {
                 self.screen = nil
                 self.afterAction = true
