@@ -1,0 +1,13 @@
+{
+ "entry": "2046",
+ "filter": "AgentWindowStyleTests",
+ "mutants": [
+  {
+   "name": "rounded_shown_ignores_style",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "style == .borderless ? stored : true }",
+   "new": "stored }",
+   "expect": "killed"
+  }
+ ]
+}
