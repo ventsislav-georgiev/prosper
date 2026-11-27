@@ -49,6 +49,32 @@ final class AgentCodexWindowTests: XCTestCase {
                        + AgentWindowControls.codexDaemonSentence + AgentWindowControls.blockedSentence)
     }
 
+    /// #2029 (QA R2002 n1): the daemon sentence names both ways a Codex is skipped.
+    func testDaemonSentenceNamesRemote() {
+        XCTAssertEqual(AgentWindowControls.codexDaemonSentence,
+                       " A Codex attached to its daemon (started without --no-daemon, or with --remote) is skipped and keeps running.")
+    }
+
+    /// #2029 (QA R2002 n2): act()'s notice for a failure the driver does not name itself (dch's skipped draft) is in
+    /// Codex's words on a Codex row and Claude's on a Claude row, through the window's click path on a fake IO.
+    /// Red under a mutant that forces act()'s `codex:` false.
+    @MainActor
+    func testActNoticeNamesCodexOnACodexRow() {
+        let w = AgentWindowInteractionTests()
+        let draft = #"{"name":"s","result":"skipped","reason":"draft","detail":""}"#
+        for (agent, screen, want) in [("codex", AgentWindowInteractionTests.codexScreen, "Codex's input already holds a draft. Open in terminal"),
+                                      ("claude", AgentWindowInteractionTests.idleScreen, AgentWindowText.draft)] {
+            let f = AgentWindowInteractionTests.MessageFake(statuses: ["idle"], screens: [screen], reply: draft)
+            let i = w.interaction(w.controller(f.io, autoAllow: false))
+            let s = session(agent)
+            i.follow(s)
+            i.draft = "go"
+            i.send()
+            w.until("sent") { !i.busy }
+            XCTAssertEqual(i.notice, want, agent)
+        }
+    }
+
     /// Gap 6: a Codex session's pane says why there is no transcript and points at X-ray. Red at base: the source has
     /// no `codex` and the pane says "No transcript matched this session".
     func testCodexPaneSaysItHasNoTranscriptView() {

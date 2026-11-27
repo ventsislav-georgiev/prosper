@@ -606,8 +606,9 @@ struct AgentWindowDriver: Sendable {
     func send(_ text: String, codex: Bool = false) -> AgentWindowOutcome {
         let st = status()
         guard st == "idle" || st == "done" else {
-            return .failed(st == "working" ? AgentWindowText.working
-                           : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus)
+            // #2029: the late refusal reaches ctl (say's "not delivered") and the window: Codex's name on a Codex row.
+            return .failed(AgentWindowText.named(st == "working" ? AgentWindowText.working
+                           : st == "blocked" ? AgentWindowText.blocked : AgentWindowText.noStatus, codex: codex))
         }
         let shown = io.read(key)
         if let why = refusal(shown, lite: AgentWindowText.noScreen, codex: codex) { return .failed(why) }
@@ -671,11 +672,12 @@ struct AgentWindowDriver: Sendable {
     /// leaving working or a new "Interrupted" on screen.
     /// QA #629 INFO-2: the status is asked last, right before the key: a prompt raised during
     /// the read is blocked, and an Esc there would answer it "No".
-    func interrupt() -> AgentWindowOutcome {
+    /// #2029: `codex` only names Codex in the not-working text; the screen check is Claude's either way.
+    func interrupt(codex: Bool = false) -> AgentWindowOutcome {
         let shown = io.read(key)
         if let why = refusal(shown, lite: AgentWindowText.noScreenInterrupt) { return .failed(why) }
         let before = Self.count("Interrupted", in: shown)
-        guard status() == "working" else { return .failed(AgentWindowText.notWorking) }
+        guard status() == "working" else { return .failed(AgentWindowText.named(AgentWindowText.notWorking, codex: codex)) }
         io.keys(key, ["esc"])
         for _ in 0..<confirmReads {
             pause(confirmStep)
@@ -1357,8 +1359,8 @@ final class AgentWindowInteraction: ObservableObject {
     /// Esc while working.
     func interrupt() {
         guard let s = actionSession, s.state == .working else { return }
-        let d = driver(s)
-        act(s, prompt: nil) { io in d(io).interrupt() }
+        let d = driver(s), codex = AgentIsland.runsCodex(s, records: [])
+        act(s, prompt: nil) { io in d(io).interrupt(codex: codex) }
     }
 
     /// The driver for `s` over the IO the controller hands the action.

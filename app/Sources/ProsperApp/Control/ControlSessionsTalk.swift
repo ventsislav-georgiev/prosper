@@ -79,7 +79,8 @@ enum ControlSessionsTalk {
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
         let message = try text(args)
         guard s.state == .idle || s.state == .done else {
-            throw ControlError(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working)
+            throw ControlError(AgentWindowText.named(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working,
+                                                     codex: AgentIsland.runsCodex(s, records: [])))
         }
         let key = s.key, once = Once<AgentWindowOutcome>(), read = liveRecords()
         try start(s, in: st, changes: changes, what: "message", run: {
@@ -145,9 +146,9 @@ enum ControlSessionsTalk {
     /// The window's Esc: only while the list says working; the driver presses it only with no prompt on screen.
     static func interrupt(_ args: [String: ControlJSON], changes: ControlChanges) throws -> ControlChange {
         let st = try ControlSessions.store(), s = try ControlSessions.session(try ControlSessions.required(args, "name"), in: st)
-        guard s.state == .working else { throw ControlError(AgentWindowText.notWorking) }
-        let key = s.key
-        try start(s, in: st, changes: changes, what: "interrupt") { AgentWindowDriver(key: key, io: $0).interrupt() }
+        guard s.state == .working else { throw ControlError(AgentWindowText.named(AgentWindowText.notWorking, codex: AgentIsland.runsCodex(s, records: []))) }
+        let key = s.key, codex = AgentIsland.runsCodex(s, records: [])
+        try start(s, in: st, changes: changes, what: "interrupt") { AgentWindowDriver(key: key, io: $0).interrupt(codex: codex) }
         return ControlChange(summary: s.title, result: .string(s.name), verb: "interrupted")
     }
 

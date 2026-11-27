@@ -308,6 +308,49 @@ final class ControlSessionsTalkTests: XCTestCase {
         }
     }
 
+    /// #2029: the refusals name the target's agent: a Codex row (the list's `agent`) says Codex, a Claude row keeps
+    /// today's words, for say (list busy, and dch busy after an idle list) and for interrupt (list not working, and dch
+    /// not working after a working list). Red at base: all four Codex lines say "Claude".
+    @MainActor
+    func testBusyRefusalsNameCodexOnACodexTarget() async throws {
+        func row(_ name: String, _ state: AgentState, codex: Bool) -> AgentSession {
+            var s = base.session(name, state)
+            s.agent = codex ? "codex" : "claude"
+            return s
+        }
+        let st = base.store([row("cx-busy", .working, codex: true), row("cl-busy", .working, codex: false),
+                             row("cx-idle", .idle, codex: true), row("cl-idle", .idle, codex: false),
+                             row("cx-late", .idle, codex: true), row("cl-late", .idle, codex: false)])
+        let working = "Codex is working. Send when it's done, or interrupt it"
+        let notWorking = "Codex isn't working, so there's nothing to interrupt"
+        let dch = FakeDch()
+        try await withSeams(st, dch: dch) { changes in
+            @MainActor func say(_ name: String) async throws { _ = try await ControlSessionsTalk.say(args(["name": name, "text": "hi"]), changes: changes) }
+            await refusedAsync({ try await say("cx-busy") }, working)
+            await refusedAsync({ try await say("cl-busy") }, AgentWindowText.working)
+            refused(try ControlSessionsTalk.interrupt(args(["name": "cx-idle"]), changes: changes), notWorking)
+            refused(try ControlSessionsTalk.interrupt(args(["name": "cl-idle"]), changes: changes), AgentWindowText.notWorking)
+            XCTAssertEqual(acted, [])
+            // The list said idle, dch says working: the driver's refusal reaches the caller in the same words.
+            dch.status = "working"
+            await refusedAsync({ try await say("cx-late") }, "cx-late: not delivered: " + working)
+            dch.status = "working"
+            await refusedAsync({ try await say("cl-late") }, "cl-late: not delivered: " + AgentWindowText.working)
+        }
+        let late = base.store([row("cx", .working, codex: true), row("cl", .working, codex: false)])
+        try await withSeams(late, dch: FakeDch()) { changes in
+            // The list said working, dch says idle: the driver's refusal is the failure notice.
+            for name in ["cx", "cl"] {
+                let dch = FakeDch()
+                dch.status = "idle"
+                ControlSessionsTalk.act = { _, run, done in done(run(dch.io)); return true }
+                _ = try ControlSessionsTalk.interrupt(args(["name": name]), changes: changes)
+            }
+            XCTAssertEqual(notices, ["Agent's interrupt to cx failed: " + notWorking,
+                                     "Agent's interrupt to cl failed: " + AgentWindowText.notWorking])
+        }
+    }
+
     // MARK: - sessions.prompt
 
     /// Not blocked: not waiting, no read. Blocked with the island's card: its question and options, no read. Blocked

@@ -74,6 +74,8 @@ tag from the now-released section and put it on the new top draft.
   which keeps a chart quick to draw (#2032)
 - The pool's "Earliest reset" time, and the retry time Codex is given, now say when the first
   account can serve again rather than when its first limit ends (#2033)
+- `ctl sessions.say` and `sessions.interrupt`, and the window's late refusals, now name Codex rather
+  than Claude when a Codex session is busy or not working (#2029)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

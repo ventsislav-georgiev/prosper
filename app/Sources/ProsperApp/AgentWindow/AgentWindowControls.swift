@@ -436,7 +436,7 @@ enum AgentWindowControls {
 
     static let blockedSentence = " It's waiting on a prompt: answer it first."
     /// #2002: dch stops or restarts only a --no-daemon Codex (README codex_daemon); one attached to its daemon is skipped.
-    static let codexDaemonSentence = " A Codex attached to its daemon (started without --no-daemon) is skipped and keeps running."
+    static let codexDaemonSentence = " A Codex attached to its daemon (started without --no-daemon, or with --remote) is skipped and keeps running."
 
     /// The strip's line, naming the session by title.
     /// #1289 (G5): a URL chip's accessibility name: the PR by its full name ("Open pull request acme/api#12").
