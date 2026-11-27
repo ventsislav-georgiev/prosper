@@ -1,0 +1,56 @@
+{
+ "entry": "2012",
+ "filter": "AgentPoolMigrationTests",
+ "mutants": [
+  {
+   "name": "marker_check_removed",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "        guard defaults.object(forKey: markerKey) == nil else { return }\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "dir_move_skipped",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno",
+   "new": "ENOENT",
+   "expect": "killed"
+  },
+  {
+   "name": "target_guard_removed",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "renamex_np(from.path, to.path, UInt32(RENAME_EXCL))",
+   "new": "rename(from.path, to.path)",
+   "expect": "killed"
+  },
+  {
+   "name": "trusted_not_carried",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionRegistry.swift",
+   "old": "for key in [enabledKey, disabledKey, trustedKey, privilegedKey] {",
+   "new": "for key in [enabledKey, disabledKey, privilegedKey] {",
+   "expect": "killed"
+  },
+  {
+   "name": "exhausted_key_not_carried",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "        (\"ccpoolExhaustedThreshold\", CCPoolPaneModel.exhaustedKey),\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "ccpool_alias_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlCCPool.swift",
+   "old": "static let poolAliasPrefixes = [\"pool\", \"ccpool\"]",
+   "new": "static let poolAliasPrefixes = [\"pool\"]",
+   "filter": "ControlCCPoolTests|ControlCCPoolHoldTests",
+   "expect": "killed"
+  },
+  {
+   "name": "old_pane_fallback_dropped",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "selection == \"ext:com.prosper.ccpool|ccpool\" ? AgentPlanLimits.settingsPane : selection",
+   "new": "selection",
+   "expect": "killed"
+  }
+ ]
+}
