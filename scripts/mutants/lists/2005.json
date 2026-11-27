@@ -33,15 +33,15 @@
   {
    "name": "authorize-no-account-id",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "        req.setValue(item.account_id, forHTTPHeaderField: \"chatgpt-account-id\")\n",
+   "old": "        req.setValue(item.accountID, forHTTPHeaderField: \"chatgpt-account-id\")\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "authorize-empty-ok",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "!item.access_token.isEmpty, !item.account_id.isEmpty else",
-   "new": "true else",
+   "file": "app/Sources/ProsperApp/CCPool/CodexCredential.swift",
+   "old": "!access.isEmpty,\n              let account = obj[\"account_id\"] as? String, !account.isEmpty else",
+   "new": "true,\n              let account = obj[\"account_id\"] as? String, true else",
    "expect": "killed"
   },
   {

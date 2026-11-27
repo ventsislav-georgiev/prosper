@@ -1,0 +1,55 @@
+{
+ "entry": "2007",
+ "filter": "CodexTokenKeeperTests",
+ "mutants": [
+  {
+   "name": "single_flight_off",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "        let key = id\n",
+   "new": "        let key = id + UUID().uuidString\n",
+   "expect": "killed"
+  },
+  {
+   "name": "write_after_use",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "do { try secrets.store(token: item, id: id, label: label) } catch {",
+   "new": "DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [secrets] in try? secrets.store(token: item, id: id, label: label) }; if Bool(\"false\") == true {",
+   "expect": "killed"
+  },
+  {
+   "name": "refusal_word_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "\"refresh_token_reused\", \"invalid_refresh_token\", ",
+   "new": "\"refresh_token_reused\", ",
+   "expect": "killed"
+  },
+  {
+   "name": "replay_401_off",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "            if replayable {\n                exchange = nil\n                decide(.cancel)\n                log.note(label, \"token rejected (401); refreshing the login\")",
+   "new": "            if replayable && Bool(\"false\") == true {\n                exchange = nil\n                decide(.cancel)\n                log.note(label, \"token rejected (401); refreshing the login\")",
+   "expect": "killed"
+  },
+  {
+   "name": "exp_trigger_off",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "exp - now < expMargin",
+   "new": "exp - now < -expMargin",
+   "expect": "killed"
+  },
+  {
+   "name": "codex_401_mark_off",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "(codex && !refreshes)",
+   "new": "(Bool(\"false\") == true && !refreshes)",
+   "expect": "killed"
+  },
+  {
+   "name": "refused_post_guard_off",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "        if store.read({ $0.accounts[label]?.refused }) != nil { return finish(.signedOut) }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
