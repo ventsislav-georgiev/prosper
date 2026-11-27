@@ -55,6 +55,8 @@ tag from the now-released section and put it on the new top draft.
 - Messages sent to a Codex session (from the Agents window, the island's Message, or `ProsperApp ctl
   sessions.say`) are no longer refused by Claude's screen check; dch decides whether Codex can take
   them. (#1994)
+- A Codex record whose History file is not valid UTF-8 now names codex resume for resuming it by
+  hand (ships dch 1.181.0). (#1995)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

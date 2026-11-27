@@ -5093,6 +5093,15 @@ final class AgentIslandControlsTests: XCTestCase {
             + "something else; resume by hand: claude --resume abc"
         XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "not_utf8", "detail": lossy, "session_id": "abc"], .resume),
                        "Not resumed: its record has bytes that are not UTF-8; claude --resume abc")
+        // #1995: dch 1.181.0's agent: codex names codex resume; claude and no key (older dch) keep claude --resume.
+        func utf8(_ agent: String?) -> String {
+            var o = ["name": "a", "as": "a", "result": "failed", "reason": "not_utf8", "detail": "", "session_id": "abc"]
+            if let agent { o["agent"] = agent }
+            return row(o, .resume)
+        }
+        XCTAssertEqual(utf8("codex"), "Not resumed: its record has bytes that are not UTF-8; codex resume abc")
+        XCTAssertEqual(utf8("claude"), "Not resumed: its record has bytes that are not UTF-8; claude --resume abc")
+        XCTAssertEqual(utf8(nil), "Not resumed: its record has bytes that are not UTF-8; claude --resume abc")
         XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "not_utf8", "detail": "", "session_id": ""], .resumeNoMessage),
                        "Not resumed: its record has bytes that are not UTF-8")
         XCTAssertEqual(row(["name": "a", "as": "a", "result": "failed", "reason": "live", "detail": "session a is live",

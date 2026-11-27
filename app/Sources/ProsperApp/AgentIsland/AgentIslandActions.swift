@@ -588,7 +588,7 @@ extension AgentIsland {
         let sid = o.sessionID ?? "", resume = verb == .resume || verb == .resumeNoMessage
         switch o.reason {
         case "not_utf8" where resume:
-            return "Not resumed: its record has bytes that are not UTF-8" + (sid.isEmpty ? "" : "; claude --resume \(sid)")
+            return "Not resumed: its record has bytes that are not UTF-8" + (sid.isEmpty ? "" : "; \(o.agent == "codex" ? "codex resume" : "claude --resume") \(sid)")
         case "live" where resume:
             return "Not resumed: \(o.revivedAs.flatMap { $0.isEmpty ? nil : $0 } ?? o.name) is running"
         case "live_sid", "dup_sid":
