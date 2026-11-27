@@ -148,6 +148,14 @@ final class ControlNotice: NSObject {
         min(maxSeconds, max(visibleSeconds, Double(text.count) / charsPerSecond))
     }
 
+    /// #2057: draws only inside its own bounds (a combining mark can rise above the line box).
+    private final class ClippedField: NSTextField {
+        override func draw(_ dirtyRect: NSRect) {
+            bounds.clip()
+            super.draw(dirtyRect)
+        }
+    }
+
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { false }
         override var canBecomeMain: Bool { false }
@@ -155,6 +163,7 @@ final class ControlNotice: NSObject {
 
     private var panel: NSPanel?
     private var label: NSTextField?
+    private var body: NSTextField?
     private var undoButton: NSButton?
     private var hide: DispatchWorkItem?
     private var pendingUndo: (@MainActor () -> Void)?
@@ -165,27 +174,43 @@ final class ControlNotice: NSObject {
         let p = panel ?? makePanel()
         panel = p
         pendingUndo = undo
-        label?.stringValue = text
         undoButton?.isHidden = undo == nil
-        // #2047: a message notice (a title line, then the message) is wider and as tall as its wrapped text.
-        let multi = text.contains("\n")
-        // Wrapped, at most the title, `bodyLines` and the "…" line high; past that the last shown line ends in "…".
-        let lines = ControlChanges.bodyLines + 2
-        label?.lineBreakMode = multi ? .byWordWrapping : .byTruncatingTail
-        label?.maximumNumberOfLines = multi ? lines : 1
-        let w: CGFloat = multi ? 420 : 360, textW = w - 14 - 88
-        let lineH = label?.font.map { NSLayoutManager().defaultLineHeight(for: $0) } ?? 16
-        let fit = label?.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textW, height: 2000)).height ?? 20
-        let textH = multi ? ceil(min(fit, lineH * CGFloat(lines))) : 20
-        let h = max(48, textH + 28)
+        let size = layout(text)
         if let f = NSScreen.main?.visibleFrame {
-            p.setFrame(NSRect(x: f.maxX - w - 16, y: f.maxY - h - 16, width: w, height: h), display: false)
+            p.setFrame(NSRect(x: f.maxX - size.width - 16, y: f.maxY - size.height - 16, width: size.width, height: size.height), display: false)
         }
-        label?.frame = NSRect(x: 14, y: 14, width: textW, height: textH)
         p.orderFrontRegardless()
         shownFor = Self.seconds(for: text)
         if !hovered { scheduleHide() }
     }
+
+    /// #2057: the title is its own one-line field above the message's field, which clips to its own bounds, so a combining
+    /// mark rising above the message's first line never draws over the title. Sets both fields' text and frames;
+    /// returns the panel's size. A one-line notice is the title field alone.
+    @discardableResult
+    func layout(_ text: String) -> NSSize {
+        // #2047: a message notice (a title line, then the message) is wider and as tall as its wrapped text.
+        let parts = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        let multi = parts.count > 1
+        label?.stringValue = multi ? String(parts[0]) : text
+        body?.stringValue = multi ? String(parts[1]) : ""
+        body?.isHidden = !multi
+        let w: CGFloat = multi ? 420 : 360, textW = w - 14 - 88
+        let lineH = ceil(label?.font.map { NSLayoutManager().defaultLineHeight(for: $0) } ?? 16)
+        // Wrapped, at most `bodyLines` and the "…" line high; past that the last shown line ends in "…".
+        let lines = ControlChanges.bodyLines + 1
+        body?.maximumNumberOfLines = lines
+        let fit = body?.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textW, height: 2000)).height ?? 20
+        let bodyH = multi ? ceil(min(fit, lineH * CGFloat(lines))) : 0
+        let titleH = multi ? lineH : 20
+        let h = max(48, titleH + bodyH + 28)
+        label?.frame = NSRect(x: 14, y: 14 + bodyH, width: textW, height: titleH)
+        body?.frame = NSRect(x: 14, y: 14, width: textW, height: bodyH)
+        return NSSize(width: w, height: h)
+    }
+
+    /// The title field's frame in the panel's content (the row pins the title rect by it).
+    var titleFrame: NSRect { label?.frame ?? .zero }
 
     private func scheduleHide() {
         hide?.cancel()
@@ -241,18 +266,24 @@ final class ControlNotice: NSObject {
                                           owner: self, userInfo: nil))
         let text = NSTextField(labelWithString: "")
         text.lineBreakMode = .byTruncatingTail
-        text.cell?.truncatesLastVisibleLine = true   // #2047: a wrapped message notice past its lines ends in "…"
+        text.maximumNumberOfLines = 1
         text.textColor = .white
         text.frame = NSRect(x: 14, y: 14, width: 260, height: 20)
-        text.autoresizingMask = [.width]
+        let msg = ClippedField(labelWithString: "")
+        msg.lineBreakMode = .byWordWrapping
+        msg.cell?.truncatesLastVisibleLine = true   // #2047: a wrapped message past its lines ends in "…"
+        msg.textColor = .white
+        msg.isHidden = true
         let button = NSButton(title: "Undo", target: self, action: #selector(undoClicked))
         button.bezelStyle = .rounded
         button.frame = NSRect(x: 280, y: 10, width: 68, height: 28)
         button.autoresizingMask = [.minXMargin]
         bg.addSubview(text)
+        bg.addSubview(msg)
         bg.addSubview(button)
         p.contentView?.addSubview(bg)
         label = text
+        body = msg
         undoButton = button
         return p
     }

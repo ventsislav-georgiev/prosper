@@ -115,6 +115,7 @@ tag from the now-released section and put it on the new top draft.
   whole message. (#2047)
 - With Follow theme off, X-ray's accent-coloured buttons and marks stay readable on its dark surface
   when a custom theme uses a dark accent. (#2043)
+- Agent control notices keep accented message text from drawing over their title line. (#2057)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -245,6 +245,36 @@ final class ControlNoticeTests: XCTestCase {
         XCTAssertEqual(e.sender, "Perf")
     }
 
+    /// #2057: offscreen (no window shown, cacheDisplay): a body line of letters carrying the capMarks ceiling of three
+    /// combining marks each adds no ink inside the title field's rect, against the same notice with a plain body.
+    func testCombiningMarksInTheMessageDoNotDrawOverTheTitleLine() {
+        func render(_ body: String) -> (bytes: [UInt8], rowBytes: Int, titleTop: Int, titleRows: Int, total: Int)? {
+            let n = ControlNotice()
+            let p = n.makePanel()
+            let size = n.layout("Perf \u{2192} API (messaged)\n" + body)
+            p.setContentSize(size)
+            guard let bg = p.contentView?.subviews.first else { return nil }
+            bg.frame = NSRect(origin: .zero, size: size)
+            bg.layoutSubtreeIfNeeded()
+            guard let rep = bg.bitmapImageRepForCachingDisplay(in: bg.bounds), let data = rep.bitmapData else { return nil }
+            bg.cacheDisplay(in: bg.bounds, to: rep)
+            let k = CGFloat(rep.pixelsHigh) / bg.bounds.height
+            let t = n.titleFrame
+            let top = Int((bg.bounds.height - t.maxY) * k), rows = Int(t.height * k)
+            let all = Array(UnsafeBufferPointer(start: data, count: rep.bytesPerRow * rep.pixelsHigh))
+            return (all, rep.bytesPerRow, top, rows, rep.pixelsHigh)
+        }
+        let marks = "\u{0310}\u{0311}\u{0312}"
+        let hostile = (0..<3).map { _ in "A\(marks)b\(marks) A\(marks)b\(marks)" }.joined(separator: "\n")
+        let plain = (0..<3).map { _ in "Ab Ab" }.joined(separator: "\n")
+        guard let h = render(hostile), let q = render(plain), h.titleRows > 0, h.titleTop == q.titleTop, h.titleRows == q.titleRows else {
+            return XCTFail("the offscreen render failed or the title rects differ")
+        }
+        let band = h.titleTop * h.rowBytes..<(h.titleTop + h.titleRows) * h.rowBytes
+        XCTAssertEqual(h.bytes[band], q.bytes[band], "marks in the body drew over the title line")
+        XCTAssertTrue(h.bytes != q.bytes, "the render does not see the body at all")
+    }
+
     /// A longer notice stays up longer, never shorter than today's six seconds nor past twelve.
     func testDisplayTimeScalesWithLengthAndStopsAtTheCap() {
         XCTAssertEqual(ControlNotice.seconds(for: "Agent changed: x"), ControlNotice.visibleSeconds)

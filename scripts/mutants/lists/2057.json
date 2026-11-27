@@ -1,0 +1,13 @@
+{
+ "entry": "2057",
+ "filter": "ControlNoticeTests",
+ "mutants": [
+  {
+   "name": "clip_removed",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "            bounds.clip()\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
