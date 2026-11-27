@@ -26,15 +26,15 @@
   {
    "name": "target-no-live-check",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
-   "old": "guard let a = asker, !a.isEmpty, !a.hasPrefix(\"-\"), live.contains(a) else",
-   "new": "guard let a = asker, !a.isEmpty, !a.hasPrefix(\"-\") else",
+   "old": "if let a = asker, !a.isEmpty, !a.hasPrefix(\"-\"), live.contains(a) { return a }",
+   "new": "if let a = asker, !a.isEmpty, !a.hasPrefix(\"-\") { return a }",
    "expect": "killed"
   },
   {
-   "name": "target-remote-no-host",
+   "name": "target-remote-host-prefixed",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
-   "old": "return host(of: drawer).map { \"\\($0):\\(a)\" } ?? drawer.name",
-   "new": "return a",
+   "old": "return host(of: drawer).map { String(drawer.name.dropFirst($0.count + 1)) } ?? drawer.name",
+   "new": "return drawer.name",
    "expect": "killed"
   },
   {
