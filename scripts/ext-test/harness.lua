@@ -486,6 +486,7 @@ function M.makeHost(opts)
             list = uiNode("list"),
             form = uiNode("form"),
             converter = uiNode("converter"),
+            chart = uiNode("chart"),
             render = function(node) env.rendered = node; return node end,
             settings = settings,
             -- Native app chooser. Returns env.chosenApp ({ bundleID=, name= } or nil).

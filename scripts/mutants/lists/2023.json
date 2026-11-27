@@ -1,0 +1,69 @@
+{
+ "entry": "2023",
+ "filter": "ExtensionChartViewTests",
+ "mutants": [
+  {
+   "name": "series_cap",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "    static let maxSeries = 12\n",
+   "new": "    static let maxSeries = 13\n",
+   "expect": "killed"
+  },
+  {
+   "name": "points_cap",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "    static let maxPoints = 1000\n",
+   "new": "    static let maxPoints = 1001\n",
+   "expect": "killed"
+  },
+  {
+   "name": "null_y_kept",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "if try p.decodeNil(forKey: .x) || p.decodeNil(forKey: .y) { continue }",
+   "new": "if try p.decodeNil(forKey: .x) { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "empty_object_list",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "        if (try? c.decode([String: Bool].self, forKey: key))?.isEmpty == true { return nil }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "kind_defaults",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "kind = try c.decode(Kind.self, forKey: .kind)",
+   "new": "kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .line",
+   "expect": "killed"
+  },
+  {
+   "name": "empty_default",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "var emptyMessage: String { emptyText ?? \"No data\" }",
+   "new": "var emptyMessage: String { emptyText ?? \"\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "numeric_x_always",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "if case .number = $0.x { true } else { false }",
+   "new": "$0.x == $0.x",
+   "expect": "killed"
+  },
+  {
+   "name": "a11y_counts",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "\\(series.count) series, \\(pointCount) points",
+   "new": "\\(series.count) series, \\(series.count) points",
+   "expect": "killed"
+  },
+  {
+   "name": "colour_no_fade",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionViewRenderer.swift",
+   "old": "opacity(round == 0 ? 1 : round == 1 ? 0.6 : 0.35)",
+   "new": "opacity(1)",
+   "expect": "killed"
+  }
+ ]
+}
