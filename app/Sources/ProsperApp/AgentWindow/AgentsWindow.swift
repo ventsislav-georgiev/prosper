@@ -145,6 +145,7 @@ final class AgentsWindow {
         win.model = model
         model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }
         model.firstShown = { [weak win] in win?.xrayShown() }   // #2068: the session the window opens on
+        NotificationCenter.default.addObserver(win, selector: #selector(AgentsNSWindow.xrayGateOpened), name: XrayPanels.gateOpened, object: nil)   // #2068: removed when the window is freed
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
         model.focusSidebar = { [weak win] in   // the model set keyFocus = .sidebar already
             win?.makeFirstResponder(nil)
@@ -709,6 +710,9 @@ final class AgentsNSWindow: NSWindow {
             panels.close(pane)
         }
     }
+
+    /// #2068: XrayPanels.publish opened the gate: the session the window shows takes the drawer state it was refused.
+    @objc func xrayGateOpened(_ note: Notification) { xrayShown() }
 
     /// Q3: the Todos chip opens the panel on Tasks when X-ray is there and the read finds a Tasks tab; else (the list
     /// already open, the gate off, no Tasks tab) `list` runs, today's AgentTodosList.

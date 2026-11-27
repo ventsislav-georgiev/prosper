@@ -25,6 +25,22 @@
    "new": "w?.xrayFollow(from: old.pane) }",
    "expect": "killed",
    "filter": "AgentWindowD1Tests/testXrayDockASessionChangeThroughTheModelTakesItsDrawerState"
+  },
+  {
+   "name": "dock-gate-open-not-applied",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        if closed, dch() != nil { NotificationCenter.default.post(name: gateOpened, object: nil) }\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDockTheGateOpeningLateAppliesTheOpeningSessionsDrawerState"
+  },
+  {
+   "name": "dock-gate-observer-unwired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        NotificationCenter.default.addObserver(win, selector: #selector(AgentsNSWindow.xrayGateOpened), name: XrayPanels.gateOpened, object: nil)   // #2068: removed when the window is freed\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDockTheGateOpeningLateAppliesTheOpeningSessionsDrawerState"
   }
  ]
 }

@@ -285,6 +285,46 @@ extension AgentWindowD1Tests {
         }
     }
 
+    /// #2068 round 2 (QA R2068a n1): the first window after launch shows its session before warm's probe lands (probed nil,
+    /// the gate closed): toggleXray refused and the one-shot firstShown is spent. Red without publish's post (mutant
+    /// dock-gate-open-not-applied, XrayPanel.swift publish): the drawer of api, remembered open, stays closed once the
+    /// gate opens. Controls: a nil or below-gate publish opens nothing; a later publish (each window open probes again)
+    /// leaves the drawer the person closed closed.
+    @MainActor
+    func testXrayDockTheGateOpeningLateAppliesTheOpeningSessionsDrawerState() throws {
+        let saved = XrayPanels.probed
+        defer { XrayPanels.probed = saved; XrayPanels.shared.remembered = [:] }
+        try xrayButtonSeams([1, 78, 0]) { _ in
+            XrayPanels.dch = { if case .ok(let path) = XrayTabs.gate(XrayPanels.probed) { path } else { nil } }   // the product's
+            XrayPanels.probed = nil
+            let api = session("api", .idle), t = XrayTarget(name: api.key.name, dir: api.key.dir)
+            XrayPanels.shared.remembered = [t: true]
+            let m = windowModel(store([api]))
+            defer { m.close() }
+            m.terminal.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+            m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+            let win = AgentsWindow.makeWindow(m, autosave: nil)
+            defer { win.close() }
+            win.cards = FakeCardPresenter()
+            XrayPanels.model = { [weak m] _ in m }
+            XrayPanels.window = { [weak win] _ in win }
+            m.setVisible(true)
+            if m.selection == nil { m.select(.live(api.key)) }
+            XCTAssertEqual(m.selection, .live(api.key), "control: the window shows api")
+            XCTAssertTrue(XrayPanels.shared.open.isEmpty, "control: the gate closed, the drawer refused")
+            XrayPanels.publish(nil)
+            XrayPanels.publish(DchCommand.Binary(path: "/fake/dch", version: [1, 77, 0]))
+            XCTAssertTrue(XrayPanels.shared.open.isEmpty, "no binary, then one below the gate: still closed")
+            XrayPanels.publish(DchCommand.Binary(path: "/fake/dch", version: [1, 78, 0]))   // what warm's Task does
+            XCTAssertEqual(XrayPanels.shared.open[m.layout.focused]?.target.name, "api", "the gate opened: api's drawer opens")
+            XCTAssertTrue(win.toggleXray(), "the person closes it")
+            XCTAssertTrue(XrayPanels.shared.open.isEmpty, "control: closed")
+            XrayPanels.publish(DchCommand.Binary(path: "/fake/dch", version: [1, 78, 0]))   // the next window open's probe
+            XCTAssertTrue(XrayPanels.shared.open.isEmpty, "a later publish leaves the drawer the person closed")
+            XCTAssertFalse(win.isVisible, "never shown")
+        }
+    }
+
     /// #2068 n1 (QA R2055a): two columns ("api" focused, "web"), the drawer docked open on api, AgentPaneArea hosted. 1400
     /// wide (the standard 480 drawer): both panes are drawn and end where the room starts. 700 wide: the area left holds
     /// one column, yet compact is the 700-wide window's (two columns fit), so the window's one drawer is drawn in the room.

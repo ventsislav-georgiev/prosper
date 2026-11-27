@@ -223,10 +223,17 @@ final class XrayPanels: ObservableObject {
     static var probed: DchCommand.Binary?   // internal: rows set it (#1443)
 
     /// #1476 b: sets `probed` and tells the views that read the gate (the header X-ray buttons drew off before it).
+    /// #2068: the gate went from closed to open: each Agents window applies its focused session's drawer state, refused
+    /// until now (a session shown before warm's probe landed). Only on that change: a later publish leaves the drawers.
     @MainActor static func publish(_ b: DchCommand.Binary?) {
+        let closed = dch() == nil
         probed = b
         shared.objectWillChange.send()
+        if closed, dch() != nil { NotificationCenter.default.post(name: gateOpened, object: nil) }
     }
+
+    /// #2068: posted on main by publish when the gate opens; each AgentsNSWindow (makeWindow) observes it.
+    static let gateOpened = Notification.Name("ProsperXrayGateOpened")
 
     /// shortcut: probed once per window open, so a dch upgrade shows on the next open; re-probe per toggle if needed.
     static func warm() {
