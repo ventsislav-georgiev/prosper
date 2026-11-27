@@ -12,8 +12,8 @@
   {
    "name": "write_after_use",
    "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
-   "old": "do { try secrets.store(token: item, id: id, label: label) } catch {",
-   "new": "DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [secrets] in try? secrets.store(token: item, id: id, label: label) }; if Bool(\"false\") == true {",
+   "old": "do { try secrets.replace(token: item, id: id, label: owner) } catch {",
+   "new": "DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [secrets] in try? secrets.replace(token: item, id: id, label: owner) }; if Bool(\"false\") == true {",
    "expect": "killed"
   },
   {
@@ -48,6 +48,34 @@
    "name": "refused_post_guard_off",
    "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
    "old": "        if store.read({ $0.accounts[label]?.refused }) != nil { return finish(.signedOut) }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "redirect_delegate_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "session = URLSession(configuration: cfg, delegate: CCPoolNoRedirect(), delegateQueue: nil)",
+   "new": "session = URLSession(configuration: cfg)",
+   "expect": "killed"
+  },
+  {
+   "name": "settle_upserts",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "do { try secrets.replace(token: item, id: id, label: owner) } catch {",
+   "new": "do { try secrets.store(token: item, id: id, label: owner) } catch {",
+   "expect": "killed"
+  },
+  {
+   "name": "owner_reread_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CodexTokenKeeper.swift",
+   "old": "        guard let owner = store.read({ $0.label(ofID: id) }) else {\n            log.note(label, \"token refresh dropped: account removed during refresh\")\n            return .failed\n        }\n",
+   "new": "        let owner = label\n",
+   "expect": "killed"
+  },
+  {
+   "name": "replace_default_upserts",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSecrets.swift",
+   "old": "        guard try self.token(id: id) != nil else { throw CCPoolSecretsError.failed(errSecItemNotFound) }\n",
    "new": "",
    "expect": "killed"
   }
