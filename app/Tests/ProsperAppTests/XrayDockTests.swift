@@ -89,7 +89,7 @@ extension XrayRemoteChipTests {
                     let before = seen.widths.count, start = try XCTUnwrap(seen.drawer).width
                     for i in 1...10 {
                         XrayDrawerWidth.shared.dragged(by: CGFloat(4 * i), offered: 800)   // narrower by 4 pt a tick (480 is 60% of 800: the widest)
-                        for _ in 0..<3 { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+                        Self.pump(host)
                     }
                     XCTAssertLessThan(seen.drawer?.width ?? 1000, start - 20, "control: the drawer previews the drag")
                     XCTAssertEqual(seen.widths.count, before, "no terminal resize during the drag: \(seen.widths)")
@@ -101,6 +101,11 @@ extension XrayRemoteChipTests {
                 }
             }
         }
+    }
+
+    /// Three layout passes with the run loop turned between them; synchronous, as RunLoop.run is unavailable in an async test.
+    static func pump(_ host: NSView) {
+        for _ in 0..<3 { host.layoutSubtreeIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
     }
 
     /// The pure room: docked and open, the drawn width; closed or overlay, none (XrayDrawerWidth.width's bounds).
