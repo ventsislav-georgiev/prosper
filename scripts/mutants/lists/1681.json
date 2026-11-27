@@ -5,8 +5,8 @@
   {
    "name": "edit-session-keeps-shells",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
-   "old": "shells: edit ? [] : row.shells ?? [], agent: row.agent)",
-   "new": "shells: row.shells ?? [], agent: row.agent)",
+   "old": "shells: edit ? [] : row.shells ?? [], agent: row.agent,",
+   "new": "shells: row.shells ?? [], agent: row.agent,",
    "expect": "killed"
   },
   {

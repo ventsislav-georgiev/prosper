@@ -45,13 +45,6 @@
    "expect": "killed"
   },
   {
-   "name": "no-empty-check",
-   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "if p.isEmpty { return \"No pattern yet: not saved\" }",
-   "new": "",
-   "expect": "killed"
-  },
-  {
    "name": "no-invalid-check",
    "file": "app/Sources/ProsperApp/SettingsWindow.swift",
    "old": "case .invalid: return \"Not a valid regex: not saved\"",

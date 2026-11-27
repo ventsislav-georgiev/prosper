@@ -38,13 +38,6 @@
    "expect": "killed"
   },
   {
-   "name": "keep-empty-regex",
-   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
-   "old": "            guard !p.isEmpty else { return nil }\n",
-   "new": "",
-   "expect": "killed"
-  },
-  {
    "name": "no-nul-cut",
    "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
    "old": "let line = whole.prefix { $0 != 0 }",

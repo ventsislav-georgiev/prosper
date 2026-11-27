@@ -5,15 +5,15 @@
   {
    "name": "parse-drop",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "shells: DchShell.list(o[\"shells\"]),\n                              agent: DchListRow.agent(o[\"agent\"]))",
-   "new": "shells: DchShell.list(o[\"shells\"]))",
+   "old": "shells: DchShell.list(o[\"shells\"]),\n                              agent: DchListRow.agent(o[\"agent\"]),",
+   "new": "shells: DchShell.list(o[\"shells\"]),",
    "expect": "killed"
   },
   {
    "name": "null-as-absent",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "if v is NSNull { return \"\" }",
-   "new": "if v is NSNull { return nil }",
+   "old": "if v is NSNull { return \"\" }\n        guard let w = v as? String",
+   "new": "if v is NSNull { return nil }\n        guard let w = v as? String",
    "expect": "killed"
   },
   {
@@ -26,8 +26,8 @@
   {
    "name": "list-handover",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
-   "old": "shells: edit ? [] : row.shells ?? [], agent: row.agent)",
-   "new": "shells: edit ? [] : row.shells ?? [])",
+   "old": "row.shells ?? [], agent: row.agent,",
+   "new": "row.shells ?? [],",
    "expect": "killed"
   },
   {
