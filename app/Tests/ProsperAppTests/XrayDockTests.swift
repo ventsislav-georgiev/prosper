@@ -1,3 +1,4 @@
+import Combine
 import AppKit
 import SwiftUI
 import XCTest
@@ -100,6 +101,32 @@ extension XrayRemoteChipTests {
                     XCTAssertEqual(seen.widths.last ?? 0, 800 - end, accuracy: 1, "to the new room")
                 }
             }
+        }
+    }
+
+    /// Red at 46e5c1ab (XrayPanel.swift:1149, `start` not @Published): ended() only cleared `start`, so `settled` moved
+    /// (the drag's start width to the new points) with no objectWillChange and a docked terminal never re-read it.
+    /// Mutant dock-end-not-published.
+    func testXrayDockDragEndPublishesTheSettledWidth() async throws {
+        try await withDocked(true) {
+            let w = XrayDrawerWidth()
+            w.reset()   // the standard 480 whatever the scratch defaults hold, so the drag below moves it (withDocked puts the key back)
+            var sent = 0
+            let sub = w.objectWillChange.sink { sent += 1 }
+            defer { sub.cancel() }
+            w.dragged(by: 0, offered: 1000)
+            let from = w.settled
+            for i in 1...3 { w.dragged(by: CGFloat(20 * i), offered: 1000) }
+            XCTAssertEqual(w.settled, from, "control: settled holds the start width during the drag")
+            let before = sent
+            w.ended()
+            XCTAssertGreaterThan(sent, before, "ended() publishes: settled changes with it")
+            XCTAssertEqual(w.settled, w.points, "settled is the new points once the drag is over")
+            XCTAssertNotEqual(w.settled, from, "the width did change")
+            w.dragged(by: 40, offered: 1000)   // a drag in flight, then a reset: start clears before points moves
+            w.reset()
+            XCTAssertEqual(w.settled, XrayDrawerWidth.standard, "reset() leaves settled at the new points")
+            XCTAssertFalse(w.dragging, "reset() ends the drag")
         }
     }
 

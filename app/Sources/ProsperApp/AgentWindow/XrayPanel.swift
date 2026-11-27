@@ -1146,7 +1146,7 @@ final class XrayDrawerWidth: ObservableObject {
     static let standard: CGFloat = 480, minimum: CGFloat = 300, share: CGFloat = 0.6
     @Published private(set) var points: CGFloat = Preferences.xrayDrawerWidth.map { CGFloat($0) } ?? XrayDrawerWidth.standard
     /// The drawn width when the drag began; nil between drags.
-    private var start: CGFloat?
+    @Published private var start: CGFloat?   // published: ended() clears it, and a docked terminal reads `settled` (#2055)
     var dragging: Bool { start != nil }
     /// #2055: the stored points as they were when the drag began (the stored points between drags): what a docked drawer's
     /// terminal makes room for, so it resizes once, at the drag's end, never per tick.

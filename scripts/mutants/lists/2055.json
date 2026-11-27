@@ -41,6 +41,14 @@
    "new": "p.close = { panels.close(pane) }",
    "expect": "killed",
    "filter": "AgentWindowD1Tests/testXrayDock"
+  },
+  {
+   "name": "dock-end-not-published",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "    @Published private var start: CGFloat?",
+   "new": "    private var start: CGFloat?",
+   "expect": "killed",
+   "filter": "XrayRemoteChipTests/testXrayDockDragEndPublishesTheSettledWidth|XrayRemoteChipTests/testXrayDockDragResizesTheTerminalOnceAtItsEnd"
   }
  ]
 }
