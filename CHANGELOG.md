@@ -90,6 +90,9 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer opens wide enough to show every tab name, Schedules included (#2014)
 - The island's plan line marks Codex or Claude when it shows the other harness's limits, and the
   plan limits popover scrolls when it lists many accounts (#2034)
+- The account pool can add a Codex (ChatGPT) account: sign in with Codex's device login in a folder
+  Prosper owns, or import an existing Codex login from its folder (with a warning that the two will
+  fight over the login, and an offer to delete that folder's auth.json) (#2008)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

@@ -120,7 +120,12 @@ struct CCPoolState: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
-        current = try c.decodeIfPresent(String.self, forKey: .current)
+        // #2008: a string (the legacy, Claude-only shape) or the per-harness map (see encode); anything else throws.
+        if let legacy = try? c.decodeIfPresent(String.self, forKey: .current) {
+            current = legacy
+        } else {
+            currents = try c.decodeIfPresent([String: String].self, forKey: .current) ?? [:]
+        }
         accounts = try c.decodeIfPresent([String: Account].self, forKey: .accounts) ?? [:]
         let saved = try c.decodeIfPresent([String].self, forKey: .order) ?? []
         // Order names every account exactly once; a hand-edited or older file is repaired.
@@ -143,8 +148,15 @@ struct CCPoolState: Codable, Equatable, Sendable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
-        // shortcut: only Claude's current is saved (the legacy key); the phase that adds a second harness saves the others.
-        try c.encodeIfPresent(current, forKey: .current)
+        // #2008 downgrade guard (QA #2004 n1): with a non-Claude account in the file, "current" is written as the
+        // per-harness map, always (even empty). A pre-#2004 build decodes "current" as a String only, so the whole file
+        // fails to decode there and its store sets it aside (CCPoolStore.init) instead of sending a Codex login as Claude.
+        // A Claude-only file keeps the legacy string, byte for byte.
+        if accounts.values.contains(where: { $0.harness != ClaudeHarness.id }) {
+            try c.encode(currents, forKey: .current)
+        } else {
+            try c.encodeIfPresent(current, forKey: .current)
+        }
         try c.encode(order, forKey: .order)
         try c.encode(accounts, forKey: .accounts)
         // Absent when empty: a file without pins is written exactly as before this key existed.

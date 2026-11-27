@@ -451,6 +451,142 @@ final class CCPoolPaneModel: ObservableObject {
         }
     }
 
+    // MARK: Actions: Codex accounts (#2008)
+
+    @Published var codexLabelDraft = ""
+    /// The running device login's output, shown (CodexLogin.Lines); empty when none ran.
+    @Published private(set) var codexLines: [String] = []
+    @Published private(set) var codexLoginRunning = false
+    /// R1: the import's warning is up; nothing is picked or read until its Continue.
+    @Published private(set) var codexImportWarning = false
+    /// The folder of the last good import: its auth.json may be deleted, on that one click only.
+    @Published private(set) var codexImportedFolder: URL?
+    /// Seams: the login child, the Codex command's words, the import's folder picker.
+    var codexRunner: CodexLogin.Runner = CodexLogin.processRunner
+    var codexCommand: @MainActor () -> [String] = {
+        let c = Preferences.agentIslandCodexCommand   // New session's Codex command, as AgentNewSession reads it
+        // shortcut: split on spaces, no shell quoting; a wrapper path with spaces needs quoting support then.
+        return (c.isEmpty ? "codex" : c).split(separator: " ").map(String.init)
+    }
+    var pickCodexFolder: @MainActor (_ done: @escaping @MainActor (URL?) -> Void) -> Void = {
+        FolderPicker.choose(message: "Choose a CODEX_HOME folder (the one holding auth.json)", $0)
+    }
+    /// Set by the warning's Continue and used up by the one import it allows (R1: nothing is read before the warning).
+    private var codexImportAccepted = false
+    private var codexHandle: CodexLogin.Handle?
+
+    /// The label an empty field takes: the next free "codex-N".
+    var codexDefaultLabel: String { CodexLogin.defaultLabel(taken: Set(store.snapshot.accounts.keys)) }
+
+    private func codexLabel() -> String {
+        let typed = codexLabelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return typed.isEmpty ? codexDefaultLabel : typed
+    }
+
+    /// "Add Codex account…": Codex's device login in a scratch CODEX_HOME under the pool's own folder.
+    @discardableResult
+    func addCodexAccount() -> Task<Void, Never>? {
+        guard !busy else { return nil }
+        let label = codexLabel()
+        let command = codexCommand()
+        let handle = CodexLogin.Handle()
+        codexHandle = handle
+        notice = nil
+        codexLines = []
+        codexImportedFolder = nil
+        busy = true
+        codexLoginRunning = true
+        let store = store, secrets = secrets, logger = logger, runner = codexRunner
+        let root = store.directory.appendingPathComponent("codex-login", isDirectory: true)
+        let output = Self.codexOutput(self, handle: handle)
+        return Task.detached { [weak self] in
+            let outcome = await CodexLogin.signIn(label: label, command: command, scratchRoot: root, store: store,
+                                                  secrets: secrets, logger: logger, runner: runner, handle: handle,
+                                                  output: output)
+            await self?.finishCodex(outcome, handle: handle)
+        }
+    }
+
+    /// The login's text, split and cleaned off main (CodexLogin.Lines); the main actor only stores the lines. Formed in a
+    /// nonisolated static, so the closure the pipe calls off main is never @MainActor (errata C7).
+    nonisolated static func codexOutput(_ model: CCPoolPaneModel, handle: CodexLogin.Handle) -> @Sendable (String) -> Void {
+        let lines = CodexLogin.Lines()
+        return { [weak model] chunk in
+            guard let model else { return }
+            let shown = lines.feed(chunk)
+            Task { @MainActor in if model.codexHandle === handle { model.codexLines = shown } }
+        }
+    }
+
+    /// Cancel: the login child gets SIGTERM by its own pid; the scratch folder goes when it has exited.
+    func cancelCodexLogin() { codexHandle?.cancel() }
+
+    /// "Import from a CODEX_HOME folder…", step one: the R1 warning only.
+    func requestCodexImport() {
+        guard !busy else { return }
+        notice = nil
+        codexImportAccepted = false
+        codexImportedFolder = nil
+        codexImportWarning = true
+    }
+
+    func dismissCodexImport() { codexImportWarning = false }
+
+    /// Step two, the warning's Continue: pick the folder; the picker hands it to importCodex.
+    func continueCodexImport() {
+        guard codexImportWarning, !busy else { return }
+        codexImportWarning = false
+        codexImportAccepted = true
+        pickCodexFolder { [weak self] url in
+            guard let self, let url else { self?.codexImportAccepted = false; return }
+            self.importCodex(from: url)
+        }
+    }
+
+    /// Imports `folder`'s auth.json off main, once per accepted warning.
+    @discardableResult
+    func importCodex(from folder: URL) -> Task<Void, Never>? {
+        guard codexImportAccepted, !busy else { return nil }
+        codexImportAccepted = false
+        let label = codexLabel()
+        let handle = CodexLogin.Handle()
+        codexHandle = handle
+        busy = true
+        let store = store, secrets = secrets, logger = logger
+        return Task.detached { [weak self] in
+            let outcome = CodexLogin.importFolder(folder, label: label, store: store, secrets: secrets, logger: logger)
+            await self?.finishCodex(outcome, handle: handle, imported: folder)
+        }
+    }
+
+    /// The offer after a good import: removes that folder's auth.json, nothing else.
+    func deleteImportedAuth() {
+        guard let folder = codexImportedFolder else { return }
+        codexImportedFolder = nil
+        notice = CodexLogin.deleteAuth(in: folder) ? "Deleted auth.json in \(CCPoolStore.shown(folder.path))."
+            : "Could not delete auth.json in \(CCPoolStore.shown(folder.path))."
+    }
+
+    func keepImportedAuth() { codexImportedFolder = nil }
+
+    private func finishCodex(_ outcome: CodexLogin.Outcome, handle: CodexLogin.Handle, imported: URL? = nil) {
+        guard codexHandle === handle else { return }
+        codexHandle = nil
+        busy = false
+        codexLoginRunning = false
+        switch outcome {
+        case .added(let label):
+            codexLabelDraft = ""
+            codexImportedFolder = imported
+            notice = "Added \(label)."
+            reconcileProxy()   // the first account starts the proxy
+        case .failed(let why):
+            notice = why
+        case .cancelled:
+            notice = "Codex login cancelled; nothing added."
+        }
+    }
+
     func select(_ label: String?) {
         selected = selected == label ? nil : label
         renameDraft = selected ?? ""

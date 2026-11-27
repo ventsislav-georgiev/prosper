@@ -53,6 +53,7 @@ struct CCPoolPane: View {
             proxySection
             accountsSection
             addSection
+            codexAddSection
             usageSection
             thresholdSection
             CCPoolUsageStatsSection(model: model.usageStats)
@@ -161,6 +162,61 @@ struct CCPoolPane: View {
                     Button(model.busy ? "Checking…" : "Add") { model.addAccount() }
                         .buttonStyle(.neon).fixedSize()
                         .disabled(model.busy || model.labelDraft.trimmingCharacters(in: .whitespaces).isEmpty || model.tokenDraft.isEmpty)
+                }
+            }
+        }
+    }
+
+    // MARK: Add Codex (#2008)
+
+    static let codexLoginHint = "Signs in with Codex's device login in a folder Prosper owns, so no other Codex shares "
+        + "this login. Open the link below and enter the code it shows."
+
+    private var codexAddSection: some View {
+        NeonSection("Add Codex account") {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                NeonRow("Label") {
+                    TextField(model.codexDefaultLabel, text: $model.codexLabelDraft).textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: sz(260))
+                        .accessibilityLabel("Codex account label")
+                }
+                caption(Self.codexLoginHint)
+                ForEach(Array(model.codexLines.enumerated()), id: \.offset) { _, line in
+                    if let url = CodexLogin.link(in: line) {
+                        Link(line, destination: url).font(.system(size: sz(11))).textSelection(.enabled)
+                    } else {
+                        Text(line).font(.system(size: sz(11), design: .monospaced)).textSelection(.enabled)
+                    }
+                }
+                if model.codexImportWarning {
+                    caption(CodexLogin.importWarning, color: Neon.magenta)
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Cancel") { model.dismissCodexImport() }.buttonStyle(.neon).fixedSize()
+                        Button("Choose folder…") { model.continueCodexImport() }.buttonStyle(.neon).fixedSize()
+                    }
+                }
+                if let folder = model.codexImportedFolder {
+                    caption("Delete auth.json in \(CCPoolStore.shown(folder.path)), so only the pool holds this login?")
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Keep it") { model.keepImportedAuth() }.buttonStyle(.neon).fixedSize()
+                        Button("Delete auth.json") { model.deleteImportedAuth() }.buttonStyle(.neon).fixedSize()
+                    }
+                }
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("Import from a CODEX_HOME folder…") { model.requestCodexImport() }
+                        .buttonStyle(.neon).fixedSize()
+                        .disabled(model.busy || model.codexImportWarning)
+                    if model.codexLoginRunning {
+                        Button("Cancel") { model.cancelCodexLogin() }.buttonStyle(.neon).fixedSize()
+                            .accessibilityLabel("Cancel the Codex login")
+                    } else {
+                        Button("Add Codex account…") { model.addCodexAccount() }
+                            .buttonStyle(.neon).fixedSize()
+                            .disabled(model.busy)
+                    }
                 }
             }
         }

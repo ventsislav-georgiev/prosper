@@ -38,6 +38,8 @@ enum CCPoolStoreError: Error, Equatable, CustomStringConvertible {
     case stateUnreadable
     /// QA #739 INFO-6: too long, or a control or invisible character (CCPoolStore.labelProblem).
     case badLabel
+    /// #2008: the Keychain item read back differs from what was written; the item is removed, nothing listed.
+    case readBackMismatch
 
     var description: String {
         switch self {
@@ -51,6 +53,7 @@ enum CCPoolStoreError: Error, Equatable, CustomStringConvertible {
         case .noSuchAccount: return "ccpool: no such account"
         case .stateWriteFailed: return "ccpool: the account list could not be saved; nothing changed"
         case .stateUnreadable: return CCPoolStore.unreadableNote
+        case .readBackMismatch: return "ccpool: the Keychain did not return the login just stored; nothing added"
         }
     }
 }
@@ -250,8 +253,11 @@ final class CCPoolStore: @unchecked Sendable {
     private var writeFailure: CCPoolStoreError { unreadable ? .stateUnreadable : .stateWriteFailed }
 
     /// Store the token under a fresh opaque id, then list the account. Nothing is stored on error. Returns the id.
+    /// #2008: `harness`/`kind` for a Codex login (its item is the flat CodexCredential JSON); the item is read back
+    /// before the account is listed.
     @discardableResult
-    func addAccount(label: String, token: String, secrets: CCPoolSecrets) throws -> String {
+    func addAccount(label: String, token: String, secrets: CCPoolSecrets,
+                    harness: String = ClaudeHarness.id, kind: String? = nil) throws -> String {
         let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !unreadable else { throw CCPoolStoreError.stateUnreadable }
@@ -260,12 +266,16 @@ final class CCPoolStore: @unchecked Sendable {
         guard read({ $0.accounts[label] == nil }) else { throw CCPoolStoreError.duplicateLabel }
         let id = UUID().uuidString
         try secrets.store(token: token, id: id, label: label)
+        guard (try? secrets.token(id: id)) == token else {
+            do { try secrets.remove(id: id) } catch { logger.note(label, "add undone; its Keychain item could not be deleted") }
+            throw CCPoolStoreError.readBackMismatch
+        }
         // N2: the label is decided under the lock; a racing add of the same label wins, ours is undone.
         // P2a (c): the Keychain item is written first, then the state; a state that cannot be written
         // is undone in memory and the item is removed again, so no item exists that no state lists.
         let (added, saved) = mutateOrUndo { st -> Bool in
             guard st.accounts[label] == nil else { return false }
-            st.accounts[label] = CCPoolState.Account(id: id)
+            st.accounts[label] = CCPoolState.Account(id: id, harness: harness, kind: kind)
             st.order.append(label)
             return true
         }
