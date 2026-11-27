@@ -1,0 +1,104 @@
+{
+ "entry": 2024,
+ "filter": "XrayAnswerTests",
+ "mutants": [
+  {
+   "name": "gate-no-dch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "questions?.answerable == true && XrayPanels.probed.map { DchCommand.isAtLeast($0.version, Self.answerDch) } == true",
+   "new": "questions?.answerable == true",
+   "expect": "killed"
+  },
+  {
+   "name": "gate-no-header",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "questions?.answerable == true && XrayPanels.probed",
+   "new": "true && XrayPanels.probed",
+   "expect": "killed"
+  },
+  {
+   "name": "header-flag-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "r.answerable = h.answer == true",
+   "new": "r.answerable = true",
+   "expect": "killed"
+  },
+  {
+   "name": "target-no-live-check",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "guard let a = asker, !a.isEmpty, !a.hasPrefix(\"-\"), live.contains(a) else",
+   "new": "guard let a = asker, !a.isEmpty, !a.hasPrefix(\"-\") else",
+   "expect": "killed"
+  },
+  {
+   "name": "target-remote-no-host",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "return host(of: drawer).map { \"\\($0):\\(a)\" } ?? drawer.name",
+   "new": "return a",
+   "expect": "killed"
+  },
+  {
+   "name": "exit5-one-line",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "say(res?.why == \"no_question\" ? \"No such question any more\" : \"Already answered elsewhere: not sent\")",
+   "new": "say(\"No such question any more\")",
+   "expect": "killed"
+  },
+  {
+   "name": "exit5-no-reread",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "            say(res?.why == \"no_question\" ? \"No such question any more\" : \"Already answered elsewhere: not sent\")\n            rereadQuestions()",
+   "new": "            say(res?.why == \"no_question\" ? \"No such question any more\" : \"Already answered elsewhere: not sent\")",
+   "expect": "killed"
+  },
+  {
+   "name": "argv-no-notify",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "[\"--xray\", name, \"--answer\", qid, \"-\", \"--json\", \"--notify\", notify]",
+   "new": "[\"--xray\", name, \"--answer\", qid, \"-\", \"--json\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "stdin-untrimmed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "let input = Data(answerText.trimmingCharacters(in: .whitespacesAndNewlines).utf8)",
+   "new": "let input = Data(answerText.utf8)",
+   "expect": "killed"
+  },
+  {
+   "name": "success-no-reread",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "now().addingTimeInterval(Self.answerLineLife))\n            rereadQuestions()",
+   "new": "now().addingTimeInterval(Self.answerLineLife))",
+   "expect": "killed"
+  },
+  {
+   "name": "told-ok-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "if t?.ok == true { return \"Told \\(who)\" }",
+   "new": "if t != nil { return \"Told \\(who)\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "field-nul-allowed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "if t.unicodeScalars.contains(where: { $0 != \"\\n\" && $0 != \"\\t\" && OutsideText.isUnseen($0) })",
+   "new": "if t.unicodeScalars.contains(where: { _ in false })",
+   "expect": "killed"
+  },
+  {
+   "name": "open-on-answered",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayAnswer.swift",
+   "old": "guard answerShown, Self.isOpen(t) else { return }",
+   "new": "guard answerShown else { return }",
+   "expect": "killed"
+  },
+  {
+   "name": "options-uncapped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "(t.options ?? []).prefix(8)",
+   "new": "(t.options ?? [])",
+   "expect": "killed"
+  }
+ ]
+}
