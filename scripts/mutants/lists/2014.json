@@ -1,6 +1,6 @@
 {
  "entry": "2014",
- "filter": "XrayFollowSchedulesTests",
+ "filter": "XrayFollowSchedulesTests|XrayDrawerWidthTests",
  "mutants": [
   {
    "name": "route-by-block",
@@ -35,6 +35,13 @@
    "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
    "old": "if status == 2 || status == XrayPanels.followTasksRefused, withSchedules, !hasSnapshot {",
    "new": "if false, withSchedules, !hasSnapshot {",
+   "expect": "killed"
+  },
+  {
+   "name": "width-back-to-420",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "static let standard: CGFloat = 480,",
+   "new": "static let standard: CGFloat = 420,",
    "expect": "killed"
   }
  ]
