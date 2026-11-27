@@ -1,0 +1,27 @@
+{
+ "entry": "2034",
+ "filter": "AgentIslandPlanLimitsTests",
+ "mutants": [
+  {
+   "name": "marker-always-off",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "u.other = line == focused ? nil : (line == \"codex\" ? .codex : .claude)",
+   "new": "u.other = nil",
+   "expect": "killed"
+  },
+  {
+   "name": "marker-when-same",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "u.other = line == focused ? nil : (line",
+   "new": "u.other = line != focused ? nil : (line",
+   "expect": "killed"
+  },
+  {
+   "name": "cap-removed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "        .frame(maxHeight: Self.maxHeight)\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
