@@ -89,7 +89,7 @@
   {
    "name": "interrupt-state",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "guard s.state == .working else { throw ControlError(AgentWindowText.notWorking) }",
+   "old": "        guard s.state == .working else { throw ControlError(AgentWindowText.named(AgentWindowText.notWorking, codex: AgentIsland.runsCodex(s, records: []))) }\n",
    "new": "",
    "expect": "killed"
   },
