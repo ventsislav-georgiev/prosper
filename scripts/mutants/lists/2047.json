@@ -1,0 +1,48 @@
+{
+ "entry": "2047",
+ "filter": "ControlNoticeTests|ControlSessionsTalkTests",
+ "mutants": [
+  {
+   "name": "sender_dropped",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "return \"\\(sender ?? \"Agent\") \u2192 \\(target) (\\(verb))\\n\\(shown)\"",
+   "new": "return \"Agent \u2192 \\(target) (\\(verb))\\n\\(shown)\"",
+   "expect": "killed"
+  },
+  {
+   "name": "body_one_line",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "var shown = lines.prefix(bodyLines).map",
+   "new": "var shown = lines.prefix(1).map",
+   "expect": "killed"
+  },
+  {
+   "name": "no_line_cap",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "var shown = lines.prefix(bodyLines).map",
+   "new": "var shown = lines.map",
+   "expect": "killed"
+  },
+  {
+   "name": "body_not_cleaned",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": ".map { OutsideText.shown(String($0), max: bodyMax) }",
+   "new": ".map { String($0) }",
+   "expect": "killed"
+  },
+  {
+   "name": "no_time_cap",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "min(maxSeconds, max(visibleSeconds, Double(text.count) / charsPerSecond))",
+   "new": "max(visibleSeconds, Double(text.count) / charsPerSecond)",
+   "expect": "killed"
+  },
+  {
+   "name": "lookup_on_reads",
+   "file": "app/Sources/ProsperApp/Control/ControlRegistry.swift",
+   "old": "if cmd.mutates, let from { registry.sender = ControlSessions.sender(from) }",
+   "new": "if let from { registry.sender = ControlSessions.sender(from) }",
+   "expect": "killed"
+  }
+ ]
+}
