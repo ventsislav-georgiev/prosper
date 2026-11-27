@@ -864,12 +864,14 @@ final class CCPoolConnection: @unchecked Sendable {
         // #2006: a Codex row carries no session id (its session_id is never written); the account and model word only.
         let keyed = harness.id == ClaudeHarness.id && head.flatMap({ harness.pinKey($0) }) != nil
         let ms = (end - startedAt) * 1000
+        // #2042: the account's harness now; "" (none reached) or a removed account takes this request's harness.
+        let hid = store.read { st in st.accounts.values.first { $0.id == acct }?.harness } ?? harness.id
         record.add(CCPoolUsageRow(t: end, acct: acct, model: CCPoolUsageRow.modelWord(model),
                                   sess: keyed ? head?.header("x-claude-code-session-id") : nil,
                                   agent: keyed ? head?.header("x-claude-code-agent-id") ?? "" : nil,
                                   path: CCPoolUsageRow.pathWord(head?.path ?? ""), st: st,
                                   ms: ms.isFinite && ms >= 0 && ms < 1e12 ? Int(ms) : 0, done: done, qc: quotaCheck,
-                                  att: attempts, thr: throttleRetries, mv: movedFrom != nil, routed: routed,
+                                  att: attempts, thr: throttleRetries, mv: movedFrom != nil, routed: routed, harness: hid,
                                   usage: usage, lim: lim))
     }
 

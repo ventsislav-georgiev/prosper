@@ -104,6 +104,8 @@ tag from the now-released section and put it on the new top draft.
   Follow theme). (#2041)
 - The account pool's Refresh reads each Codex account's 5-hour and weekly usage, and the pane lists
   Claude and Codex accounts in their own groups. (#2010)
+- The account pool's usage stats and its control replies tell Claude and Codex accounts apart; usage
+  files from earlier builds still read. (#2042)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

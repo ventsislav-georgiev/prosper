@@ -221,7 +221,7 @@ final class CCPoolRestartKeepTests: XCTestCase {
         let t = 1_800_000_000.25
         r.service.usageRecord.add(CCPoolUsageRow(t: t, acct: "acct-example-1", model: "claude-opus-5", sess: nil, agent: nil,
                                                  path: "messages", st: 200, ms: 7, done: true, qc: false, att: 1, thr: 0,
-                                                 mv: false, routed: "pick", usage: nil, lim: [:]))
+                                                 mv: false, routed: "pick", harness: "claude", usage: nil, lim: [:]))
         r.service.eventRecord.add(CCPoolEventRow(t: t, ev: .bench, acct: "Example Org A", from: nil, to: nil,
                                                  claim: "five_hour", reset: 1_900_000_000, sess: nil))
         r.service.usageRecord.settle()

@@ -38,6 +38,7 @@ enum CCPoolControl {
         let accounts = m.rows.map { row -> ControlJSON in
             var o = usage(row.label, st, m.store, now: now)
             o["label"] = .string(row.label)
+            o["harness"] = .string(st.accounts[row.label]?.harness ?? ClaudeHarness.id)
             o["state"] = .string(row.stateText)
             o["sessions"] = .number(Double(row.sessions))
             if case .held = row.state { o["held"] = .bool(true) } else { o["held"] = .bool(false) }
@@ -90,8 +91,10 @@ enum CCPoolControl {
         var o = usage(label, st, m.store, now: now)
         o["pinned"] = .bool(true)
         o["label"] = .string(label)
+        o["harness"] = .string(st.accounts[label]?.harness ?? ClaudeHarness.id)
         o["agents"] = .array(mine.sorted { $0.key < $1.key }.map {
-            .object(["agent": .string(String($0.key.dropFirst(prefix.count))), "label": .string($0.value.account)])
+            .object(["agent": .string(String($0.key.dropFirst(prefix.count))), "label": .string($0.value.account),
+                     "harness": .string(st.accounts[$0.value.account]?.harness ?? ClaudeHarness.id)])
         })
         return .object(o)
     }
@@ -124,15 +127,20 @@ enum CCPoolControl {
              "cache_write_1h": .number(Double(t.cacheWrite1h)), "total": .number(Double(t.total))]
         }
         var byLabel: [String: CCPoolUsageTotals] = [:]
+        // #2042: the harness of each account id as its rows say (the newest row wins); a label shared by ids takes the first id's.
+        var harnessOf: [String: String] = [:], byLabelHarness: [String: String] = [:]
+        for row in rows { harnessOf[row.acct] = row.harness }
         for (id, t) in CCPoolUsageStats.tokens(rows, by: .account) {
             var sum = byLabel[label(id), default: CCPoolUsageTotals()]
             sum.input += t.input; sum.output += t.output; sum.cacheRead += t.cacheRead
             sum.cacheWrite5m += t.cacheWrite5m; sum.cacheWrite1h += t.cacheWrite1h; sum.requests += t.requests
             byLabel[label(id)] = sum
+            if byLabelHarness[label(id)] == nil { byLabelHarness[label(id)] = harnessOf[id] ?? ClaudeHarness.id }
         }
         let accounts = byLabel.keys.sorted(by: CCPoolCore.labelFirst).map { l -> ControlJSON in
             var o = totals(byLabel[l] ?? CCPoolUsageTotals())
             o["label"] = .string(l)
+            o["harness"] = .string(byLabelHarness[l] ?? ClaudeHarness.id)
             return .object(o)
         }
         let top = CCPoolUsageStats.topSessions(rows, limit: sessionsMax + 1)

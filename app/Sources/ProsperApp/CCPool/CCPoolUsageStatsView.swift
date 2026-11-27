@@ -23,7 +23,7 @@ final class CCPoolUsageStatsModel: ObservableObject {
     }
 
     enum Grouping: String, CaseIterable, Identifiable, Sendable {
-        case account = "Account", model = "Model", session = "Session"
+        case account = "Account", model = "Model", session = "Session", harness = "Harness"
         var id: String { rawValue }
     }
 
@@ -88,6 +88,9 @@ final class CCPoolUsageStatsModel: ObservableObject {
                              "Time to finish per model"]
 
         /// VoiceOver: each chart's label (its title) and a value that says what it shows.
+        /// #2042: the Harness grouping is offered only when the rows hold more than one harness.
+        var hasHarnessSplit: Bool { tokens[.harness] != nil }
+
         func charts(_ grouping: Grouping) -> [(title: String, summary: String)] {
             let pct = { (v: Double) in String(format: "%.0f%%", v) }
             let util = utilization.map { l in
@@ -160,6 +163,7 @@ final class CCPoolUsageStatsModel: ObservableObject {
             let s = await Task.detached { CCPoolUsageStatsModel.shape(read(dir, range, now), labels: names) }.value
             guard let self, g == self.generation else { return }
             self.shown = s
+            if grouping == .harness && !s.hasHarnessSplit { grouping = .account }   // the split went away
             self.loading = false
         }
     }
@@ -171,6 +175,10 @@ final class CCPoolUsageStatsModel: ObservableObject {
         let accts = names(Set(rows.map(\.acct))) { id in labels[id].map { OutsideText.shown($0, max: 40) } ?? "removed account" }
         let sessions = names(Set(rows.compactMap(\.sess)), shortSession)
         let models = names(Set(rows.map(\.model))) { OutsideText.shown($0, max: 64) }
+        // #2042: "claude" and "codex" by name; an unknown id is shown as itself.
+        let harnesses = names(Set(rows.map(\.harness))) { id in
+            id == ClaudeHarness.id ? "Claude" : id == CCPoolCodexHarness.id ? "Codex" : OutsideText.shown(id, max: 64)
+        }
         func kinds(_ t: CCPoolUsageTotals) -> [Int] { [t.input, t.cacheWrite5m, t.cacheWrite1h, t.cacheRead, t.output] }
         func percent(_ p: [CCPoolUsageStats.Point]) -> [CCPoolUsageStats.Point] { p.map { .init(t: $0.t, value: $0.value * 100) } }
 
@@ -191,7 +199,10 @@ final class CCPoolUsageStatsModel: ObservableObject {
             s.utilization.append(Line(name: "other (\(rest.count))", points: p, markers: m))
         }
         for (g, group, map) in [(Grouping.account, CCPoolUsageGroup.account, accts), (Grouping.model, CCPoolUsageGroup.model, models),
-                                    (Grouping.session, CCPoolUsageGroup.session, sessions)] {
+                                    (Grouping.session, CCPoolUsageGroup.session, sessions),
+                                    (Grouping.harness, CCPoolUsageGroup.harness, harnesses)] {
+            // #2042: the Harness bars exist only when the rows hold more than one harness.
+            if g == .harness && Set(rows.lazy.map(\.harness)).count < 2 { continue }
             s.tokens[g] = capBars(CCPoolUsageStats.tokens(rows, by: group).map { Bar(name: map[$0.key] ?? "", kinds: kinds($0.totals), total: $0.totals.total) })
         }
         let hits = CCPoolUsageStats.cacheHitRate(rows)
@@ -333,7 +344,7 @@ struct CCPoolUsageStatsSection: View {
                     // The picker sits above the chart: the chart is one ignored element, which would hide it from VoiceOver.
                     if i == 1 {
                         Picker("Group by", selection: $model.grouping) {
-                            ForEach(CCPoolUsageStatsModel.Grouping.allCases) { Text($0.rawValue).tag($0) }
+                            ForEach(CCPoolUsageStatsModel.Grouping.allCases.filter { $0 != .harness || s.hasHarnessSplit }) { Text($0.rawValue).tag($0) }
                         }
                         .pickerStyle(.segmented).labelsHidden().fixedSize()
                         .accessibilityLabel("Group by")

@@ -80,6 +80,7 @@ final class ControlCCPoolTests: XCTestCase {
             st.pin("s3/agent-x", to: "Charlie", now: now - 50)
             st.pin("s3/agent-y", to: "delta", now: now - 10)
             st.pin("old/", to: "echo", now: now - 4000)   // idle past pinIdle: not live
+            st.accounts["delta"]?.harness = CCPoolCodexHarness.id   // #2042: the others are claude (absent)
         }
         r.store.recordUsage(id: id(r, "alpha"), limits: ["five_hour": CCPoolLimit(status: "allowed", utilization: "0.42", reset: nil)])
         return r
@@ -98,13 +99,15 @@ final class ControlCCPoolTests: XCTestCase {
         XCTAssertEqual(o["sessions"], .number(3), "s1, s2, s3; the idle pin is not live")
         let rows = list(o["accounts"])
         XCTAssertEqual(rows.map { $0["label"] }, ["alpha", "bravo", "Charlie", "delta", "echo"].map { .string($0) })
-        XCTAssertEqual(rows.first?.keys.sorted(), ["benched", "five_hour", "held", "label", "sessions", "seven_day", "state"])
+        XCTAssertEqual(rows.first?.keys.sorted(), ["benched", "five_hour", "harness", "held", "label", "sessions", "seven_day", "state"])
         let by = Dictionary(rows.map { row -> (String, [String: ControlJSON]) in
             guard case .string(let l)? = row["label"] else { return ("", row) }
             return (l, row)
         }, uniquingKeysWith: { a, _ in a })
         XCTAssertEqual(by["alpha"]?["sessions"], .number(2))
         XCTAssertEqual(by["alpha"]?["state"], .string("ready"))
+        XCTAssertEqual(by["alpha"]?["harness"], .string("claude"))
+        XCTAssertEqual(by["delta"]?["harness"], .string("codex"))
         XCTAssertEqual(by["echo"]?["state"], .string("active"))
         XCTAssertEqual(by["echo"]?["sessions"], .number(0))
         XCTAssertEqual(by["bravo"]?["held"], .bool(true))
@@ -120,14 +123,16 @@ final class ControlCCPoolTests: XCTestCase {
     func testCCPoolPinMainAgentThenLatestAndNotPinned() async throws {
         _ = try pool()
         let s1 = obj(await call("ccpool.pin", ["session": .string("s1")]))
-        XCTAssertEqual(s1.keys.sorted(), ["agents", "five_hour", "label", "pinned", "seven_day"])
+        XCTAssertEqual(s1.keys.sorted(), ["agents", "five_hour", "harness", "label", "pinned", "seven_day"])
         XCTAssertEqual(s1["pinned"], .bool(true))
         XCTAssertEqual(s1["label"], .string("alpha"), "the main agent's pin wins over a later agent's")
         XCTAssertEqual(claim(s1, "five_hour"), ["percent": .number(42), "resets": .number(t0 + 7200)])
-        XCTAssertEqual(s1["agents"], .array([.object(["agent": .string(""), "label": .string("alpha")]),
-                                             .object(["agent": .string("agent-a"), "label": .string("bravo")])]))
+        XCTAssertEqual(s1["agents"], .array([.object(["agent": .string(""), "label": .string("alpha"), "harness": .string("claude")]),
+                                             .object(["agent": .string("agent-a"), "label": .string("bravo"), "harness": .string("claude")])]))
+        XCTAssertEqual(s1["harness"], .string("claude"))
         let s3 = obj(await call("ccpool.pin", ["session": .string("s3")]))
         XCTAssertEqual(s3["label"], .string("delta"), "no main pin: the most recently seen agent's")
+        XCTAssertEqual(s3["harness"], .string("codex"))
         XCTAssertEqual(claim(s3, "five_hour"), ["percent": .null, "resets": .null])
         for none in ["nobody", "old", "s"] {
             let r = await call("ccpool.pin", ["session": .string(none)])
@@ -155,9 +160,10 @@ final class ControlCCPoolTests: XCTestCase {
 
     // MARK: usage
 
-    private func line(_ t: Double, _ acct: String, sess: String? = nil, tok: [Int], qc: Bool = false) -> String {
+    private func line(_ t: Double, _ acct: String, sess: String? = nil, tok: [Int], qc: Bool = false, harness: String? = nil) -> String {
         var o: [String: Any] = ["v": 1, "t": t, "acct": acct, "model": "claude-opus-5", "path": "messages", "st": 200, "ms": 1000,
                                 "done": true, "qc": qc, "att": 1, "thr": 0, "mv": false, "routed": "pin"]
+        if let harness { o["harness"] = harness }
         if let sess { o["sess"] = sess; o["agent"] = "" }
         for (k, v) in zip(["in", "out", "cr", "cw5", "cw1"], tok) { o[k] = v }
         let data = try? JSONSerialization.data(withJSONObject: o, options: [.sortedKeys])
@@ -185,7 +191,7 @@ final class ControlCCPoolTests: XCTestCase {
                 line(t0 - 5 * 3600, id(r, "alpha"), sess: "0123456789abcdef", tok: [1000, 0, 0, 0, 0]),   // before since
                 line(t0 - 3600, id(r, "alpha"), sess: "0123456789abcdef", tok: [100, 50, 0, 900, 0]),
                 line(t0 - 1800, id(r, "bravo"), sess: "fedcba9876543210", tok: [10, 20, 0, 0, 0]),
-                line(t0 - 1750, id(r, "Charlie"), sess: "fedcba9876543210", tok: [3, 0, 0, 0, 0]),
+                line(t0 - 1750, id(r, "Charlie"), sess: "fedcba9876543210", tok: [3, 0, 0, 0, 0], harness: "codex"),
                 line(t0 - 1700, "id-removed", tok: [1, 1, 1, 1, 1]),
                 line(t0 - 1600, id(r, "alpha"), tok: [0, 1, 0, 0, 0], qc: true),   // a quota check: no tokens counted
             ],
@@ -200,9 +206,11 @@ final class ControlCCPoolTests: XCTestCase {
         XCTAssertEqual(o["more_sessions"], .bool(false))
         let accts = list(o["accounts"])
         XCTAssertEqual(accts.map { $0["label"] }, ["alpha", "bravo", "Charlie", "removed account"].map { .string($0) })
-        XCTAssertEqual(accts.first?.keys.sorted(), ["cache_read", "cache_write_1h", "cache_write_5m", "input", "label", "output", "requests", "total"])
+        XCTAssertEqual(accts.first?.keys.sorted(), ["cache_read", "cache_write_1h", "cache_write_5m", "harness", "input", "label", "output", "requests", "total"])
         XCTAssertEqual(accts.first.map(totals), [1, 100, 50, 0, 900, 0, 1050], "the row before since is not counted")
         XCTAssertEqual(accts.last.map(totals), [1, 1, 1, 1, 1, 1, 5])
+        // #2042: a row without the key (every old file) is claude; a written one is the account's.
+        XCTAssertEqual(accts.map { $0["harness"] }, ["claude", "claude", "codex", "claude"].map { .string($0) })
         let sessions = list(o["sessions"])
         XCTAssertEqual(sessions.map { $0["session"] }, [.string("01234567\u{2026}"), .string("fedcba98\u{2026}")])
         XCTAssertEqual(sessions.last?["accounts"], .array([.string("bravo"), .string("Charlie")]))

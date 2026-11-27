@@ -58,6 +58,16 @@ final class CCPoolUsageReaderTests: XCTestCase {
             lim: ["five_hour": .init(u: 0.5, r: 1_800_003_600, s: "a")])])
     }
 
+    /// #2042: rdLine is a pre-harness line (every file written before): it reads whole, as claude. A written harness is kept
+    /// as is, known or not; a non-string or empty one is skipped under its own reason.
+    func testHarnessAbsentReadsAsClaudeUnknownIsKeptAndNonStringIsSkipped() throws {
+        let lines = [rdLine(), rdLine(["harness": "\"codex\""]), rdLine(["harness": "\"gemini-x\""]), rdLine(["harness": "7"]),
+                     rdLine(["harness": "null"]), rdLine(["harness": "\"\""]), rdLine(["harness": "[\"codex\"]"])]
+        let got = CCPoolUsageReader.readNow(directory: try dir([rdDay: lines.joined(separator: "\n") + "\n"]), range: .day, now: rdNow)
+        XCTAssertEqual(got.rows.map(\.harness), ["claude", "codex", "gemini-x"])
+        XCTAssertEqual(got.skipped, [.harness: 4])
+    }
+
     func testRowWithoutSessionOrUsageOrLimDecodes() throws {
         let bare = rdLine(["sess": nil, "agent": nil, "in": nil, "out": nil, "cr": nil, "cw5": nil, "cw1": nil, "lim": nil])
         let got = CCPoolUsageReader.readNow(directory: try dir([rdDay: bare + "\n"]), range: .day, now: rdNow)

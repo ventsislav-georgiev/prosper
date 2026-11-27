@@ -71,9 +71,9 @@ final class CCPoolUsageRecordTests: XCTestCase {
 
     private func row(_ acct: String, sess: String = "", qc: Bool = false, done: Bool = true, att: Int = 1, thr: Int = 0,
                      mv: Bool = false, routed: String = "pick", counts: Bool = true, st: Int = 200,
-                     answered: Bool = false, path: String = "messages") -> String {
+                     answered: Bool = false, path: String = "messages", harness: String = "claude") -> String {
         "{\"v\":1,\"t\":1800000000.250,\"acct\":\"\(acct)\",\"model\":\"claude-opus-5\"\(sess),\"path\":\"\(path)\",\"st\":\(st),\"ms\":0,"
-            + "\"done\":\(done),\"qc\":\(qc),\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\"\(routed)\""
+            + "\"done\":\(done),\"qc\":\(qc),\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\"\(routed)\",\"harness\":\"\(harness)\""
             + (counts && !answered ? "," + recCounts : "") + (answered ? "" : "," + recLim) + "}"
     }
 
@@ -326,6 +326,16 @@ final class CCPoolUsageRecordTests: XCTestCase {
     }
 
     /// i2: the time stays below year 9999, so a day file name always matches isOwnName.
+    /// #2042: the line names the account's harness right after `routed`; every other key keeps its place.
+    func testLineCarriesTheHarnessAfterRouted() throws {
+        for id in ["claude", "codex"] {
+            var row = writerRow()
+            row.harness = id
+            let text = String(decoding: try XCTUnwrap(row.line()), as: UTF8.self)
+            XCTAssertTrue(text.contains("\"routed\":\"pick\",\"harness\":\"\(id)\"}"), text)
+        }
+    }
+
     func testRowTimeIsBelowYear9999() {
         var row = writerRow()
         row.t = 253402300799
@@ -338,7 +348,7 @@ final class CCPoolUsageRecordTests: XCTestCase {
 
     private func writerRow(_ acct: String = "acct-example-1") -> CCPoolUsageRow {
         CCPoolUsageRow(t: recNow, acct: acct, model: "claude-opus-5", sess: nil, agent: nil, path: "messages", st: 200, ms: 7,
-                       done: true, qc: false, att: 1, thr: 0, mv: false, routed: "pick", usage: nil, lim: [:])
+                       done: true, qc: false, att: 1, thr: 0, mv: false, routed: "pick", harness: "claude", usage: nil, lim: [:])
     }
 
     private func names(_ dir: URL) -> [String] {

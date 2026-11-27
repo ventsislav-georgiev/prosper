@@ -31,12 +31,14 @@ struct CCPoolUsageEntry: Equatable, Sendable {
     var thr: Int
     var mv: Bool
     var routed: String
+    /// #2042: absent (a file from before) reads as claude; an unknown id is kept as written.
+    var harness: String = ClaudeHarness.id
     var tokens: Tokens?
     var lim: [String: Claim]
 }
 
 enum CCPoolUsageSkip: String, CaseIterable, Sendable {
-    case tooLong, notJSON, version, missing, type, number, utilization, epoch
+    case tooLong, notJSON, version, missing, type, number, utilization, epoch, harness
 }
 
 enum CCPoolUsageRange: Sendable {
@@ -158,6 +160,11 @@ enum CCPoolUsageReader {
             let sess = try string(obj["sess"], required: false), agent = try string(obj["agent"], required: false)
             // sess and agent come together or not at all.
             if (sess == nil) != (agent == nil) { throw Bad(reason: .missing) }
+            var harness = ClaudeHarness.id
+            if let h = obj["harness"] {
+                guard let hs = h as? String, !hs.isEmpty, hs.utf8.count <= stringMax else { throw Bad(reason: .harness) }
+                harness = hs
+            }
             let st = try count(obj["st"], required: true)!, ms = try count(obj["ms"], required: true)!
             let att = try count(obj["att"], required: true)!, thr = try count(obj["thr"], required: true)!
             let done = try bool(obj["done"]), qc = try bool(obj["qc"]), mv = try bool(obj["mv"])
@@ -186,7 +193,7 @@ enum CCPoolUsageReader {
                 }
             }
             return .success(CCPoolUsageEntry(t: t, acct: acct!, model: model!, sess: sess, agent: agent, path: path!, st: st, ms: ms,
-                                             done: done, qc: qc, att: att, thr: thr, mv: mv, routed: routed!, tokens: tokens, lim: lim))
+                                             done: done, qc: qc, att: att, thr: thr, mv: mv, routed: routed!, harness: harness, tokens: tokens, lim: lim))
         } catch let b as Bad {
             return .failure(b)
         } catch {
@@ -247,7 +254,7 @@ struct CCPoolUsageTotals: Equatable, Sendable {
     }
 }
 
-enum CCPoolUsageGroup: Sendable { case account, model, session }
+enum CCPoolUsageGroup: Sendable { case account, model, session, harness }
 
 enum CCPoolUsageStats {
     struct Point: Equatable, Sendable { var t: Double; var value: Double }
@@ -295,6 +302,7 @@ enum CCPoolUsageStats {
             switch group {
             case .account: key = row.acct
             case .model: key = row.model
+            case .harness: key = row.harness
             case .session: guard let s = row.sess else { continue }; key = s
             }
             out[key, default: CCPoolUsageTotals()].add(k)

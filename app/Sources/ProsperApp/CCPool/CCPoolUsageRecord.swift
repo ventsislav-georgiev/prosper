@@ -20,6 +20,8 @@ struct CCPoolUsageRow: Equatable, Sendable {
     var thr: Int
     var mv: Bool
     var routed: String
+    /// #2042: the harness id of the account that served the row (PoolHarness.id).
+    var harness: String
     var usage: CCPoolTokenUsage?
     var lim: [String: CCPoolLimit]
 
@@ -56,7 +58,7 @@ struct CCPoolUsageRow: Equatable, Sendable {
         var s = "{\"v\":1,\"t\":\(String(format: "%.3f", t)),\"acct\":\(Self.quote(acct)),\"model\":\(Self.quote(Self.modelWord(model)))"
         if let sess { s += ",\"sess\":\(Self.quote(sess)),\"agent\":\(Self.quote(agent ?? ""))" }
         s += ",\"path\":\(Self.quote(path)),\"st\":\(st),\"ms\":\(max(0, ms)),\"done\":\(done),\"qc\":\(qc)"
-        s += ",\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\(Self.quote(routed))"
+        s += ",\"att\":\(att),\"thr\":\(thr),\"mv\":\(mv),\"routed\":\(Self.quote(routed)),\"harness\":\(Self.quote(harness))"
         if let u = usage {
             // CCPoolUsageTap.count bounds every count to a finite 0...1e12, so Int() cannot trap.
             let n = [u.input, u.output, u.cacheRead, u.cacheWrite5m, u.cacheWrite1h].map { Int($0) }

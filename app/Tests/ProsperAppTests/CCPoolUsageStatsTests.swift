@@ -14,9 +14,11 @@ private let stLabels = ["id-a": "Example Org A", "id-b": "Example Org B"]
 
 /// One row as JSON text, in the writer's shape; tokens are (in, out, cr, cw5, cw1); lim is five_hour (u, r).
 private func stLine(_ t: Double, acct: String = "id-a", model: String = "claude-opus-5", sess: String? = "s-0001", agent: String = "",
-                    st: Int = 200, ms: Int = 1000, done: Bool = true, qc: Bool = false, tok: [Int]? = nil, five: (Double, Double)? = nil) -> String {
+                    st: Int = 200, ms: Int = 1000, done: Bool = true, qc: Bool = false, tok: [Int]? = nil, five: (Double, Double)? = nil,
+                    harness: String? = nil) -> String {
     var o: [String: Any] = ["v": 1, "t": t, "acct": acct, "model": model, "path": "messages", "st": st, "ms": ms, "done": done, "qc": qc,
                             "att": 1, "thr": 0, "mv": false, "routed": "pin"]
+    if let harness { o["harness"] = harness }
     if let sess { o["sess"] = sess; o["agent"] = agent }
     if let tok, tok.count == 5 { for (k, v) in zip(["in", "out", "cr", "cw5", "cw1"], tok) { o[k] = v } }
     if let five { o["lim"] = ["five_hour": ["u": five.0, "r": five.1, "s": "a"] as [String: Any]] }
@@ -128,6 +130,25 @@ final class CCPoolUsageStatsTests: XCTestCase {
             "1 session; most tokens: s-000\u{2026}, 4250 tokens",
             "claude-opus-5 on 2027-01-15: median 1.5 s, 90th percentile 1.5 s, 1 request",
         ])
+    }
+
+    /// #2042: with two harnesses in the rows the Harness grouping exists (named, one bar each); with one (or none written) the
+    /// model is what it was and offers no split.
+    func testTokensSplitByHarnessOnlyWhenBothExist() async throws {
+        let day = "usage-2027-01-15.jsonl"
+        let (both, _) = try rig([day: [stLine(stNow - 600, tok: [1, 2, 3, 4, 5]),
+                                       stLine(stNow - 500, acct: "id-b", tok: [10, 20, 30, 40, 50], harness: "codex"),
+                                       stLine(stNow - 400, acct: "id-b", tok: [10, 20, 30, 40, 50], harness: "codex")]])
+        await both.reload().value
+        let s = try XCTUnwrap(both.shown)
+        XCTAssertTrue(s.hasHarnessSplit)
+        XCTAssertEqual(s.tokens[.harness], [M.Bar(name: "Claude", kinds: [1, 4, 5, 3, 2], total: 15),
+                                            M.Bar(name: "Codex", kinds: [20, 80, 100, 60, 40], total: 300)])
+        let (one, _) = try rig([day: [stLine(stNow - 600, tok: [1, 2, 3, 4, 5]), stLine(stNow - 500, tok: [1, 2, 3, 4, 5], harness: "claude")]])
+        await one.reload().value
+        XCTAssertTrue(one.shown?.hasHarnessSplit == false)
+        XCTAssertTrue(one.shown?.tokens[.harness] == nil)
+        XCTAssertEqual(one.shown?.tokens.keys.count, 3)
     }
 
     func testFourteenDayFixtureRendersEveryChartModel() async throws {
@@ -273,7 +294,7 @@ final class CCPoolUsageStatsTests: XCTestCase {
         XCTAssertEqual(s.cache.count, 10, "hit rate keeps the busiest 10 sessions")
         XCTAssertEqual(s.moreSessions, 390)
         XCTAssertTrue(s.charts(.account)[2].summary.hasSuffix("; and 390 more"), "the summary says how many are left out")
-        for g in M.Grouping.allCases {
+        for g in M.Grouping.allCases where s.tokens[g] != nil {   // #2042: Harness has bars only with two harnesses
             let bars = s.tokens[g] ?? []
             XCTAssertLessThanOrEqual(bars.count * M.kinds.count, 2000)
             XCTAssertLessThanOrEqual(M.kinds.count, 25)
