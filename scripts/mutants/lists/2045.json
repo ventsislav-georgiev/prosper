@@ -1,0 +1,27 @@
+{
+ "entry": "2045",
+ "filter": "AgentWindowStyleTests",
+ "mutants": [
+  {
+   "name": "content_frame_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            cv.frame = frameView.convert(r, from: nil)\n",
+   "new": "            _ = frameView.convert(r, from: nil)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "fill_reset_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        SettingsWindow.applyWindowOpacity(win)   // the fill through AgentsNSWindow's setters, then the shadow again\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "standard_build_skips_applystyle",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        applyStyle(win)   // #2045: every style, Standard too, is built by the live switch's own path\n",
+   "new": "        win.minimum = minimum(for: win, scale: s)\n        SettingsWindow.applyWindowOpacity(win)\n        if Preferences.agentWindowStyle != .standard { applyStyle(win) }\n",
+   "expect": "killed"
+  }
+ ]
+}
