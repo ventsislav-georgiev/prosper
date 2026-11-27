@@ -81,6 +81,8 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var limits: [String: CCPoolLimit] = [:]
     /// #2006: a Codex 429's response headers, kept for its spent check once the body snippet is in.
     var upstreamHeaders: [String: String] = [:]
+    /// #2015: a Codex 400 after an account move, its head held back while its body is read for an encrypted-content error.
+    var held400 = false
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
@@ -200,6 +202,8 @@ final class CCPoolConnection: @unchecked Sendable {
     /// #1855: the first account's 429 once a keyed quota check was re-placed (its ONE re-placement); nowhere else to go
     /// answers with it.
     private var replacedFrom: CCPoolExchange?
+    /// #2015: the body was sent again without its encrypted reasoning items; a second encrypted 400 passes through.
+    private var strippedReplay = false
     /// #1482: when the relay started, and how the last account was chosen ("pin", "place" or "pick").
     private var startedAt = 0.0
     private var routed = "pick"
@@ -651,6 +655,16 @@ final class CCPoolConnection: @unchecked Sendable {
                 log.note(label, "now full on \(spent.keys.sorted().joined(separator: ",")); retired before it could reject anything")
                 if let retired { for (claim, until) in spent.sorted(by: { $0.key < $1.key }) { event(.retire, acct: retired, claim: claim, reset: until) } }
             }
+            // #2015: a Codex 400 may be an account refusing reasoning another account sealed (a move, this turn or an
+            // earlier one): its head waits while the body (4 KiB at most) is read; finish400 decides. Nothing else reads it.
+            if codex, code == 400, !strippedReplay, replayable {
+                ex.held400 = true
+                ex.upstreamHeaders = headers
+                ex.status = code
+                ex.limits = limits
+                ex.mode = .snippet
+                return decide(.allow)
+            }
         }
         writeHead(response.statusCode, headers)
         // #1482: the tap reads every relayed reply for the usage record.
@@ -670,6 +684,12 @@ final class CCPoolConnection: @unchecked Sendable {
         switch ex.mode {
         case .deciding: return
         case .snippet:
+            // #2015: the held 400 keeps every byte (it may still go to the client); decided at 4 KiB or at its end.
+            if ex.held400 {
+                ex.snippet.append(data)
+                if ex.snippet.count >= CCPoolCodexHarness.bodyCap { finish400(ex, error: nil, done: false, reused: false) }
+                return
+            }
             // #2006: a Codex 429 body is read up to 4 KiB for its usage_limit_reached type (still only on a 429).
             let cap = harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.bodyCap : Self.snippetCap
             ex.snippet.append(data.prefix(cap - ex.snippet.count))
@@ -719,6 +739,7 @@ final class CCPoolConnection: @unchecked Sendable {
             recordAnswer(502, acct: ex.accountID)
             fail(502, "upstream unreachable", type: "api_error")
         case .snippet:
+            if ex.held400 { return finish400(ex, error: error, done: true, reused: reused) }
             finishSnippet(ex)
         case .streaming:
             exchange = nil
@@ -880,6 +901,40 @@ final class CCPoolConnection: @unchecked Sendable {
         log.note(ex.label, "out on \(claims.joined(separator: ",")); rotating to another account and retrying request")
         attempt(rotatingFrom: ex.label)
         return true
+    }
+
+    /// #2015 (design #2003 section 4, R3): the held Codex 400. An encrypted-content error replays ONCE on the
+    /// same account without the encrypted reasoning items; anything else (another error, a compaction item, nothing to
+    /// strip) goes to the client as it came, the held bytes first. Counts only in the log, never body content.
+    private func finish400(_ ex: CCPoolExchange, error: Error?, done: Bool, reused: Bool) {
+        guard ex === exchange else { return }
+        ex.held400 = false
+        if CCPoolCodexHarness.encryptedError(ex.snippet) {
+            let lead = "encrypted content refused; "
+            switch CCPoolCodexHarness.stripEncrypted(body) {
+            case .stripped(let out, let removed, let kept):
+                // shortcut: every turn after a move pays one 400 round trip, and B's own sealed reasoning is stripped too
+                // (the blobs don't say which account sealed them); upgrade: per-session memory of a moved conversation if
+                // the extra round trip shows up in latency
+                exchange = nil
+                ex.task?.cancel()
+                body = out
+                strippedReplay = true
+                log.note(ex.label, lead + "replaying once without \(removed) encrypted reasoning item(s); \(kept) item(s) kept")
+                return send(label: ex.label, accountID: ex.accountID, retried: false)
+            case .blocked:
+                log.note(ex.label, lead + "the conversation holds a compaction or other encrypted item; passing the 400 through: start a new Codex session")
+            case .nothing:
+                log.note(ex.label, lead + "nothing to strip; passing the 400 through")
+            }
+        }
+        writeHead(ex.status, ex.upstreamHeaders)
+        ex.tap = harness.usageTap(contentType: ex.upstreamHeaders["content-type"])
+        ex.mode = .streaming
+        let held = ex.snippet
+        ex.snippet = Data()
+        if !held.isEmpty { onData(ex, held) }
+        if done { onDone(ex, error, reused: reused) }
     }
 
     /// #1263: what a throughput 429 leads to; the raw value is the logged outcome word.

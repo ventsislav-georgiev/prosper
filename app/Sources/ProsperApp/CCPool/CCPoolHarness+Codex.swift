@@ -141,6 +141,40 @@ struct CCPoolCodexHarness: PoolHarness {
         return (true, CCPoolCore.epoch(fullest?.value.reset))
     }
 
+    /// #2015: whether a 400 body (its first `bodyCap` bytes) names encrypted content in error.type or error.code. The
+    /// exact word is unknown (`invalid_encrypted_content` is not in Codex 0.167.2), so any "encrypted" counts.
+    static func encryptedError(_ body: Data) -> Bool {
+        guard let err = ((try? JSONSerialization.jsonObject(with: body.prefix(bodyCap))) as? [String: Any])?["error"] as? [String: Any]
+        else { return false }
+        return ["type", "code"].contains { (err[$0] as? String)?.lowercased().contains("encrypted") == true }
+    }
+
+    enum EncryptedStrip: Equatable {
+        case stripped(Data, removed: Int, kept: Int)
+        /// A compaction item, or an item other than reasoning with encrypted_content: stripping would lose history.
+        case blocked
+        /// No `input` array or nothing sealed in it.
+        case nothing
+    }
+
+    /// #2015: the Responses request body without its `reasoning` items that carry encrypted_content (sealed by the
+    /// account that made them). The other items keep their order; the rest of the body is unchanged.
+    static func stripEncrypted(_ body: Data) -> EncryptedStrip {
+        guard var obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any], let input = obj["input"] as? [Any]
+        else { return .nothing }
+        var kept: [Any] = []
+        for item in input {
+            let d = item as? [String: Any], type = d?["type"] as? String
+            let sealed = d.map { $0["encrypted_content"] != nil && !($0["encrypted_content"] is NSNull) } ?? false
+            if type == "compaction" || (sealed && type != "reasoning") { return .blocked }
+            if !sealed { kept.append(item) }
+        }
+        guard kept.count < input.count else { return .nothing }
+        obj["input"] = kept
+        guard let out = try? JSONSerialization.data(withJSONObject: obj, options: [.withoutEscapingSlashes]) else { return .nothing }
+        return .stripped(out, removed: input.count - kept.count, kept: kept.count)
+    }
+
     var id: String { Self.id }
     var upstream: URL { Self.upstream }
     var stripRequest: Set<String> { Self.stripRequest }

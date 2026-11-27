@@ -11,18 +11,25 @@ final class CCPoolCodexAccountsFake: @unchecked Sendable {
     private let lock = NSLock()
     private var _heads: [CCPoolRequestHead] = []
     private var answers: [String: Answer] = [:]
+    private var queued: [String: [Answer]] = [:]
+    private var _bodies: [Data] = []
     static let ok: Answer = (200, [("content-type", "application/json")], Data(#"{"ok":true}"#.utf8))
 
     var heads: [CCPoolRequestHead] { lock.withLock { _heads } }
     /// The access tokens the upstream saw, in order.
     var tokens: [String] { heads.map { ($0.header("authorization") ?? "").replacingOccurrences(of: "Bearer ", with: "") } }
     func answer(_ token: String, _ a: Answer) { lock.withLock { answers[token] = a } }
+    /// #2015: answers used once each, in order, before `answer`'s (or the 200).
+    func queue(_ token: String, _ list: [Answer]) { lock.withLock { queued[token, default: []] += list } }
+    /// The request bodies the upstream saw, in order.
+    var bodies: [Data] { lock.withLock { _bodies } }
 
     func reply(_ head: CCPoolRequestHead, _ data: Data) -> CCPoolFakeServer.Reply {
         lock.withLock {
             _heads.append(head)
+            _bodies.append(data)
             let token = (head.header("authorization") ?? "").replacingOccurrences(of: "Bearer ", with: "")
-            let a = answers[token] ?? Self.ok
+            let a = queued[token]?.isEmpty == false ? queued[token]!.removeFirst() : answers[token] ?? Self.ok
             return .respond(a.status, a.headers, a.body)
         }
     }
@@ -238,6 +245,140 @@ final class CCPoolCodexRotationTests: XCTestCase {
             XCTAssertEqual(row["cw5"] as? Int, 0)
             XCTAssertTrue(row["sess"] == nil)
         }
+    }
+
+    // MARK: encrypted reasoning after a move (#2015, design #2003 section 4 R3)
+
+    /// A Codex Responses body as ChatGPT mode sends it (store:false, the whole input): two sealed reasoning items
+    /// between plain ones. Fake blobs only.
+    static let sealedBody = #"{"model":"gpt-5-codex","stream":true,"store":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"list the files"}]},{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"gAAAA-example-sealed-1"},{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"ls\"}","call_id":"call_1"},{"type":"function_call_output","call_id":"call_1","output":"a.txt"},{"type":"reasoning","id":"rs_2","summary":[],"encrypted_content":"gAAAA-example-sealed-2"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}"#
+    static let json = [("content-type", "application/json")]
+    static let encrypted400: CCPoolCodexAccountsFake.Answer = (400, json, Data(#"{"error":{"message":"The encrypted content could not be verified.","type":"invalid_request_error","code":"invalid_encrypted_content","param":null}}"#.utf8))
+    static let spent429: CCPoolCodexAccountsFake.Answer = (429, json, Data(#"{"error":{"type":"usage_limit_reached","resets_in_seconds":3600}}"#.utf8))
+
+    /// Each `input` item in a canonical form (sorted keys), in order.
+    static func items(_ body: Data) -> [Data] {
+        let input = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?["input"] as? [Any] ?? []
+        return input.map { (try? JSONSerialization.data(withJSONObject: [$0], options: [.sortedKeys])) ?? Data() }
+    }
+    func refusedLines(_ r: Rig) -> [String] { r.log.lines.filter { $0.contains("encrypted content refused") } }
+
+    // A spends (usage_limit_reached), the request rotates to B, B refuses A's encrypted reasoning with a 400: the body
+    // goes to B once more without the two sealed reasoning items, every other item byte-equal (canonical) and in order,
+    // and B's 200 reaches the client. The log carries counts only.
+    func testEncrypted400AfterMoveStripsAndReplaysOnce() throws {
+        let r = try rig()
+        r.fake.answer(Self.token("a"), Self.spent429)
+        r.fake.queue(Self.token("b"), [Self.encrypted400])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a"), Self.token("b"), Self.token("b")])
+        let replay = try XCTUnwrap(r.fake.bodies.last)
+        let original = Data(Self.sealedBody.utf8)
+        let plain = Self.items(original).filter { !String(decoding: $0, as: UTF8.self).contains("encrypted_content") }
+        XCTAssertEqual(plain.count, 4)
+        XCTAssertEqual(Self.items(replay), plain, "the other items are unchanged and keep their order")
+        XCTAssertFalse(String(decoding: replay, as: UTF8.self).contains("encrypted_content"))
+        let top = try XCTUnwrap((try? JSONSerialization.jsonObject(with: replay)) as? [String: Any])
+        XCTAssertEqual(top["model"] as? String, "gpt-5-codex")
+        XCTAssertEqual(top["stream"] as? Bool, true)
+        XCTAssertEqual(top["store"] as? Bool, false)
+        XCTAssertEqual(top.count, 4)
+        XCTAssertEqual(refusedLines(r), ["b: encrypted content refused; replaying once without 2 encrypted reasoning item(s); 4 item(s) kept"])
+        XCTAssertFalse(r.log.lines.contains { $0.contains("gAAAA") || $0.contains("list the files") }, "\(r.log.lines)")
+    }
+
+    // A later turn of a moved conversation goes straight to B (the pin) with A's sealed reasoning still in its history:
+    // no move in this request, and B's encrypted 400 still gets the one stripped replay; B's 200 reaches the client.
+    func testLaterTurnOnTheNewAccountStripsToo() throws {
+        let r = try rig(codex: ["b"])
+        r.fake.queue(Self.token("b"), [Self.encrypted400])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        XCTAssertEqual(r.fake.tokens, [Self.token("b"), Self.token("b")])
+        let replay = try XCTUnwrap(r.fake.bodies.last)
+        XCTAssertFalse(String(decoding: replay, as: UTF8.self).contains("encrypted_content"))
+        XCTAssertEqual(Self.items(replay).count, 4)
+        XCTAssertEqual(refusedLines(r), ["b: encrypted content refused; replaying once without 2 encrypted reasoning item(s); 4 item(s) kept"])
+    }
+
+    // A compaction item cannot be stripped without losing the history: the 400 passes through with the one line
+    // telling the operator to start a new session; B is sent once.
+    func testCompactionItemPassesThroughWithNewSessionLine() throws {
+        let r = try rig()
+        r.fake.answer(Self.token("a"), Self.spent429)
+        r.fake.queue(Self.token("b"), [Self.encrypted400])
+        let body = Self.sealedBody.replacingOccurrences(of: #""input":["#, with: #""input":[{"type":"compaction","encrypted_content":"gAAAA-example-compacted"},"#)
+        let resp = try XCTUnwrap(r.codex(body: body))
+        XCTAssertEqual(resp.status, 400)
+        XCTAssertTrue(resp.text.contains("invalid_encrypted_content"), resp.text)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a"), Self.token("b")])
+        let lines = refusedLines(r)
+        XCTAssertEqual(lines.count, 1, "\(lines)")
+        XCTAssertTrue(lines.first?.hasPrefix("b: ") == true && lines.first?.contains("start a new Codex session") == true, "\(lines)")
+    }
+
+    // The stripped replay refused again: that second 400 goes to the client, never a third send nor a second decision.
+    func testSecondEncrypted400AfterStripPassesThrough() throws {
+        let r = try rig()
+        r.fake.answer(Self.token("a"), Self.spent429)
+        r.fake.queue(Self.token("b"), [Self.encrypted400, Self.encrypted400])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 400)
+        XCTAssertTrue(resp.text.contains("invalid_encrypted_content"), resp.text)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a"), Self.token("b"), Self.token("b")], "exactly two sends to B")
+        let lines = refusedLines(r)
+        XCTAssertEqual(lines.count, 1, "the second 400 is not read at all: \(lines)")
+        XCTAssertTrue(lines.first?.contains("replaying once") == true, "\(lines)")
+    }
+
+    // A 400 for another reason after the move passes through untouched (the body is relayed whole).
+    func testUnrelated400AfterMovePassesThrough() throws {
+        let r = try rig()
+        r.fake.answer(Self.token("a"), Self.spent429)
+        let other = #"{"error":{"message":"Your input exceeds the context window of this model.","type":"invalid_request_error","code":"context_length_exceeded","param":"input"}}"#
+        r.fake.queue(Self.token("b"), [(400, Self.json, Data(other.utf8))])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 400)
+        XCTAssertEqual(resp.text, other)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a"), Self.token("b")])
+        XCTAssertEqual(refusedLines(r), [])
+    }
+
+    // Claude traffic is untouched: after the #1262 throttle move a Claude 400 that names encrypted content passes
+    // through, one send to the destination.
+    func testClaude400AfterMovePassesThrough() throws {
+        let r = try rig(claude: ["c1", "c2"], codex: [])
+        r.fake.answer("tok-c1", (429, [("content-type", "application/json"), ("retry-after", "0")], Data("{}".utf8)))
+        r.fake.answer("tok-c2", Self.encrypted400)
+        let body = Self.sealedBody.replacingOccurrences(of: #""model":"gpt-5-codex""#, with: #""model":"claude-opus-5","max_tokens":64"#)
+        let resp = try XCTUnwrap(CCPoolTestClient.request(port: r.port, headers: Self.json + [("x-claude-code-session-id", "sess-example-2")],
+                                                          body: Data(body.utf8)))
+        XCTAssertEqual(resp.status, 400, resp.text)
+        XCTAssertEqual(r.fake.tokens, Array(repeating: "tok-c1", count: 1 + CCPoolCore.throttleBackoff.count) + ["tok-c2"])
+        XCTAssertTrue(r.log.lines.contains { $0.contains("moving the conversation once") }, "\(r.log.lines)")
+        XCTAssertEqual(refusedLines(r), [])
+    }
+
+    // The pure parts: the tolerant match reads error.type and error.code only; the strip keeps unsealed items.
+    func testEncryptedMatchAndStrip() {
+        func match(_ s: String) -> Bool { CCPoolCodexHarness.encryptedError(Data(s.utf8)) }
+        XCTAssertTrue(match(#"{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content"}}"#))
+        XCTAssertTrue(match(#"{"error":{"type":"Encrypted_Content_Error"}}"#))
+        XCTAssertFalse(match(#"{"error":{"type":"invalid_request_error","message":"encrypted content"}}"#), "the message is not read")
+        XCTAssertFalse(match(#"{"error":{"code":7}}"#))
+        XCTAssertFalse(match("not json"))
+        XCTAssertFalse(match(#"{"type":"encrypted"}"#), "outside error")
+        func strip(_ s: String) -> CCPoolCodexHarness.EncryptedStrip { CCPoolCodexHarness.stripEncrypted(Data(s.utf8)) }
+        XCTAssertEqual(strip(#"{"input":[{"type":"reasoning","encrypted_content":null},{"type":"message"}]}"#), .nothing)
+        XCTAssertEqual(strip(#"{"input":[{"type":"reasoning","encrypted_content":"x"},{"type":"message","encrypted_content":"y"}]}"#), .blocked)
+        XCTAssertEqual(strip(#"{"input":[{"type":"compaction"},{"type":"reasoning","encrypted_content":"x"}]}"#), .blocked)
+        XCTAssertEqual(strip(#"{"model":"m"}"#), .nothing)
+        XCTAssertEqual(strip("[1]"), .nothing)
+        guard case .stripped(let out, 1, 2) = strip(#"{"input":[{"type":"reasoning","encrypted_content":"x"},"text",{"type":"reasoning","summary":[]}]}"#) else {
+            return XCTFail("one sealed item removed, two kept")
+        }
+        XCTAssertEqual(Self.items(out).count, 2)
     }
 
     // MARK: harness filters with two harnesses (QA #2004 n2)
