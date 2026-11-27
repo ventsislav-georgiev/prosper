@@ -221,6 +221,84 @@ final class AgentWindowStyleTests: XCTestCase {
         }
     }
 
+    /// #2045: what a Standard window's chrome is, for comparing a live switch with a fresh build.
+    struct StandardChrome: Equatable {
+        let mask: NSWindow.StyleMask, frame: CGRect, content: CGRect, opaque: Bool, fill: [CGFloat], buttonsShown: Bool
+        let transparentBar: Bool, titleHidden: Bool
+    }
+    /// sRGB components, so two NSColors made from the same theme colour compare by value.
+    static func rgba(_ c: NSColor?) -> [CGFloat] {
+        guard let c = c?.usingColorSpace(.sRGB) else { return [] }
+        return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map { ($0 * 1000).rounded() / 1000 }
+    }
+    func chrome(_ win: AgentsNSWindow) throws -> StandardChrome {
+        let cv = try XCTUnwrap(win.contentView)
+        return StandardChrome(mask: win.styleMask, frame: win.frame, content: cv.convert(cv.bounds, to: nil), opaque: win.isOpaque,
+                              fill: Self.rgba(win.backgroundColor), buttonsShown: Self.buttons.allSatisfy { win.standardWindowButton($0)?.isHidden == false },
+                              transparentBar: win.titlebarAppearsTransparent, titleHidden: win.titleVisibility == .hidden)
+    }
+
+    /// #2045 (operator 2026-11-27: the traffic lights over the sidebar's "Agent Sessions" header after a live switch, fixed by a
+    /// restart): the content sits below the title bar and its buttons on a fresh Standard build and after a switch to Standard
+    /// from every other style; each switch, a round trip Standard -> X -> Standard included, leaves the window as it was built.
+    func testEveryPathToStandardKeepsTheContentBelowTheTitleBar() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .standard
+            try built { win in
+                @MainActor func below(_ what: String) throws {
+                    let cv = try XCTUnwrap(win.contentView)
+                    let content = cv.convert(cv.bounds, to: nil)
+                    XCTAssertLessThanOrEqual(content.maxY, win.contentLayoutRect.maxY + 0.5, "\(what): the content's top under the bar")
+                    XCTAssertLessThan(content.maxY, win.frame.height, "\(what): a title bar band above the content")
+                    for b in Self.buttons {
+                        let button = try XCTUnwrap(win.standardWindowButton(b), "\(what) \(b.rawValue)")
+                        XCTAssertFalse(button.isHidden, "\(what) \(b.rawValue)")
+                        let f = button.convert(button.bounds, to: nil)
+                        XCTAssertFalse(f.intersects(content), "\(what): button \(b.rawValue) \(f) over the content \(content)")
+                    }
+                }
+                try below("fresh")
+                let fresh = try chrome(win)
+                for (from, rounded) in [(AgentWindowStyle.borderless, true), (.borderless, false), (.noTitleBar, false), (.standard, false)] {
+                    AgentsWindow.applyStyle(win, style: from, rounded: rounded)
+                    win.contentView?.layoutSubtreeIfNeeded()
+                    AgentsWindow.applyStyle(win, style: .standard, rounded: false)
+                    try below("\(from) rounded \(rounded) -> standard")
+                    XCTAssertEqual(try chrome(win), fresh, "\(from) rounded \(rounded) -> standard: as built")
+                }
+            }
+        }
+    }
+
+    /// #2045 (a colleague's see-through strip): after a switch to Standard the strip's fill is the fresh Standard build's,
+    /// applyWindowOpacity's for the theme (Settings' strip), under an opaque theme and a translucent frosted one.
+    func testTheStripAfterASwitchToStandardIsTheThemesFill() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .standard
+            for (opacity, frost) in [(CGFloat(1), false), (CGFloat(0.8), true)] {
+                (ThemeRuntime.opacity, ThemeRuntime.frost) = (opacity, frost)
+                let settings = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: Self.standardMask,
+                                        backing: .buffered, defer: true)
+                settings.isReleasedWhenClosed = false
+                SettingsWindow.applyWindowOpacity(settings)
+                try built { win in
+                    let what = "opacity \(opacity) frost \(frost)"
+                    XCTAssertEqual(win.isOpaque, settings.isOpaque, "\(what): fresh")
+                    XCTAssertEqual(Self.rgba(settings.backgroundColor).count, 4, "\(what): an sRGB fill to compare")
+                    XCTAssertEqual(Self.rgba(win.backgroundColor), Self.rgba(settings.backgroundColor), "\(what): fresh, Settings' strip")
+                    XCTAssertEqual(win.backgroundColor.alphaComponent, opacity >= 0.999 && !frost ? 1 : ThemeRuntime.backdropFillOpacity,
+                                   accuracy: 0.001, what)
+                    for (from, rounded) in [(AgentWindowStyle.borderless, true), (.borderless, false), (.noTitleBar, false)] {
+                        AgentsWindow.applyStyle(win, style: from, rounded: rounded)
+                        AgentsWindow.applyStyle(win, style: .standard, rounded: rounded)
+                        XCTAssertEqual(win.isOpaque, settings.isOpaque, "\(what): \(from) rounded \(rounded) -> standard")
+                        XCTAssertEqual(Self.rgba(win.backgroundColor), Self.rgba(settings.backgroundColor), "\(what): \(from) rounded \(rounded) -> standard")
+                    }
+                }
+            }
+        }
+    }
+
     /// Command-W closes and Command-M minimises in No title bar and Borderless (built key events handed to the window);
     /// Standard keeps today's keys (no Command-M).
     func testCommandWClosesAndCommandMMinimisesWithoutTheButtons() throws {

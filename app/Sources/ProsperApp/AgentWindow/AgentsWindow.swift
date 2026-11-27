@@ -149,18 +149,11 @@ final class AgentsWindow {
             win?.makeFirstResponder(nil)
         }
         win.title = title
-        win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        // #860: Settings' chrome. The title hides (the sidebar's "Agent Sessions" header names the
-        // window, and the Window menu still lists `title`); the strip is painted by applyWindowOpacity.
-        win.titleVisibility = .hidden
-        win.titlebarAppearsTransparent = true
         // The theme hook (AppDelegate.applyThemedWindowSizing) finds the open window by it.
         win.identifier = themedIdentifier
         let s = ThemeRuntime.scale
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
-        win.minimum = minimum(for: win, scale: s)
-        SettingsWindow.applyWindowOpacity(win)
-        if Preferences.agentWindowStyle != .standard { applyStyle(win) }   // #1378: Standard is built as before
+        applyStyle(win)   // #2045: every style, Standard too, is built by the live switch's own path
         win.isReleasedWhenClosed = false
         if let autosave { win.setFrameAutosaveName(autosave) }
         if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
@@ -190,6 +183,17 @@ final class AgentsWindow {
         case .standard: win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         case .noTitleBar: win.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         case .borderless: win.styleMask = [.borderless, .resizable, .miniaturizable]
+        }
+        // #860: Settings' chrome. The title hides (the sidebar's "Agent Sessions" header names the
+        // window, and the Window menu still lists `title`); the strip is painted by applyWindowOpacity.
+        win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
+        // #2045: a live mask change keeps the window's frame but can leave the content view where the old mask put it
+        // (the whole frame under Borderless or No title bar), under the new title bar and its buttons: it is set to the
+        // new mask's content rect. The frame stays, so the content gives up the bar's height (the window keeps its place).
+        if let cv = win.contentView, let frameView = cv.superview {
+            let r = win.contentRect(forFrameRect: win.frame).offsetBy(dx: -win.frame.minX, dy: -win.frame.minY)
+            cv.frame = frameView.convert(r, from: nil)
         }
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             win.standardWindowButton(b)?.isHidden = style != .standard

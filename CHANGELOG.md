@@ -108,6 +108,8 @@ tag from the now-released section and put it on the new top draft.
   files from earlier builds still read. (#2042)
 - Settings shows Rounded corners as on for the Standard and No title bar window styles, which always
   keep rounded corners. (#2046)
+- The Agent Sessions window's Standard style keeps its title bar above the sidebar and painted like
+  the theme, also after switching to it from another style. (#2045)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
