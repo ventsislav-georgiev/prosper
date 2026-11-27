@@ -1,0 +1,41 @@
+{
+ "entry": "2014",
+ "filter": "XrayFollowSchedulesTests",
+ "mutants": [
+  {
+   "name": "route-by-block",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "guard let b = o[\"block\"] else {",
+   "new": "guard let b = o[\"block\"], false else {",
+   "expect": "killed"
+  },
+  {
+   "name": "gone-branch",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if gone { b.rows.remove(at: i) }",
+   "new": "if false { b.rows.remove(at: i) }",
+   "expect": "killed"
+  },
+  {
+   "name": "live-false-ended",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySchedules.swift",
+   "old": "if !r.live { for i in",
+   "new": "if false { for i in",
+   "expect": "killed"
+  },
+  {
+   "name": "version-gate",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "withSchedules = !schedulesRefused && XrayPanels.followSchedulesOK()",
+   "new": "withSchedules = !schedulesRefused",
+   "expect": "killed"
+  },
+  {
+   "name": "exit2-restart",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "if status == 2 || status == XrayPanels.followTasksRefused, withSchedules, !hasSnapshot {",
+   "new": "if false, withSchedules, !hasSnapshot {",
+   "expect": "killed"
+  }
+ ]
+}
