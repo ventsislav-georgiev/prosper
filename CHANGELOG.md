@@ -65,8 +65,8 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.189.0: X-ray's Schedules tab shows each durable cron's real status, checked against
   the session's scheduled tasks file, and a permanent durable cron no longer reads expired. (#2024, #2031)
 - Ships dch 1.191.0, with fixes from QA of the X-ray answer and Codex resume features. (#2024, #2031)
-- Ships dch 1.193.0: the X-ray view's Schedules tab keeps up when a session on an older host turns
-  into a shell or a new Claude starts, and no longer crashes then.
+- Ships dch 1.193.0: dch's own terminal X-ray view keeps its Schedules tab right, and no longer
+  crashes, when a session on an older host turns into a shell or a new Claude starts. (#2024)
 - New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
   command next to the Claude one; a command edited in the form is no longer saved as the default.
   (#1997)
