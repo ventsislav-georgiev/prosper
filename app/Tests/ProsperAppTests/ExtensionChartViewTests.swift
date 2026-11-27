@@ -186,8 +186,8 @@ final class ExtensionChartViewTests: XCTestCase {
         print("CHART_TIMING ms=\(Int(ms))")
         XCTAssertTrue(host.window == nil)
         XCTAssertGreaterThan(host.fittingSize.height, 0)
-        // shortcut: generous bound until CI timings are known, tighten after the first CI run
-        XCTAssertLessThan(ms, 2000)
+        // CI drew it in 39 ms (2026-11-27); 500 ms leaves room for a loaded runner.
+        XCTAssertLessThan(ms, 500)
     }
 
     /// Builds the view in an NSHostingView that is never put in a window.
