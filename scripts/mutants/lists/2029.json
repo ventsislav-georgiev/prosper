@@ -36,6 +36,14 @@
    "old": "is paused and the session ends. Resume it later from History.\"\n                + (codex ? codexDaemonSentence : \"\")",
    "new": "is paused and the session ends. Resume it later from History.\"\n                + (codex ? \"\" : codexDaemonSentence)",
    "expect": "killed"
+  },
+  {
+   "name": "send-late-codex-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": ": st == \"blocked\" ? AgentWindowText.blocked : AgentWindowText.noStatus, codex: codex))",
+   "new": ": st == \"blocked\" ? AgentWindowText.blocked : AgentWindowText.noStatus, codex: false))",
+   "expect": "killed",
+   "filter": "ControlSessionsTalkTests"
   }
  ]
 }
