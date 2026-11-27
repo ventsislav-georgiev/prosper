@@ -1,0 +1,27 @@
+{
+ "entry": "2032",
+ "filter": "ExtensionChartViewTests",
+ "mutants": [
+  {
+   "name": "total-guard-ge",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "guard total <= Self.maxTotalPoints",
+   "new": "guard total < Self.maxTotalPoints",
+   "expect": "killed"
+  },
+  {
+   "name": "total-guard-removed",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "guard total <= Self.maxTotalPoints",
+   "new": "guard true || total <= Self.maxTotalPoints",
+   "expect": "killed"
+  },
+  {
+   "name": "total-cap-2001",
+   "file": "app/Sources/ProsperApp/Extensions/ExtensionView.swift",
+   "old": "static let maxTotalPoints = 2000",
+   "new": "static let maxTotalPoints = 2001",
+   "expect": "killed"
+  }
+ ]
+}
