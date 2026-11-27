@@ -1,6 +1,6 @@
 {
  "entry": "1997",
- "filter": "AgentWindowD1Tests|AgentWindowNewSessionTests|AgentWindowNewSessionFollowUpTests|ControlSessionsTests|AgentIslandControlsTests|AgentIslandDefaultModelTests",
+ "filter": "AgentWindowD1Tests|ControlSessionsTests|AgentIslandControlsTests|AgentIslandDefaultModelTests",
  "mutants": [
   {
    "name": "pick-ignores-codex-setting",

@@ -351,7 +351,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
     }
 
     /// #1250: the pane's Command and Default model fields are ScaledTextField's (their delegate is its coordinator), so
-    /// their heights come from the measure above, not from a SwiftUI TextField's placement. #1820: no Sidekick suffix field.
+    /// their heights come from the measure above, not from a SwiftUI TextField's placement. #1820: no Sidekick suffix field. #1997: Codex's.
     @MainActor
     func testThePanesCommandAndDefaultModelFieldsAreScaledTextFields() {
         _ = ThemeStore.shared
@@ -359,7 +359,7 @@ final class AgentIslandDefaultModelTests: XCTestCase {
         let (win, host) = AXTreeSupport.hosted(AgentIslandPane().frame(width: size.width), size)
         defer { win.close() }
         let ours = nativeFields(host).filter { $0.delegate is ScaledTextField.Coordinator }.compactMap(\.placeholderString)
-        XCTAssertEqual(ours.sorted(), ["Claude Code's default", "claude"], "#1820: the Sidekick suffix field is gone")
+        XCTAssertEqual(ours.sorted(), ["Claude Code's default", "claude", "codex"], "#1820: no Sidekick suffix field; #1997: the Codex command")
     }
 
     /// #1250: ScaledTextField looks and measures as the stock SwiftUI TextField it replaced (itself an NSTextField

@@ -170,7 +170,7 @@ extension AgentWindowD1Tests {
             spawns.done.first?(spawnKey("api"), nil)
             XCTAssertEqual(spawns.calls.map(\.name), ["api"], "no sidekick from an old stored suffix")
             XCTAssertEqual(says.calls.map(\.text), ["secret task text"], "no sidekick brief")
-            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "claude --chrome")
+            XCTAssertEqual(Preferences.agentIslandNewSessionCommand, "", "#1997: a Start saves no command")
             XCTAssertEqual(Preferences.defaults.string(forKey: "agentIslandSidekickPrompt"), "check $name", "left as stored")
             for k in Self.newSessionPrefs where !k.hasPrefix("agentIslandSidekick") {
                 let v = Preferences.defaults.object(forKey: k) as? String ?? ""
