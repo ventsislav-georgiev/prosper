@@ -43,6 +43,8 @@ final class AgentTerminalBackingTests: XCTestCase {
         AgentTerminalLook.refresh(c, colours: [("background", "#101010")])
         XCTAssertTrue(c.renderedConfig.contains("font-thicken = true"), "1x with the user's colours")
         XCTAssertTrue(c.renderedConfig.contains("background = #101010"))
+        // #1873: and Prosper's theme (its palette, display-p3) is dropped at 1x as at 2x: refresh's overlay comparison holds.
+        XCTAssertTrue(c.theme == TerminalTheme() && !c.renderedConfig.contains("display-p3"), "the user's colours at 1x")
     }
 
     /// 2x -> 1x and 1x -> 2x: the grid ends as a window created at the new scale has it (cell pixels, columns, rows),

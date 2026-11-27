@@ -68,9 +68,11 @@ extension AgentTerminalTests {
     static func near(_ a: [Int], _ b: [Int]) -> Bool { a.count == 3 && b.count == 3 && zip(a, b).allSatisfy { abs($0 - $1) <= 1 } }
 
     /// The probe rows drawn: the background, then one entry per row (from the foreground row on), then the background.
+    /// #1873: with `want`, it waits for those colours: a look switched on a view that already drew the probe (same fg,
+    /// bg and rows) otherwise passes on the old frame before libghostty presents one with the new config.
     @MainActor
     func drawnRows(_ v: ViewRig, _ what: String, bg: String, fg: String, raw: Bool = false,
-                   sgrs: [String] = AgentTerminalTests.probeRows) -> [Drawn] {
+                   sgrs: [String] = AgentTerminalTests.probeRows, want: [String]? = nil) -> [Drawn] {
         v.output(probeText(v, sgrs), self)
         var rows: [Drawn] = []
         let pick: (Drawn) -> [Int] = { raw ? $0.raw : $0.srgb }
@@ -78,7 +80,9 @@ extension AgentTerminalTests {
             let runs = Self.surfaceRef(v.host).map { Self.drawnRuns($0.0) } ?? []
             guard let first = runs.firstIndex(where: { Self.near(pick($0), Self.rgb(fg)) }) else { return false }
             rows = Array(runs[first...])
-            return rows.count == sgrs.count + 1 && Self.near(pick(runs.last!), Self.rgb(bg))
+            guard rows.count == sgrs.count + 1, Self.near(pick(runs.last!), Self.rgb(bg)) else { return false }
+            guard let want else { return true }
+            return want.count == rows.count && zip(rows, want).allSatisfy { Self.near(pick($0), Self.rgb($1)) }
         }
         return rows
     }
@@ -93,8 +97,8 @@ extension AgentTerminalTests {
         defer { v.tearDown() }
         XCTAssertEqual(Self.surfaceRef(v.host).map { $0.1.isOpaque }, true, "an opaque layer: nothing behind shows through")
         func check(_ name: String, bg: String, fg: String, tail: [String] = Self.probeTail, raw: Bool = false) {
-            let rows = drawnRows(v, name, bg: bg, fg: fg, raw: raw)
             let want = [fg] + tail + [bg]
+            let rows = drawnRows(v, name, bg: bg, fg: fg, raw: raw, want: want)
             XCTAssertEqual(rows.count, want.count, name)
             for (d, w) in zip(rows, want) {
                 XCTAssertTrue(Self.near(raw ? d.raw : d.srgb, Self.rgb(w)), "\(name): drawn \(raw ? d.raw : d.srgb) for \(w)")
