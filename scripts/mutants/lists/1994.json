@@ -33,15 +33,15 @@
   {
    "name": "runs-claude-ignored",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
-   "old": "s.claudeSessionID?.isEmpty != false && records.contains",
-   "new": "records.contains",
+   "old": "s.claudeSessionID?.isEmpty != false && records().contains",
+   "new": "records().contains",
    "expect": "killed"
   },
   {
    "name": "runs-key-ignored",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
-   "old": "records.contains { $0.key == s.key && isInteractiveCodex",
-   "new": "records.contains { isInteractiveCodex",
+   "old": "records().contains { $0.key == s.key && isInteractiveCodex",
+   "new": "records().contains { isInteractiveCodex",
    "expect": "killed"
   },
   {

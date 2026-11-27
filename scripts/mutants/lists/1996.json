@@ -1,0 +1,55 @@
+{
+ "entry": "1996",
+ "filter": "AgentWindowInteractionTests|AgentIslandMessageTests|ControlSessionsTalkTests",
+ "mutants": [
+  {
+   "name": "parse-drop",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "shells: DchShell.list(o[\"shells\"]),\n                              agent: DchListRow.agent(o[\"agent\"]))",
+   "new": "shells: DchShell.list(o[\"shells\"]))",
+   "expect": "killed"
+  },
+  {
+   "name": "null-as-absent",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if v is NSNull { return \"\" }",
+   "new": "if v is NSNull { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "any-word",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "return w == \"claude\" || w == \"codex\" ? w : \"\"",
+   "new": "return w",
+   "expect": "killed"
+  },
+  {
+   "name": "list-handover",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "shells: edit ? [] : row.shells ?? [], agent: row.agent)",
+   "new": "shells: edit ? [] : row.shells ?? [])",
+   "expect": "killed"
+  },
+  {
+   "name": "ignore-agent",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "        if let agent = s.agent { return agent == \"codex\" }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "eager-read",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "if let agent = s.agent { return agent == \"codex\" }",
+   "new": "if let agent = s.agent { _ = records(); return agent == \"codex\" }",
+   "expect": "killed"
+  },
+  {
+   "name": "group-unnarrowed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "let records = unsaid.isEmpty ? [] : read(unsaid)",
+   "new": "let records = read(group)",
+   "expect": "killed"
+  }
+ ]
+}
