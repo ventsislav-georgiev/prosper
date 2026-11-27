@@ -31,6 +31,11 @@ struct XrayTasks: Equatable {
         /// #1351 (QA R1349-i1): the url as dch sent it, the one Open checks (http/https only) and opens.
         var rawURL: String?
         var group: String?
+        /// #2024 (dch 1.189.0): an OPEN question's suggested answers (at most 8) and recommendation, shown (60 visible
+        /// characters on a chip, the whole in the field); the asker is a session name, compared only, never shown or run.
+        var options: [String] = []
+        var recommended: String? = nil
+        var asker: String? = nil
     }
 
     struct Group: Equatable {
@@ -51,6 +56,8 @@ struct XrayTasks: Equatable {
     /// Lines left out here: over 64 KB, past 50000 rows, or not valid JSON for any line kind.
     var skippedLines: Int
     var tasks: [Task]
+    /// #2024: the --questions header's "answer":true (an answer_command is set where the read ran); absent: false.
+    var answerable = false
 
     static let maxLine = 64 * 1024
     static let maxRows = 50_000
@@ -90,6 +97,7 @@ struct XrayTasks: Equatable {
         let title: String?
         let partial: Bool?
         let warn: String?
+        let answer: Bool?   // #2024
     }
 
     private struct Row: Decodable {
@@ -107,6 +115,9 @@ struct XrayTasks: Equatable {
             let blocked_by: [String]?
             let url: String?
             let group: String?
+            let options: [String]?   // #2024 (dch 1.189.0, OPEN rows only)
+            let recommended: String?
+            let asker: String?
         }
         // #1974: a questions read's rows say "question" where a tasks read's say "task" (the same fields)
         let task: T?
@@ -148,7 +159,11 @@ struct XrayTasks: Equatable {
                     active: t.active.map { OutsideText.shown($0, max: 120) }, note: t.note.map { OutsideText.shown($0, max: 120) },
                     created: date(t.created), updated: date(t.updated), chapter: t.chapter, createdChapter: t.created_chapter,
                     blockedBy: (t.blocked_by ?? []).map { OutsideText.shown($0, max: 32) },
-                    url: t.url.map { OutsideText.shown($0, max: 2048) }, rawURL: t.url, group: t.group.map { OutsideText.shown($0, max: 120) })
+                    url: t.url.map { OutsideText.shown($0, max: 2048) }, rawURL: t.url, group: t.group.map { OutsideText.shown($0, max: 120) },
+                    // #2024: dch cuts each at 300 bytes; the same cap here (an older or other source may not)
+                    options: (t.options ?? []).prefix(8).map { OutsideText.shown($0, max: 300) }.filter { !$0.isEmpty },
+                    recommended: t.recommended.map { OutsideText.shown($0, max: 300) }.flatMap { $0.isEmpty ? nil : $0 },
+                    asker: t.asker.flatMap { $0.utf8.count <= 64 ? $0 : nil })
     }
 
     /// The parse: bytes in, never throws; a bad line is counted and skipped.
@@ -190,6 +205,7 @@ struct XrayTasks: Equatable {
                 r.sessionTitle = h.title.map { OutsideText.shown($0, max: 120) }
                 headerPartial = h.partial ?? false
                 r.headerWarn = h.warn.map { OutsideText.shown($0, max: 160) }
+                r.answerable = h.answer == true
             } else if let t = try? dec.decode(Row.T.self, from: line), t.id != nil {
                 add(t, line)   // #1974: a bare row (no "task" or "question" around it), known by its id
             } else { r.skippedLines += 1 }

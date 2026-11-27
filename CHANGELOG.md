@@ -84,6 +84,8 @@ tag from the now-released section and put it on the new top draft.
 - X-ray has a Schedules tab: a session's crons, its /loop wake-up and Codex heartbeats, with a
   countdown to each one's next run and a loop marker on the tab while a /loop is waiting (needs dch
   1.188.0) (#2014)
+- X-ray's Questions tab can answer an open question: type a ruling or pick a suggested answer, and
+  the session that asked is told right away (needs dch 1.189.0) (#2024)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

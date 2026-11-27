@@ -116,6 +116,7 @@ final class XrayPanels: ObservableObject {
         m.fromDch = { Self.chaptersRead(pane, target) }
         m.openURL = { Self.model(pane)?.openURL($0) }
         m.cwd = { Self.cwd(pane, target) }
+        m.liveNames = { Self.liveNames(pane, target) }   // #2024
         m.refResults = { XrayRefResults.on() ? Self.window(pane).map { XrayRefResults.of($0) } : nil }   // #1567
         // #1611: a local panel's group opens its session to the side; a remote one's sessions are the host's: none
         m.openSession = { g in
@@ -238,6 +239,16 @@ final class XrayPanelModel: ObservableObject {
     @Published var questions: XrayTasks? {   // set by the open read and the poller (XrayPoller.swift), never by the follow
         didSet { if questions != oldValue { questionColsMemo = nil } }
     }
+    /// #2024 (XrayAnswer.swift): the Open question the answer editor is on (as it was when opened, so a row that moves or
+    /// goes keeps the editor and its text), the text typed, the one status line and the clock time it goes (the poller's
+    /// ticker clears it: no timer of its own), the Send in flight, and the live session names next to this drawer's.
+    @Published var answerQuestion: XrayTasks.Task?
+    @Published var answerText = ""
+    @Published var answerLine: String?
+    var answerLineUntil: Date?
+    @Published var sending = false
+    var answerTask: Task<Void, Never>?
+    var liveNames: @MainActor () -> Set<String> = { [] }
     /// nil: no Memory tab (exit not 0, no row).
     @Published private(set) var memory: XrayMemory? {
         didSet { if memory != oldValue { memoryColsMemo = nil } }
@@ -1258,7 +1269,8 @@ struct XrayPanelView: View {
         } else if panel.tab == .schedules {
             schedulesTab
         } else if panel.tab == .questions {
-            taskList(panel.questionLines, cols: panel.questionCols, filterLabel: "Filter questions", title: nil, footer: panel.goneFooter)
+            taskList(panel.questionLines, cols: panel.questionCols, filterLabel: "Filter questions", title: nil, footer: panel.goneFooter,
+                     questions: true)
         } else {
             tasksTab
         }
@@ -1269,8 +1281,11 @@ struct XrayPanelView: View {
     }
 
     /// The Tasks list; #1974: the Questions tab's too (its own lines, widths and filter label).
-    func taskList(_ lines: [XrayTaskLine], cols: XrayTaskCols, filterLabel: String, title: String?, footer: [String]) -> some View {
-        VStack(alignment: .leading, spacing: sz(4)) {
+    /// #2024: the Questions list adds the Answer slot on every row (the button on Open rows) and the editor under the rows.
+    func taskList(_ lines: [XrayTaskLine], cols: XrayTaskCols, filterLabel: String, title: String?, footer: [String],
+                  questions: Bool = false) -> some View {
+        let answers = questions && panel.answerShown
+        return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
@@ -1284,7 +1299,9 @@ struct XrayPanelView: View {
                             if let h = l.header {
                                 faint(h).padding(.top, sz(6)).accessibilityAddTraits(.isHeader)
                             } else if let t = l.task {
-                                XrayTaskRowView(row: XrayTaskRow(t, now: panel.now()), cols: cols) { panel.activate(t) }
+                                XrayTaskRowView(row: XrayTaskRow(t, now: panel.now()), cols: cols,
+                                                answer: answers && XrayPanelModel.isOpen(t) ? { panel.openAnswer(t) } : nil,
+                                                answerSlot: answers) { panel.activate(t) }
                             }
                         }
                         .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
@@ -1292,6 +1309,8 @@ struct XrayPanelView: View {
                 }
                 .scrollTargetLayout()
             }
+            // #2024: an inset, so opening the editor or a new status line moves no row (the list's bottom edge only)
+            .safeAreaInset(edge: .bottom, spacing: 0) { if questions { XrayAnswerEditor(panel: panel) } }
             .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             ForEach(footer, id: \.self) { faint($0) }
         }
@@ -1652,9 +1671,28 @@ struct XrayTaskRowView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     let row: XrayTaskRow
     var cols: XrayTaskCols?   // nil: each cell fits its own text
+    /// #2024: the Questions list's Answer (nil: none on this row); `answerSlot` keeps its width on every row of that list.
+    var answer: (() -> Void)? = nil
+    var answerSlot = false
     let open: () -> Void
 
     var body: some View {
+        HStack(spacing: sz(6)) {
+            rowButton
+            if answerSlot {
+                Button("Answer") { answer?() }
+                    .buttonStyle(.plain)
+                    .font(Neon.font(XrayText.small, weight: .medium))
+                    .foregroundStyle(Neon.blue)
+                    .opacity(answer == nil ? 0 : 1)   // drawn on every row so the columns stay put
+                    .disabled(answer == nil)
+                    .accessibilityHidden(answer == nil)
+                    .accessibilityLabel("Answer question \(row.id)")
+            }
+        }
+    }
+
+    var rowButton: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
                 Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)

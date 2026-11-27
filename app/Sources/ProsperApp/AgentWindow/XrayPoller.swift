@@ -53,6 +53,7 @@ extension XrayPanelModel {
         if let f = follow, f.state != nil, !f.running { detachFollow() }
         let s = paneState()
         if !s.visible { quiet.reset() }   // #1636: shown again: the base spacing
+        if let u = answerLineUntil, now() >= u { (answerLine, answerLineUntil) = (nil, nil) }   // #2024: the 6 s line, on this ticker
         if s.visible, tab == .tasks || tab == .questions || tab == .memory { agesTick() }   // #1972 (QA f2): ages move on a quiet ledger
         if s.visible, tab == .schedules { schedulesTick() }   // #2014: the countdowns, on this ticker (no timer of their own)
         guard s.visible, reading == nil, let dch, let run else { return }
@@ -87,7 +88,7 @@ extension XrayPanelModel {
     }
 
     /// #1974: one `--questions` read (the 30 s poll while the Questions tab shows).
-    private func readQuestions(_ dch: String, _ run: @escaping XrayPanels.Run) {
+    func readQuestions(_ dch: String, _ run: @escaping XrayPanels.Run) {
         lastRead = now()
         let env = target.env, a = target.args("questions")
         reading = Task { [weak self] in
