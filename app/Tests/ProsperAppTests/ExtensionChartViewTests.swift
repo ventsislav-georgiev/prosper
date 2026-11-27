@@ -170,7 +170,8 @@ final class ExtensionChartViewTests: XCTestCase {
         XCTAssertEqual(Set(colours).count, ChartNode.maxSeries)
     }
 
-    /// A 12-series chart at the 2000-point cap: layout plus one display pass, off-screen.
+    /// A 12-series chart at the 2000-point cap: layout plus one draw into an offscreen bitmap (an unwindowed view has no
+    /// backing store, so displayIfNeeded would draw nothing).
     @MainActor
     func testFullChartRendersWithinABound() throws {
         let counts = Array(repeating: 166, count: 11) + [174]
@@ -179,7 +180,8 @@ final class ExtensionChartViewTests: XCTestCase {
         let host = NSHostingView(rootView: ExtensionRenderedView(node: node, onAction: { _, _, _ in }))
         host.frame = NSRect(x: 0, y: 0, width: 520, height: 460)
         host.layoutSubtreeIfNeeded()
-        host.displayIfNeeded()
+        let rep = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
         let ms = Date().timeIntervalSince(start) * 1000
         print("CHART_TIMING ms=\(Int(ms))")
         XCTAssertTrue(host.window == nil)

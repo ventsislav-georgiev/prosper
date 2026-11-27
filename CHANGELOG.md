@@ -71,9 +71,9 @@ tag from the now-released section and put it on the new top draft.
   Restart questions, the message notices and the conversation pane name Codex; folders used only
   with Codex now show under recent folders (#2002)
 - Extension charts with more than 2000 points across all series now fail to load with a message,
-  which keeps a chart quick to draw
+  which keeps a chart quick to draw (#2032)
 - The pool's "Earliest reset" time, and the retry time Codex is given, now say when the first
-  account can serve again rather than when its first limit ends
+  account can serve again rather than when its first limit ends (#2033)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
