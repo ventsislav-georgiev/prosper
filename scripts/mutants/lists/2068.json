@@ -1,0 +1,30 @@
+{
+ "entry": "2068",
+ "filter": "AgentWindowD1Tests/testXrayDock",
+ "mutants": [
+  {
+   "name": "dock-first-not-applied",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        model.firstShown = { [weak win] in win?.xrayShown() }   // #2068: the session the window opens on\n",
+   "new": "\n",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDockTheSessionTheWindowOpensOnTakesItsDrawerState"
+  },
+  {
+   "name": "dock-compact-no-room",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "Self.compact(model, CGSize(width: proxy.size.width + dockInset, height:",
+   "new": "Self.compact(model, CGSize(width: proxy.size.width, height:",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDockSplitLayoutPanesEndAtTheRoomAndTheDrawerTakesTheClicks"
+  },
+  {
+   "name": "dock-onchange-unwired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "w?.xrayFollow(from: old.pane) } else { w?.xrayShown() }",
+   "new": "w?.xrayFollow(from: old.pane) }",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayDockASessionChangeThroughTheModelTakesItsDrawerState"
+  }
+ ]
+}

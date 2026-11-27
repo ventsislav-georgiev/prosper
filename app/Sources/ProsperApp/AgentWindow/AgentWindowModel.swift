@@ -1284,6 +1284,9 @@ final class AgentWindowModel: ObservableObject {
     /// Told when the window shows or hides, so the island keeps the store current
     /// (it holds activity-only lists back while nothing shows them).
     var onVisible: (Bool) -> Void = { AgentIslandController.shared.windowWatching = $0 }
+    /// #2068: told once, when the focused pane's first session lands (settle); the window applies that session's X-ray
+    /// drawer state then (the area's onChange sees only later changes).
+    var firstShown: (() -> Void)?
     /// The age clock: while visible the rows are rebuilt at least this often, so a row's age is never more than
     /// this behind (#1114: whole minutes, so at most one minute low, for at most this long past the minute).
     var ageInterval: TimeInterval = 30
@@ -2221,6 +2224,7 @@ final class AgentWindowModel: ObservableObject {
             confirming = nil
             refusal = nil
             renameEdit = nil
+            if s != nil, let f = firstShown { firstShown = nil; f() }
         } else if focusedEnded != wasEnded {
             objectWillChange.send()   // the view reads focusedEnded: told even when the row stays (an emptied pane)
         } else {

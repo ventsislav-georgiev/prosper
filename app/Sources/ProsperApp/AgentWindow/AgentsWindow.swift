@@ -144,6 +144,7 @@ final class AgentsWindow {
         let win = AgentsNSWindow(contentViewController: hosting)
         win.model = model
         model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }
+        model.firstShown = { [weak win] in win?.xrayShown() }   // #2068: the session the window opens on
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
         model.focusSidebar = { [weak win] in   // the model set keyFocus = .sidebar already
             win?.makeFirstResponder(nil)

@@ -11,17 +11,23 @@ import XCTest
 extension XrayRemoteChipTests {
     /// Runs `body` with XrayPanels.docked at `docked` and the drawer width model between drags, both put back.
     func withDocked(_ docked: Bool, _ body: () async throws -> Void) async rethrows {
+        let restore = Self.dockSaved()
+        defer { restore() }
+        XrayPanels.shared.docked = docked
+        try await body()
+    }
+
+    /// XrayPanels.docked and the drawer width model as they are now; the closure puts them back (#2068: sync rows too).
+    static func dockSaved() -> @MainActor () -> Void {
         let (saved, points) = (XrayPanels.shared.docked, XrayDrawerWidth.shared.points)
         let key = Preferences.defaults.object(forKey: "xrayDrawerWidth")
-        defer {
+        return {
             XrayPanels.shared.docked = saved
             let w = XrayDrawerWidth.shared, s = ThemeRuntime.scale
             w.reset()   // back to the standard, then a drag by the difference (the model's own seam) to the saved width
             if points != XrayDrawerWidth.standard { w.dragged(by: (XrayDrawerWidth.standard - points) * s, offered: 1e6); w.ended() }
             Preferences.defaults.set(key, forKey: "xrayDrawerWidth")
         }
-        XrayPanels.shared.docked = docked
-        try await body()
     }
 
     /// The remote branch of AgentDetailView (AgentsWindow.swift, the mount site under AgentRemoteHeader) at 800 x 500 with
@@ -222,6 +228,120 @@ extension AgentWindowD1Tests {
                     XCTAssertTrue(panels.open[pane] == nil, "web, closed by the person, stays closed")
                 }
             }
+        }
+    }
+
+    /// #2068: the terminal on fakes (no dch, no screen) and AgentPaneArea hosted in the never-shown `win` at `size`, over a
+    /// window-move view, so a point no view of the area takes is told apart (AppKit's hitTest, no event).
+    @MainActor
+    func xrayDockArea(_ m: AgentWindowModel, _ win: AgentsNSWindow, _ size: CGSize) -> NSView {
+        m.terminal.request = { AgentTerminalSpawn.local($0, cols: $1, rows: $2, dch: "/opt/example/bin/dch", env: [:]) }
+        m.terminal.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+        m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+        m.terminal.after = { _, _ in }
+        let host = NSHostingView(rootView: ZStack { AgentWindowDragArea(); AgentPaneArea(model: m, scrolls: false) }
+            .frame(width: size.width, height: size.height))
+        win.setContentSize(size)
+        host.frame = CGRect(origin: .zero, size: size)
+        win.contentView = host
+        return host
+    }
+
+    /// #2068 (supervisor gap, QA R2055a): red without the new call (mutant dock-first-not-applied: makeWindow's
+    /// `model.firstShown` line gone): the area's onChange sees only later changes, so the session focused when the window
+    /// first shows kept a closed drawer whatever its remembered state or the setting. The model's first selection lands
+    /// at setVisible(true) on a window AgentsWindow.makeWindow built (never shown). Remembered wins over the setting.
+    @MainActor
+    func testXrayDockTheSessionTheWindowOpensOnTakesItsDrawerState() throws {
+        // (api's remembered state, Open the X-ray drawer with new sessions, the drawer open)
+        for (remembered, openWithNew, want) in [(true, false, true), (false, true, false), (nil, true, true), (nil, false, false)]
+            as [(Bool?, Bool, Bool)] {
+            let savedNew = Preferences.defaults.object(forKey: "xrayOpenWithNewSessions")
+            defer {
+                Preferences.defaults.set(savedNew, forKey: "xrayOpenWithNewSessions")
+                XrayPanels.shared.remembered = [:]
+            }
+            XCTAssertFalse(Preferences.defaults === UserDefaults.standard, "a private defaults store")
+            Preferences.xrayOpenWithNewSessions = openWithNew
+            try xrayButtonSeams([1, 78, 0]) { _ in
+                let api = session("api", .idle), why = "remembered \(String(describing: remembered)), new \(openWithNew)"
+                XrayPanels.shared.remembered = remembered.map { [XrayTarget(name: api.key.name, dir: api.key.dir): $0] } ?? [:]
+                let m = windowModel(store([api]))
+                defer { m.close() }
+                m.terminal.spawn = { _, _ in AgentTerminalTests.FakeChild() }
+                m.terminal.makeScreen = { AgentTerminalTests.FakeScreen($0) }
+                let win = AgentsWindow.makeWindow(m, autosave: nil)
+                defer { win.close() }
+                win.cards = FakeCardPresenter()
+                XrayPanels.model = { [weak m] _ in m }
+                XrayPanels.window = { [weak win] _ in win }
+                XCTAssertTrue(XrayPanels.shared.open.isEmpty, "control: nothing open before the window shows")
+                m.setVisible(true)
+                if m.selection == nil { m.select(.live(api.key)) }   // the first fill's pick, else the person's: either lands first
+                XCTAssertEqual(m.selection, .live(api.key), "control: the window shows api")
+                XCTAssertEqual(XrayPanels.shared.open[m.layout.focused]?.target.name, want ? "api" : nil, why)
+                XCTAssertFalse(win.isVisible, "never shown")
+            }
+        }
+    }
+
+    /// #2068 n1 (QA R2055a): two columns ("api" focused, "web"), the drawer docked open on api, AgentPaneArea hosted. 1400
+    /// wide (the standard 480 drawer): both panes are drawn and end where the room starts. 700 wide: the area left holds
+    /// one column, yet compact is the 700-wide window's (two columns fit), so the window's one drawer is drawn in the room.
+    /// Either way the drawer fills the room and a click there lands on it, not through to the window-move view. Red with
+    /// the compact size read without the room (mutant dock-compact-no-room, AgentsWindow.swift:3003): at 700 the pane is
+    /// not compact, draws a drawer inside itself, and the room is empty.
+    @MainActor
+    func testXrayDockSplitLayoutPanesEndAtTheRoomAndTheDrawerTakesTheClicks() throws {
+        let restore = XrayRemoteChipTests.dockSaved()
+        defer { restore(); AgentPaneArea.probe = nil }
+        XrayPanels.shared.docked = true
+        XrayDrawerWidth.shared.reset()   // the standard 480 (restore puts the width back)
+        try xrayButtonSeams([1, 78, 0]) { _ in try xrayButtonSplit { m, win, api, _ in
+            for width in [1400, 700] as [CGFloat] {
+                final class Seen { var panes: [UUID: CGRect] = [:]; var drawer: CGRect? }
+                let seen = Seen(), size = CGSize(width: width, height: 600)
+                AgentPaneArea.probe = { k, p, r in if k == "pane" { seen.panes[p] = r } else if k == "xray" { seen.drawer = r } }
+                defer { AgentPaneArea.probe = nil; win.contentView = nil }
+                XCTAssertTrue(AgentPaneArea.compact(m, size), "control: two columns fit \(width)")
+                if XrayPanels.shared.open[api] == nil { XCTAssertTrue(win.toggleXray(), "the drawer opens on api") }
+                let room = XrayDock.inset(open: true, docked: true, settled: XrayDrawerWidth.shared.settled, offered: width)
+                let host = xrayDockArea(m, win, size)
+                XrayRemoteChipTests.layOut(host, until: { !seen.panes.isEmpty && abs((seen.drawer?.maxX ?? 0) - width) < 1 })
+                let d = try XCTUnwrap(seen.drawer, "\(width): the drawer is drawn")
+                XCTAssertEqual(d.minX, width - room, accuracy: 1, "\(width): the drawer starts where the room does")
+                XCTAssertEqual(d.maxX, width, accuracy: 1, "\(width): and fills it to the window's edge")
+                // the panes drawn now: a pane hidden once the room took its width keeps its last (first-pass) probe in `seen`
+                let drawn = AgentPaneArea.drawn(m, in: CGRect(x: 0, y: 0, width: width - room, height: 600)).keys
+                let ends = drawn.compactMap { seen.panes[$0]?.maxX }
+                XCTAssertEqual(ends.count, width == 1400 ? 2 : 1, "\(width): both columns drawn at 1400, the focused one at 700")
+                XCTAssertLessThanOrEqual(ends.max() ?? .infinity, width - room + 1, "\(width): the panes end at the room: \(ends)")
+                let p = CGPoint(x: width - room / 2, y: 300), v = host.hitTest(host.superview.map { host.convert(p, to: $0) } ?? p)
+                XCTAssertTrue(v != nil && !(v is AgentWindowDragView), "\(width): a click in the room: \(String(describing: v))")
+            }
+        } }
+    }
+
+    /// #2068 n2 (QA R2055a): the session changed THROUGH THE MODEL (the sidebar's pick), never a direct xrayShown call: the
+    /// area's onChange applies the new session's state. Red with the onChange's `else { w?.xrayShown() }` gone (mutant
+    /// dock-onchange-unwired, AgentsWindow.swift:3077): api's panel stays open over web.
+    @MainActor
+    func testXrayDockASessionChangeThroughTheModelTakesItsDrawerState() throws {
+        try xrayDockWindow(openWithNew: false) { m, win, api, web in
+            let panels = XrayPanels.shared, pane = m.layout.focused
+            m.select(.live(api.key))
+            let host = xrayDockArea(m, win, CGSize(width: 1200, height: 600))
+            defer { win.contentView = nil }
+            XrayRemoteChipTests.layOut(host, until: { AgentsNSWindow.window(of: pane) === win })
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "control: the area's onChange finds this window")
+            XCTAssertTrue(win.toggleXray())
+            XCTAssertEqual(panels.open[pane]?.target.name, "api")
+            m.select(.live(web.key))
+            XrayRemoteChipTests.layOut(host, until: { panels.open[pane] == nil })
+            XCTAssertTrue(panels.open[pane] == nil, "web, never opened: closed")
+            m.select(.live(api.key))
+            XrayRemoteChipTests.layOut(host, until: { panels.open[pane] != nil })
+            XCTAssertEqual(panels.open[pane]?.target.name, "api", "back on api: open again")
         }
     }
 }
