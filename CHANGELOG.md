@@ -93,6 +93,8 @@ tag from the now-released section and put it on the new top draft.
 - The account pool can add a Codex (ChatGPT) account: sign in with Codex's device login in a folder
   Prosper owns, or import an existing Codex login from its folder (with a warning that the two will
   fight over the login, and an offer to delete that folder's auth.json) (#2008)
+- The Copy and Run buttons on a hovered command line in Agent Sessions stay shown while a session
+  writes output, until you hover another command or the text scrolls. (#2040)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

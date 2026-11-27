@@ -82,7 +82,7 @@ final class XrayCommandPillTests: XCTestCase {
     static func at(row: Int) -> CGPoint { CGPoint(x: 40, y: CGFloat(row) * 17 + 5) }
 
     /// Red if the pill is missing on a command row, sits off the head row or off the right edge, shows on prose, reads the
-    /// viewport per move, or lacks its tooltip and label.
+    /// viewport per move, or lacks its tooltip and label. #2040: a shown pill stays on prose and when the pointer leaves.
     func testHoverShowsThePillOnTheHeadRowAtTheRightEdge() throws {
         let r = try rig(), m = r.marks
         m.commandHover(Self.at(row: 3))
@@ -93,13 +93,16 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertEqual(m.commandReads, 1)
         m.commandHover(CGPoint(x: 100, y: 3 * 17 + 9))
         XCTAssertEqual(m.commandReads, 1, "a move in the same row reads nothing")
+        m.hideCommand()
         m.commandHover(Self.at(row: 5))
         XCTAssertTrue(m.pill.isHidden, "prose")
         XCTAssertTrue(m.hoveredCommand == nil)
         m.commandHover(Self.at(row: 2))
         XCTAssertFalse(m.pill.isHidden)
+        m.commandHover(Self.at(row: 5))
+        XCTAssertFalse(m.pill.isHidden, "#2040: prose after a command keeps it")
         m.commandHover(nil)
-        XCTAssertTrue(m.pill.isHidden, "the pointer left")
+        XCTAssertFalse(m.pill.isHidden, "#2040: the pointer left: kept")
         XCTAssertEqual(m.pill.copy.toolTip, "Copy command")
         XCTAssertEqual(m.pill.copy.accessibilityLabel(), "Copy command")
     }
@@ -145,27 +148,149 @@ final class XrayCommandPillTests: XCTestCase {
         m.commandHover(Self.at(row: 3))
         m.copyCommand()
         XCTAssertEqual(pb.string(forType: .string), "gcloud sql backups create --instance=canary --project=example --description=probe")
+        m.hideCommand()
+        pb.clearContents()
         m.commandHover(Self.at(row: 5))
         m.copyCommand()
-        XCTAssertEqual(pb.string(forType: .string), "gcloud sql backups create --instance=canary --project=example --description=probe",
-                       "no block: nothing copied")
+        XCTAssertTrue(pb.string(forType: .string) == nil, "no block: nothing copied")
     }
 
-    /// Red if output leaves the pill up, a move before the settle shows it, or the next move after the settle does not.
-    func testOutputHidesItUntilTheSettle() throws {
+    /// #2040: red if output that leaves the block as it was hides the pill, a move before the settle does not show it, or a
+    /// resize keeps it.
+    func testOutputKeepsItAndAResizeHidesIt() throws {
         let r = try rig(), m = r.marks
         m.commandHover(Self.at(row: 2))
         XCTAssertFalse(m.pill.isHidden)
         m.output()
-        XCTAssertTrue(m.pill.isHidden)
-        m.commandHover(Self.at(row: 2))
-        XCTAssertTrue(m.pill.isHidden, "not settled")
-        r.settle()
-        XCTAssertTrue(m.pill.isHidden, "comes back on a move, not on the settle")
-        m.commandHover(Self.at(row: 2))
+        XCTAssertFalse(m.pill.isHidden, "#2040: the block did not change")
+        m.commandHover(Self.at(row: 6))
+        XCTAssertTrue(m.settle != nil)
+        XCTAssertEqual(m.hoveredCommand?.row, 6, "#2040: shown before the settle")
         XCTAssertFalse(m.pill.isHidden)
         m.output(resized: true)
         XCTAssertTrue(m.pill.isHidden, "a resize")
+    }
+
+    /// A rig whose viewport is `vp` (changed by the row) and whose viewport reads are counted in `reads`.
+    final class Screen {
+        var vp: [String]
+        var reads = 0
+        init(_ vp: [String]) { self.vp = vp }
+    }
+    func screen(_ r: Rig, _ vp: [String] = XrayCommandPillTests.lines) -> Screen {
+        let s = Screen(vp)
+        r.v.viewportText = { [unowned s] in s.reads += 1; return s.vp.joined(separator: "\n") }
+        return s
+    }
+
+    /// #2040: red if a drain that leaves the block's rows as they were hides the pill or moves it, or Copy then copies
+    /// anything but the command.
+    func testOutputThatLeavesTheBlockKeepsThePill() throws {
+        let r = try rig(), m = r.marks, s = screen(r)
+        let pb = NSPasteboard(name: .init("eu.illegible.prosper.test.2040.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        r.v.pasteboard = { pb }
+        m.commandHover(Self.at(row: 3))
+        let frame = m.pill.frame
+        for i in 0..<4 {
+            s.vp[7] = "status \(i)"   // a status line redraw elsewhere
+            m.output()
+            XCTAssertFalse(m.pill.isHidden, "drain \(i)")
+            XCTAssertEqual(m.pill.frame, frame, "drain \(i)")
+        }
+        r.settle()
+        XCTAssertFalse(m.pill.isHidden, "the settle")
+        m.copyCommand()
+        XCTAssertEqual(pb.string(forType: .string), "gcloud sql backups create --instance=canary --project=example --description=probe")
+    }
+
+    /// #2040: red if output that pushes the block up a row (the same text) or rewrites it keeps the pill on the old row.
+    func testOutputThatMovesTheBlockHidesIt() throws {
+        let r = try rig(), m = r.marks, s = screen(r)
+        m.commandHover(Self.at(row: 3))
+        XCTAssertFalse(m.pill.isHidden)
+        s.vp = Array(Self.lines.dropFirst()) + ["new output"]
+        m.output()
+        XCTAssertTrue(m.pill.isHidden, "pushed up one row")
+        XCTAssertTrue(m.hoveredCommand == nil)
+        m.commandHover(Self.at(row: 5))
+        XCTAssertEqual(m.hoveredCommand?.row, 5, "the next move reads again")
+        s.vp[5] = "$ ls -l"
+        m.output()
+        XCTAssertTrue(m.pill.isHidden, "the text changed in place")
+    }
+
+    /// #2040: red if a move onto a row with no command (prose, blank, two rows off the corridor) hides the pill or
+    /// changes the command it copies.
+    func testANonCommandRowKeepsThePill() throws {
+        let r = try rig(), m = r.marks
+        m.commandHover(Self.at(row: 6))
+        for row in [0, 1, 4, 9, 11] {
+            m.commandHover(Self.at(row: row))
+            XCTAssertFalse(m.pill.isHidden, "row \(row)")
+            XCTAssertEqual(m.hoveredCommand?.text, "ls -la", "row \(row)")
+        }
+    }
+
+    /// #2040: red if hovering another command (during output too) leaves the pill on the first, or Copy takes the old text.
+    func testAnotherCommandMovesThePill() throws {
+        let r = try rig(), m = r.marks
+        let pb = NSPasteboard(name: .init("eu.illegible.prosper.test.2040.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        r.v.pasteboard = { pb }
+        m.commandHover(Self.at(row: 2))
+        let first = m.pill.frame
+        m.output()   // not settled: the next command still shows
+        m.commandHover(Self.at(row: 8))
+        XCTAssertFalse(m.pill.isHidden)
+        XCTAssertEqual(m.hoveredCommand?.row, 8)
+        XCTAssertNotEqual(m.pill.frame.minY, first.minY)
+        m.copyCommand()
+        XCTAssertEqual(pb.string(forType: .string), "echo hi")
+    }
+
+    /// #2040: red if Run sends or Copy copies after the text under the shown row changed (between show and click), or
+    /// the pill stays up after such a click.
+    func testAClickAfterTheTextChangedDoesNothing() throws {
+        let r = try rig(), m = r.marks, s = screen(r)
+        let pb = NSPasteboard(name: .init("eu.illegible.prosper.test.2040.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        r.v.pasteboard = { pb }
+        var sent: [String] = []
+        r.t.runOff = { _ in nil }
+        r.t.run = { _, text, tell in sent.append(text); tell(AgentWindowText.ran) }
+        m.commandHover(Self.at(row: 6))
+        s.vp[6] = "$ rm -rf build"
+        m.runCommand()
+        XCTAssertEqual(sent, [], "Run: never a command not shown")
+        XCTAssertTrue(m.pill.isHidden)
+        s.vp[6] = "$ ls -la"
+        m.commandHover(Self.at(row: 6))
+        XCTAssertFalse(m.pill.isHidden)
+        s.vp[6] = "$ ls -l"
+        m.copyCommand()
+        XCTAssertTrue(pb.string(forType: .string) == nil, "Copy: nothing")
+        XCTAssertNotEqual(r.t.notice, XrayGridMarksView.copiedText)
+        XCTAssertTrue(m.pill.isHidden)
+        s.vp[6] = "$ ls -la"
+        m.commandHover(Self.at(row: 6))
+        m.runCommand()
+        XCTAssertEqual(sent, ["ls -la"], "unchanged: it runs")
+    }
+
+    /// #2040: red if a drain reads the viewport while no pill is shown (and no marks are drawn), or more than once per
+    /// drain while one is.
+    func testNoViewportReadPerDrainWithoutAPill() throws {
+        let r = try rig(), m = r.marks, s = screen(r)
+        for _ in 0..<5 { m.output() }
+        XCTAssertEqual(s.reads, 0, "no pill")
+        m.commandHover(Self.at(row: 2))
+        XCTAssertEqual(s.reads, 1)
+        for _ in 0..<3 { m.output() }
+        XCTAssertEqual(s.reads, 4, "one per drain while the pill is up")
+        m.hideCommand()
+        for _ in 0..<3 { m.output() }
+        XCTAssertEqual(s.reads, 4, "hidden again: none")
     }
 
     /// Red if an unfocused pane, a window not shown or a pane not live shows the pill.
@@ -200,15 +325,16 @@ final class XrayCommandPillTests: XCTestCase {
             XCTAssertEqual(m.commandReads, 1, "inside the corridor: no viewport read \(p)")
         }
         m.commandHover(Self.at(row: 0))
-        XCTAssertTrue(m.pill.isHidden, "two rows above the head")
+        XCTAssertFalse(m.pill.isHidden, "#2040: two rows above the head, no command there: kept")
         XCTAssertEqual(m.commandReads, 2, "outside it: one read for the new row")
         m.commandHover(Self.at(row: 3))
         XCTAssertFalse(m.pill.isHidden)
         m.commandHover(Self.at(row: 5))
-        XCTAssertTrue(m.pill.isHidden, "two rows below the block's last row")
+        XCTAssertEqual(m.commandReads, 4, "two rows below the block's last row: read")
         m.commandHover(Self.at(row: 3))
         m.commandHover(CGPoint(x: 10, y: 1 * 17 + 5))
-        XCTAssertTrue(m.pill.isHidden, "left of the block's column, outside the block")
+        XCTAssertEqual(m.commandReads, 6, "left of the block's column, outside the corridor: read")
+        XCTAssertEqual(m.hoveredCommand?.row, 2, "#2040: no other command there: kept")
     }
 
     /// QA R1954 f1: red if a corridor slack row that is another command's row keeps the first command (no read), so the
@@ -273,6 +399,7 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertEqual(sent.last?.0, AgentSessionKey(dir: "/Users/example/dch", name: "api"))
         XCTAssertEqual(sent.last?.1, "gcloud sql backups create --instance=canary --project=example --description=probe")
         XCTAssertEqual(r.t.notice, AgentWindowText.ran)
+        m.hideCommand()
         m.commandHover(Self.at(row: 5))
         m.runCommand()
         XCTAssertEqual(sent.count, 1, "no block: nothing sent")

@@ -22,9 +22,12 @@ import SwiftUI
 // through a per-line memo (XrayMarksMemo, the refs prepared once per refs change) and the result is applied on main only
 // if no output, refs change or newer place() came in meanwhile (`generation`). A focus switch costs the snapshot.
 // #1952: a command block ("! cmd" / "$ cmd", XrayGridMarksView.commandBlock) under the pointer shows a Copy pill pinned to
-// the pane's right edge on the block's first row, only while the grid is settled (`settle` nil); output, a scroll, a resize,
-// a focus change and the pointer leaving hide it at once, and the next move after the settle shows it again. One viewport
-// read per row the pointer enters (`commandReads`), never per move. Only the pill's rect takes clicks (hitTest).
+// the pane's right edge on the block's first row. #2040 (operator 2026-11-27: it blinked under the pointer while a status
+// line redrew): it stays while output runs and while the pointer is on a row with no command or leaves the view; it goes
+// on another command (the pill moves there), a scroll, a resize, a focus change, or a drain that changed the block under
+// it (its rows moved or its text changed: one viewport read per drain, only while the pill is up). Copy and Run read
+// the block again on the click and act only on the text shown. One viewport read per row the pointer enters
+// (`commandReads`), never per move. Only the pill's rect takes clicks (hitTest).
 // #1953: the pill's second button, Run, sends "! <command>" to the pane's session (dch --say types the "!" as a key, so
 // Claude Code runs it in shell mode) through the window's composer path, only while the list says idle or done.
 
@@ -127,11 +130,16 @@ final class XrayGridMarksView: NSView {
     /// The pty wrote: a mark whose cells changed (or moved: a scroll) goes now, the rest stay; all are placed again once
     /// output rests. `resized`: the grid's cells changed, every mark goes.
     func output(resized: Bool = false) {
-        hideCommand()   // #1952: shown only while the grid is settled
         // #1724: the text under a Command hover may have changed: one re-read per drain, only while one is on the grid
         if link != nil || linkCell != nil { linkCell = nil; linkHover(pointer) }
-        // #1628: one viewport read per drain, only while marks are drawn (drains are coalesced, one per main-loop turn)
-        let lines = resized || marks.isEmpty || !shown() ? [] : (host?.viewportText() ?? "").components(separatedBy: "\n")
+        // #1628: one viewport read per drain, only while marks are drawn or (#2040) the pill is up (drains are coalesced,
+        // one per main-loop turn)
+        let marksRead = !resized && !marks.isEmpty && shown()
+        let pillUp = !resized && !pill.isHidden && hoveredCommand != nil
+        let read = marksRead || pillUp ? (host?.viewportText() ?? "").components(separatedBy: "\n") : []
+        let lines = marksRead ? read : []
+        // #2040: the pill stays unless its block changed under it (rows pushed up, text rewritten); a resize always hides it
+        if resized || pillUp && !commandStill(read) { hideCommand() }
         let kept = marks.filter { m in
             guard m.row < lines.count, m.row < placedOn.count, let was = Self.span(placedOn[m.row], m) else { return false }
             return Self.span(lines[m.row], m) == was
@@ -246,8 +254,7 @@ final class XrayGridMarksView: NSView {
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) {
         pointer = nil
-        linkHover(nil)
-        hideCommand()
+        linkHover(nil)   // #2040: the pill stays (a focus change, the window hiding or a scroll still take it)
     }
 
     /// #1701: the pointer's last point over this view (top-left); nil once it left.
@@ -324,7 +331,7 @@ final class XrayGridMarksView: NSView {
     private(set) var hoveredCommand: HoverCommand?
     /// The row `hoveredCommand` was read for: a move inside the same row reads no viewport text.
     private var commandRow: Int?
-    /// Rows count the work: viewport reads for the pill (one per row the pointer enters while settled).
+    /// Rows count the work: viewport reads for the pill (one per row the pointer enters).
     private(set) var commandReads = 0
     /// #1954: while the pill shows, a move inside this rect (the block's rows plus one above and one below, from its left
     /// column to the right edge) keeps it and reads nothing; .null: none.
@@ -339,21 +346,17 @@ final class XrayGridMarksView: NSView {
     }
 
     /// The pointer moved to top-left point `p`: the pill for the block under it, read once per row entered.
+    /// #2040: shown during output too; off every command (another row, off the grid, nil) the shown pill stays.
     func commandHover(_ p: CGPoint?) {
         if let p, !pill.isHidden, pill.frame.contains(p) { return }   // on the pill: keep it (it may sit past the grid)
-        if let p, !pill.isHidden, commandCorridor.contains(p), settle == nil, commandsShown() { return }   // #1954: on the way
-        guard settle == nil, let p, commandsShown(), let g = host?.gridMetrics, let c = host?.gridCell(at: p) else {
-            return hideCommand()
-        }
-        if c.row == commandRow { return }
+        if let p, !pill.isHidden, commandCorridor.contains(p), commandsShown() { return }   // #1954: on the way
+        guard commandsShown() else { return hideCommand() }
+        guard let p, let g = host?.gridMetrics, let c = host?.gridCell(at: p), c.row != commandRow else { return }
         commandRow = c.row
         commandReads += 1
         let lines = (host?.viewportText() ?? "").components(separatedBy: "\n")
-        hoveredCommand = Self.commandBlock(lines, at: c.row, cols: Int(g.columns))
-        guard let cmd = hoveredCommand, g.cellHeightPixels > 0 else {
-            pill.isHidden = true
-            return
-        }
+        guard let cmd = Self.commandBlock(lines, at: c.row, cols: Int(g.columns)), g.cellHeightPixels > 0 else { return }
+        hoveredCommand = cmd
         let scale = max(window?.backingScaleFactor ?? 2, 1), h = CGFloat(g.cellHeightPixels) / scale
         let o = AgentTerminalHostView.gridOrigin, head = o.y + CGFloat(cmd.row) * h
         // #1954: 2 pt above and below the head row, kept inside the overlay
@@ -378,9 +381,23 @@ final class XrayGridMarksView: NSView {
         if !pill.isHidden { pill.isHidden = true }
     }
 
+    /// #2040: the shown block is still the one at its row (one viewport read); false: it changed or moved, hide.
+    private func commandStill(_ lines: [String]) -> Bool {
+        guard let cmd = hoveredCommand, let g = host?.gridMetrics else { return false }
+        return Self.commandBlock(lines, at: cmd.row, cols: Int(g.columns)) == cmd
+    }
+
+    /// #2040: the shown command's text if the viewport still holds it where it was shown; else the pill goes and nil
+    /// (Run never sends a command the user was not shown).
+    private func clickedCommand() -> String? {
+        guard let cmd = hoveredCommand else { return nil }
+        guard commandStill((host?.viewportText() ?? "").components(separatedBy: "\n")) else { hideCommand(); return nil }
+        return cmd.text
+    }
+
     /// Copy: the command on the host's pasteboard (tests hand a private one), then "Copied" in the pane.
     @objc func copyCommand() {
-        guard let text = hoveredCommand?.text, let host else { return }
+        guard let text = clickedCommand(), let host else { return }
         let pb = host.pasteboard()
         pb.clearContents()
         pb.setString(text, forType: .string)
@@ -390,7 +407,7 @@ final class XrayGridMarksView: NSView {
 
     /// #1953: Run: the command to the pane's session (AgentWindowInteraction.run, the composer's path); its outcome in the pane.
     @objc func runCommand() {
-        guard let text = hoveredCommand?.text, let owner = host?.owner else { return }
+        guard let text = clickedCommand(), let owner = host?.owner else { return }
         owner.run(owner.key, text) { [weak owner] in owner?.show($0) }
     }
 
