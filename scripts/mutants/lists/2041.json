@@ -1,0 +1,56 @@
+{
+ "entry": "2041",
+ "filter": "XrayLookTests",
+ "mutants": [
+  {
+   "name": "default_on",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "get { defaults.bool(forKey: Keys.xrayFollowsTheme) }",
+   "new": "get { defaults.object(forKey: Keys.xrayFollowsTheme) as? Bool ?? true }",
+   "expect": "killed"
+  },
+  {
+   "name": "terminal_lift_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
+   "old": "            if ThemeRuntime.contrastRatio(Color(nsColor: c), Color(nsColor: t)) >= minTerminalContrast { return Color(nsColor: c) }",
+   "new": "            return Color(nsColor: opaque)",
+   "expect": "killed"
+  },
+  {
+   "name": "outline_removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
+   "old": "[AgentIslandInk.hairline, AgentIslandInk.hairline]",
+   "new": "[.clear, .clear]",
+   "expect": "killed"
+  },
+  {
+   "name": "outline_removed_drawer",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "Rectangle().fill(XrayInk.edge).frame(width: 1)",
+   "new": "Rectangle().fill(Color.clear).frame(width: 1)",
+   "expect": "killed"
+  },
+  {
+   "name": "follow_branch_ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
+   "old": "static var follows: Bool { Preferences.xrayFollowsTheme }",
+   "new": "static var follows: Bool { false }",
+   "expect": "killed"
+  },
+  {
+   "name": "scheme_pin_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
+   "old": "if XrayInk.follows { content } else { content.environment(\\.colorScheme, .dark) }",
+   "new": "content",
+   "expect": "killed",
+   "filter": "XrayLookTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance"
+  },
+  {
+   "name": "memo_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
+   "old": "if let m = memo, m.key == key { return m.fill }",
+   "new": "_ = memo",
+   "expect": "killed"
+  }
+ ]
+}
