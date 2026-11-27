@@ -17,13 +17,6 @@
    "expect": "killed"
   },
   {
-   "name": "persist_command",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "if persist, let command, !command",
-   "new": "if let command, !command",
-   "expect": "killed"
-  },
-  {
    "name": "focus_click",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
    "old": "        m.keepingKeys { m.select(.live(s.key)) }\n        return ControlChange(summary: \"focus",

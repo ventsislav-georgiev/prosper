@@ -1,0 +1,48 @@
+{
+ "entry": "1997",
+ "filter": "AgentWindowD1Tests|AgentWindowNewSessionTests|AgentWindowNewSessionFollowUpTests|ControlSessionsTests|AgentIslandControlsTests|AgentIslandDefaultModelTests",
+ "mutants": [
+  {
+   "name": "pick-ignores-codex-setting",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "case .codex: let c = Preferences.agentIslandCodexCommand; return c.isEmpty ? \"codex\" : c",
+   "new": "case .codex: return \"codex\"",
+   "expect": "killed"
+  },
+  {
+   "name": "pick-ignores-claude-setting",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "case .claude: let c = Preferences.agentIslandNewSessionCommand; return c.isEmpty ? \"claude\" : c",
+   "new": "case .claude: return \"claude\"",
+   "expect": "killed"
+  },
+  {
+   "name": "persist-write-restored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if persist { Preferences.agentWindowNewSessionFolder = folder }\n",
+   "new": "        if persist { Preferences.agentWindowNewSessionFolder = folder }\n        if persist, let c = newSession?.command, !c.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Preferences.agentIslandNewSessionCommand = c }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "sessions-new-bare-codex",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "case \"codex\": m.pickNewSessionAgent(.codex)",
+   "new": "case \"codex\": m.setNewSessionCommand(\"codex\")",
+   "expect": "killed"
+  },
+  {
+   "name": "inference-keeps-codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "guard let c = recordCommand(r), !isInteractiveCodex(c) else { return nil }",
+   "new": "guard let c = recordCommand(r) else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-pref-untrimmed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "            else { defaults.set(v, forKey: Keys.agentIslandCodexCommand) }",
+   "new": "            else { defaults.set(newValue, forKey: Keys.agentIslandCodexCommand) }",
+   "expect": "killed"
+  }
+ ]
+}
