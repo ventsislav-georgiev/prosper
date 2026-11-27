@@ -1,0 +1,34 @@
+{
+ "entry": "2035",
+ "filter": "XrayFollowSchedulesTests",
+ "mutants": [
+  {
+   "name": "lower-bound",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySchedules.swift",
+   "old": "0 < $0.timeIntervalSince1970 - t && $0.timeIntervalSince1970 - t < 3600",
+   "new": "$0.timeIntervalSince1970 - t < 3600",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-block-hide",
+   "file": "app/Sources/ProsperApp/AgentWindow/XraySchedules.swift",
+   "old": " && !s.schedules.isEmpty ? s : nil",
+   "new": " ? s : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "agent-only-note",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "let c = s.corpus?.corpus, c == \"claude\" || c == \"codex\" {",
+   "new": "{",
+   "expect": "killed"
+  },
+  {
+   "name": "one-restart",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayFollow.swift",
+   "old": "            if status == XrayPanels.followTasksRefused { tasksRefused = true }\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}
