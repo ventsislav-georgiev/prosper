@@ -437,7 +437,27 @@ final class ControlSessionsTalkTests: XCTestCase {
             XCTAssertEqual(reply, ControlReply(ok: true, result: .object(["delivered": .bool(true)]), error: nil))
             XCTAssertEqual(changes.entries.map(\.command), ["sessions.say"], "recorded once")
             XCTAssertEqual(changes.entries.last?.summary, "API: go on")
-            XCTAssertEqual(notices, ["Agent messaged: API: go on"], "the change's notice, no failure notice")
+            XCTAssertEqual(notices, ["Agent → API (messaged)\ngo on"], "the change's notice, no failure notice")
+        }
+    }
+
+    /// #2047: say from a known session (the client's DCH_SESSION): the notice names the sender and the target and holds
+    /// the whole message (300 characters); the log entry carries the sender.
+    @MainActor
+    func testSayFromAKnownSessionNamesSenderAndTargetWithTheWholeMessage() async {
+        let st = base.store([base.session("api", .idle, alias: "API"), base.session("perf-1", .idle, alias: "Perf")])
+        await withSeams(st) { changes in
+            Preferences.defaults.removeObject(forKey: Preferences.agentControlKey)
+            var r = ControlRegistry()
+            ControlRegistry.registerSessionsTalk(&r)
+            r.changes = changes
+            let registry = r
+            let message = (0..<30).map { _ in "word word " }.joined().trimmingCharacters(in: .whitespaces)
+            let line = #"{"cmd":"sessions.say","args":{"name":"api","text":"\#(message)"},"from":"perf-1"}"#
+            let reply = await registry.reply(to: Data(line.utf8))
+            XCTAssertTrue(reply.ok, "\(reply)")
+            XCTAssertEqual(notices, ["Perf → API (messaged)\n" + message])
+            XCTAssertEqual(changes.entries.last?.sender, "Perf")
         }
     }
 }

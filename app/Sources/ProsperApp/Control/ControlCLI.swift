@@ -21,16 +21,18 @@ enum ControlCLI {
     static func runIfRequested() {
         let args = Array(CommandLine.arguments.dropFirst())
         guard args.first == "ctl" else { return }
-        let out = run(Array(args.dropFirst()), socketPath: ControlServer.socketPath)
+        let out = run(Array(args.dropFirst()), socketPath: ControlServer.socketPath,
+                      from: ProcessInfo.processInfo.environment["DCH_SESSION"])
         if let s = out.stdout { print(s) }
         if let e = out.stderr { FileHandle.standardError.write(Data((e + "\n").utf8)) }
         exit(out.code)
     }
 
     /// The request line for `args` (after `ctl`), or the usage error.
-    static func parse(_ args: [String]) -> Result<Data, ControlError> {
+    /// #2047: `from` is the client's DCH_SESSION (runIfRequested), sent so the notice names the calling session.
+    static func parse(_ args: [String], from: String? = nil) -> Result<Data, ControlError> {
         guard let cmd = args.first, !cmd.hasPrefix("-"), !cmd.isEmpty else { return .failure(ControlError(usage)) }
-        var req = ControlRequest(cmd: cmd, args: nil)
+        var req = ControlRequest(cmd: cmd, args: nil, from: from.flatMap { $0.isEmpty ? nil : $0 })
         let rest = Array(args.dropFirst())
         if !rest.isEmpty {
             guard rest.count == 2, rest[0] == "--json" else { return .failure(ControlError(usage)) }
@@ -48,9 +50,9 @@ enum ControlCLI {
     }
 
     /// Function-level seam for the rows: parse, send, map the reply to an exit code. Blocks; call off main.
-    static func run(_ args: [String], socketPath: String) -> Outcome {
+    static func run(_ args: [String], socketPath: String, from: String? = nil) -> Outcome {
         let line: Data
-        switch parse(args) {
+        switch parse(args, from: from) {
         case .failure(let e): return Outcome(code: 1, stdout: nil, stderr: e.message)
         case .success(let d): line = d
         }

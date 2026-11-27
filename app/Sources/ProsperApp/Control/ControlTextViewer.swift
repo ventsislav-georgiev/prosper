@@ -120,7 +120,7 @@ enum ControlTextViewer {
         mutates: true, run: { _, _ in throw ControlError("textviewer.open checks the file off main: send it through the control channel") },
         runAsync: { reg, a in
             let c = try await run(a)
-            reg.changes.record(command: "textviewer.open", summary: c.summary, verb: c.verb, undo: c.undo)
+            reg.changes.record(command: "textviewer.open", change: c, sender: reg.sender)
             return c.result
         })
 }

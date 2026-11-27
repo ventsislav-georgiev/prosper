@@ -44,10 +44,13 @@ indirect enum ControlJSON: Sendable, Equatable, Codable {
     }
 }
 
-/// A wire request: one line `{"cmd": "...", "args": {...}}`.
+/// A wire request: one line `{"cmd": "...", "args": {...}, "from": "..."}`.
 struct ControlRequest: Codable, Equatable {
     var cmd: String
     var args: [String: ControlJSON]?
+    /// #2047: the client's DCH_SESSION (the dch session it runs in), absent outside one. Display only: the notice and
+    /// the log name that session; the peer uid check stays the gate.
+    var from: String? = nil
 }
 
 /// A wire reply: `{"ok": true, "result": ...}` or `{"ok": false, "error": "..."}`.
@@ -126,6 +129,8 @@ struct ControlRegistry: Sendable {
     private(set) var commands: [String: ControlCommand] = [:]
     /// #1808: where mutating commands log their changes and undos; rows swap in their own.
     var changes = ControlChanges.shared
+    /// #2047: the calling session's shown title for this request (set by reply(to:) for a mutating command); nil = unknown.
+    var sender: String?
 
     mutating func register(_ c: ControlCommand) { commands[c.name] = c }
 
@@ -182,7 +187,7 @@ struct ControlRegistry: Sendable {
         do {
             try cmd.validate(args)
             let registry = self
-            let result = try await Self.run(cmd, registry, args)
+            let result = try await Self.run(cmd, registry, args, from: req.from)
             return ControlReply(ok: true, result: result, error: nil)
         } catch let e as ControlError {
             return .failure(e.message)
@@ -193,8 +198,12 @@ struct ControlRegistry: Sendable {
 
     /// Checked on main with the run itself, so a flip of the switch cannot land between check and change.
     @MainActor
-    private static func run(_ cmd: ControlCommand, _ registry: ControlRegistry, _ args: [String: ControlJSON]) async throws -> ControlJSON {
+    private static func run(_ cmd: ControlCommand, _ registry: ControlRegistry, _ args: [String: ControlJSON],
+                            from: String?) async throws -> ControlJSON {
         if cmd.mutates, !Preferences.agentControlEnabled { throw ControlError(ControlChanges.offError) }
+        var registry = registry
+        // #2047: once per change, never for a read; one pass over the live sessions.
+        if cmd.mutates, let from { registry.sender = ControlSessions.sender(from) }
         if let a = cmd.runAsync { return try await a(registry, args) }
         return try cmd.run(registry, args)
     }

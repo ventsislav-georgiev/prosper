@@ -10,6 +10,7 @@ import XCTest
 final class ControlNoticeTests: XCTestCase {
 
     @MainActor private final class Box { var color = "red" }
+    @MainActor private final class Count { var n = 0 }
 
     private struct Shown { let text: String; let undo: (@MainActor () -> Void)? }
 
@@ -168,5 +169,87 @@ final class ControlNoticeTests: XCTestCase {
         XCTAssertEqual(ControlNotice.visibleSeconds, 6)
         XCTAssertEqual(ControlChanges.noticeText("theme to Royal Purple"), "Agent changed: theme to Royal Purple")
         XCTAssertEqual(ControlChanges.noticeText("x", verb: "ran"), "Agent ran: x")
+    }
+
+    // MARK: - #2047: who sent it, the whole message, time to read it
+
+    /// A change whose request carries the client's DCH_SESSION names that live session (its shown title) in the notice
+    /// and the log; a name no live session has, or none, reads as before. A read never looks the sender up.
+    func testAChangeFromAKnownSessionNamesItsSenderInTheNoticeAndTheLog() async {
+        let saved = (ControlSessions.model, ControlSessions.islandStore)
+        defer { (ControlSessions.model, ControlSessions.islandStore) = saved }
+        let fakes = AgentWindowD1Tests()
+        let st = fakes.store([fakes.session("perf-1", .idle, alias: "Perf"), fakes.session("api", .idle)])
+        let count = Count()
+        ControlSessions.model = { nil }
+        ControlSessions.islandStore = { count.n += 1; return st }
+        let reg = registry()
+
+        _ = await call(reg, #"{"cmd":"color","args":{"to":"blue"},"from":"perf-1"}"#)
+        XCTAssertEqual(shown.map(\.text).last, "Perf changed: color to blue")
+        XCTAssertEqual(count.n, 1, "one lookup for the change")
+        var log = await logChanges(reg)
+        XCTAssertEqual(log.last?["sender"], .string("Perf"))
+        XCTAssertEqual(reg.changes.entries.last?.sender, "Perf")
+
+        _ = await call(reg, #"{"cmd":"color","args":{"to":"green"},"from":"a-terminal"}"#)
+        XCTAssertEqual(shown.map(\.text).last, "Agent changed: color to green", "unknown sender: today's text")
+        _ = await call(reg, #"{"cmd":"color","args":{"to":"red"}}"#)
+        XCTAssertEqual(shown.map(\.text).last, "Agent changed: color to red", "no sender: today's text")
+        log = await logChanges(reg)
+        XCTAssertTrue(log.last?["sender"] == nil)
+
+        let before = count.n
+        _ = await call(reg, #"{"cmd":"log","from":"perf-1"}"#)
+        _ = await call(reg, #"{"cmd":"ping","from":"perf-1"}"#)
+        XCTAssertEqual(count.n, before, "a read costs no lookup")
+    }
+
+    /// The message notice: "<sender> → <target> (<verb>)", then the message whole (300 characters come through), at most
+    /// eight lines and a "…" line, every line cleaned of bidi and control characters, the whole at most bodyMax.
+    func testMessageNoticeShowsTheWholeMessageUpToEightLinesCleaned() {
+        let long = String(repeating: "abcdefghij", count: 30)
+        XCTAssertEqual(ControlChanges.messageText(long, target: "API", verb: "messaged", sender: "Perf"),
+                       "Perf → API (messaged)\n" + long)
+        XCTAssertEqual(ControlChanges.messageText("go on", target: "API", verb: "messaged", sender: nil),
+                       "Agent → API (messaged)\ngo on")
+
+        let twelve = (1...12).map { "line \($0)" }.joined(separator: "\n")
+        let t = ControlChanges.messageText(twelve, target: "API", verb: "messaged", sender: nil)
+        let lines = t.components(separatedBy: "\n")
+        XCTAssertEqual(lines.count, 1 + 8 + 1, "the title, eight lines, the ellipsis")
+        XCTAssertEqual(lines.last, "…")
+        XCTAssertTrue(t.contains("line 8") && !t.contains("line 9"))
+        let eight = (1...8).map { "line \($0)" }.joined(separator: "\n")
+        XCTAssertFalse(ControlChanges.messageText(eight, target: "API", verb: "messaged", sender: nil).hasSuffix("…"))
+
+        let dirty = ControlChanges.messageText("ok\u{202E}evil\u{07}\tnow\nnext\u{200B}", target: "API", verb: "messaged", sender: nil)
+        XCTAssertEqual(dirty, "Agent → API (messaged)\nokevilnow\nnext")
+
+        let huge = ControlChanges.messageText(String(repeating: "x", count: 5000), target: "API", verb: "messaged", sender: nil)
+        let body = huge.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+        XCTAssertEqual(body.count, ControlChanges.bodyMax)
+        XCTAssertTrue(body.hasSuffix("…"))
+    }
+
+    /// Through record: a change with a target and a message shows the message notice; the log keeps the short summary.
+    func testRecordShowsTheMessageNoticeAndKeepsTheLogSummaryShort() {
+        let changes = ControlChanges()
+        var texts: [String] = []
+        changes.present = { text, _ in texts.append(text) }
+        let message = String(repeating: "m", count: 300)
+        let c = ControlChange(summary: "API: \(message)", verb: "messaged", target: "API", body: message)
+        let e = changes.record(command: "sessions.say", change: c, sender: "Perf")
+        XCTAssertEqual(texts, ["Perf → API (messaged)\n" + message])
+        XCTAssertEqual(e.summary.count, ControlChanges.summaryMax)
+        XCTAssertEqual(e.sender, "Perf")
+    }
+
+    /// A longer notice stays up longer, never shorter than today's six seconds nor past twelve.
+    func testDisplayTimeScalesWithLengthAndStopsAtTheCap() {
+        XCTAssertEqual(ControlNotice.seconds(for: "Agent changed: x"), ControlNotice.visibleSeconds)
+        XCTAssertEqual(ControlNotice.seconds(for: String(repeating: "a", count: 200)), 10)
+        XCTAssertEqual(ControlNotice.seconds(for: String(repeating: "a", count: 1000)), ControlNotice.maxSeconds)
+        XCTAssertEqual(ControlNotice.maxSeconds, 12)
     }
 }

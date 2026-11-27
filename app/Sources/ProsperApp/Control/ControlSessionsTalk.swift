@@ -97,7 +97,7 @@ enum ControlSessionsTalk {
         case nil: result = .object(["delivered": .string("unknown"), "note": .string(unknownNote)])
         case .done?, .answered(_)?: result = .object(["delivered": .bool(true)])
         }
-        return ControlChange(summary: "\(s.title): \(message)", result: result, verb: "messaged")
+        return ControlChange(summary: "\(s.title): \(message)", result: result, verb: "messaged", target: s.title, body: message)
     }
 
     // MARK: - sessions.resume with a message
@@ -112,10 +112,10 @@ enum ControlSessionsTalk {
     /// sessions.resume (ControlSessions.resume): the change is recorded once the resume runs, whatever the message does.
     /// Without a message the reply is the name, at once. With one it waits (at most `resumeBound`) for sayFirst:
     /// {"name", "delivered": true}; a failure throws naming the resume and why; no outcome in time is "unknown".
-    static func resume(_ args: [String: ControlJSON], changes: ControlChanges) async throws -> ControlJSON {
+    static func resume(_ args: [String: ControlJSON], changes: ControlChanges, sender: String? = nil) async throws -> ControlJSON {
         let once = Once<String?>()
         let c = try ControlSessions.resume(args) { once.give(.some($0)) }
-        changes.record(command: "sessions.resume", summary: c.summary, verb: c.verb, undo: c.undo)
+        changes.record(command: "sessions.resume", change: c, sender: sender)
         guard ControlSessions.string(args, "message") != nil else { return c.result }
         let sleep = Self.sleep, bound = Self.resumeBound
         let timer = Task { @MainActor in await sleep(bound); once.give(nil) }
@@ -221,7 +221,7 @@ extension ControlRegistry {
         ], mutates: true, run: { _, _ in throw ControlError("sessions.say waits for its outcome: send it through the control channel") },
            runAsync: { reg, a in
             let c = try await ControlSessionsTalk.say(a, changes: reg.changes)
-            reg.changes.record(command: "sessions.say", summary: c.summary, verb: c.verb, undo: c.undo)
+            reg.changes.record(command: "sessions.say", change: c, sender: reg.sender)
             return c.result
         }))
         r.register(.change(name: "sessions.interrupt", summary: "Press Esc in a working session, as its Interrupt does (no undo).",

@@ -160,7 +160,7 @@ extension ControlRegistry {
                                   run: { _, _ in throw ControlError("updates.install awaits its answer: send it through the control channel") },
                                   runAsync: { reg, _ in
             let (o, c) = try await ControlInfo.updatesInstall()
-            if let c { reg.changes.record(command: "updates.install", summary: c.summary, verb: c.verb, undo: nil) }
+            if let c { reg.changes.record(command: "updates.install", summary: c.summary, verb: c.verb, undo: nil, sender: reg.sender) }
             return o
         }))
     }

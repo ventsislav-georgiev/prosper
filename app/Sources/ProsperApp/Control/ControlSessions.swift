@@ -42,6 +42,13 @@ enum ControlSessions {
         return s
     }
 
+    /// #2047: the shown title of the one live local session named `name` (a client's DCH_SESSION), nil when none or two.
+    static func sender(_ name: String) -> String? {
+        guard let st = model()?.store ?? islandStore() else { return nil }
+        let hits = st.sessions.filter { $0.name == name }
+        return hits.count == 1 ? hits.first?.title : nil
+    }
+
     static func string(_ args: [String: ControlJSON], _ key: String) -> String? {
         guard case .string(let s)? = args[key] else { return nil }
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -230,11 +237,15 @@ enum ControlSessions {
                 m.cancelNewSession()
                 changes.present("Agent's new session \(OutsideText.shown(name, max: 60)) did not start: \(OutsideText.shown(why, max: 200))", nil)
             }
-            return ControlChange(summary: name, result: .string(name), verb: "is starting a session", undo: undo(name, m))
+            return ControlChange(summary: name, result: .string(name), verb: "is starting a session", undo: undo(name, m),
+                                 target: name, body: prompt)
         }
         guard m.startNewSession(persist: false) else { throw refuse(m.newSession?.status) }
-        guard let host else { return ControlChange(summary: name, result: .string(name), verb: "started a session", undo: undo(name, m)) }
-        return ControlChange(summary: "\(name) on \(host) (no undo on another Mac)", result: .string(name), verb: "started a session")
+        guard let host else {
+            return ControlChange(summary: name, result: .string(name), verb: "started a session", undo: undo(name, m), target: name, body: prompt)
+        }
+        return ControlChange(summary: "\(name) on \(host) (no undo on another Mac)", result: .string(name), verb: "started a session",
+                             target: "\(name) on \(host)", body: prompt)
     }
 
     private static func undo(_ name: String, _ m: AgentWindowModel) -> @MainActor () -> Void {
@@ -373,7 +384,7 @@ enum ControlSessions {
                 else { AgentIslandController.shared.sayFirst(key, message, codex: codex, then: then) }
             }
         }
-        return ControlChange(summary: "\(r.title) (a resume has no undo)", result: .string(name), verb: "resumed")
+        return ControlChange(summary: "\(r.title) (a resume has no undo)", result: .string(name), verb: "resumed", target: r.title, body: message)
     }
 }
 
@@ -412,6 +423,6 @@ extension ControlRegistry {
             "noMessage": ControlArg(type: "boolean", summary: "Resume (no message): dch types no carry-on message"),
             "message": ControlArg(type: "string", summary: "your first message once it is up, instead of dch's (a Claude or Codex session on this Mac only)"),
         ], mutates: true, run: { _, _ in throw ControlError("sessions.resume waits for its outcome: send it through the control channel") },
-           runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes) }))
+           runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes, sender: reg.sender) }))
     }
 }

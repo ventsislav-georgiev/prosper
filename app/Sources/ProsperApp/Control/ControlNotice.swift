@@ -9,6 +9,10 @@ struct ControlChange {
     var verb = "changed"
     /// nil = no known inverse: the notice has no Undo button and the log marks the entry not undoable.
     var undo: (@MainActor () -> Void)? = nil
+    /// #2047: a message's session and the whole message (sessions.say, sessions.new's prompt, sessions.resume's message):
+    /// the notice titles "<sender> → <target> (<verb>)" and shows the message below. nil: the one-line notice.
+    var target: String? = nil
+    var body: String? = nil
 }
 
 extension ControlCommand {
@@ -19,7 +23,7 @@ extension ControlCommand {
                        apply: @escaping @MainActor @Sendable (_ registry: ControlRegistry, _ args: [String: ControlJSON]) throws -> ControlChange) -> ControlCommand {
         ControlCommand(name: name, summary: summary, args: args, mutates: true) { reg, a in
             let c = try apply(reg, a)
-            reg.changes.record(command: name, summary: c.summary, verb: c.verb, undo: c.undo)
+            reg.changes.record(command: name, change: c, sender: reg.sender)
             return c.result
         }
     }
@@ -34,6 +38,9 @@ final class ControlChanges {
 
     static let capacity = 100
     static let summaryMax = 200
+    /// #2047: a message in the notice: at most `bodyLines` lines (then "…") and `bodyMax` characters, each line cleaned.
+    static let bodyMax = 1000
+    static let bodyLines = 8
     static let offError = "agent control is off in Settings"
 
     struct Entry: Equatable {
@@ -41,6 +48,8 @@ final class ControlChanges {
         let date: Date
         let command: String
         let summary: String
+        /// #2047: the calling session's shown title (ControlSessions.sender); nil when not known.
+        var sender: String? = nil
         var undone = false
         var undoable = true
     }
@@ -55,15 +64,36 @@ final class ControlChanges {
         ControlNotice.shared.show(text, undo: undo)
     }
 
-    static func noticeText(_ summary: String, verb: String = "changed") -> String { "Agent \(verb): \(summary)" }
+    /// "Agent <verb>: <summary>"; #2047: the sender's title in place of "Agent" when known.
+    static func noticeText(_ summary: String, verb: String = "changed", sender: String? = nil) -> String {
+        "\(sender ?? "Agent") \(verb): \(summary)"
+    }
+
+    /// #2047: "<sender> → <target> (<verb>)", then the message: every line cleaned of unseen scalars, at most `bodyLines`
+    /// lines (a longer one ends with a "…" line) and `bodyMax` characters. `sender` and `target` come cleaned.
+    static func messageText(_ body: String, target: String, verb: String, sender: String?) -> String {
+        let lines = body.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        var shown = lines.prefix(bodyLines).map { OutsideText.shown(String($0), max: bodyMax) }.joined(separator: "\n")
+        if lines.count > bodyLines { shown += "\n…" }
+        if shown.count > bodyMax { shown = String(shown.prefix(bodyMax - 1)) + "…" }
+        return "\(sender ?? "Agent") → \(target) (\(verb))\n\(shown)"
+    }
+
+    /// #2047: a change as made, with its message for the notice and the calling session's title.
+    @discardableResult
+    func record(command: String, change c: ControlChange, sender: String?) -> Entry {
+        record(command: command, summary: c.summary, verb: c.verb, undo: c.undo, sender: sender, target: c.target, body: c.body)
+    }
 
     @discardableResult
-    func record(command: String, summary: String, verb: String = "changed", undo: (@MainActor () -> Void)? = nil) -> Entry {
+    func record(command: String, summary: String, verb: String = "changed", undo: (@MainActor () -> Void)? = nil,
+                sender: String? = nil, target: String? = nil, body: String? = nil) -> Entry {
         nextID += 1
         // QA n123: a summary can carry agent text; clean it once here so the notice and `ctl log` never show bidi or control
         // characters or a line that pushes the real action out of view.
         let summary = OutsideText.shown(summary, max: Self.summaryMax)
-        let e = Entry(id: nextID, date: Date(), command: command, summary: summary, undoable: undo != nil)
+        let sender = sender.map { OutsideText.shown($0, max: 64) }
+        let e = Entry(id: nextID, date: Date(), command: command, summary: summary, sender: sender, undoable: undo != nil)
         entries.append(e)
         undos[e.id] = undo
         if entries.count > Self.capacity {
@@ -73,7 +103,11 @@ final class ControlChanges {
         let id = e.id
         var click: (@MainActor () -> Void)?
         if undo != nil { click = { [weak self] in _ = self?.undo(id) } }
-        present(Self.noticeText(summary, verb: verb), click)
+        if let body, let target, !body.isEmpty {
+            present(Self.messageText(body, target: OutsideText.shown(target, max: 64), verb: verb, sender: sender), click)
+        } else {
+            present(Self.noticeText(summary, verb: verb, sender: sender), click)
+        }
         return e
     }
 
@@ -86,22 +120,33 @@ final class ControlChanges {
         return true
     }
 
-    /// `ctl log`: {"changes": [{id, time, command, summary, undone, undoable}, ...]}, oldest first.
+    /// `ctl log`: {"changes": [{id, time, command, summary, sender?, undone, undoable}, ...]}, oldest first.
     var logJSON: ControlJSON {
         let f = ISO8601DateFormatter()
         return .object(["changes": .array(entries.map {
-            .object(["id": .number(Double($0.id)), "time": .string(f.string(from: $0.date)), "command": .string($0.command),
-                     "summary": .string($0.summary), "undone": .bool($0.undone), "undoable": .bool($0.undoable)])
+            var o: [String: ControlJSON] = ["id": .number(Double($0.id)), "time": .string(f.string(from: $0.date)),
+                                            "command": .string($0.command), "summary": .string($0.summary),
+                                            "undone": .bool($0.undone), "undoable": .bool($0.undoable)]
+            if let s = $0.sender { o["sender"] = .string(s) }
+            return .object(o)
         })])
     }
 }
 
 /// #1808: the small "Agent changed: ..." notice with an Undo button. A borderless non-activating panel that can never
-/// become key or main, so it never takes focus; it hides itself after `visibleSeconds`. One notice at a time.
+/// become key or main, so it never takes focus; it hides itself after `seconds(for:)` (#2047: the pointer over it holds
+/// it). One notice at a time.
 @MainActor
 final class ControlNotice: NSObject {
     static let shared = ControlNotice()
     static let visibleSeconds: TimeInterval = 6
+    /// #2047: a longer notice stays up longer, `charsPerSecond` of reading time, never past `maxSeconds`.
+    static let maxSeconds: TimeInterval = 12
+    static let charsPerSecond = 20.0
+
+    static func seconds(for text: String) -> TimeInterval {
+        min(maxSeconds, max(visibleSeconds, Double(text.count) / charsPerSecond))
+    }
 
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { false }
@@ -113,6 +158,8 @@ final class ControlNotice: NSObject {
     private var undoButton: NSButton?
     private var hide: DispatchWorkItem?
     private var pendingUndo: (@MainActor () -> Void)?
+    private var shownFor = ControlNotice.visibleSeconds
+    private var hovered = false
 
     func show(_ text: String, undo: (@MainActor () -> Void)?) {
         let p = panel ?? makePanel()
@@ -120,15 +167,42 @@ final class ControlNotice: NSObject {
         pendingUndo = undo
         label?.stringValue = text
         undoButton?.isHidden = undo == nil
-        let w: CGFloat = 360, h: CGFloat = 48
+        // #2047: a message notice (a title line, then the message) is wider and as tall as its wrapped text.
+        let multi = text.contains("\n")
+        // Wrapped, at most the title, `bodyLines` and the "…" line high; past that the last shown line ends in "…".
+        let lines = ControlChanges.bodyLines + 2
+        label?.lineBreakMode = multi ? .byWordWrapping : .byTruncatingTail
+        label?.maximumNumberOfLines = multi ? lines : 1
+        let w: CGFloat = multi ? 420 : 360, textW = w - 14 - 88
+        let lineH = label?.font.map { NSLayoutManager().defaultLineHeight(for: $0) } ?? 16
+        let fit = label?.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: textW, height: 2000)).height ?? 20
+        let textH = multi ? ceil(min(fit, lineH * CGFloat(lines))) : 20
+        let h = max(48, textH + 28)
         if let f = NSScreen.main?.visibleFrame {
-            p.setFrame(NSRect(x: f.maxX - w - 16, y: f.maxY - h - 16, width: w, height: h), display: true)
+            p.setFrame(NSRect(x: f.maxX - w - 16, y: f.maxY - h - 16, width: w, height: h), display: false)
         }
+        label?.frame = NSRect(x: 14, y: 14, width: textW, height: textH)
         p.orderFrontRegardless()
+        shownFor = Self.seconds(for: text)
+        if !hovered { scheduleHide() }
+    }
+
+    private func scheduleHide() {
         hide?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.dismiss() }
         hide = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.visibleSeconds, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + shownFor, execute: item)
+    }
+
+    /// #2047: the pointer over the notice holds it; leaving starts its time again. The panel's tracking area calls these.
+    @objc(mouseEntered:) func mouseEntered(with event: NSEvent) {
+        hovered = true
+        hide?.cancel()
+    }
+
+    @objc(mouseExited:) func mouseExited(with event: NSEvent) {
+        hovered = false
+        if panel?.isVisible == true { scheduleHide() }
     }
 
     @objc private func undoClicked() {
@@ -140,6 +214,7 @@ final class ControlNotice: NSObject {
     private func dismiss() {
         hide?.cancel()
         hide = nil
+        hovered = false
         pendingUndo = nil
         panel?.orderOut(nil)
     }
@@ -162,8 +237,11 @@ final class ControlNotice: NSObject {
         bg.state = .active
         bg.wantsLayer = true
         bg.layer?.cornerRadius = 10
+        bg.addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                          owner: self, userInfo: nil))
         let text = NSTextField(labelWithString: "")
         text.lineBreakMode = .byTruncatingTail
+        text.cell?.truncatesLastVisibleLine = true   // #2047: a wrapped message notice past its lines ends in "…"
         text.textColor = .white
         text.frame = NSRect(x: 14, y: 14, width: 260, height: 20)
         text.autoresizingMask = [.width]

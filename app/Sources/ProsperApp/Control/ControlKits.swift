@@ -397,7 +397,7 @@ enum ControlKits {
                        run: { _, _ in throw ControlError("\(name) runs off main: send it through the control channel") },
                        runAsync: { reg, a in
             let c = try await work(a)
-            reg.changes.record(command: name, summary: c.summary, verb: c.verb, undo: c.undo)
+            reg.changes.record(command: name, change: c, sender: reg.sender)
             return c.result
         })
     }
