@@ -1,0 +1,41 @@
+{
+ "entry": "2042",
+ "filter": "CCPoolUsageReaderTests|CCPoolUsageRecordTests|CCPoolUsageStatsTests|ControlCCPoolTests",
+ "mutants": [
+  {
+   "name": "harness_not_written",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageRecord.swift",
+   "old": ",\\\"harness\\\":\\(Self.quote(harness))\"",
+   "new": "\"",
+   "expect": "killed"
+  },
+  {
+   "name": "reader_claude_default_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageReader.swift",
+   "old": "var harness = ClaudeHarness.id\n            if let h = obj[\"harness\"] {",
+   "new": "var harness = \"\"\n            guard let h = obj[\"harness\"] else { throw Bad(reason: .missing) }\n            do {",
+   "expect": "killed"
+  },
+  {
+   "name": "control_harness_key_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "old": "            o[\"harness\"] = .string(st.accounts[row.label]?.harness ?? ClaudeHarness.id)\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "stats_split_ignores_harness",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageReader.swift",
+   "old": "case .harness: key = row.harness",
+   "new": "case .harness: key = row.acct",
+   "expect": "killed"
+  },
+  {
+   "name": "reader_nonstring_kept",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageReader.swift",
+   "old": "guard let hs = h as? String, !hs.isEmpty, hs.utf8.count <= stringMax else { throw Bad(reason: .harness) }\n                harness = hs",
+   "new": "harness = (h as? String) ?? \"x\"",
+   "expect": "killed"
+  }
+ ]
+}
