@@ -106,7 +106,8 @@ final class IncreaseContrastIslandTests: XCTestCase {
         // #1898: 32, the limits popover (black like the island): its dim words (0.6) and its bars' track (0.15).
         // #1915: 34, the pool caption and the compact row.
         // #1999: 35, the plan limits popover's per-harness section header.
-        XCTAssertEqual(Self.count("Neon.faded(", in: view), 35, "the ear count, the text sites on the black shape and the shown tab's fallback")
+        // #2041: 36, AgentIslandInk.white(_:), the island's faded white shared with the X-ray drawer (QA early note).
+        XCTAssertEqual(Self.count("Neon.faded(", in: view), 36, "the ear count, the text sites on the black shape and the shown tab's fallback")
         XCTAssertEqual(Self.count("Color.white.opacity(0.75)", in: view), 0)
         XCTAssertEqual(Self.count("case .idle: Color.white.opacity(0.4)", in: model), 1, "idle colour unchanged")
         XCTAssertEqual(Self.count("p.backgroundColor = .clear", in: controller), 1, "the panel stays clear for the notch corners")
