@@ -1,0 +1,90 @@
+{
+ "entry": "2002",
+ "filter": "AgentCodexWindowTests",
+ "mutants": [
+  {
+   "name": "marker_no_codex",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if AgentIsland.runsCodex(s, records: []) { return .codex }",
+   "new": "if false { return .codex }",
+   "expect": "killed"
+  },
+  {
+   "name": "marker_shell_claude",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return s.agent == \"claude\" || (s.agent == nil && s.claudeSessionID?.isEmpty == false) ? .claude : nil",
+   "new": "return s.agent != \"codex\" ? .claude : nil",
+   "expect": "killed"
+  },
+  {
+   "name": "island_row_drops_marker",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "effort: r.effort, agentKind: r.agentKind)",
+   "new": "effort: r.effort, agentKind: nil)",
+   "expect": "killed"
+  },
+  {
+   "name": "sidebar_words_no_agent",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "row.detail, row.agentKind?.rawValue,",
+   "new": "row.detail, nil,",
+   "expect": "killed"
+  },
+  {
+   "name": "island_label_no_agent",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "show: show), row.agentKind?.rawValue,",
+   "new": "show: show), nil,",
+   "expect": "killed"
+  },
+  {
+   "name": "confirm_names_claude",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "agent = codex ? \"Codex\" : \"Claude Code\"",
+   "new": "agent = \"Claude Code\"",
+   "expect": "killed"
+  },
+  {
+   "name": "restart_no_daemon_warning",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "+ (codex ? codexDaemonSentence : \"\") + blocked\n        case .stop:",
+   "new": "+ blocked\n        case .stop:",
+   "expect": "killed"
+  },
+  {
+   "name": "source_not_codex",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "codex: AgentIsland.runsCodex(s, records: []))   // #2002",
+   "new": "codex: false)   // #2002",
+   "expect": "killed"
+  },
+  {
+   "name": "pane_ignores_codex",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTranscriptModel.swift",
+   "old": "s.codex ? codexNoTranscript :",
+   "new": "false ? codexNoTranscript :",
+   "expect": "killed"
+  },
+  {
+   "name": "notices_not_named",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        guard codex else { return text }",
+   "new": "        guard !codex else { return text }",
+   "expect": "killed"
+  },
+  {
+   "name": "runoff_not_named",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowActions.swift",
+   "old": "        return AgentWindowText.named(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working,\n                                     codex: AgentIsland.runsCodex(s, records: []))",
+   "new": "        return AgentWindowText.named(s.state == .blocked ? AgentWindowText.blocked : AgentWindowText.working,\n                                     codex: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "recent_skips_codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "where (r.agent != nil || r.codex != nil) && out.count",
+   "new": "where r.agent != nil && out.count",
+   "expect": "killed"
+  }
+ ]
+}
