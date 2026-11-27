@@ -43,6 +43,13 @@
    "old": "            else { defaults.set(v, forKey: Keys.agentIslandCodexCommand) }",
    "new": "            else { defaults.set(newValue, forKey: Keys.agentIslandCodexCommand) }",
    "expect": "killed"
+  },
+  {
+   "name": "codex_no_fallback",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "; if !m.newSessionCodex { m.setNewSessionCommand(\"codex\") }",
+   "new": "",
+   "expect": "killed"
   }
  ]
 }
