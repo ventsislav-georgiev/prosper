@@ -41,6 +41,9 @@ final class CCPoolPaneModel: ObservableObject {
         case held(until: Int)
         /// #1278: the account's token got a 401 (proxy or Refresh) at `since`; routing skips it.
         case refused(since: Int)
+        /// #2007: a Codex account out of routing: its refresh token was refused or its login got a 401 it could not
+        /// refresh past. Only a new sign-in brings it back.
+        case signedOut(since: Int)
         case rejected
         /// The last check of this token could not answer (network error, no rate-limit headers).
         case unverified
@@ -230,7 +233,7 @@ final class CCPoolPaneModel: ObservableObject {
     /// Precedence: a token out of routing, a rejected token, a hand hold, a limit, an unanswered check, current, ready.
     nonisolated static func rowState(label: String, account: CCPoolState.Account, current: String?, now: Double,
                                      rejected: Set<String>, unverified: Set<String>) -> RowState {
-        if let since = account.refused { return .refused(since: since) }
+        if let since = account.refused { return account.harness == CCPoolCodexHarness.id ? .signedOut(since: since) : .refused(since: since) }
         if rejected.contains(label) { return .rejected }
         if let h = account.held, Double(h) > now { return .held(until: h) }
         let live = account.cooldown.filter { Double($0.value) > now }
@@ -242,6 +245,8 @@ final class CCPoolPaneModel: ObservableObject {
         return current == label ? .active : .ready
     }
 
+    nonisolated static let signedOutText = "Signed out: sign in again"
+
     nonisolated static func stateText(_ s: RowState, timeZone: TimeZone) -> String {
         switch s {
         case .active: return "active"
@@ -250,6 +255,7 @@ final class CCPoolPaneModel: ObservableObject {
             return "limited until \(timeText(until, timeZone: timeZone)) (\(claims.map { CCPoolCore.display[$0] ?? $0 }.joined(separator: ", ")))"
         case .held(let until): return "held until \(timeText(until, timeZone: timeZone))"
         case .refused(let since): return "token rejected since \(timeText(since, timeZone: timeZone)), not routed"
+        case .signedOut: return Self.signedOutText
         case .rejected: return "token rejected"
         case .unverified: return "not verified"
         }

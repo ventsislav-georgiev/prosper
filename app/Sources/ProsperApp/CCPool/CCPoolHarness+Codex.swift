@@ -21,13 +21,6 @@ struct CCPoolCodexHarness: PoolHarness {
         return rest.isEmpty || rest.hasPrefix("/") || rest.hasPrefix("?") ? rest : nil
     }
 
-    /// The Keychain item of a `codex-chatgpt` account (design section 4); Phase 2 reads only these two fields.
-    /// Never logged or described.
-    private struct ChatGPTItem: Decodable {
-        let access_token: String
-        let account_id: String
-    }
-
     /// The default limit id: `x-codex-<slot>-...`. Another id's claims carry its prefix and never bench.
     static let defaultLimit = "codex"
     static let slots = ["primary", "secondary"]
@@ -189,10 +182,10 @@ struct CCPoolCodexHarness: PoolHarness {
     /// False (nothing set) for an item that does not decode or lacks either field: the caller skips the account as
     /// it does a missing token, so no empty or raw bearer goes out.
     func authorize(_ req: inout URLRequest, token: String) -> Bool {
-        guard let item = try? JSONDecoder().decode(ChatGPTItem.self, from: Data(token.utf8)),
-              !item.access_token.isEmpty, !item.account_id.isEmpty else { return false }
-        req.setValue("Bearer \(item.access_token)", forHTTPHeaderField: "Authorization")
-        req.setValue(item.account_id, forHTTPHeaderField: "chatgpt-account-id")
+        // #2007: the item is a CodexCredential (design section 4); the #2005 two-field shape still decodes.
+        guard let item = CodexCredential.decode(token) else { return false }
+        req.setValue("Bearer \(item.accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue(item.accountID, forHTTPHeaderField: "chatgpt-account-id")
         return true
     }
 

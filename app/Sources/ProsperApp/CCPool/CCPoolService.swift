@@ -7,6 +7,8 @@ struct CCPoolServiceConfig: Sendable {
     var upstream: URL = CCPoolService.productionUpstream
     /// #2005: the Codex (ChatGPT login) upstream that `/codex/...` is relayed to, a test seam only.
     var codexUpstream: URL = CCPoolCodexHarness.upstream
+    /// #2007: where a Codex login's refresh token is spent (CodexTokenKeeper), a test seam only.
+    var codexRefreshURL: URL = CodexTokenKeeper.productionURL
     /// #2009: routed Codex spawns against served /codex requests, shared by every copy of this config (a class, like
     /// thresholdBox); tests inject one with their own clock.
     var codexReach = CCPool.CodexReach()
@@ -101,6 +103,8 @@ final class CCPoolService: @unchecked Sendable {
     let secrets: CCPoolSecrets
     let logger: CCPoolLogger
     let upstream = CCPoolUpstream()
+    /// #2007: the one refresher of every Codex login this service serves, shared by its connections.
+    let codexKeeper: CodexTokenKeeper
     /// #1482: the usage record writer, owned here and stopped (flushed) with the service.
     let usageRecord: CCPoolUsageRecord
     /// #1667: the event record writer, in its own "events" folder beside usage/, stopped (flushed) with the service.
@@ -128,6 +132,7 @@ final class CCPoolService: @unchecked Sendable {
         self.store = store
         self.secrets = secrets
         self.logger = logger
+        codexKeeper = CodexTokenKeeper(store: store, secrets: secrets, url: config.codexRefreshURL, logger: logger)
         usageRecord = CCPoolUsageRecord(directory: store.usageDirectory, logger: logger)
         eventRecord = CCPoolEventRecord(directory: store.directory.appendingPathComponent("events", isDirectory: true), logger: logger)
     }
@@ -604,7 +609,7 @@ final class CCPoolService: @unchecked Sendable {
     private func accept(_ fd: Int32, port: UInt16) {
         let c = CCPoolConnection(conn: CCPoolFDTransport(fd: fd), config: config, store: store, secrets: secrets, logger: logger,
                                  upstream: upstream, boundPort: port, record: usageRecord,
-                                 events: eventRecord) { [weak self] id in
+                                 events: eventRecord, keeper: codexKeeper) { [weak self] id in
             self?.lock.withLock { _ = self?.connections.removeValue(forKey: id) }
         }
         lock.withLock { connections[ObjectIdentifier(c)] = c }

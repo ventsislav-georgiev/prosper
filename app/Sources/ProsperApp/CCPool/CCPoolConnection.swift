@@ -83,6 +83,9 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
     var upstreamHeaders: [String: String] = [:]
     /// #2015: a Codex 400 after an account move, its head held back while its body is read for an encrypted-content error.
     var held400 = false
+    /// #2007: the Codex access token this attempt sent (never logged), and whether its login can refresh.
+    var codexAccess: String?
+    var canRefresh = false
 
     init(connection: CCPoolConnection, label: String, accountID: String, retried: Bool, followedPin: Bool) {
         self.connection = connection
@@ -204,13 +207,17 @@ final class CCPoolConnection: @unchecked Sendable {
     private var replacedFrom: CCPoolExchange?
     /// #2015: the body was sent again without its encrypted reasoning items; a second encrypted 400 passes through.
     private var strippedReplay = false
+    /// #2007: the Codex login was refreshed after a 401 and the request replayed (once); a second 401 marks it refused.
+    private var refreshed401 = false
+    /// #2007: the service's Codex refresher (nil: no refresh, a 401 marks the account refused at once).
+    private let keeper: CodexTokenKeeper?
     /// #1482: when the relay started, and how the last account was chosen ("pin", "place" or "pick").
     private var startedAt = 0.0
     private var routed = "pick"
 
     init(conn: CCPoolTransport, config: CCPoolServiceConfig, store: CCPoolStore, secrets: CCPoolSecrets, logger: CCPoolLogger,
          upstream: CCPoolUpstream, boundPort: UInt16, record: CCPoolUsageRecord? = nil, events: CCPoolEventRecord? = nil,
-         onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
+         keeper: CodexTokenKeeper? = nil, onClose: @escaping @Sendable (ObjectIdentifier) -> Void) {
         self.conn = conn
         self.config = config
         self.store = store
@@ -220,6 +227,7 @@ final class CCPoolConnection: @unchecked Sendable {
         self.boundPort = boundPort
         self.record = record
         self.events = events
+        self.keeper = keeper
         self.onClose = onClose
     }
 
@@ -497,8 +505,9 @@ final class CCPoolConnection: @unchecked Sendable {
         send(label: label, accountID: id, retried: false)
     }
 
-    private func send(label: String, accountID: String, retried: Bool) {
-        guard let head else { return }
+    /// `given`: the item a refresh just stored (#2007), used instead of reading the secret again.
+    private func send(label: String, accountID: String, retried: Bool, token given: String? = nil) {
+        guard let head, !closed else { return }
         // The token lives in this request only: read per attempt, never kept on the connection.
         // #1326 (c): a retry (throttle wait, pooled resend) can outlive its account: a removed one is never sent, even
         // when its Keychain item stayed behind.
@@ -511,8 +520,23 @@ final class CCPoolConnection: @unchecked Sendable {
             if let first = movedFrom { return pinBack(first, answer: first) }
             return attempt()
         }
-        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
+        guard !removed, let token = given ?? (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
             return skip(removed ? "account removed; skipping this account" : "token unavailable; skipping this account")
+        }
+        let codexLogin = harness.id == CCPoolCodexHarness.id ? CodexCredential.decode(token) : nil
+        // #2007: a Codex login due for refresh (exp within 1 h, last refresh over 7 days) is refreshed first; the keeper
+        // stores the new item before it comes back here. No answer: the stored login is used as it is.
+        if given == nil, let keeper, let c = codexLogin, CodexTokenKeeper.due(c, now: store.now) {
+            return keeper.refresh(id: accountID, stale: c.accessToken) { [weak self] outcome in
+                guard let self else { return }
+                self.queue.async {
+                    switch outcome {
+                    case .refreshed(let item): self.send(label: label, accountID: accountID, retried: retried, token: item)
+                    case .failed: self.send(label: label, accountID: accountID, retried: retried, token: token)
+                    case .signedOut: self.signedOut(label: label, accountID: accountID)
+                    }
+                }
+            }
         }
         guard let url = URL(string: target) else {
             // #1572 (O11): the pool's own 400 after a relay began is one usage row too (acct of this attempt).
@@ -539,11 +563,35 @@ final class CCPoolConnection: @unchecked Sendable {
             req.httpBody = body
         }
         let ex = CCPoolExchange(connection: self, label: label, accountID: accountID, retried: retried, followedPin: followedPin)
+        ex.codexAccess = codexLogin?.accessToken
+        ex.canRefresh = codexLogin?.canRefresh ?? false
         exchange = ex
         ex.task = upstream.start(req, accountID: accountID, handler: ex)
     }
 
     private var replayable: Bool { !streamed && !headSent }
+
+    /// #2007: the account's refresh token was refused (the keeper stamped it refused): the client hears so, no retry.
+    private func signedOut(label: String, accountID: String) {
+        exchange = nil
+        log.note(label, "Codex login signed out; not routed until it signs in again")
+        recordAnswer(401, acct: accountID)
+        fail(401, "the Codex account's login is signed out: sign in again", type: "authentication_error")
+    }
+
+    /// #2007: after a 401 the login was refreshed: the request goes again ONCE on the same account with the new item.
+    private func after401(_ outcome: CodexTokenKeeper.Outcome, label: String, accountID: String) {
+        guard !closed else { return }
+        switch outcome {
+        case .refreshed(let item):
+            log.note(label, "login refreshed; replaying the request once")
+            send(label: label, accountID: accountID, retried: false, token: item)
+        case .signedOut: signedOut(label: label, accountID: accountID)
+        case .failed:
+            recordAnswer(502, acct: accountID)
+            fail(502, "the Codex login could not be refreshed; try again", type: "api_error")
+        }
+    }
 
     func onResponse(_ ex: CCPoolExchange, _ response: HTTPURLResponse, decide: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
         guard ex === exchange, !closed else { return decide(.cancel) }
@@ -562,9 +610,28 @@ final class CCPoolConnection: @unchecked Sendable {
         // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
         let id = ex.accountID, code = response.statusCode
+        // #2007: a Codex 401 on a login that can refresh: refresh through the keeper (one in flight per account) and,
+        // while the request is replayable, replay it once. Not replayable: the refresh is for the next request, and
+        // this 401 passes through unmarked.
+        let refreshes = codex && code == 401 && ex.canRefresh && !refreshed401 && keeper != nil
+        if refreshes, let keeper, let stale = ex.codexAccess {
+            refreshed401 = true
+            if replayable {
+                exchange = nil
+                decide(.cancel)
+                log.note(label, "token rejected (401); refreshing the login")
+                return keeper.refresh(id: id, stale: stale) { [weak self] outcome in
+                    guard let self else { return }
+                    self.queue.async { self.after401(outcome, label: label, accountID: id) }
+                }
+            }
+            keeper.refresh(id: id, stale: stale) { _ in }
+            log.note(label, "token rejected (401); refreshing the login for the next request (body above the replay cap)")
+        }
         // #1278: a 401 to /v1/messages* takes the account out of routing (the first stamp kept: a second 401 writes
         // nothing) and never makes it `current`; a 2xx puts it back. One write with `current`; the reply is unchanged.
-        let marks = code == 401 && head?.path.hasPrefix("/v1/messages") == true
+        // #2007: on Codex, a 401 that is not refreshed (a login that cannot refresh, or the second 401) marks it too.
+        let marks = code == 401 && (head?.path.hasPrefix("/v1/messages") == true || (codex && !refreshes))
         let refusal = store.mutate { st -> Bool? in
             guard let owner = st.label(ofID: id) else { return nil }
             if !ex.followedPin, code != 401 { st.remember(owner) }

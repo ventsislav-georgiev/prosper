@@ -354,7 +354,7 @@ extension CCPoolService {
         case .ready, .rejected, .unverified: return ["label": label, "state": "ready"]
         case .limited(let until, _): return ["label": label, "state": "limited", "until": until]
         case .held(let until): return ["label": label, "state": "held", "until": until]
-        case .refused: return ["label": label, "state": "refused"]
+        case .refused, .signedOut: return ["label": label, "state": "refused"]
         }
     }
 }
