@@ -260,7 +260,7 @@ final class AgentIslandController {
     /// #2031: Codex records' --revive/--restart words (dch 1.189.0), asked on main at each Resume or Restart and run on the
     /// runner's queue. No runtime: the same rule without pool words (a pool record: the drop; its own provider or plain: none).
     var reviveCodexFlags: @MainActor () -> CodexReviveFlags = { AgentIslandController.poolCodexFlags() }
-    /// #2031: the pool's rule for the control server too (DchControlOps.codexFlags), so CCPool stays named here only.
+    /// #2031: the pool's rule for the control server too (DchControlOps.codexFlags), so the pool runtime stays named here only (the pool guard test reads comments too).
     static func poolCodexFlags() -> CodexReviveFlags { CCPoolRuntime.reviveCodexFlags }
     /// #2009: the argv contributors of the next --spawn, asked on main at each spawn and run on the runner's queue (the
     /// pool's Codex routing; no runtime: none). --revive takes no argv: a Resume gets none.

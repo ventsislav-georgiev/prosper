@@ -393,8 +393,8 @@ final class DchControlFramesTests: XCTestCase {
         return f.launchedArgs
     }
 
-    private static func lsAgents(_ rows: [(String, String)]) -> String {
-        json(rows.map { ["name": $0.0, "version": "1.189.0", "agent": $0.1] })
+    private static func lsAgents(_ rows: [(String, String)], version: String = "1.189.0") -> String {
+        json(rows.map { ["name": $0.0, "version": version, "agent": $0.1] })
     }
 
     func testCodexRestartByNameCarriesTheWords() {
@@ -403,7 +403,7 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(Set(restartedArgs(f, version: [1, 189, 0], ["names": ["a", "b"]])),
                        [AgentIsland.restartArgs("a")! + Self.codexWords, AgentIsland.restartArgs("b")!])
         let old = Fake()
-        old.ls["/d"] = Self.lsAgents([("a", "codex")])
+        old.ls["/d"] = Self.lsAgents([("a", "codex")], version: "1.188.0")   // the gate refuses a dch older than a master
         XCTAssertEqual(restartedArgs(old, version: [1, 188, 0], ["names": ["a"]]), [AgentIsland.restartArgs("a")!], "dch 1.188.0: none")
     }
 
