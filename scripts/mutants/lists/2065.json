@@ -1,0 +1,27 @@
+{
+ "entry": "2065",
+ "filter": "AgentTerminalBackingTests",
+ "mutants": [
+  {
+   "name": "handler_removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        if flips { AgentTerminalLook.refresh(look()) }",
+   "new": "        _ = flips",
+   "expect": "killed"
+  },
+  {
+   "name": "thicken_flipped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "static func thicken(_ backing: CGFloat) -> Bool { backing < 2 }",
+   "new": "static func thicken(_ backing: CGFloat) -> Bool { backing >= 2 }",
+   "expect": "killed"
+  },
+  {
+   "name": "show_backing_not_set",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        AgentTerminalLook.backing = window.backingScaleFactor   // #2065: the 1x thickening of the screen it opens on",
+   "new": "        _ = window",
+   "expect": "killed"
+  }
+ ]
+}

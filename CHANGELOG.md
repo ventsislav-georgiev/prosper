@@ -121,6 +121,9 @@ tag from the now-released section and put it on the new top draft.
   card. (#2049)
 - Each session group has a ••• menu to restart, stop or end just the sessions in that group. (#2060)
 - New session opens its terminal at once, and the agent's output streams in as it starts. (#2058)
+- The Agent Sessions window keeps its terminal text readable on a non-Retina display: Ghostty
+  thickens the glyphs at 1x, and the setting follows the window when it moves between a Retina and a
+  non-Retina display. (#2065)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

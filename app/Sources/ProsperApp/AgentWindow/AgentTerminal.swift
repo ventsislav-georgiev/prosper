@@ -1154,7 +1154,8 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
     /// rendered without one (an offscreen hosting view) never starts libghostty.
     func show(_ screen: AgentGhosttyScreen?) {
         wanted = screen
-        guard window != nil, let screen, screen !== installed else { return }
+        guard let window, let screen, screen !== installed else { return }
+        AgentTerminalLook.backing = window.backingScaleFactor   // #2065: the 1x thickening of the screen it opens on
         AgentTerminalLook.refresh(look())
         installed = screen
         screen.mounts += 1
@@ -1196,6 +1197,17 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
         owner?.followFocus()
         show(wanted)
         if owner?.focusPending == true { owner?.focus() }
+    }
+
+    /// #2065: a move to a screen of another scale (Retina to a 1x display and back). The wrapper re-applies the content
+    /// scale and the pixel grid itself (AppTerminalView+Lifecycle viewDidChangeBackingProperties); this follows the 1x
+    /// thickening, one reconfigure of the shared app when it flips (the other panes see it flipped already).
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let b = window?.backingScaleFactor else { return }
+        let flips = AgentTerminalLook.thicken(b) != AgentTerminalLook.thicken(AgentTerminalLook.backing)
+        AgentTerminalLook.backing = b
+        if flips { AgentTerminalLook.refresh(look()) }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -1555,6 +1567,14 @@ final class AgentTerminalHostView: AppTerminalView, TerminalSurfaceLifecycleDele
 enum AgentTerminalLook {
     static let controller: TerminalController = make()
 
+    /// #2065: the backing scale of the window the terminals were last shown in. Under 2x (a non-Retina display) macOS
+    /// draws no font smoothing and Ghostty's thin default strokes read faint, so the config adds font-thicken there;
+    /// Retina keeps Ghostty's default (no line at all).
+    /// shortcut: one value for the one ghostty app; terminals in two windows on screens of different scale share the
+    /// last one's; per-window config would need a ghostty app per window.
+    static var backing: CGFloat = 2
+    static func thicken(_ backing: CGFloat) -> Bool { backing < 2 }
+
     /// #1376: Ghostty's macOS default keybinds that only send text to the program (line kill, line start and end, word
     /// back and forward), kept after `keybind = clear`; its others (copy, paste, new window...) would bypass the window.
     static let textKeybinds = [
@@ -1645,7 +1665,8 @@ enum AgentTerminalLook {
     /// the theme then keeps Prosper's colours: never a config without Prosper's keys and clipboard rules.
     static func refresh(_ c: TerminalController, colours: [(key: String, value: String)]? = nil) {
         let colours = colours ?? userColours()
-        let overlay = colours.isEmpty ? TerminalConfiguration() : configuration(colours: colours)
+        let base = colours.isEmpty ? TerminalConfiguration() : configuration(colours: colours)
+        let overlay = thicken(backing) ? base.fontThicken(true) : base   // #2065: 1x only
         if c.setTerminalConfiguration(overlay) { dropConfigFile(c) }
         if c.setTheme(theme(colours: c.terminalConfiguration == overlay ? colours : [])) { dropConfigFile(c) }
     }

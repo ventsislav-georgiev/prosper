@@ -691,17 +691,20 @@ final class AgentTerminalTests: XCTestCase {
     /// post an occlusion change for it at any moment (CI), and libghostty's view then stops drawing for good. As shown.
     final class ShownWindow: NSWindow {
         override var occlusionState: NSWindow.OcclusionState { .visible }
+        /// #2065: a backing the window reports instead of the screen's (nil: the screen's).
+        var fixedBacking: CGFloat?
+        override var backingScaleFactor: CGFloat { fixedBacking ?? super.backingScaleFactor }
     }
 
     @MainActor
     final class ViewRig {
         let rig: Rig
         let host = AgentTerminalHostView(frame: NSRect(x: 0, y: 0, width: 720, height: 420))
-        let window: NSWindow
+        let window: ShownWindow
         let app = AgentTerminalLook.make()
         let pb = NSPasteboard(name: NSPasteboard.Name("eu.illegible.prosper.xctest.term.\(UUID().uuidString)"))
 
-        init(_ rig: Rig = Rig()) {
+        init(_ rig: Rig = Rig(), backing: CGFloat? = nil) {
             _ = NSApplication.shared
             self.rig = rig
             rig.c.makeScreen = { AgentGhosttyScreen($0) }
@@ -711,6 +714,7 @@ final class AgentTerminalTests: XCTestCase {
             rig.c.view = host
             window = ShownWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            window.fixedBacking = backing
         }
 
         var session: InMemoryTerminalSession? { (rig.c.screen as? AgentGhosttyScreen)?.session }
