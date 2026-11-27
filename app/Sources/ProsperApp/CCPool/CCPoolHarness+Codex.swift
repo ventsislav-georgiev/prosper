@@ -320,7 +320,10 @@ struct CCPoolCodexHarness: PoolHarness {
             logger.note(label, "refresh: token rejected (401); refreshing the login")
             switch await Self.refresh(keeper, id: id, stale: c.accessToken) {
             case .refreshed(let fresh): (answer, missing) = await Self.usage(item: fresh, base: base, timeout: timeout)
-            case .signedOut, .failed: break
+            case .signedOut: break   // the keeper stamped it: the 401 stands
+            case .failed:   // an auth host blip says nothing about the login: no refused stamp (the proxy's 502 rule)
+                logger.note(label, "refresh: the login refresh failed; no answer, the account is kept")
+                return nil
             }
         }
         if let missing { logger.note(label, "refresh: the usage answer lacked \(missing)") }

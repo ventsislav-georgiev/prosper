@@ -12,16 +12,19 @@ final class CodexFakeAuth: @unchecked Sendable {
     var status = 200
     var body = Data()
     var delay: TimeInterval = 0
+    /// Read the POST, hang up without answering.
+    var drop = false
     /// With a 3xx `status`: the Location the reply names.
     var location: String?
     var posts: [Data] { lock.withLock { _posts } }
     func set(_ f: (CodexFakeAuth) -> Void) { lock.withLock { f(self) } }
 
     func reply(_ head: CCPoolRequestHead, _ data: Data) -> CCPoolFakeServer.Reply {
-        let (s, b, d, l) = lock.withLock { () -> (Int, Data, TimeInterval, String?) in
+        let (s, b, d, l, dropped) = lock.withLock { () -> (Int, Data, TimeInterval, String?, Bool) in
             _posts.append(data)
-            return (status, body, delay, location)
+            return (status, body, delay, location, drop)
         }
+        if dropped { return .drop }
         if d > 0 { Thread.sleep(forTimeInterval: d) }
         return .respond(s, [("content-type", "application/json")] + (l.map { [("location", $0)] } ?? []), b)
     }

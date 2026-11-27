@@ -241,6 +241,37 @@ final class CCPoolCodexUsageProbeTests: XCTestCase {
         assertNoSecrets(r)
     }
 
+    // QA R2010 F1: a 401 whose keeper refresh FAILS (auth host 5xx or hang-up) says nothing about the login: no answer, no
+    // refused stamp, and the keeper still POSTs on a later trigger. Old: the 401 stood and the account was marked refused.
+    private func assertFailedRefreshKeepsTheAccount(_ r: Rig, file: StaticString = #filePath, line: UInt = #line) async throws {
+        r.usage.set { $0.accepted = [K.accessNew] }
+        let report = await r.refresh()
+        XCTAssertEqual(r.auth.posts.count, 1, file: file, line: line)
+        XCTAssertTrue(report.rows.first?.status == nil, "could not answer, not a 401", file: file, line: line)
+        XCTAssertTrue(r.store.snapshot.accounts["cx"]?.refused == nil, "not refused", file: file, line: line)
+        XCTAssertNotEqual(r.rowText, CCPoolPaneModel.signedOutText, file: file, line: line)
+        XCTAssertTrue(r.log.lines.contains { $0.contains("login refresh failed") }, "\(r.log.lines)", file: file, line: line)
+        // The keeper is not shut off: a working auth host gets another POST.
+        r.auth.set { $0.status = 200; $0.drop = false }
+        let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
+        let outcome = await withCheckedContinuation { c in r.keeper.refresh(id: id, stale: K.freshAccess) { c.resume(returning: $0) } }
+        XCTAssertEqual(r.auth.posts.count, 2, file: file, line: line)
+        if case .refreshed = outcome {} else { XCTFail("\(outcome)", file: file, line: line) }
+        assertNoSecrets(r, file: file, line: line)
+    }
+
+    func test401ThenAuthHost5xxIsNotASignOut() async throws {
+        let r = try rig()
+        r.auth.set { $0.status = 500; $0.body = Data("{}".utf8) }
+        try await assertFailedRefreshKeepsTheAccount(r)
+    }
+
+    func test401ThenAuthHostHangUpIsNotASignOut() async throws {
+        let r = try rig()
+        r.auth.set { $0.drop = true }
+        try await assertFailedRefreshKeepsTheAccount(r)
+    }
+
     // A login that is due is refreshed through the keeper before the probe, never by the probe itself.
     func testDueLoginIsRefreshedFirstThroughTheKeeper() async throws {
         let r = try rig(item: K.item(access: K.jwt(exp: Date().timeIntervalSince1970 + 60, tag: "due")))

@@ -57,6 +57,13 @@
    "old": "[(ClaudeHarness(), base), (codex, service.config.codexUpstream)]",
    "new": "[(ClaudeHarness(), base)]",
    "expect": "killed"
+  },
+  {
+   "name": "failed_refresh_keeps_401",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "            case .failed:   // an auth host blip says nothing about the login: no refused stamp (the proxy's 502 rule)\n                logger.note(label, \"refresh: the login refresh failed; no answer, the account is kept\")\n                return nil\n",
+   "new": "            case .failed: break\n",
+   "expect": "killed"
   }
  ]
 }
