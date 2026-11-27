@@ -122,8 +122,9 @@ final class XrayAnswerTests: XCTestCase {
         XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: local, live: ["api"]), "api", "the asker ended")
         XCTAssertEqual(XrayPanelModel.notifyTarget(asker: nil, drawer: local, live: ["api"]), "api")
         XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "-k", drawer: local, live: ["-k"]), "api", "never a flag")
-        XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: remote, live: ["api", "api-qa"]), "box:api-qa")
-        XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: remote, live: []), "box:api")
+        XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: remote, live: ["api", "api-qa"]), "api-qa")
+        XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: remote, live: []), "api")
+        XCTAssertEqual(XrayPanelModel.notifyTarget(asker: "api-qa", drawer: remote, live: ["other"]), "api", "a remote drawer whose asker is not live: the plain drawer name")
     }
 
     /// The asker gone: the drawer's session is told; on a remote drawer the argv names the host's sessions.
@@ -135,7 +136,14 @@ final class XrayAnswerTests: XCTestCase {
         let rrec = Recorder((0, ok)), r = panel(XrayTarget(name: "box:api", dir: nil), rec: rrec, live: ["api-qa"])
         await send(r)
         XCTAssertEqual(rrec.calls.first { $0.args.contains("--answer") }?.args,
-                       ["--xray", "box:api", "--answer", "OQ-7", "-", "--json", "--notify", "box:api-qa"])
+                       ["--xray", "box:api", "--answer", "OQ-7", "-", "--json", "--notify", "api-qa"])
+        // a remote drawer whose asker is not live: the plain drawer name, and never a host prefix in any --notify value
+        let nrec = Recorder((0, ok)), n = panel(XrayTarget(name: "box:api", dir: nil), rec: nrec, live: ["other"])
+        await send(n)
+        let notifies = (rec.calls + rrec.calls + nrec.calls).compactMap { c in c.args.firstIndex(of: "--notify").map { c.args[$0 + 1] } }
+        XCTAssertEqual(nrec.calls.first { $0.args.contains("--answer") }?.args.last, "api")
+        XCTAssertEqual(notifies.count, 3)
+        XCTAssertTrue(notifies.allSatisfy { !$0.contains(":") })
     }
 
     /// Success: the editor closes, the told line shows for 6 s (the poller's ticker clears it), --questions is read at once.
@@ -192,7 +200,7 @@ final class XrayAnswerTests: XCTestCase {
         r = await line(7, remote: true)
         XCTAssertEqual(r.0, "Host unreachable: not answered")
         r = await line(2)
-        XCTAssertEqual(r.0, "Not answered: dch refused the text")
+        XCTAssertEqual(r.0, "Not answered: dch refused the request")
         XCTAssertEqual(r.1, "keep me")
     }
 

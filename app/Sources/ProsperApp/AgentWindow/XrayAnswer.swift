@@ -75,12 +75,12 @@ extension XrayPanelModel {
         return String(t.name[..<i])
     }
 
-    /// Design 3 "Who": the asker when it is exactly a live session's name next to the drawer (as host:asker on a remote
-    /// drawer's host), else the drawer's own session. The asker is ledger data: compared only, never a path or a flag.
+    /// Design 3 "Who": the asker when it is exactly a live session's name next to the drawer, else the drawer's own session.
+    /// Always a PLAIN session name: dch --notify refuses "host:name" (exit 2), the host's own dch tells its session.
+    /// The asker is ledger data: compared only, never a path or a flag.
     static func notifyTarget(asker: String?, drawer: XrayTarget, live: Set<String>) -> String {
-        guard let a = asker, !a.isEmpty, !a.hasPrefix("-"), live.contains(a) else { return drawer.name }
-        if drawer.dir != nil { return a }
-        return host(of: drawer).map { "\($0):\(a)" } ?? drawer.name
+        if let a = asker, !a.isEmpty, !a.hasPrefix("-"), live.contains(a) { return a }
+        return host(of: drawer).map { String(drawer.name.dropFirst($0.count + 1)) } ?? drawer.name
     }
 
     /// Design 4: a qid dch takes: 1 to 32 of [A-Za-z0-9._-], not starting with "-".
@@ -169,7 +169,7 @@ extension XrayPanelModel {
             questions?.answerable = false   // the Answer buttons go until a header says answer:true again
         case 3:
             say("Not answered: " + OutsideText.shown(res?.detail.flatMap { $0.isEmpty ? nil : $0 } ?? "the answer command failed", max: 160))
-        case 2: say("Not answered: dch refused the text")
+        case 2: say("Not answered: dch refused the request")
         case 1: say("Not answered: dch found no such session")
         default: say("Not answered: dch did not answer")
         }
