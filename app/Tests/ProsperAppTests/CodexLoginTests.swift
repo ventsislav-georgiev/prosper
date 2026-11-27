@@ -402,6 +402,20 @@ final class CodexLoginTests: XCTestCase {
         XCTAssertEqual(scratchLeft(r), [])
     }
 
+    func testASweepWhileALoginHoldsTheSlotRemovesNothingNew() async throws {
+        let r = rig(), child = Hanging(), handle = CodexLogin.Handle()
+        let task = Task { await Self.signIn(r, runner: child.runner, handle: handle) }
+        let deadline = Date().addingTimeInterval(10)
+        while !child.running, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        let live = scratchLeft(r)
+        XCTAssertEqual(live.count, 1)
+        try FileManager.default.createDirectory(at: r.root.appendingPathComponent("later", isDirectory: true), withIntermediateDirectories: true)
+        CodexLogin.sweep(root: r.root)
+        XCTAssertEqual(Set(scratchLeft(r)), Set(live + ["later"]), "a live login makes the whole sweep a no-op, its scratch included")
+        handle.cancel()
+        _ = await task.value
+    }
+
     func testQuitHookStopsTheLiveChildAndRemovesItsScratch() async throws {
         let r = rig(), child = Hanging()
         let task = Task { await Self.signIn(r, runner: child.runner) }

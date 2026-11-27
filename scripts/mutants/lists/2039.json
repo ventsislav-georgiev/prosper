@@ -26,8 +26,8 @@
   {
    "name": "before_login_sweep_removed",
    "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
-   "old": "if Live.isActive { return .failed(alreadyRunning) }\n        sweep(root: scratchRoot)",
-   "new": "if Live.isActive { return .failed(alreadyRunning) }",
+   "old": "removeChildren(of: root)\n                guard let dir = makeScratch(root: root)",
+   "new": "guard let dir = makeScratch(root: root)",
    "expect": "killed"
   },
   {
@@ -35,6 +35,13 @@
    "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
    "old": "s?()\n            if let dir",
    "new": "_ = s\n            if let dir",
+   "expect": "killed"
+  },
+  {
+   "name": "sweep_ignores_live_login",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "if Live.scratch == nil { removeChildren(of: root) }",
+   "new": "removeChildren(of: root)",
    "expect": "killed"
   }
  ]

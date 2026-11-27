@@ -9,7 +9,7 @@ import Foundation
 enum CodexLogin {
     /// The words after the Codex command (checked against Codex 0.167.2's strings: `login`, `--device-auth`,
     /// `cli_auth_credentials_store`). #2039: the `-c` override is a top-level option, so it goes before `login`; one argv
-    /// word (no shell), so a managed config that forces the keyring cannot send the login to the Keychain.
+    /// word (no shell), so it asks Codex for the file store. A managed config can still override it; that shows as "wrote no auth.json".
     static let loginArgs = ["-c", "cli_auth_credentials_store=\"file\"", "login", "--device-auth"]
     /// An auth.json is a few KB; anything above this is not one (outside data: a picked folder).
     static let maxAuthBytes = 1 << 20
@@ -100,13 +100,23 @@ enum CodexLogin {
     /// #2039: the one login of this process that is running (its scratch and its own stop), reachable by the quit hook
     /// whatever pane model started it. Set after the scratch is made, cleared on every exit of signIn.
     enum Live {
-        private static let lock = NSLock()
-        nonisolated(unsafe) private static var scratch: URL?
+        fileprivate static let lock = NSLock()
+        nonisolated(unsafe) fileprivate static var scratch: URL?
         nonisolated(unsafe) private static var stop: (@Sendable () -> Void)?
 
         static var isActive: Bool { lock.withLock { scratch != nil } }
-        /// Test-and-set: one login per process; false when one is already live (the slot is left alone).
-        static func begin(_ dir: URL) -> Bool { lock.withLock { if scratch != nil { return false }; scratch = dir; stop = nil; return true } }
+        enum Claim { case taken, noFolder, ok(URL) }
+        /// One lock for the slot and the sweep: refuse when taken, sweep `root`, make the scratch, store it. A sweep from
+        /// elsewhere (sweep(root:) takes the same lock) can neither miss this scratch nor delete it.
+        static func claim(root: URL) -> Claim {
+            lock.withLock {
+                if scratch != nil { return .taken }
+                removeChildren(of: root)
+                guard let dir = makeScratch(root: root) else { return .noFolder }
+                scratch = dir; stop = nil
+                return .ok(dir)
+            }
+        }
         static func started(_ s: @escaping @Sendable () -> Void) { lock.withLock { if scratch != nil { stop = s } } }
         static func end() { lock.withLock { scratch = nil; stop = nil } }
 
@@ -126,9 +136,13 @@ enum CodexLogin {
     /// login of this process is live (it keeps its scratch: the sweep is skipped while busy). A symlink child is
     /// unlinked, never followed; a `root` that is not a plain folder is left alone. Run off main.
     static func sweep(root: URL) {
+        Live.lock.withLock { if Live.scratch == nil { removeChildren(of: root) } }
+    }
+
+    /// The sweep's body, for callers already holding Live's lock (NSLock is not recursive).
+    private static func removeChildren(of root: URL) {
         let fm = FileManager.default
-        guard !Live.isActive,
-              (try? fm.attributesOfItem(atPath: root.path))?[.type] as? FileAttributeType == .typeDirectory,
+        guard (try? fm.attributesOfItem(atPath: root.path))?[.type] as? FileAttributeType == .typeDirectory,
               let names = try? fm.contentsOfDirectory(atPath: root.path) else { return }
         for name in names { try? fm.removeItem(atPath: root.appendingPathComponent(name).path) }
     }
@@ -149,12 +163,11 @@ enum CodexLogin {
                        output: @escaping @Sendable (String) -> Void) async -> Outcome {
         if let why = labelRefusal(label, store: store) { return .failed(why) }
         guard !command.isEmpty else { return .failed("No Codex command is set.") }
-        if Live.isActive { return .failed(alreadyRunning) }
-        sweep(root: scratchRoot)
-        guard let scratch = makeScratch(root: scratchRoot) else { return .failed("Could not make a private folder for the login.") }
-        guard Live.begin(scratch) else {
-            try? FileManager.default.removeItem(at: scratch)
-            return .failed(alreadyRunning)
+        let scratch: URL
+        switch Live.claim(root: scratchRoot) {
+        case .taken: return .failed(alreadyRunning)
+        case .noFolder: return .failed("Could not make a private folder for the login.")
+        case .ok(let dir): scratch = dir
         }
         defer { Live.end(); try? FileManager.default.removeItem(at: scratch) }
         let status = await runner(command + loginArgs, ["CODEX_HOME": scratch.path], { s in Live.started(s); handle.started(s) },
