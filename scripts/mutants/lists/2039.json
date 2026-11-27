@@ -1,0 +1,41 @@
+{
+ "entry": "2039",
+ "filter": "CodexLoginTests",
+ "mutants": [
+  {
+   "name": "store_override_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "[\"-c\", \"cli_auth_credentials_store=\\\"file\\\"\", \"login\", \"--device-auth\"]",
+   "new": "[\"login\", \"--device-auth\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "sweep_follows_symlinks",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "try? fm.removeItem(atPath: root.appendingPathComponent(name).path)",
+   "new": "try? fm.removeItem(atPath: root.appendingPathComponent(name).resolvingSymlinksInPath().path)",
+   "expect": "killed"
+  },
+  {
+   "name": "sweep_root_link_guard_off",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "(try? fm.attributesOfItem(atPath: root.path))?[.type] as? FileAttributeType == .typeDirectory,",
+   "new": "true,",
+   "expect": "killed"
+  },
+  {
+   "name": "before_login_sweep_removed",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "if Live.isActive { return .failed(alreadyRunning) }\n        sweep(root: scratchRoot)",
+   "new": "if Live.isActive { return .failed(alreadyRunning) }",
+   "expect": "killed"
+  },
+  {
+   "name": "terminate_skips_stop",
+   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "old": "s?()\n            if let dir",
+   "new": "_ = s\n            if let dir",
+   "expect": "killed"
+  }
+ ]
+}

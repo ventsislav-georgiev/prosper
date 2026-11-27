@@ -12,8 +12,8 @@
   {
    "name": "no_cleanup_on_failure",
    "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
-   "old": "        defer { try? FileManager.default.removeItem(at: scratch) }\n",
-   "new": "",
+   "old": "defer { Live.end(); try? FileManager.default.removeItem(at: scratch) }",
+   "new": "defer { Live.end() }",
    "expect": "killed"
   },
   {
