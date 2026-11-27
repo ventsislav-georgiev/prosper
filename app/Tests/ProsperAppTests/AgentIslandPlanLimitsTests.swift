@@ -349,7 +349,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         c.monitorClicks = { _ in "global" }
         c.monitorOwnClicks = { _ in "local" }
         c.removeMonitor = { _ in }
-        c.planUsage = { _ in usage() }
+        c.planUsage = { _, _ in usage() }
         c.planLimits = { _ in limits() }
         c.openPoolSettings = {}
         let geometry = AgentIslandGeometry.make(
@@ -493,5 +493,175 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertTrue(buttons.first?.reads(AgentPlanLimits.settingsLink) == true)
         XCTAssertEqual(opened, 0, "drawing opens nothing")
         XCTAssertEqual(AgentPlanLimits.settingsPane, "ext:com.prosper.ccpool|ccpool")
+    }
+}
+
+// MARK: - #2011: groups by harness (design #2003 section 6); #1999's Codex card reads group("codex")
+
+extension AgentIslandPlanLimitsTests {
+    @MainActor private func runtime() -> CCPoolRuntime {
+        let dir = tempDir()
+        var cfg = CCPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:9")!
+        let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-limits-\(UUID().uuidString)")!
+        XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
+        return CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+                             vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
+                             logger: CCPoolCapturingLogger())
+    }
+
+    /// A Codex ChatGPT account (the pool's own add path makes a Claude one; the harness and kind are what #2005 sets).
+    @MainActor private func addCodex(_ rt: CCPoolRuntime, _ label: String, headers: [String: String], t: Double) throws {
+        let id = try rt.store.addAccount(label: label, token: "example-token-\(label)", secrets: rt.secrets)
+        rt.store.mutate {
+            $0.accounts[label]?.harness = CCPoolCodexHarness.id
+            $0.accounts[label]?.kind = CCPoolCodexHarness.chatgptKind
+        }
+        rt.store.recordUsage(id: id, limits: CCPoolCodexHarness.parseLimits(headers, now: t).limits)
+    }
+
+    @MainActor func testTwoHarnessesGiveTwoGroupsWithTheirOwnDisplayAndCurrent() throws {
+        let rt = runtime()
+        let t = Date().timeIntervalSince1970
+        let idA = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
+        rt.store.recordUsage(id: idA, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
+        try addCodex(rt, "cx1", headers: ["x-codex-primary-used-percent": "40", "x-codex-primary-window-minutes": "300",
+                                          "x-codex-secondary-used-percent": "20", "x-codex-secondary-window-minutes": "10080"], t: t)
+        try addCodex(rt, "cx2", headers: ["x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "20160"], t: t)
+        rt.store.mutate {
+            $0.currents = [ClaudeHarness.id: "alpha", CCPoolCodexHarness.id: "cx1"]
+            $0.accounts["alpha"]?.reset = ["five_hour": Int(t) + 7200]
+            $0.accounts["cx1"]?.reset = ["five_hour": Int(t) + 3600, "seven_day": Int(t) + 3 * 86400]
+            $0.accounts["cx2"]?.reset = ["window_20160m": Int(t) + 86400]
+        }
+        let l = rt.planLimits(now: t)
+        XCTAssertEqual(l.groups.map(\.harness), ["claude", "codex"])
+        XCTAssertEqual(l.groups.map(\.title), ["Claude", "Codex"])
+        XCTAssertEqual(l.accounts.map(\.label), ["alpha"], "the popover's accounts are the Claude group's only")
+        XCTAssertEqual(l.accounts.map(\.isCurrent), [true])
+        XCTAssertEqual(l.accounts.map(\.harness), ["claude"])
+        XCTAssertEqual(l.pool, l.group("claude")?.pool)
+        let codex = try XCTUnwrap(l.group("codex"))
+        XCTAssertEqual(codex.accounts.map(\.label), ["cx1", "cx2"], "most urgent first")
+        XCTAssertEqual(codex.accounts.map(\.isCurrent), [true, false], "Codex's own current")
+        XCTAssertEqual(codex.accounts.map(\.harness), ["codex", "codex"])
+        XCTAssertEqual(codex.accounts.first?.limits.map(\.name), ["5h", "week"])
+        XCTAssertEqual(codex.accounts.last?.limits.map(\.name), ["14d"], "Codex's own word for a two-week window")
+        let pool = try XCTUnwrap(codex.pool)
+        XCTAssertTrue(pool.hasPrefix("5h 60%") && pool.contains("week 80%") && pool.contains("14d 90%"), pool)
+        XCTAssertFalse(pool.contains("window_"), pool)
+        XCTAssertTrue(l.pool?.hasPrefix("5h 70%") == true, "a Codex share never counts in the Claude pool: \(l.pool ?? "nil")")
+    }
+
+    @MainActor func testCodexOnlyPoolGivesNoClaudeGroupAndNoClaudeLine() throws {
+        let rt = runtime()
+        let t = Date().timeIntervalSince1970
+        try addCodex(rt, "cx", headers: ["x-codex-primary-used-percent": "40", "x-codex-primary-window-minutes": "300"], t: t)
+        rt.store.mutate { $0.currents[CCPoolCodexHarness.id] = "cx" }
+        let l = rt.planLimits(now: t)
+        XCTAssertEqual(l.groups.map(\.harness), ["codex"])
+        XCTAssertTrue(l.group("claude") == nil)
+        XCTAssertTrue(l.accounts.isEmpty && l.pool == nil, "the popover's Claude part is empty")
+        XCTAssertTrue(rt.planUsage(now: t) == nil, "the Claude line is empty")
+        XCTAssertTrue(rt.planUsage(now: t, harness: "claude") == nil)
+        let u = try XCTUnwrap(rt.planUsage(now: t, harness: "codex"))
+        XCTAssertEqual(u.session, 0.4)
+        XCTAssertEqual(u.plan, "Codex")
+        XCTAssertTrue(u.help().hasPrefix("Codex plan usage"))
+    }
+
+    @MainActor func testNoCodexAccountGivesNoCodexGroup() throws {
+        let rt = runtime()
+        let t = Date().timeIntervalSince1970
+        let id = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
+        rt.store.recordUsage(id: id, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
+        rt.store.mutate { $0.current = "alpha" }
+        let l = rt.planLimits(now: t)
+        XCTAssertEqual(l.groups.map(\.harness), ["claude"])
+        XCTAssertTrue(l.group("codex") == nil)
+        XCTAssertTrue(rt.planUsage(now: t, harness: "codex") == nil, "no Codex current: no Codex line")
+        let u = try XCTUnwrap(rt.planUsage(now: t, harness: "claude"))
+        XCTAssertEqual(u.session, 0.3)
+        XCTAssertEqual(u.plan, "Claude")
+        XCTAssertTrue(u.help().hasPrefix("Claude plan usage"))
+    }
+
+    /// A current that names an account of another harness is not that harness's line.
+    @MainActor func testPlanUsageNeedsTheCurrentToServeThatHarness() throws {
+        let rt = runtime()
+        let t = Date().timeIntervalSince1970
+        try addCodex(rt, "cx", headers: ["x-codex-primary-used-percent": "40", "x-codex-primary-window-minutes": "300"], t: t)
+        rt.store.mutate { $0.current = "cx" }
+        XCTAssertTrue(rt.planUsage(now: t) == nil, "a Codex account is never the Claude line")
+    }
+
+    func testLegacyCurrentDecodesAsClaudes() throws {
+        let json = #"{"current":"alpha","order":["alpha","cx"],"accounts":{"alpha":{"id":"a1"},"cx":{"id":"c1","harness":"codex"}}}"#
+        var st = try JSONDecoder().decode(CCPoolState.self, from: Data(json.utf8))
+        XCTAssertEqual(st.currents, ["claude": "alpha"], "the single legacy value is Claude's")
+        st.remember("cx")
+        XCTAssertEqual(st.currents, ["claude": "alpha", "codex": "cx"], "Codex's current is its own")
+    }
+
+    func testPaceReachesEveryGroupByLabel() throws {
+        let a = account("alpha", util: ["five_hour": 0.75], reset: ["five_hour": Int(now) + 7200])
+        let cx = AgentPlanLimits.Account(label: "cx", isCurrent: true, util: ["five_hour": 0.75], at: now - 60,
+                                         reset: ["five_hour": Int(now) + 7200], cooldown: [:], claims: [("five_hour", "5h")],
+                                         now: now, harness: "codex")
+        let l = AgentPlanLimits(groups: [.init(harness: "claude", title: "Claude", pool: nil, accounts: [a]),
+                                         .init(harness: "codex", title: "Codex", pool: nil, accounts: [cx])])
+            .withPace(["cx": ["five_hour": pace(rising)]], now: now)
+        XCTAssertEqual(l.group("codex")?.accounts.first?.limits.first?.runsOut, Int(now) + 3000, "the Codex row's own samples")
+        XCTAssertTrue(l.accounts.first?.limits.first?.runsOut == nil, "alpha has no samples")
+    }
+
+    @MainActor func testTheLineFollowsTheFocusedSessionsHarness() throws {
+        let saved = Preferences.defaults.object(forKey: "agentIslandShowPlanUsage")
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: "agentIslandShowPlanUsage") } else { Preferences.defaults.removeObject(forKey: "agentIslandShowPlanUsage") } }
+        Preferences.agentIslandShowPlanUsage = true
+        let c = controller({ nil }, limits: { nil })
+        var asked: [String] = []
+        c.planUsage = { _, h in asked.append(h); return nil }
+        let store = try XCTUnwrap(c.store)
+        let codexKey = AgentSessionKey(dir: "/Users/example/d", name: "api-qa")
+        var codexRow = AgentSession(key: codexKey, alias: "", activity: 0, state: .idle, agents: 0)
+        codexRow.agent = "codex"
+        store.sessions.append(codexRow)
+        c.readPlanUsage()
+        store.focusKey = store.sessions.first?.key
+        c.readPlanUsage()
+        store.focusKey = codexKey
+        c.readPlanUsage()
+        store.focusKey = AgentSessionKey(dir: "/Users/example/d", name: "gone")
+        c.readPlanUsage()
+        XCTAssertEqual(asked, ["claude", "claude", "codex", "claude", "claude"], "no focus, a Claude row, a Codex row (then the Claude fallback), an unknown row")
+    }
+
+    @MainActor func testACodexRowWithoutACodexLineFallsBackToClaudes() throws {
+        let saved = Preferences.defaults.object(forKey: "agentIslandShowPlanUsage")
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: "agentIslandShowPlanUsage") } else { Preferences.defaults.removeObject(forKey: "agentIslandShowPlanUsage") } }
+        Preferences.agentIslandShowPlanUsage = true
+        let c = controller({ nil }, limits: { nil })
+        let store = try XCTUnwrap(c.store)
+        let codexKey = AgentSessionKey(dir: "/Users/example/d", name: "api-qa")
+        var codexRow = AgentSession(key: codexKey, alias: "", activity: 0, state: .idle, agents: 0)
+        codexRow.agent = "codex"
+        store.sessions.append(codexRow)
+        store.focusKey = codexKey
+        let t = Date().timeIntervalSince1970
+        let claude = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.4], at: t, reset: [:], now: t))
+        var codex: AgentPlanUsage?
+        var asked: [String] = []
+        c.planUsage = { _, h in asked.append(h); return h == "codex" ? codex : claude }
+        c.readPlanUsage()
+        XCTAssertEqual(store.planUsage, claude, "no Codex current: Claude's line stays")
+        XCTAssertEqual(asked, ["codex", "claude"])
+        codex = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.9], at: t, reset: [:], now: t))
+        codex?.plan = "Codex"
+        asked = []
+        c.readPlanUsage()
+        XCTAssertEqual(store.planUsage, codex, "a Codex value wins")
+        XCTAssertEqual(asked, ["codex"], "no Claude call")
     }
 }

@@ -262,7 +262,8 @@ final class AgentIslandController {
     var reviveKitBins: @MainActor () -> [String] = { KitRuntimes.shared?.liveBins() ?? [] }
     /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
     /// (the ccpool extension off, or under XCTest): none.
-    var planUsage: @MainActor (_ now: Double) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0) }
+    /// #2011: `harness` is the focused session's (planHarness).
+    var planUsage: @MainActor (_ now: Double, _ harness: String) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0, harness: $1) }
     /// #1898: every pool account's limits for the line's popover, read on main when it opens and when the line's own value
     /// changes while it is open. No runtime: none.
     var planLimits: @MainActor (_ now: Double) -> AgentPlanLimits? = { CCPoolRuntime.shared?.planLimits(now: $0) }
@@ -1497,11 +1498,20 @@ final class AgentIslandController {
     /// #1537: the plan usage line, re-read with the clock now (a value past its reset drops); assigned only on a change.
     func readPlanUsage() {   // internal for #1898's rows
         guard let store else { return }
-        let u = Preferences.agentIslandShowPlanUsage ? planUsage(Date().timeIntervalSince1970) : nil   // #1552: off, never read
+        let now = Date().timeIntervalSince1970
+        // #1552: off, never read. A harness with no current account yet (Codex before its pool) keeps Claude's line, not none.
+        let u = Preferences.agentIslandShowPlanUsage ? (planUsage(now, planHarness) ?? (planHarness == "claude" ? nil : planUsage(now, "claude"))) : nil
         guard store.planUsage != u else { return }
         store.planUsage = u
         // #1898: the line's value moved (the pool published a sample or a reset): an open popover re-reads; no line, no popover.
         if store.planLimits != nil { if u == nil { closePlanLimits() } else { readPlanLimits() } }
+    }
+
+    /// #2011: the line's harness: the focused row's ("codex" by AgentIsland.runsCodex, no record read on main); no focused
+    /// row, or one not running Codex: "claude".
+    var planHarness: String {
+        guard let key = store?.focusKey, let s = store?.sessions.first(where: { $0.key == key }) else { return "claude" }
+        return AgentIsland.runsCodex(s, records: []) ? "codex" : "claude"
     }
 
     /// #1898: the plan usage line's popover opens (read now) or closes. Only while the line is drawn.
@@ -1593,6 +1603,7 @@ final class AgentIslandController {
         store.historyTab = false
         store.groupTab = hit.1
         store.focusKey = hit.0.key
+        readPlanUsage()   // #2011: the line follows the focused row's harness
         refreshCards()   // the tab may have changed: read the shown tab's blocked screens
         return true
     }

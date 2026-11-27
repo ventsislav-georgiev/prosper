@@ -27,7 +27,7 @@ final class AgentIslandPlanUsageTests: XCTestCase {
         c.monitorClicks = { _ in "global" }
         c.monitorOwnClicks = { _ in "local" }
         c.removeMonitor = { _ in }
-        c.planUsage = { _ in usage }
+        c.planUsage = { _, _ in usage }
         let store = AgentIslandStore(geometry: notched, sort: .name, sidekickPattern: "")
         store.sessions = [AgentSession(key: AgentSessionKey(dir: "/Users/example/d", name: "api"), alias: "", activity: 0,
                                        state: .idle, agents: 0)]

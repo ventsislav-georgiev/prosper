@@ -1294,6 +1294,8 @@ struct AgentPlanUsage: Equatable, Sendable {
     /// Epochs the windows roll over; nil: not reported.
     var sessionReset: Int?
     var weekReset: Int?
+    /// #2011: whose plan the line is ("Claude", "Codex"), the focused session's harness; the help's first words.
+    var plan = "Claude"
 
     static let sessionWindow: Double = 5 * 3600
     static let weekWindow: Double = 7 * 86400
@@ -1337,7 +1339,7 @@ struct AgentPlanUsage: Equatable, Sendable {
             guard let u else { return nil }
             return "\(name): \(Self.percent(u)) used" + (r.map { ", resets \(f.string(from: Date(timeIntervalSince1970: Double($0))))" } ?? "")
         }
-        return (["Claude plan usage (account pool, current account)"]
+        return (["\(plan) plan usage (account pool, current account)"]
                 + [line("Session limit", session, sessionReset), line("Weekly limit", week, weekReset)].compactMap { $0 })
             .joined(separator: "\n")
     }
@@ -1366,6 +1368,8 @@ struct AgentPlanLimits: Equatable, Sendable {
 
     struct Account: Equatable, Sendable {
         var label: String
+        /// #2011: the pool harness the account serves ("claude", "codex").
+        var harness: String
         var isCurrent: Bool
         /// Fresh limits only, in the given claim order; empty: no recent data.
         var limits: [Limit]
@@ -1376,8 +1380,9 @@ struct AgentPlanLimits: Equatable, Sendable {
 
         /// `claims`: (claim, display name) in display order; a claim not listed is not drawn.
         init(label: String, isCurrent: Bool, util: [String: Double], at: Double?, reset: [String: Int],
-             cooldown: [String: Int], claims: [(claim: String, name: String)], now: Double) {
+             cooldown: [String: Int], claims: [(claim: String, name: String)], now: Double, harness: String = AgentPlanLimits.claude) {
             self.label = label
+            self.harness = harness
             self.isCurrent = isCurrent
             sampleAt = at
             limits = at.map { at in
@@ -1392,23 +1397,45 @@ struct AgentPlanLimits: Equatable, Sendable {
         var nextReset: Int { limits.compactMap(\.reset).min() ?? Int.max }
     }
 
-    /// The pool's free share, the Account pool pane's words ("5h 162% · week 40% (more at Tue 18:00)"); nil: none known.
-    var pool: String?
-    var accounts: [Account]
+    /// #2011: one harness's accounts, its title ("Claude", "Codex") and its pool's free share in the Account pool pane's
+    /// words ("5h 162% · week 40% (more at Tue 18:00)"; nil: none known). Accounts sorted as `sorted`.
+    struct Group: Equatable, Sendable {
+        var harness: String
+        var title: String
+        var pool: String?
+        var accounts: [Account]
+    }
+
+    static let claude = "claude"
+    /// #2011: one per harness that has accounts, in the pool runtime's harness order.
+    var groups: [Group]
+
+    /// The Claude group's pool words and accounts: what the island's popover draws (#1999 draws the Codex card).
+    var pool: String? { group(Self.claude)?.pool }
+    var accounts: [Account] { group(Self.claude)?.accounts ?? [] }
 
     init(pool: String?, accounts: [Account]) {
-        self.pool = pool
-        self.accounts = Self.sorted(accounts)
+        self.init(groups: [Group(harness: Self.claude, title: "Claude", pool: pool, accounts: accounts)])
     }
+
+    init(groups: [Group]) {
+        self.groups = groups.map { var g = $0; g.accounts = Self.sorted(g.accounts); return g }
+    }
+
+    /// #2011: a harness's group ("codex" for #1999's card); nil: no account of that harness in the pool.
+    func group(_ harness: String) -> Group? { groups.first { $0.harness == harness } }
 
     /// #1899: each limit's runsOut from the last hour's samples, `samples[label][claim]` (any order).
     func withPace(_ samples: [String: [String: [PaceSample]]], now: Double) -> AgentPlanLimits {
         var out = self
-        for i in out.accounts.indices {
-            let label = out.accounts[i].label
-            for j in out.accounts[i].limits.indices {
-                let l = out.accounts[i].limits[j]
-                out.accounts[i].limits[j].runsOut = l.reset.flatMap { Self.runsOut(samples[label]?[l.claim] ?? [], reset: $0, now: now) }
+        // #2011: every group's; labels are unique pool-wide, so a label's samples are its own harness's.
+        for g in out.groups.indices {
+            for i in out.groups[g].accounts.indices {
+                let label = out.groups[g].accounts[i].label
+                for j in out.groups[g].accounts[i].limits.indices {
+                    let l = out.groups[g].accounts[i].limits[j]
+                    out.groups[g].accounts[i].limits[j].runsOut = l.reset.flatMap { Self.runsOut(samples[label]?[l.claim] ?? [], reset: $0, now: now) }
+                }
             }
         }
         return out

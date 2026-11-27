@@ -158,31 +158,52 @@ final class CCPoolRuntime {
 
     /// #1537: the Agent Island's plan usage line: the current account's last usage sample (relayed replies or a
     /// Refresh) and its reset stamps, as a plain island value. nil without a current account or a sample.
-    func planUsage(now: Double) -> AgentPlanUsage? {
+    /// #2011: `harness`'s current account (the focused session's harness; the island passes claude when unknown).
+    func planUsage(now: Double, harness: String = ClaudeHarness.id) -> AgentPlanUsage? {
         let st = store.snapshot
-        guard let label = st.current, let account = st.accounts[label], let sample = store.usageSample(label) else { return nil }
-        return AgentPlanUsage(util: sample.util, at: sample.at, reset: account.reset, now: now)
+        guard let label = st.currents[harness], let account = st.accounts[label], account.harness == harness,
+              let sample = store.usageSample(label) else { return nil }
+        var u = AgentPlanUsage(util: sample.util, at: sample.at, reset: account.reset, now: now)
+        u?.plan = Self.planTitles[harness] ?? harness
+        return u
+    }
+
+    /// #2011: the island's harnesses in group order, with their titles.
+    static let planHarnesses: [any PoolHarness] = [ClaudeHarness(), CCPoolCodexHarness()]
+    static let planTitles = [ClaudeHarness.id: "Claude", CCPoolCodexHarness.id: "Codex"]
+
+    /// #2011: a claim's popover word in `harness`'s display (Codex: "5h", "week", "<n>d" as its pane says).
+    nonisolated static func claimName(_ claim: String, harness: any PoolHarness) -> String {
+        harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.displayName(claim) : harness.display[claim] ?? claim
     }
 
     /// #1898: the island's limits popover (read only): every account's limits under the line's stale rule, its earliest
     /// cooldown in force and its sample's age, plus the pool's free share over those same fresh values in the pane's words.
     /// Memory only (the snapshot and the samples): no file, no network.
+    /// #2011: one group per harness that has accounts (one pass over the snapshot), each with its own display and current.
     func planLimits(now: Double) -> AgentPlanLimits {
         let st = store.snapshot
-        var live: [CCPoolCore.LiveAccount] = []
-        let accounts = st.order.compactMap { label -> AgentPlanLimits.Account? in
-            guard let acct = st.accounts[label] else { return nil }
+        var live: [String: [CCPoolCore.LiveAccount]] = [:]
+        var accounts: [String: [AgentPlanLimits.Account]] = [:]
+        for label in st.order {
+            guard let acct = st.accounts[label],
+                  let h = Self.planHarnesses.first(where: { $0.id == acct.harness }) else { continue }   // an unknown harness: not drawn
             let sample = store.usageSample(label)
-            let extra = (sample?.util.keys).map { $0.filter { !CCPoolCore.displayOrder.contains($0) }.sorted() } ?? []
-            let a = AgentPlanLimits.Account(label: label, isCurrent: st.current == label, util: sample?.util ?? [:], at: sample?.at,
-                                            reset: acct.reset, cooldown: acct.cooldown,
-                                            claims: (CCPoolCore.displayOrder + extra).map { ($0, CCPoolCore.display[$0] ?? $0) }, now: now)
+            let extra = (sample?.util.keys).map { $0.filter { !h.displayOrder.contains($0) }.sorted() } ?? []
+            accounts[h.id, default: []].append(.init(label: label, isCurrent: st.currents[h.id] == label, util: sample?.util ?? [:],
+                                                     at: sample?.at, reset: acct.reset, cooldown: acct.cooldown,
+                                                     claims: (h.displayOrder + extra).map { ($0, Self.claimName($0, harness: h)) },
+                                                     now: now, harness: h.id))
             // #1907: the whole sample and its epoch; headroom applies the stale rule itself (a stale claim has rolled over).
-            live.append(.init(util: sample?.util ?? [:], reset: acct.reset, spent: acct.cooldown, at: sample?.at ?? now))
-            return a
+            live[h.id, default: []].append(.init(util: sample?.util ?? [:], reset: acct.reset, spent: acct.cooldown, at: sample?.at ?? now))
         }
-        return AgentPlanLimits(pool: CCPoolPaneModel.poolText(CCPoolCore.poolCells(live, now: now), timeZone: model.timeZone),
-                               accounts: accounts)
+        return AgentPlanLimits(groups: Self.planHarnesses.compactMap { h in
+            guard let list = accounts[h.id] else { return nil }
+            // poolText names a cell by Claude's display; a cell carrying the harness's own word reads the same for Claude.
+            let cells = CCPoolCore.poolCells(live[h.id] ?? [], now: now).map { var c = $0; c.claim = Self.claimName(c.claim, harness: h); return c }
+            return .init(harness: h.id, title: Self.planTitles[h.id] ?? h.id, pool: CCPoolPaneModel.poolText(cells, timeZone: model.timeZone),
+                         accounts: list)
+        })
     }
 
     /// #1899: the last hour's usage record samples per account label and claim, for the popover's pace. The day files are read
