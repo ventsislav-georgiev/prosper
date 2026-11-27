@@ -329,11 +329,12 @@ final class XrayCommandPillTests: XCTestCase {
         XCTAssertEqual(m.commandReads, 2, "outside it: one read for the new row")
         m.commandHover(Self.at(row: 3))
         XCTAssertFalse(m.pill.isHidden)
+        XCTAssertEqual(m.commandReads, 2, "#2040: the kept pill keeps its corridor, so its own row reads nothing")
         m.commandHover(Self.at(row: 5))
-        XCTAssertEqual(m.commandReads, 4, "two rows below the block's last row: read")
+        XCTAssertEqual(m.commandReads, 3, "two rows below the block's last row: read")
         m.commandHover(Self.at(row: 3))
         m.commandHover(CGPoint(x: 10, y: 1 * 17 + 5))
-        XCTAssertEqual(m.commandReads, 6, "left of the block's column, outside the corridor: read")
+        XCTAssertEqual(m.commandReads, 4, "left of the block's column, outside the corridor: read")
         XCTAssertEqual(m.hoveredCommand?.row, 2, "#2040: no other command there: kept")
     }
 
