@@ -1,0 +1,62 @@
+{
+ "entry": "2001",
+ "filter": "ControlSessionsTests|ControlSessionsReadTests|DchListModelEffortTests",
+ "mutants": [
+  {
+   "name": "list-ignores-agent",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "let agent: String? = if let a = s.agent { a.isEmpty ? nil : a }",
+   "new": "let agent: String? = if let a = s.agent, false { a.isEmpty ? nil : a }",
+   "expect": "killed"
+  },
+  {
+   "name": "list-empty-not-null",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "{ a.isEmpty ? nil : a }",
+   "new": "{ a }",
+   "expect": "killed"
+  },
+  {
+   "name": "transcript-no-codex-branch",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if s.agent == \"codex\" { throw",
+   "new": "if s.agent == \"codex-x\" { throw",
+   "expect": "killed"
+  },
+  {
+   "name": "transcript-codex-for-shell",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+   "old": "if s.agent == \"codex\" { throw",
+   "new": "if s.agent != nil { throw",
+   "expect": "killed"
+  },
+  {
+   "name": "payload-drops-agent",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "{ o[\"agent\"] = a }",
+   "new": "{ _ = a }",
+   "expect": "killed"
+  },
+  {
+   "name": "payload-any-word",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if let a = row.agent, a == \"claude\" || a == \"codex\" {",
+   "new": "if let a = row.agent {",
+   "expect": "killed"
+  },
+  {
+   "name": "cache-drops-agent",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "effort: me.effort ?? \"\", agent: s.agent)",
+   "new": "effort: me.effort ?? \"\")",
+   "expect": "killed"
+  },
+  {
+   "name": "stop-summary-claude",
+   "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
+   "old": "\"Stop a session (its agent is paused, the session ends; no undo).\"",
+   "new": "\"Stop a session (Claude Code paused, the session ends; no undo).\"",
+   "expect": "killed"
+  }
+ ]
+}
