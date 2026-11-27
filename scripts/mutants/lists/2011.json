@@ -68,8 +68,8 @@
   {
    "name": "help-plan",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
-   "old": "\"\\(plan) plan usage (account pool, current account)\"",
-   "new": "\"Claude plan usage (account pool, current account)\"",
+   "old": "\"\\(plan) plan usage (Agent Account Pool, current account)\"",
+   "new": "\"Claude plan usage (Agent Account Pool, current account)\"",
    "expect": "killed"
   },
   {

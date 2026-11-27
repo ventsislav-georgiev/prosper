@@ -13,8 +13,8 @@
   {
    "name": "hold-no-undo",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
-   "old": "verb: \"held a ccpool account\", undo: undo(m, label, before, after: Bench(a)))",
-   "new": "verb: \"held a ccpool account\")",
+   "old": "verb: \"held a pool account\", undo: undo(m, label, before, after: Bench(a)))",
+   "new": "verb: \"held a pool account\")",
    "expect": "killed",
    "filter": "ControlCCPoolHoldTests"
   },
@@ -61,8 +61,8 @@
   {
    "name": "release-no-undo",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
-   "old": "verb: \"released a ccpool account\", undo: undo(m, label, before, after: after))",
-   "new": "verb: \"released a ccpool account\")",
+   "old": "verb: \"released a pool account\", undo: undo(m, label, before, after: after))",
+   "new": "verb: \"released a pool account\")",
    "expect": "killed",
    "filter": "ControlCCPoolHoldTests"
   },

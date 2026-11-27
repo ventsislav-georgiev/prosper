@@ -72,7 +72,7 @@ final class CCPoolRuntimeTests: XCTestCase {
         XCTAssertEqual(ext.id, "com.prosper.agentpool")
         XCTAssertEqual(ext.isSystem, true)
         XCTAssertEqual(ext.defaultDisabled, true)
-        XCTAssertEqual(ext.version, "1.1.3")
+        XCTAssertEqual(ext.version, "1.2.0")
         XCTAssertEqual(loaded.manifest.contributes?.allSettingsSections.map(\.id), ["agentpool"])
 
         let system = tempDir("ccpool-ext").appendingPathComponent("system", isDirectory: true)
