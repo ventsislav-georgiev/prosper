@@ -47,7 +47,7 @@
     {
       "name": "compact_speaks_status",
       "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
-      "old": ".padding(.horizontal, 10)\n        .accessibilityElement(children: .ignore)\n        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))",
+      "old": ".padding(.horizontal, 10)\n        .accessibilityElement(children: .ignore)\n        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone, title: title)))",
       "new": ".padding(.horizontal, 10)\n        .accessibilityElement(children: .ignore)\n        .accessibilityLabel(Text(verbatim: \"\\(a.label), \\(status)\"))",
       "expect": "killed"
     }

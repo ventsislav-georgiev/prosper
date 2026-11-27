@@ -110,15 +110,15 @@
   {
    "name": "seam-harness",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "planUsage(now, planHarness) ??",
-   "new": "planUsage(now, \"claude\") ??",
+   "old": ": [\"codex\", \"claude\"]).lazy",
+   "new": ": [\"claude\", \"codex\"]).lazy",
    "expect": "killed"
   },
   {
    "name": "claude-fallback",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "(planHarness == \"claude\" ? nil : planUsage(now, \"claude\"))",
-   "new": "nil",
+   "old": ": [\"codex\", \"claude\"]).lazy",
+   "new": ": [\"codex\"]).lazy",
    "expect": "killed"
   },
   {

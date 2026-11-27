@@ -1,0 +1,34 @@
+{
+ "entry": "1999",
+ "filter": "AgentIslandPlanLimitsTests",
+ "mutants": [
+  {
+   "name": "codex-section-dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "ForEach(limits.groups, id: \\.harness) { section($0) }",
+   "new": "ForEach(Array(limits.groups.prefix(1)), id: \\.harness) { section($0) }",
+   "expect": "killed"
+  },
+  {
+   "name": "section-order-flipped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "ForEach(limits.groups, id: \\.harness) { section($0) }",
+   "new": "ForEach(Array(limits.groups.reversed()), id: \\.harness) { section($0) }",
+   "expect": "killed"
+  },
+  {
+   "name": "codex-fallback-line-dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "[\"claude\", \"codex\"] : [\"codex\", \"claude\"]",
+   "new": "[\"claude\"] : [\"codex\", \"claude\"]",
+   "expect": "killed"
+  },
+  {
+   "name": "harness-not-spoken",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "(title.map { [$0] } ?? []) + [OutsideText",
+   "new": "[OutsideText",
+   "expect": "killed"
+  }
+ ]
+}
