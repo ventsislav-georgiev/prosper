@@ -27,14 +27,14 @@
   {
    "name": "no-record",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "reg.changes.record(command: name, summary: c.summary, verb: c.verb, undo: c.undo)",
+   "old": "reg.changes.record(command: name, change: c, sender: reg.sender)",
    "new": "_ = c",
    "expect": "killed"
   },
   {
    "name": "no-notice",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "present(Self.noticeText(summary, verb: verb), click)",
+   "old": "present(Self.noticeText(summary, verb: verb, sender: sender), click)",
    "new": "_ = (id, click)",
    "expect": "killed"
   },

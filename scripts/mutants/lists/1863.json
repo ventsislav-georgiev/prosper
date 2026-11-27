@@ -12,8 +12,8 @@
   {
    "name": "host_keeps_undo",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "guard let host else { return ControlChange(",
-   "new": "guard let host, false else { return ControlChange(",
+   "old": "guard let host else {",
+   "new": "guard let host, false else {",
    "expect": "killed"
   },
   {

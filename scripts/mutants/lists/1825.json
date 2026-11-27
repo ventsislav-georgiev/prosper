@@ -5,8 +5,8 @@
   {
    "name": "optional-undo-always-present",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "summary: summary, undoable: undo != nil)",
-   "new": "summary: summary, undoable: true)",
+   "old": "summary: summary, sender: sender, undoable: undo != nil)",
+   "new": "summary: summary, sender: sender, undoable: true)",
    "expect": "killed"
   },
   {
@@ -19,8 +19,8 @@
   {
    "name": "verb-ignored",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "noticeText(summary, verb: verb)",
-   "new": "noticeText(summary)",
+   "old": "noticeText(summary, verb: verb, sender: sender)",
+   "new": "noticeText(summary, sender: sender)",
    "expect": "killed"
   },
   {

@@ -5,7 +5,7 @@
   {
    "name": "say_no_record",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "            reg.changes.record(command: \"sessions.say\", summary: c.summary, verb: c.verb, undo: c.undo)\n",
+   "old": "            reg.changes.record(command: \"sessions.say\", change: c, sender: reg.sender)\n",
    "new": "",
    "expect": "killed",
    "filter": "ControlSessionsTalkTests/testSayThroughTheRegistryRecordsTheChange"
@@ -13,7 +13,7 @@
   {
    "name": "resume_no_record",
    "file": "app/Sources/ProsperApp/Control/ControlSessionsTalk.swift",
-   "old": "        changes.record(command: \"sessions.resume\", summary: c.summary, verb: c.verb, undo: c.undo)\n",
+   "old": "        changes.record(command: \"sessions.resume\", change: c, sender: sender)\n",
    "new": "",
    "expect": "killed",
    "filter": "ControlSessionsHistoryTests"
@@ -61,7 +61,7 @@
   {
    "name": "resume_not_runasync",
    "file": "app/Sources/ProsperApp/Control/ControlSessions.swift",
-   "old": "runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes) }))",
+   "old": "runAsync: { reg, a in try await ControlSessionsTalk.resume(a, changes: reg.changes, sender: reg.sender) }))",
    "new": "runAsync: nil))",
    "expect": "killed",
    "filter": "ControlSessionsHistoryTests"
