@@ -148,14 +148,6 @@ final class ControlNotice: NSObject {
         min(maxSeconds, max(visibleSeconds, Double(text.count) / charsPerSecond))
     }
 
-    /// #2057: draws only inside its own bounds (a combining mark can rise above the line box).
-    private final class ClippedField: NSTextField {
-        override func draw(_ dirtyRect: NSRect) {
-            bounds.clip()
-            super.draw(dirtyRect)
-        }
-    }
-
     private final class Panel: NSPanel {
         override var canBecomeKey: Bool { false }
         override var canBecomeMain: Bool { false }
@@ -193,6 +185,8 @@ final class ControlNotice: NSObject {
         let parts = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
         let multi = parts.count > 1
         label?.stringValue = multi ? String(parts[0]) : text
+        // #2064: "<sender> -> <target> (<verb>)" keeps its end visible; the one-line notice cuts at the tail.
+        label?.lineBreakMode = multi ? .byTruncatingMiddle : .byTruncatingTail
         body?.stringValue = multi ? String(parts[1]) : ""
         body?.isHidden = !multi
         let w: CGFloat = multi ? 420 : 360, textW = w - 14 - 88
@@ -211,6 +205,7 @@ final class ControlNotice: NSObject {
 
     /// The title field's frame in the panel's content (the row pins the title rect by it).
     var titleFrame: NSRect { label?.frame ?? .zero }
+    var titleBreakMode: NSLineBreakMode? { label?.lineBreakMode }
 
     private func scheduleHide() {
         hide?.cancel()
@@ -269,7 +264,8 @@ final class ControlNotice: NSObject {
         text.maximumNumberOfLines = 1
         text.textColor = .white
         text.frame = NSRect(x: 14, y: 14, width: 260, height: 20)
-        let msg = ClippedField(labelWithString: "")
+        let msg = NSTextField(labelWithString: "")
+        msg.clipsToBounds = true   // #2057: a combining mark rising above the line box never draws over the title
         msg.lineBreakMode = .byWordWrapping
         msg.cell?.truncatesLastVisibleLine = true   // #2047: a wrapped message past its lines ends in "…"
         msg.textColor = .white

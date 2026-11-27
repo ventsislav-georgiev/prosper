@@ -124,6 +124,8 @@ tag from the now-released section and put it on the new top draft.
 - The Agent Sessions window keeps its terminal text readable on a non-Retina display: Ghostty
   thickens the glyphs at 1x, and the setting follows the window when it moves between a Retina and a
   non-Retina display. (#2065)
+- A notice for a message from a session with a long title keeps the target and the action visible.
+  (#2064)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

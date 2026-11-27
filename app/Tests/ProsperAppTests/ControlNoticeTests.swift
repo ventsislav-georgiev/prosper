@@ -275,6 +275,17 @@ final class ControlNoticeTests: XCTestCase {
         XCTAssertTrue(h.bytes != q.bytes, "the render does not see the body at all")
     }
 
+    /// #2064: a message notice with a 60-char sender truncates its title in the middle (the "(messaged)" end stays
+    /// visible); a plain notice after it on the same panel is cut at the tail again.
+    func testMessageTitleTruncatesInTheMiddleAndAPlainNoticeRestoresTail() {
+        let n = ControlNotice()
+        _ = n.makePanel()
+        n.layout(String(repeating: "S", count: 60) + " \u{2192} API (messaged)\nhello")
+        XCTAssertEqual(n.titleBreakMode, .byTruncatingMiddle)
+        n.layout("Agent changed: x")
+        XCTAssertEqual(n.titleBreakMode, .byTruncatingTail)
+    }
+
     /// A longer notice stays up longer, never shorter than today's six seconds nor past twelve.
     func testDisplayTimeScalesWithLengthAndStopsAtTheCap() {
         XCTAssertEqual(ControlNotice.seconds(for: "Agent changed: x"), ControlNotice.visibleSeconds)

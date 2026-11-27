@@ -5,8 +5,8 @@
   {
    "name": "clip_removed",
    "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
-   "old": "            bounds.clip()\n",
-   "new": "",
+   "old": "msg.clipsToBounds = true",
+   "new": "msg.clipsToBounds = false",
    "expect": "killed"
   }
  ]

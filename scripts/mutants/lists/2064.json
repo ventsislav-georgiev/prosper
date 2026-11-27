@@ -1,0 +1,20 @@
+{
+ "entry": "2064",
+ "filter": "ControlNoticeTests",
+ "mutants": [
+  {
+   "name": "middle_reverted_to_tail",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "multi ? .byTruncatingMiddle : .byTruncatingTail",
+   "new": "multi ? .byTruncatingTail : .byTruncatingTail",
+   "expect": "killed"
+  },
+  {
+   "name": "restore_to_tail_removed",
+   "file": "app/Sources/ProsperApp/Control/ControlNotice.swift",
+   "old": "multi ? .byTruncatingMiddle : .byTruncatingTail",
+   "new": "multi ? .byTruncatingMiddle : .byTruncatingMiddle",
+   "expect": "killed"
+  }
+ ]
+}
