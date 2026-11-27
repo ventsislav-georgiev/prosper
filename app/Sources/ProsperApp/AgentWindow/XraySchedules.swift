@@ -96,9 +96,9 @@ struct XraySchedules: Equatable {
             }
         }
         r.partial = headerPartial || !sawDone
-        // dch README: the agent gone (live:false), its pending crons and wake-up read "ended"; held here too in case a
-        // row's own delta came before the block that says so
-        if !r.live { for i in r.schedules.indices where r.schedules[i].pending { r.schedules[i].status = "ended" } }
+        // dch README: the agent gone (live:false), its pending session crons and wake-up read "ended" (a durable cron outlives the
+        // session and stays pending); held here too in case a row's own delta came before the block that says so
+        if !r.live { for i in r.schedules.indices where r.schedules[i].pending && !r.schedules[i].durable { r.schedules[i].status = "ended" } }
         return r
     }
 }

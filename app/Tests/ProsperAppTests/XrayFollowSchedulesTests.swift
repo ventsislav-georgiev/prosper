@@ -19,8 +19,8 @@ final class XrayFollowSchedulesTests: XCTestCase {
     static func header(live: Bool = true, source: String = "claude") -> String {
         #"{"schema":1,"block":"schedules","session":"api","session_id":"s-1","source":""# + source + #"","live":"# + "\(live)" + #","title":null,"partial":false}"#
     }
-    static func cron(_ id: String, status: String = "pending", next: TimeInterval = 600, prompt: String = "check CI") -> String {
-        #"{"schedule":{"id":""# + id + #"","kind":"cron","status":""# + status + #"","recurring":true,"cron":"*/10 * * * *","human":"every 10 minutes","durable":false,"prompt":""# + prompt + #"","reason":null,"created":null,"next":""# + iso(next) + #"","last_fired":null,"expires":""# + iso(7 * 86400) + #"","fires":0}}"#
+    static func cron(_ id: String, status: String = "pending", next: TimeInterval = 600, prompt: String = "check CI", durable: Bool = false) -> String {
+        #"{"schedule":{"id":""# + id + #"","kind":"cron","status":""# + status + #"","recurring":true,"cron":"*/10 * * * *","human":"every 10 minutes","durable":"# + (durable ? "true" : "false") + #","prompt":""# + prompt + #"","reason":null,"created":null,"next":""# + iso(next) + #"","last_fired":null,"expires":""# + iso(7 * 86400) + #"","fires":0}}"#
     }
     static func wakeup(status: String = "pending", next: TimeInterval = 90) -> String {
         #"{"schedule":{"id":"wakeup","kind":"wakeup","status":""# + status + #"","recurring":false,"cron":null,"human":"in 20m","durable":false,"prompt":"check again","next":""# + iso(next) + #"","expires":null,"fires":14}}"#
@@ -126,6 +126,21 @@ final class XrayFollowSchedulesTests: XCTestCase {
             XCTAssertEqual(p.title(.schedules), "Schedules 0")
             XCTAssertTrue(p.schedules?.schedules.compactMap { XrayScheduleRow($0, now: Self.base).countdown }.isEmpty == true,
                           "an ended row has no countdown")
+            p.stop()
+        }
+    }
+
+    /// live:false keeps a durable pending cron pending (it outlives the session) with its countdown; the session cron ends.
+    /// Red with the `!durable` test removed in XraySchedules.parse: both rows end, count 0.
+    func testLiveFalseKeepsADurablePendingCron() async throws {
+        await withFollow { fake, panels in
+            let p = await panel(panels)
+            send(fake, [XrayFollowTests.snapshot()] + T.blocks(tasks: ["1"], memories: ["m1"])
+                 + Self.schedules([Self.cron("d1", durable: true), Self.cron("c1")], live: false))
+            XCTAssertEqual(p.schedules?.schedules.map(\.status), ["pending", "ended"])
+            XCTAssertEqual(p.count(.schedules), 1)
+            let rows = p.schedules?.schedules.map { XrayScheduleRow($0, now: Self.base).countdown }
+            XCTAssertTrue(rows?.first == "in 10m" && rows?.last == .some(nil), "durable keeps its countdown, ended has none")
             p.stop()
         }
     }
