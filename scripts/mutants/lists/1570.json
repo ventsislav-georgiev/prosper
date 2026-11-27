@@ -5,8 +5,8 @@
   {
    "name": "strip-back",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
-   "old": "case \"claude\": return EnvDelta(set: [\"ANTHROPIC_BASE_URL\": base])",
-   "new": "case \"claude\": return EnvDelta(set: [\"ANTHROPIC_BASE_URL\": base], remove: [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\", \"CLAUDE_CODE_OAUTH_TOKEN\"])",
+   "old": "EnvDelta(set: [rule.key: base]) : EnvDelta()",
+   "new": "EnvDelta(set: [rule.key: base], remove: [\"ANTHROPIC_API_KEY\", \"ANTHROPIC_AUTH_TOKEN\", \"CLAUDE_CODE_OAUTH_TOKEN\"]) : EnvDelta()",
    "expect": "killed"
   },
   {

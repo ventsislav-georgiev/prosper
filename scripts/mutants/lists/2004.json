@@ -1,0 +1,69 @@
+{
+ "entry": "2004",
+ "filter": "CCPoolHarnessTests",
+ "mutants": [
+  {
+   "name": "account-harness-always-encoded",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "if harness != ClaudeHarness.id { try c.encode(harness, forKey: .harness) }",
+   "new": "try c.encode(harness, forKey: .harness)",
+   "expect": "killed"
+  },
+  {
+   "name": "harness-decode-ignored",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "harness = try c.decodeIfPresent(String.self, forKey: .harness) ?? ClaudeHarness.id",
+   "new": "harness = ClaudeHarness.id",
+   "expect": "killed"
+  },
+  {
+   "name": "current-any-harness",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "get { currents[ClaudeHarness.id] }",
+   "new": "get { currents.values.first }",
+   "expect": "killed"
+  },
+  {
+   "name": "remember-ignores-harness",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "if let h = accounts[label]?.harness { currents[h] = label }",
+   "new": "if accounts[label] != nil { current = label }",
+   "expect": "killed"
+  },
+  {
+   "name": "pick-no-harness-filter",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "let names = state.order.filter { serves(state, $0, harness) }",
+   "new": "let names = state.order",
+   "expect": "killed"
+  },
+  {
+   "name": "place-no-harness-filter",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "let ready = state.order.filter { state.accounts[$0]?.harness == harness.id && !exclude.contains($0)",
+   "new": "let ready = state.order.filter { state.accounts[$0] != nil && !exclude.contains($0)",
+   "expect": "killed"
+  },
+  {
+   "name": "route-pin-no-harness-filter",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "old": "state.order.contains(n) && state.accounts[n]?.harness == harness.id && !exclude.contains(n)",
+   "new": "state.order.contains(n) && state.accounts[n] != nil && !exclude.contains(n)",
+   "expect": "killed"
+  },
+  {
+   "name": "authorize-drops-beta",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness.swift",
+   "old": "        req.setValue(Self.withOAuthBeta(req.value(forHTTPHeaderField: \"anthropic-beta\")), forHTTPHeaderField: \"anthropic-beta\")\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "env-rule-any-program",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "return rule.programs.contains(programName(first)) ?",
+   "new": "return !programName(first).isEmpty ?",
+   "expect": "killed"
+  }
+ ]
+}

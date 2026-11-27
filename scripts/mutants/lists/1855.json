@@ -89,8 +89,8 @@
   {
    "name": "shun-written",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
-   "old": "a.current == b.current && a.order == b.order && a.accounts == b.accounts",
-   "new": "a.shunned == b.shunned && a.current == b.current && a.order == b.order && a.accounts == b.accounts",
+   "old": "a.currents == b.currents && a.order == b.order && a.accounts == b.accounts",
+   "new": "a.shunned == b.shunned && a.currents == b.currents && a.order == b.order && a.accounts == b.accounts",
    "expect": "killed"
   }
  ]
