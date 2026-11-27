@@ -10,13 +10,6 @@
    "expect": "killed"
   },
   {
-   "name": "recap_unrouted",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayRecap.swift",
-   "old": "Image(systemName: \"clock.arrow.circlepath\").foregroundStyle(XrayInk.accentInk)",
-   "new": "Image(systemName: \"clock.arrow.circlepath\").foregroundStyle(Neon.blue)",
-   "expect": "killed"
-  },
-  {
    "name": "threshold_lowered",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayLook.swift",
    "old": "let text = AgentIslandInk.readable(key.accent, on: key.surface, else: fallback)",

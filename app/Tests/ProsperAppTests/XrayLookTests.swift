@@ -264,9 +264,8 @@ final class XrayLookTests: XCTestCase {
     }
 
     /// Off, a dark accent (#1A237E, about 1.5:1 on black) is replaced where it is text, an icon or a mark (4.5:1: the answer
-    /// button, the Answer mark, the recap clock and its two buttons) and a ring or tint (3:1: the chip, the tab, the
-    /// recommended chip). Red at base: those sites drew Neon.blue (XrayPanel.swift:1586/1587/1612/1692/1766, XrayAnswer.swift:256/257,
-    /// XrayRecap.swift:286/290/300).
+    /// button and the Answer mark) and where it is a ring or tint (3:1: the chip, the tab, the recommended chip). Red at base:
+    /// those sites drew Neon.blue (XrayPanel.swift:1586/1587/1612/1692/1766, XrayAnswer.swift:256/257).
     func testOffADarkAccentIsReplacedOnTheSurface() {
         withAccent("#1A237E") {
             let surface = XrayInk.surface
@@ -323,12 +322,15 @@ final class XrayLookTests: XCTestCase {
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentWindow")
         let want: [(String, String, Int)] = [("XrayPanel.swift", ".foregroundStyle(XrayInk.accentInk)", 2),
                                              ("XrayPanel.swift", "XrayInk.accentRing.opacity", 3),
-                                             ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2),
-                                             ("XrayRecap.swift", ".foregroundStyle(XrayInk.accentInk)", 3)]
+                                             ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2)]
         for (f, needle, n) in want {
             let src = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
             XCTAssertEqual(src.components(separatedBy: needle).count - 1, n, "\(f): \(needle)")
             XCTAssertFalse(src.contains("foregroundStyle(Neon.blue)") || src.contains("Neon.blue.opacity"), "\(f): no raw accent")
         }
+        // QA R2043: the recap strip sits on the theme's card, not the black surface, so it keeps the theme's accent.
+        let recap = try String(contentsOf: dir.appendingPathComponent("XrayRecap.swift"), encoding: .utf8)
+        XCTAssertEqual(recap.components(separatedBy: ".foregroundStyle(Neon.blue)").count - 1, 3, "XrayRecap keeps Neon.blue")
+        XCTAssertFalse(recap.contains("XrayInk.accent"), "XrayRecap: no X-ray surface ink on the theme card")
     }
 }

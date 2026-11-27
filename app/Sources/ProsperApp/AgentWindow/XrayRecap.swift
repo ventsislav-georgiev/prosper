@@ -281,13 +281,14 @@ struct XrayRecapStrip: View {
         if active == .inactive { recaps.leave(target) } else { recaps.focus(target) }
     }
 
+    /// #2043 (QA R2043): the recap strip draws on the theme's card (Neon.card), where the theme's own accent reads; not XrayInk.
     private func line(_ r: XrayRecap, _ target: XrayTarget) -> some View {
         HStack(spacing: sz(8)) {
-            Image(systemName: "clock.arrow.circlepath").foregroundStyle(XrayInk.accentInk).accessibilityHidden(true)
+            Image(systemName: "clock.arrow.circlepath").foregroundStyle(Neon.blue).accessibilityHidden(true)
             Text(verbatim: r.headline(now: recaps.now())).foregroundStyle(Neon.textPrimary).lineLimit(1).layoutPriority(1)
             ForEach(Array(r.chapters.prefix(XrayRecap.shownChapters).enumerated()), id: \.offset) { _, c in
                 Button { recaps.openChapter(c, pane, target) } label: { Text(verbatim: XrayRecap.title(c)).lineLimit(1) }
-                    .buttonStyle(.plain).foregroundStyle(XrayInk.accentInk)
+                    .buttonStyle(.plain).foregroundStyle(Neon.blue)
                     .help(XrayRecap.fullTitle(c)).accessibilityLabel("Open prompt " + XrayRecap.fullTitle(c))
             }
             ForEach(Array(r.refChips.enumerated()), id: \.offset) { _, chip in
@@ -297,7 +298,7 @@ struct XrayRecapStrip: View {
             }
             if r.moreRefs > 0 {
                 Button { recaps.openDrawer(pane, target) } label: { Text(verbatim: "+\(r.moreRefs) more") }
-                    .buttonStyle(.plain).foregroundStyle(XrayInk.accentInk)
+                    .buttonStyle(.plain).foregroundStyle(Neon.blue)
                     .help("Show every reference in X-ray").accessibilityLabel("Show \(r.moreRefs) more references in X-ray")
             }
             Spacer(minLength: 0)
