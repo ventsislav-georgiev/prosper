@@ -33,8 +33,8 @@
   {
    "name": "plan-read-twice",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "if let v = planUsage(now, h) { u = v; break }",
-   "new": "if planUsage(now, h) != nil, let v = planUsage(now, h) { u = v; break }",
+   "old": "if let v = planUsage(now, h) { u = Self.marked(v, line: h, focused: planHarness); break }",
+   "new": "if planUsage(now, h) != nil, let v = planUsage(now, h) { u = Self.marked(v, line: h, focused: planHarness); break }",
    "expect": "killed"
   }
  ]
