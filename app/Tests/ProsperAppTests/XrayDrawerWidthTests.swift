@@ -20,8 +20,8 @@ final class XrayDrawerWidthTests: XCTestCase {
         try body()
     }
 
-    /// A panel that shows every tab: dch's chapters with refs (gate on), Search on, Tasks, (#1974) Questions and Memory.
-    func sixTabs() -> XrayPanelModel {
+    /// A panel that shows every tab: dch's chapters with refs (gate on), Search on, Tasks, (#1974) Questions and Memory, (#2014) Schedules.
+    func sevenTabs() -> XrayPanelModel {
         let p = XrayPanelModel(target: XrayTarget(name: "api", dir: "/tmp/dch-test"), tab: .tasks)
         p.now = { XrayPanelTasksTests.now }
         p.fromDch = { true }
@@ -29,18 +29,19 @@ final class XrayDrawerWidthTests: XCTestCase {
                 chapters: (0, XrayRefsParseTests.object(refs: XrayRefsTabTests.three)))
         p.searchable = true
         p.takeQuestions((0, XrayQuestionsTabTests.out))   // #1974
+        p.schedules = XraySchedules.parse(XrayFollowSchedulesTests.schedules([XrayFollowSchedulesTests.cron("c1")]).map { Data($0.utf8) })   // #2014
         return p
     }
 
     func fitting<V: View>(_ v: V) -> CGFloat { NSHostingView(rootView: v).fittingSize.width }
 
-    /// Red at TIP (no XrayDrawerWidth; the drawer was sz(340)): the header (the six names' strip, the two 6 pt gaps, the close
+    /// Red at TIP (no XrayDrawerWidth; the drawer was sz(340); #2014: 420 left Schedules cut, header 445 at 1.0): the header (the seven names' strip, the two 6 pt gaps, the close
     /// button and the 10 pt padding each side) fits the default width at 0.7, 0.85 and 1.0, so no name is cut and nothing scrolls.
     func testTheDefaultFitsEveryTabNameAtEachScale() {
         let gate = XrayPanels.refsTab
         defer { XrayPanels.refsTab = gate }
         XrayPanels.refsTab = { true }
-        let p = sixTabs()
+        let p = sevenTabs()
         XCTAssertEqual(p.tabs, XrayTab.allCases, "every tab")
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -65,7 +66,7 @@ final class XrayDrawerWidthTests: XCTestCase {
             let w = XrayDrawerWidth()
             XCTAssertEqual(w.points, XrayDrawerWidth.standard, "unset: the default")
             w.dragged(by: -50, offered: 1000, scale: 1)
-            XCTAssertEqual(w.points, 470, accuracy: 0.001)
+            XCTAssertEqual(w.points, 530, accuracy: 0.001)
             XCTAssertTrue(w.dragging)
             w.dragged(by: -1000, offered: 1000, scale: 1)
             XCTAssertEqual(w.points, 600, accuracy: 0.001, "at most 60% of the space offered")
@@ -89,8 +90,8 @@ final class XrayDrawerWidthTests: XCTestCase {
             w.dragged(by: -80, offered: 1000, scale: 1)
             XCTAssertTrue(Preferences.defaults.object(forKey: Self.key) == nil, "nothing is written while the drag runs")
             w.ended()
-            XCTAssertEqual(Preferences.xrayDrawerWidth ?? 0, 500, accuracy: 0.001, "stored")
-            XCTAssertEqual(XrayDrawerWidth().points, 500, accuracy: 0.001, "read back by a new model")
+            XCTAssertEqual(Preferences.xrayDrawerWidth ?? 0, 560, accuracy: 0.001, "stored")
+            XCTAssertEqual(XrayDrawerWidth().points, 560, accuracy: 0.001, "read back by a new model")
             for bad: Any in ["wide", true, -5.0, 0.0, Double.nan, Double.infinity] {
                 Preferences.defaults.set(bad, forKey: Self.key)
                 XCTAssertTrue(Preferences.xrayDrawerWidth == nil, "\(bad) reads as unset")
@@ -104,7 +105,7 @@ final class XrayDrawerWidthTests: XCTestCase {
         withClearedKey {
             let w = XrayDrawerWidth()
             w.dragged(by: 100, offered: 1000, scale: 1)
-            XCTAssertEqual(w.points, 320, accuracy: 0.001)
+            XCTAssertEqual(w.points, 380, accuracy: 0.001)
             w.reset()
             XCTAssertFalse(w.dragging)
             XCTAssertEqual(w.points, XrayDrawerWidth.standard)

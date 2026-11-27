@@ -86,6 +86,7 @@ tag from the now-released section and put it on the new top draft.
   1.188.0) (#2014)
 - X-ray's Questions tab can answer an open question: type a ruling or pick a suggested answer, and
   the session that asked is told right away (needs dch 1.189.0) (#2024)
+- The X-ray drawer opens wide enough to show every tab name, Schedules included (#2014)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

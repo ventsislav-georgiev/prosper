@@ -1131,7 +1131,7 @@ final class XrayDrawerWidth: ObservableObject {
     static let shared = XrayDrawerWidth()
     /// The default fits every tab's name at UI scale 0.7 to 1.0 (XrayDrawerWidthTests measures the strip); the narrowest
     /// usable width; the largest share of the space offered.
-    static let standard: CGFloat = 420, minimum: CGFloat = 300, share: CGFloat = 0.6
+    static let standard: CGFloat = 480, minimum: CGFloat = 300, share: CGFloat = 0.6
     @Published private(set) var points: CGFloat = Preferences.xrayDrawerWidth.map { CGFloat($0) } ?? XrayDrawerWidth.standard
     /// The drawn width when the drag began; nil between drags.
     private var start: CGFloat?
