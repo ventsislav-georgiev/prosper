@@ -348,10 +348,11 @@ enum CCPoolCore {
         return Double(r)
     }
 
-    /// Earliest cooldown end among the claims `model` draws on, for the all-benched message.
+    /// Earliest moment any account serves `model` again: an account serves when its last wanted cooldown ends (the max),
+    /// the pool when its first account does (the min). nil when no account has a live wanted cooldown.
     static func nextReset(_ state: CCPoolState, model: String?, now: Double, harness: any PoolHarness = ClaudeHarness()) -> Int? {
         let wanted = Set(harness.claims(for: model))
-        return state.accounts.values.filter { $0.harness == harness.id }.flatMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values }.min()
+        return state.accounts.values.filter { $0.harness == harness.id }.compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.max() }.min()
     }
 
     // MARK: Header parse

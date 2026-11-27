@@ -133,10 +133,10 @@ final class CCPoolCodexRotationTests: XCTestCase {
         XCTAssertFalse(resp.text.contains("rate_limit_error"), resp.text)
         let err = try XCTUnwrap(((try? JSONSerialization.jsonObject(with: resp.body)) as? [String: Any])?["error"] as? [String: Any])
         XCTAssertEqual(err["type"] as? String, "usage_limit_reached")
-        XCTAssertEqual(err["resets_at"] as? Int, Self.now + 600)
-        XCTAssertEqual(err["resets_in_seconds"] as? Int, 600)
+        XCTAssertEqual(err["resets_at"] as? Int, Self.now + 800)
+        XCTAssertEqual(err["resets_in_seconds"] as? Int, 800)
         XCTAssertTrue((err["message"] as? String)?.isEmpty == false)
-        XCTAssertEqual(resp.headers.first { $0.0.lowercased() == "retry-after" }?.1, "600")
+        XCTAssertEqual(resp.headers.first { $0.0.lowercased() == "retry-after" }?.1, "800")
         XCTAssertEqual(r.fake.heads.count, 0)
     }
 

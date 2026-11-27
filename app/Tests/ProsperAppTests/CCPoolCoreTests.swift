@@ -239,8 +239,21 @@ final class CCPoolCoreTests: XCTestCase {
         st.accounts["a"]?.cooldown = ["seven_day_opus": Int(now) + 50, "seven_day_sonnet": Int(now) + 10]
         st.accounts["b"]?.cooldown = ["five_hour": Int(now) + 70, "seven_day": Int(now) - 1]
         XCTAssertEqual(CCPoolCore.nextReset(st, model: "claude-opus-5", now: now), Int(now) + 50)
-        XCTAssertEqual(CCPoolCore.nextReset(st, model: nil, now: now), Int(now) + 10)
+        XCTAssertEqual(CCPoolCore.nextReset(st, model: nil, now: now), Int(now) + 50)   // a serves at its last wanted end (+50), b at +70
         XCTAssertNil(CCPoolCore.nextReset(st, model: "claude-haiku-4-5", now: now + 100))
+    }
+
+    // #2033: an account serves when its LAST wanted cooldown ends; the pool when its first account does. A = +50/+900 ->
+    // +900, B = +300 -> +300: flat min and per-account min give +50, global max gives +900. An expired claim is ignored.
+    func testNextResetIsMinOverAccountsOfTheirMaxClaim() {
+        var st = pool(["a", "b", "c"])
+        st.accounts["a"]?.cooldown = ["five_hour": Int(now) + 50, "seven_day": Int(now) + 900]
+        st.accounts["b"]?.cooldown = ["five_hour": Int(now) + 300]
+        XCTAssertEqual(CCPoolCore.nextReset(st, model: "claude-opus-5", now: now), Int(now) + 300)
+        st.accounts["b"]?.cooldown = ["five_hour": Int(now) - 10, "seven_day": Int(now) + 400]
+        XCTAssertEqual(CCPoolCore.nextReset(st, model: "claude-opus-5", now: now), Int(now) + 400, "expired claim counts for nothing")
+        st.accounts["b"]?.cooldown = ["five_hour": Int(now) + 800, "seven_day": Int(now) + 400]
+        XCTAssertEqual(CCPoolCore.nextReset(st, model: "claude-opus-5", now: now), Int(now) + 800, "b's max (800) is below a's max (900)")
     }
 
     // B21 headroom maths for the All row (test_ccpool.py status/headroom checks).
