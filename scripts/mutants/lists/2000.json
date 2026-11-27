@@ -1,0 +1,69 @@
+{
+ "entry": "2000",
+ "filter": "AgentIslandCodexPromptTests|AgentIslandPromptTests",
+ "mutants": [
+  {
+   "name": "caret-not-accepted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "while k >= 0, let o = option(lines[k], mark: \"›\") {",
+   "new": "while k >= 0, let o = option(lines[k]) {",
+   "expect": "killed"
+  },
+  {
+   "name": "shortcut-not-stripped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "(String(c.dropLast(4)), String(c[c.count - 2]))",
+   "new": "(o.label, String(c[c.count - 2]))",
+   "expect": "killed"
+  },
+  {
+   "name": "digit-for-codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "let typed = expected.codex ? o.codexKey : String(digit),",
+   "new": "let typed = Optional(String(digit)),",
+   "expect": "killed"
+  },
+  {
+   "name": "key-path-swapped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "let typed = expected.codex ? o.codexKey : String(digit),",
+   "new": "let typed = !expected.codex ? o.codexKey : String(digit),",
+   "expect": "killed"
+  },
+  {
+   "name": "no-shortcut-accepted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "guard hint == \"esc\" || letter, !label.isEmpty else { return nil }",
+   "new": "guard !label.isEmpty else { return nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "caret-count-loose",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "guard options.count >= 2, carets == 1,",
+   "new": "guard options.count >= 2, carets <= 1,",
+   "expect": "killed"
+  },
+  {
+   "name": "title-twice-accepted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "              !lines[..<title].contains(where: isCodexTitle) else { return nil }\n",
+   "new": "              true else { return nil }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "card-skips-codex",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandPrompt.swift",
+   "old": "(parse(screen) ?? codex(screen)).map(AgentCard.prompt)",
+   "new": "parse(screen).map(AgentCard.prompt)",
+   "expect": "killed"
+  },
+  {
+   "name": "esc-option-on",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": " && !keyless.contains(o.digit)\n",
+   "new": "\n",
+   "expect": "killed"
+  }
+ ]
+}
