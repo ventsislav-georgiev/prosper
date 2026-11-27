@@ -152,7 +152,7 @@ final class IncreaseContrastIslandTests: XCTestCase {
             "case .glyph, .icon, .cwd: return Color.white.opacity(0.35)",
             "case .pinned: return Color.white.opacity(0.8)",
             "case .plain: (Color.white.opacity(0.08), Neon.faded(.white, 0.9))",
-            "static func ownCardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }",
+            "static func cardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }",
             "static var cardFill: Color { AgentIslandInk.follows ? AgentIslandRow.cardFill : Color.white.opacity(0.05) }",
         ]
         XCTAssertEqual(left, kept)

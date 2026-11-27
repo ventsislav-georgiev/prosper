@@ -252,7 +252,7 @@ final class CCPoolCodexUsageProbeTests: XCTestCase {
         XCTAssertNotEqual(r.rowText, CCPoolPaneModel.signedOutText, file: file, line: line)
         XCTAssertTrue(r.log.lines.contains { $0.contains("login refresh failed") }, "\(r.log.lines)", file: file, line: line)
         // The keeper is not shut off: a working auth host gets another POST.
-        r.auth.set { $0.status = 200; $0.drop = false }
+        r.auth.set { $0.status = 200; $0.drop = false; $0.body = Data(#"{"access_token":"\#(K.accessNew)","refresh_token":"\#(K.refreshNew)","id_token":"\#(K.idNew)"}"#.utf8) }
         let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
         let outcome = await withCheckedContinuation { c in r.keeper.refresh(id: id, stale: K.freshAccess) { c.resume(returning: $0) } }
         XCTAssertEqual(r.auth.posts.count, 2, file: file, line: line)
