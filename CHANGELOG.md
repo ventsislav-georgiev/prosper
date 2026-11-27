@@ -102,6 +102,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer and its detail cards take the Agent Island's dark look with clearer outlines,
   stand apart from the terminal, and can follow the theme instead (Settings, Agent Island, X-ray,
   Follow theme). (#2041)
+- The account pool's Refresh reads each Codex account's 5-hour and weekly usage, and the pane lists
+  Claude and Codex accounts in their own groups. (#2010)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

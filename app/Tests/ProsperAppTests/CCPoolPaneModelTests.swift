@@ -44,7 +44,7 @@ final class CCPoolTrashRecorder: @unchecked Sendable {
 extension XCTestCase {
     /// 1_800_000_000 is Fri 08:00 UTC.
     @MainActor
-    func ccpoolPaneRig(probeBase: URL? = nil, t0: Double = 1_800_000_000) throws -> CCPoolPaneRig {
+    func ccpoolPaneRig(probeBase: URL? = nil, t0: Double = 1_800_000_000, codexUpstream: URL? = nil) throws -> CCPoolPaneRig {
         let anthropic = CCPoolFakeAnthropic()
         let up = try CCPoolFakeServer { h, b in anthropic.reply(h, b) }
         XCTAssertNotEqual(up.port, 0)
@@ -56,6 +56,7 @@ extension XCTestCase {
         var cfg = CCPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:\(up.port)")!
+        if let codexUpstream { cfg.codexUpstream = codexUpstream }   // #2010: the Codex usage fake
         let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: log)
         addTeardownBlock { service.stop(); up.stop() }
         let defaults = scratchDefaults("ccpool-pane")

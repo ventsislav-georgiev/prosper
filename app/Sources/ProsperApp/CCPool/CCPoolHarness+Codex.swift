@@ -205,6 +205,129 @@ struct CCPoolCodexHarness: PoolHarness {
     func usageTap(contentType: String?) -> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType, codex: true) }
     /// Codex sends no quota check.
     func isQuotaCheck(_ obj: [String: Any]?) -> Bool { false }
-    // shortcut: P2 stub, Phase 7 adds the wham/usage probe
-    func probe(token: String, base: URL, timeout: TimeInterval) async -> CCPoolUsage.Probe? { nil }
+
+    // MARK: Refresh probe (#2010, design sections 3 and 10)
+
+    /// The keeper that holds each login's refresh chain (the service's own). nil: the probe uses the stored item as it
+    /// is and never refreshes. The probe itself never refreshes nor writes the Keychain: a second refresher kills the chain.
+    var keeper: CodexTokenKeeper? = nil
+
+    /// The usage answer is read up to this many bytes; a longer one is refused.
+    static let usageCap = 64 << 10
+
+    /// `<chatgpt base>/backend-api/wham/usage`, next to the Codex upstream `<chatgpt base>/backend-api/codex`.
+    // shortcut: no fallback `POST /responses` probe (its headers are the answer); add it if wham/usage starts failing
+    static func usageURL(codexUpstream: URL) -> URL {
+        codexUpstream.deletingLastPathComponent().appendingPathComponent("wham/usage")
+    }
+
+    /// A JSON number that is not a bool and is finite, else nil (dropped).
+    private static func jsonNumber(_ v: Any?) -> Double? {
+        guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }
+        return n.doubleValue
+    }
+
+    /// The wham/usage answer: `rate_limit.{primary,secondary}_window.{used_percent, limit_window_seconds, reset_at |
+    /// reset_after_seconds}` as the header fields `parseLimits` reads, so a window gets its claim by its length through
+    /// the one window->claim map. A missing window is absent; a field that is not a number is dropped. With
+    /// `rate_limit.limit_reached` the fullest window is rejected. `missing` names the key the answer lacked, never a value.
+    static func parseUsage(_ data: Data, now: Double) -> (limits: [String: CCPoolLimit], credits: String?, missing: String?) {
+        guard data.count <= usageCap else { return ([:], nil, "an answer under 64 KiB") }
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return ([:], nil, "a JSON object") }
+        let credits = creditsText(obj["credits"])
+        guard let rl = obj["rate_limit"] as? [String: Any] else { return ([:], credits, "rate_limit") }
+        var headers: [String: String] = [:]
+        for slot in slots {
+            guard let w = rl["\(slot)_window"] as? [String: Any] else { continue }
+            let p = "x-\(defaultLimit)-\(slot)-"
+            if let v = jsonNumber(w["used_percent"]) { headers[p + "used-percent"] = "\(v)" }
+            if let v = jsonNumber(w["limit_window_seconds"]), v > 0 { headers[p + "window-minutes"] = "\(v / 60)" }
+            if let v = jsonNumber(w["reset_at"]) { headers[p + "reset-at"] = "\(v)" }
+            if let v = jsonNumber(w["reset_after_seconds"]) { headers[p + "reset-after-seconds"] = "\(v)" }
+        }
+        var limits = parseLimits(headers, now: now).limits
+        guard !limits.isEmpty else { return ([:], credits, "rate_limit.primary_window") }
+        if (rl["limit_reached"] as? NSNumber).map({ CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue }) == true,
+           let fullest = limits.max(by: { (Double($0.value.utilization ?? "") ?? -1, $0.key) < (Double($1.value.utilization ?? "") ?? -1, $1.key) })?.key {
+            limits[fullest]?.status = "rejected"
+        }
+        return (limits, credits, nil)
+    }
+
+    /// UNVERIFIED shape (design section 3: has_credits, unlimited, balance as a number or numeric text): "unlimited
+    /// credits", "credits $<balance>", else nil. Display only: credits never keep an account routable (Q7).
+    static func creditsText(_ v: Any?) -> String? {
+        guard let c = v as? [String: Any] else { return nil }
+        func flag(_ k: String) -> Bool? { (c[k] as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil } }
+        if flag("unlimited") == true { return "unlimited credits" }
+        if flag("has_credits") == false { return nil }
+        guard let bal = jsonNumber(c["balance"]) ?? (c["balance"] as? String).flatMap({ Double($0.trimmingCharacters(in: .whitespaces)) }),
+              bal.isFinite, (0...1e9).contains(bal) else { return nil }
+        return String(format: "credits $%.2f", bal)
+    }
+
+    /// One GET of the usage answer with the login in `item`, no refresh. A non-2xx is a Probe with that status and no
+    /// limits (a 3xx is never followed: the token reaches no other host).
+    static func usage(item: String, base: URL, timeout: TimeInterval) async -> (probe: CCPoolUsage.Probe?, missing: String?) {
+        guard let login = CodexCredential.decode(item) else { return (nil, "a login item that decodes") }
+        let url = usageURL(codexUpstream: base)
+        // Under XCTest chatgpt.com (and every OpenAI host) is never dialled, so no token can leave in a test.
+        guard !CCPoolService.refusesUnderTest(url) else { return (nil, "a host tests may dial") }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.setValue("Bearer \(login.accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue(login.accountID, forHTTPHeaderField: "ChatGPT-Account-Id")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let session = CCPoolUpstream.probeSession()
+        defer { session.finishTasksAndInvalidate() }
+        guard let result = try? await session.bytes(for: req, delegate: CCPoolNoRedirect()),
+              let http = result.1 as? HTTPURLResponse else { return (nil, "an answer") }
+        let bytes = result.0
+        guard (200...299).contains(http.statusCode) else {
+            bytes.task.cancel()
+            return (CCPoolUsage.Probe(status: http.statusCode, limits: [:]), nil)
+        }
+        guard http.expectedContentLength <= Int64(usageCap) else { bytes.task.cancel(); return (nil, "an answer under 64 KiB") }
+        var data = Data()
+        do {
+            for try await b in bytes {
+                data.append(b)
+                if data.count > usageCap { bytes.task.cancel(); return (nil, "an answer under 64 KiB") }
+            }
+        } catch { return (nil, "a whole answer") }
+        let parsed = parseUsage(data, now: Date().timeIntervalSince1970)
+        if let missing = parsed.missing { return (nil, missing) }
+        return (CCPoolUsage.Probe(status: http.statusCode, limits: parsed.limits, credits: parsed.credits), nil)
+    }
+
+    func probe(token: String, base: URL, timeout: TimeInterval) async -> CCPoolUsage.Probe? {
+        await Self.usage(item: token, base: base, timeout: timeout).probe
+    }
+
+    /// The proxy's rules through the keeper: a login due (exp within 1 h, last refresh over 7 days) is refreshed first;
+    /// a 401 gets one keeper refresh and one retry. A refused refresh token is a sign-out the keeper has stamped: the
+    /// answer is a 401, so Refresh says so and the row reads "sign in again".
+    func probe(token: String, id: String, label: String, base: URL, timeout: TimeInterval, logger: CCPoolLogger) async -> CCPoolUsage.Probe? {
+        var item = token
+        if let keeper, let c = CodexCredential.decode(item), CodexTokenKeeper.due(c, now: Date().timeIntervalSince1970) {
+            switch await Self.refresh(keeper, id: id, stale: c.accessToken) {
+            case .refreshed(let fresh): item = fresh
+            case .signedOut: return CCPoolUsage.Probe(status: 401, limits: [:])
+            case .failed: break   // the stored login as it is
+            }
+        }
+        var (answer, missing) = await Self.usage(item: item, base: base, timeout: timeout)
+        if answer?.status == 401, let keeper, let c = CodexCredential.decode(item), c.canRefresh {
+            logger.note(label, "refresh: token rejected (401); refreshing the login")
+            switch await Self.refresh(keeper, id: id, stale: c.accessToken) {
+            case .refreshed(let fresh): (answer, missing) = await Self.usage(item: fresh, base: base, timeout: timeout)
+            case .signedOut, .failed: break
+            }
+        }
+        if let missing { logger.note(label, "refresh: the usage answer lacked \(missing)") }
+        return answer
+    }
+
+    private static func refresh(_ keeper: CodexTokenKeeper, id: String, stale: String) async -> CodexTokenKeeper.Outcome {
+        await withCheckedContinuation { c in keeper.refresh(id: id, stale: stale) { c.resume(returning: $0) } }
+    }
 }

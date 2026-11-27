@@ -35,7 +35,8 @@ struct CCPoolPane: View {
 
     /// The account row's second line; the live session count only when there is one.
     static func rowSubtitle(_ row: CCPoolPaneModel.Row) -> String {
-        ([row.stateText] + (row.sessions > 0 ? [CCPoolPaneModel.count(row.sessions, "session")] : []) + [row.usageText])
+        ([row.stateText] + (row.sessions > 0 ? [CCPoolPaneModel.count(row.sessions, "session")] : []) + [row.usageText]
+            + (row.credits.map { [$0] } ?? []))
             .joined(separator: " · ")
     }
 
@@ -91,16 +92,24 @@ struct CCPoolPane: View {
             VStack(alignment: .leading, spacing: sz(10)) {
                 if let problem = model.storeProblem { caption(problem, color: Neon.magenta) }
                 if let notice = model.notice { caption(notice, color: Neon.blueBright) }
-                let rows = model.rows
-                if rows.isEmpty { caption("No accounts yet.") }
-                ForEach(Array(rows.enumerated()), id: \.element.id) { i, row in
-                    if i > 0 { NeonDivider() }
-                    NeonRow(row.label, subtitle: Self.rowSubtitle(row)) {
-                        Button(model.selected == row.label ? "Done" : "Edit") { model.select(row.label) }
-                            .buttonStyle(.neon).fixedSize()
-                            .accessibilityLabel(model.selected == row.label ? "Close the actions for \(row.label)" : "Edit \(row.label)")
+                let groups = model.rowGroups
+                if groups.allSatisfy(\.rows.isEmpty) { caption("No accounts yet.") }
+                // #2010: one group per harness under its name; a pool of one harness has one group and no header.
+                ForEach(Array(groups.enumerated()), id: \.element.id) { g, group in
+                    if let title = group.title {
+                        if g > 0 { NeonDivider() }
+                        Text(title).font(.system(size: sz(11), weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                            .accessibilityAddTraits(.isHeader)
                     }
-                    if model.selected == row.label { actions(row.label) }
+                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { i, row in
+                        if i > 0 { NeonDivider() }
+                        NeonRow(row.label, subtitle: Self.rowSubtitle(row)) {
+                            Button(model.selected == row.label ? "Done" : "Edit") { model.select(row.label) }
+                                .buttonStyle(.neon).fixedSize()
+                                .accessibilityLabel(model.selected == row.label ? "Close the actions for \(row.label)" : "Edit \(row.label)")
+                        }
+                        if model.selected == row.label { actions(row.label) }
+                    }
                 }
             }
         }

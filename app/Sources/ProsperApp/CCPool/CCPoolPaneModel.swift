@@ -56,6 +56,9 @@ final class CCPoolPaneModel: ObservableObject {
         var usageText: String
         /// #1838: live sessions on this account (CCPoolState.liveSessions); 0 when none.
         var sessions = 0
+        /// #2010: the account's harness id, and its credits text from the last Refresh (Codex; display only).
+        var harness = ClaudeHarness.id
+        var credits: String? = nil
         var id: String { label }
     }
 
@@ -226,8 +229,31 @@ final class CCPoolPaneModel: ObservableObject {
                                       rejected: rejected, unverified: unverified)
             return Row(label: label, state: state, stateText: Self.stateText(state, timeZone: timeZone),
                        usageText: Self.usageText(store.usageSample(label), reset: acct.reset, now: now, timeZone: timeZone),
-                       sessions: sessions[label]?.count ?? 0)
+                       sessions: sessions[label]?.count ?? 0, harness: acct.harness,
+                       credits: report?.rows.last { $0.label == label }?.credits)
         }
+    }
+
+    struct RowGroup: Equatable, Identifiable {
+        /// nil: the pool lists one harness only, so no header (the look before #2010).
+        var title: String?
+        var rows: [Row]
+        var id: String { title ?? "" }
+    }
+
+    nonisolated static let harnessTitles = [(ClaudeHarness.id, "Claude"), (CCPoolCodexHarness.id, "Codex")]
+
+    /// #2010: the rows grouped by harness, Claude first, each group under its harness's name; any other harness id
+    /// under "Other". One group only: no header.
+    var rowGroups: [RowGroup] { Self.groups(rows) }
+
+    nonisolated static func groups(_ rows: [Row]) -> [RowGroup] {
+        let known = Set(harnessTitles.map(\.0))
+        let groups = (harnessTitles + [("", "Other")]).compactMap { id, title -> RowGroup? in
+            let r = rows.filter { id.isEmpty ? !known.contains($0.harness) : $0.harness == id }
+            return r.isEmpty ? nil : RowGroup(title: title, rows: r)
+        }
+        return groups.count > 1 ? groups : [RowGroup(title: nil, rows: rows)]
     }
 
     /// Precedence: a token out of routing, a rejected token, a hand hold, a limit, an unanswered check, current, ready.
@@ -679,8 +705,12 @@ final class CCPoolPaneModel: ObservableObject {
         refreshing = true
         checkVault()
         let store = store, secrets = secrets, base = probeBase, logger = logger
+        // #2010: each harness against its own base; Codex reads wham/usage through the service's token keeper.
+        var codex = CCPoolCodexHarness()
+        codex.keeper = service.codexKeeper
+        let runs: [(harness: any PoolHarness, base: URL)] = [(ClaudeHarness(), base), (codex, service.config.codexUpstream)]
         return Task.detached { [weak self] in
-            let report = await CCPoolUsage.refresh(store: store, secrets: secrets, base: base, logger: logger)
+            let report = await CCPoolUsage.refresh(store: store, secrets: secrets, runs: runs, logger: logger)
             await self?.finishRefresh(report)
         }
     }

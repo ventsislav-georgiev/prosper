@@ -26,8 +26,17 @@ protocol PoolHarness: Sendable {
     var prices: [(family: String, input: Double, output: Double, read: Double)] { get }
     func isQuotaCheck(_ obj: [String: Any]?) -> Bool
     func probe(token: String, base: URL, timeout: TimeInterval) async -> CCPoolUsage.Probe?
+    /// #2010: Refresh's probe of account `id` (its Keychain id), which may go through the harness's token keeper.
+    func probe(token: String, id: String, label: String, base: URL, timeout: TimeInterval, logger: CCPoolLogger) async -> CCPoolUsage.Probe?
     /// The session env rule: `key` is set to the pool's base URL for these argv[0] program names.
     var env: (key: String, programs: Set<String>) { get }
+}
+
+extension PoolHarness {
+    /// A harness with no token keeper probes with the stored token as it is.
+    func probe(token: String, id: String, label: String, base: URL, timeout: TimeInterval, logger: CCPoolLogger) async -> CCPoolUsage.Probe? {
+        await probe(token: token, base: base, timeout: timeout)
+    }
 }
 
 /// Claude Code against api.anthropic.com: the values the pool used before the seam, moved here unchanged. The old

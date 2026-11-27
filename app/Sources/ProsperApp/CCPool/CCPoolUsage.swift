@@ -10,6 +10,8 @@ enum CCPoolUsage {
     struct Probe: Equatable, Sendable {
         var status: Int
         var limits: [String: CCPoolLimit]
+        /// #2010: a Codex account's credits as the pane shows them ("credits $12.50", "unlimited credits"); display only.
+        var credits: String? = nil
     }
 
     struct Row: Equatable, Sendable {
@@ -21,6 +23,8 @@ enum CCPoolUsage {
         var spent: [String: Int] = [:]
         /// Cooldowns still in force that the probe cannot see (holds, long Retry-After benches).
         var held: [String: Int] = [:]
+        /// #2010: the probe's credits text (Codex), display only.
+        var credits: String? = nil
     }
 
     struct Report: Equatable, Sendable {
@@ -47,7 +51,7 @@ enum CCPoolUsage {
                 rows.append(Row(label: label, limits: nil, status: nil))
                 continue
             }
-            let answer = await harness.probe(token: token, base: base, timeout: 30)
+            let answer = await harness.probe(token: token, id: id, label: label, base: base, timeout: 30, logger: logger)
             // R1190-1: the verdict belongs to the account probed, by its Keychain id, not to its label: a rename, a
             // remove and add or an import Replace during the probe can move the label to another account. An account
             // gone by now gets no row and no write (the pane keys its flags by a row's label).
@@ -99,10 +103,24 @@ enum CCPoolUsage {
             if owned.cleared { logger.note(owned.owner, "token accepted again; back in routing") }
             let held = owned.cooldown.filter { Double($0.value) > now && spent[$0.key] == nil }
             logger.note(owned.owner, "refresh: status \(p.status); spent \(spent.keys.sorted()); held \(held.keys.sorted())")
-            rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held))
+            rows.append(Row(label: owned.owner, limits: p.limits, status: p.status, spent: spent, held: held, credits: p.credits))
             live.append(.init(util: CCPoolCore.utils(p.limits), reset: CCPoolCore.resets(p.limits),
                               spent: spent.merging(held) { a, _ in a }, at: now))
         }
         return Report(rows: rows, pool: CCPoolCore.poolCells(live, now: store.now))
+    }
+
+    /// #2010: Refresh for every harness in `runs`, in order, each against its own base; a harness with no account
+    /// probes nothing. One report: the rows of all, the pool row of the first harness that has one (two harnesses'
+    /// cells share claim names and never add up).
+    static func refresh(store: CCPoolStore, secrets: CCPoolSecrets, runs: [(harness: any PoolHarness, base: URL)],
+                        logger: CCPoolLogger, threshold: Double = CCPoolCore.exhaustedDefault) async -> Report {
+        var all = Report(rows: [], pool: [])
+        for run in runs {
+            let r = await refresh(store: store, secrets: secrets, base: run.base, logger: logger, threshold: threshold, harness: run.harness)
+            all.rows += r.rows
+            if all.pool.isEmpty { all.pool = r.pool }
+        }
+        return all
     }
 }
