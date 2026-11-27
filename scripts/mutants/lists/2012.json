@@ -65,6 +65,13 @@
    "old": "        if moved == EEXIST, !hasState(to), hasState(from) {",
    "new": "        if moved == EEXIST, hasState(to), hasState(from) {",
    "expect": "killed"
+  },
+  {
+   "name": "source_state_check_dropped",
+   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "old": "if moved == EEXIST, !hasState(to), hasState(from) {",
+   "new": "if moved == EEXIST, !hasState(to) {",
+   "expect": "killed"
   }
  ]
 }

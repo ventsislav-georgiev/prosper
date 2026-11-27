@@ -124,6 +124,21 @@ final class AgentPoolMigrationTests: XCTestCase {
         XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
     }
 
+    /// QA R2012b n1: a ccpool WITHOUT state.json (usage only) next to a by-product agentpool is not worth a set-aside:
+    /// both are kept, nothing is renamed aside, the marker is set.
+    func testAStatelessSourceDoesNotSetTheTargetAside() throws {
+        let d = scratchDefaults("agentpool-mig-stateless"), support = tempDir(), log = CCPoolCapturingLogger()
+        let fm = FileManager.default
+        try fm.createDirectory(at: support.appendingPathComponent("ccpool/usage"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: support.appendingPathComponent("agentpool/codex-scratch"), withIntermediateDirectories: true)
+        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
+        XCTAssertEqual(files(support.appendingPathComponent("agentpool")), ["codex-scratch"])
+        XCTAssertEqual(files(support.appendingPathComponent("ccpool")), ["usage"])
+        XCTAssertTrue(files(support).filter { $0.hasPrefix("agentpool-replaced-") }.isEmpty, "nothing set aside")
+        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both; the agentpool folder already holds the pool's state"])
+        XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
+    }
+
     /// The other-errno branch, driven by a read-only parent (EACCES): the marker stays unset for the next launch.
     func testAnUnmovableFolderLeavesTheMarkerUnset() throws {
         let d = scratchDefaults("agentpool-mig-eacces"), support = tempDir(), log = CCPoolCapturingLogger()
