@@ -1553,6 +1553,11 @@ struct DchControlOps: Sendable {
     /// The island's own runner (QA #462 M2), bounded like its jobs (one SIGTERM on
     /// expiry): a phone job and an island job on one row or dir exclude each other.
     var runner = DchActionRunner.shared
+    /// #2031: a Codex restart's --codex-drop-provider and pool words (AgentIsland.withCodexRestartFlags); read on main.
+    var codexFlags: ReviveEnvFlags = { argv in
+        let read: @MainActor () -> [String] = { (CCPoolRuntime.shared?.routing.reviveCodexFlags ?? { _ in ["--codex-drop-provider"] })(argv) }
+        return Thread.isMainThread ? MainActor.assumeIsolated(read) : DispatchQueue.main.sync { MainActor.assumeIsolated(read) }
+    }
     var now: @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
     /// #719: the live sessions' dch records (their Claude ids); none under XCTest.
     var liveRecords: @Sendable ([AgentSession]) -> [DchHistoryRecord] = {
@@ -1797,14 +1802,21 @@ struct DchControlOps: Sendable {
         guard case let (path, live)? = gated("Restart", minimum: AgentIsland.restartMinimum, reply) else { return }
         switch req {
         case .all:
-            let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { (AgentSessionKey(dir: $0, name: ""), AgentIsland.restartAllArgs) }
+            let version = binary()?.version, flags = codexFlags
+            let jobs: [(AgentSessionKey, [String]?)] = Set(live.map(\.key.dir)).sorted().map { dir in   // #2031
+                (AgentSessionKey(dir: dir, name: ""),
+                 AgentIsland.withCodexRestartFlags(AgentIsland.restartAllArgs, rows: live.filter { $0.key.dir == dir }, dch: version, flags: flags))
+            }
             run(jobs, path: path, bound: DchActionRunner.restartBound, yields: true, rows: Dictionary(grouping: live.map(\.key), by: \.dir).mapValues { $0.map(\.name) },
                 reply) { Self.answer(all: $0, .restart) }
         case .names(let names):
             switch Self.resolve(names, live: live) {
             case .failure(let why): reply(Self.error(why.message))
             case .success(let rows):
-                run(rows.map { ($0.key, AgentIsland.restartArgs($0.name)) }, path: path, bound: DchActionRunner.restartBound,
+                let version = binary()?.version, flags = codexFlags
+                run(rows.map { row in   // #2031
+                    (row.key, AgentIsland.restartArgs(row.name).map { AgentIsland.withCodexRestartFlags($0, rows: [row], dch: version, flags: flags) })
+                }, path: path, bound: DchActionRunner.restartBound,
                     yields: true, reply) { Self.answer(named: Array(zip(rows.map(\.name), $0)), .restart) }
             }
         }

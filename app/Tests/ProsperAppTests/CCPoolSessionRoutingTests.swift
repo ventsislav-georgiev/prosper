@@ -100,6 +100,7 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         if let routing {
             c.sessionEnvContributors = { [routing.contributor] }
             c.reviveEnvFlags = { routing.reviveFlags }
+            c.reviveCodexFlags = { routing.reviveCodexFlags }
         }
         return c
     }
@@ -744,5 +745,74 @@ final class CCPoolSessionRoutingTests: XCTestCase {
         XCTAssertEqual(resumedArgs(record("api", argv: ["claude"]), version: [1, 94, 0], pool: off), ["--revive", "api", "--json"])
         XCTAssertEqual(resumedArgs(record("api", argv: ["headroom", "wrap", "claude"]), version: [1, 94, 0], pool: Pool()),
                        ["--revive", "api", "--json"])
+    }
+
+    // MARK: - Codex Resume and Restart (#2031)
+
+    private static let codexWords = ["--codex-drop-provider"] + stride(from: 1, to: 12, by: 2).flatMap { ["--codex-config", CCPool.codexArgs(port: 41234)[$0]] }
+
+    private func codexPool(on: Bool) -> CCPool.Routing {
+        var routing = Pool().routing
+        routing.codexOn = { on }
+        routing.hasCodexAccounts = { true }
+        return routing
+    }
+
+    private func resumedCodex(_ r: DchHistoryRecord, version: [Int], on: Bool) -> [String]? {
+        let rec = Recorder()
+        let c = controller(rec, routing: codexPool(on: on), version: version)
+        c.store?.history = [r]
+        _ = launchedEnv(c, rec, key: r.id) { XCTAssertTrue(c.resume(r), "the Resume started") }
+        return rec.args.last
+    }
+
+    private func restartedCodex(agent: String, version: [Int], on: Bool) -> [String]? {
+        let rec = Recorder()
+        let c = controller(rec, routing: codexPool(on: on), version: version)
+        var s = AgentSession(key: AgentSessionKey(dir: "/d", name: "api"), alias: "", activity: 1, state: .working, agents: 0)
+        s.agent = agent
+        c.store?.history = [record("api", argv: ["codex"])]
+        _ = launchedEnv(c, rec, key: s.key) { XCTAssertTrue(c.restart(s), "the Restart started") }
+        return rec.args.last
+    }
+
+    /// Mutant codex-words-dropped-when-on: routing on, a Codex record's Resume carries the drop and the six pool words in order.
+    func testCodexResumeOnDch1189CarriesTheDropAndThePoolWords() {
+        XCTAssertEqual(resumedCodex(record("api", argv: ["codex"]), version: [1, 189, 0], on: true),
+                       ["--revive", "api", "--json"] + Self.codexWords)
+        XCTAssertEqual(Self.codexWords.filter { $0 == "--codex-config" }.count, 6)
+    }
+
+    /// Routing off at the revive: the drop alone (it removes the earlier appended words).
+    func testCodexResumeWithRoutingOffCarriesTheDropOnly() {
+        XCTAssertEqual(resumedCodex(record("api", argv: ["codex"]), version: [1, 189, 0], on: false),
+                       ["--revive", "api", "--json", "--codex-drop-provider"])
+    }
+
+    /// Mutant codex-check-removed: a Claude record gets nothing new, routing on or off.
+    func testClaudeResumeOnDch1189HasNoCodexFlags() {
+        for on in [true, false] {
+            XCTAssertEqual(resumedCodex(record("api", argv: ["claude"]), version: [1, 189, 0], on: on),
+                           ["--revive", "api", "--json"] + Self.poolFlags)
+        }
+    }
+
+    /// Mutant version-gate-removed: dch 1.188.0 gets no Codex flag.
+    func testCodexResumeOnDch1188HasNoCodexFlags() {
+        XCTAssertEqual(resumedCodex(record("api", argv: ["codex"]), version: [1, 188, 0], on: true), ["--revive", "api", "--json"])
+    }
+
+    /// A remote record is not routed through this Mac's pool: its revive is as before.
+    func testCodexResumeOfARemoteRecordIsUnchanged() {
+        XCTAssertEqual(resumedCodex(record("api", dir: "@example-host", argv: ["codex"]), version: [1, 189, 0], on: true).map { !$0.contains("--codex-drop-provider") }, true)
+    }
+
+    /// Restart --include-agents of a Codex row carries the same words; a Claude row and dch 1.188.0 get none.
+    func testCodexRestartCarriesTheSameWords() {
+        let base = AgentIsland.restartArgs("api") ?? []
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: true), base + Self.codexWords)
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 189, 0], on: false), base + ["--codex-drop-provider"])
+        XCTAssertEqual(restartedCodex(agent: "claude", version: [1, 189, 0], on: true), base)
+        XCTAssertEqual(restartedCodex(agent: "codex", version: [1, 188, 0], on: true), base)
     }
 }

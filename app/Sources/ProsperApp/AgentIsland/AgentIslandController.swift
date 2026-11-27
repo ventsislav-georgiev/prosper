@@ -255,6 +255,12 @@ final class AgentIslandController {
     /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
     /// and run on the runner's queue like a contributor. No runtime: none.
     var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
+    /// #2031: a Codex record's --revive/--restart words (dch 1.189.0), asked on main at each Resume or Restart and run on the
+    /// runner's queue. No runtime: the drop alone (it also removes an earlier appended pool word).
+    var reviveCodexFlags: @MainActor () -> ReviveEnvFlags = {
+        if let routing = CCPoolRuntime.shared?.routing { return routing.reviveCodexFlags }
+        return { _ in ["--codex-drop-provider"] }
+    }
     /// #2009: the argv contributors of the next --spawn, asked on main at each spawn and run on the runner's queue (the
     /// pool's Codex routing; no runtime: none). --revive takes no argv: a Resume gets none.
     var sessionArgvContributors: @MainActor () -> [SessionArgvContributor] = { CCPoolRuntime.shared.map { [$0.routing.argvContributor] } ?? [] }
@@ -548,8 +554,11 @@ final class AgentIslandController {
         if let command, let args, store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.reviveEnvMinimum) }) == true {
             let flags = reviveEnvFlags(), bins = reviveKitBins(), env = controlEnv, dir = r.key.dir
             // #1684: PATH goes the way a spawn builds it (control env + kit bins appended), after the pool's flags.
-            if flags != nil || !bins.isEmpty {
-                prepare = { (args + (flags?(command) ?? []) + KitSessionEnv.reviveFlags(kitBins: bins, env: env(dir)), Data()) }
+            // #2031: a Codex record always gets the drop (plus the pool's words while routing is on), from dch 1.189.0.
+            let codex: ReviveEnvFlags? = (r.codex != nil || AgentIsland.isInteractiveCodex(r.argv))
+                && store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.codexReviveMinimum) }) == true ? reviveCodexFlags() : nil
+            if flags != nil || !bins.isEmpty || codex != nil {
+                prepare = { (args + (flags?(command) ?? []) + KitSessionEnv.reviveFlags(kitBins: bins, env: env(dir)) + (codex?(command) ?? []), Data()) }
             }
         }
         return run(key, alias: alias, dch: dch, args: args,
@@ -774,8 +783,15 @@ final class AgentIslandController {
             if sayBusy { refuseBusy(key, AgentIsland.restartBusyText) }
             return false
         }
+        // #2031: a Codex row's restart carries the same words as its Resume (the record's argv decides keeps-own; none: plain codex).
+        var prepare: (@Sendable () -> (args: [String]?, out: Data))?
+        if AgentIsland.runsCodex(s, records: []), store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.codexReviveMinimum) }) == true {
+            let flags = reviveCodexFlags(), argv = store.history.first { $0.key == key }?.argv ?? ["codex"]
+            prepare = { (args + flags(argv), Data()) }
+        }
         let started = run(key, dch: dch, args: args, running: AgentIsland.restartingText,
-                          bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) }) {
+                          bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.rowLine($0, key: key) },
+                          prepare: prepare) {
             [weak self] r in
             self?.setRow(key, AgentIsland.rowText(r, name: key.name, .restart))
         }
@@ -1318,7 +1334,9 @@ final class AgentIslandController {
                 store.actions[key] = AgentIsland.restartBusyText
                 continue
             }
-            run(key, rows: rows.map(\.name), dch: dch, args: force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs,
+            let all = AgentIsland.withCodexRestartFlags(force ? AgentIsland.restartAllForceArgs : AgentIsland.restartAllArgs, rows: rows,
+                                                        dch: store.controlDch?.version, flags: reviveCodexFlags())   // #2031
+            run(key, rows: rows.map(\.name), dch: dch, args: all,
                 running: force ? AgentIsland.restartAllForceRunningText : AgentIsland.restartAllRunningText,
                 bound: DchActionRunner.restartBound, yields: true, onLine: { [weak self] in self?.dirLine($0, dir: dir, .restart) }) {
                 [weak self] r in self?.dirDone(dir, AgentIsland.restartAllSummary(r))

@@ -383,6 +383,40 @@ final class DchControlFramesTests: XCTestCase {
         XCTAssertEqual(f.refreshes, 1)
     }
 
+    /// #2031: the ctl restart of a Codex session carries the drop and the words; a Claude one and dch 1.188.0 none.
+    private static let codexWords = ["--codex-drop-provider", "--codex-config", "w1", "--codex-config", "w2"]
+
+    private func restartedArgs(_ f: Fake, version: [Int], _ req: [String: Any], dirs: [String] = ["/d"]) -> [[String]] {
+        var o = ops(f, dirs: dirs, binary: DchCommand.Binary(path: "/fake/dch", version: version))
+        o.codexFlags = { _ in Self.codexWords }
+        _ = call(o, DchFrame.restart, req)
+        return f.launchedArgs
+    }
+
+    private static func lsAgents(_ rows: [(String, String)]) -> String {
+        json(rows.map { ["name": $0.0, "version": "1.189.0", "agent": $0.1] })
+    }
+
+    func testCodexRestartByNameCarriesTheWords() {
+        let f = Fake()
+        f.ls["/d"] = Self.lsAgents([("a", "codex"), ("b", "claude")])
+        XCTAssertEqual(Set(restartedArgs(f, version: [1, 189, 0], ["names": ["a", "b"]])),
+                       [AgentIsland.restartArgs("a")! + Self.codexWords, AgentIsland.restartArgs("b")!])
+        let old = Fake()
+        old.ls["/d"] = Self.lsAgents([("a", "codex")])
+        XCTAssertEqual(restartedArgs(old, version: [1, 188, 0], ["names": ["a"]]), [AgentIsland.restartArgs("a")!], "dch 1.188.0: none")
+    }
+
+    /// Restart all: one Codex and one Claude in a dir carry the words once; no Codex adds nothing.
+    func testCodexRestartAllCarriesTheWordsOncePerDirWithCodex() {
+        let f = Fake()
+        f.ls["/d"] = Self.lsAgents([("a", "codex"), ("b", "claude")])
+        XCTAssertEqual(restartedArgs(f, version: [1, 189, 0], ["all": true]), [AgentIsland.restartAllArgs + Self.codexWords])
+        let none = Fake()
+        none.ls["/d"] = Self.lsAgents([("b", "claude")])
+        XCTAssertEqual(restartedArgs(none, version: [1, 189, 0], ["all": true]), [AgentIsland.restartAllArgs])
+    }
+
     func testRestartAllRunsRestartAllArgsPerLiveDir() {
         let f = Fake()
         f.ls["/d"] = Self.ls([("a", "1.24.1")])

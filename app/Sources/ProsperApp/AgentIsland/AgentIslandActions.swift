@@ -167,6 +167,8 @@ extension AgentIsland {
     static let reviveEndedHoldMinimum = [1, 28, 3]
     /// #1499: `--revive <n> [--env K=V]... [--unset K]...`, applied after dch's login-shell env, dch 1.94.0 (local only).
     static let reviveEnvMinimum = [1, 94, 0]
+    /// #2031: `--codex-drop-provider` and `--codex-config K=V` on --revive and --restart --include-agents, dch 1.189.0.
+    static let codexReviveMinimum = [1, 189, 0]
     /// The History tab lists this many records in all, the newest first, unless more
     /// are pinned: pinned ones are never capped, unpinned ones fill the rest.
     static let historyCap = 50
@@ -1192,6 +1194,15 @@ extension AgentIsland {
     static func runsCodex(_ s: AgentSession, records: @autoclosure () -> [DchHistoryRecord]) -> Bool {
         if let agent = s.agent { return agent == "codex" }
         return s.claudeSessionID?.isEmpty != false && records().contains { $0.key == s.key && isInteractiveCodex($0.argv) }
+    }
+
+    /// #2031: dch replays the argv it recorded on every restart, so a restart of any Codex row (Restart all, the control
+    /// server's) carries the same words as a Resume: `flags` of a plain ["codex"] argv (the several rows' record argvs may
+    /// differ in codexWords' keeps-own rule; one set is passed for all). Claude and shell rows alone, or a dch before
+    /// 1.189.0: `args` as they are.
+    static func withCodexRestartFlags(_ args: [String], rows: [AgentSession], dch: [Int]?, flags: ReviveEnvFlags) -> [String] {
+        guard let dch, DchCommand.isAtLeast(dch, codexReviveMinimum), rows.contains(where: { runsCodex($0, records: []) }) else { return args }
+        return args + flags(["codex"])
     }
 
     static func isInteractiveCodex(_ argv: [String]) -> Bool {

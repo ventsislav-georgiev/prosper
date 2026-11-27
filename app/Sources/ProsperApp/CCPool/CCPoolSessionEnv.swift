@@ -261,6 +261,16 @@ enum CCPool {
         /// unchanged, byte for byte.
         var contributor: SessionEnvContributor { { [self] argv, env in delta(argv, wait: true, env: env).applied(to: env) } }
 
+        /// #2031: dch 1.189.0's --revive/--restart words for a Codex record: always `--codex-drop-provider` (dch records the
+        /// argv it ran, so an earlier appended pool word would otherwise come back), then one `--codex-config K=V` per pool
+        /// word of codexWords (every second element, after its `-c`) while routing is on. Read on the runner's queue, so at the revive.
+        var reviveCodexFlags: ReviveEnvFlags {
+            { [self] argv in
+                let w = codexWords(argv)
+                return ["--codex-drop-provider"] + stride(from: 1, to: w.count, by: 2).flatMap { ["--codex-config", w[$0]] }
+            }
+        }
+
         /// #1499: the same delta as --revive flags (AgentIslandController.resume, dch 1.94.0); read on the runner's queue too.
         var reviveFlags: ReviveEnvFlags { { [self] argv in delta(argv, wait: true, env: nil).reviveFlags } }
     }

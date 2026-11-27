@@ -2467,6 +2467,28 @@ final class AgentIslandControlsTests: XCTestCase {
     }
 
     /// Confirmed: one job per dir with a live session, no -f. A row shows dch's
+    /// #2031: Restart all with one Codex and one Claude row carries the words once; with no Codex none; dch 1.188.0 none.
+    @MainActor
+    func testRestartAllCarriesTheCodexWordsOnlyWithACodexRowOnDch1189() throws {
+        func restarted(_ agents: [String?], version: [Int]) throws -> [[String]] {
+            let f = FakeProc()
+            let c = controller(f, Reads(), dch: DchCommand.Binary(path: "/fake/dch", version: version))
+            c.reviveCodexFlags = { { _ in ["--codex-drop-provider", "--codex-config", "w1"] } }
+            c.store?.controlDch = DchCommand.Binary(path: "/fake/dch", version: version)
+            c.store?.sessions = agents.enumerated().map { i, a in
+                var s = session("s\(i)", version: DchCommand.versionString(version)); s.agent = a; return s
+            }
+            c.askRestartAll()
+            c.confirmRestartAll(true)
+            XCTAssertEqual(f.launched.wait(timeout: .now() + 5), .success)
+            return f.args
+        }
+        let base = AgentIsland.restartAllArgs
+        XCTAssertEqual(try restarted(["codex", "claude"], version: [1, 189, 0]), [base + ["--codex-drop-provider", "--codex-config", "w1"]])
+        XCTAssertEqual(try restarted(["claude", nil], version: [1, 189, 0]), [base])
+        XCTAssertEqual(try restarted(["codex"], version: [1, 188, 0]), [base])
+    }
+
     /// phases once it reaches it, then its result; a row left on a phase is
     /// cleared; a skip with no phase leaves its row alone; the dir gets the summary.
     @MainActor
