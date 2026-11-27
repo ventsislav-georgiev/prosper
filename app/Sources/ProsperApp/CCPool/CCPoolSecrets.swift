@@ -9,6 +9,17 @@ protocol CCPoolSecrets: Sendable {
     func remove(id: String) throws
     /// #1326 (a): rename the item `id` to `label` (shown as `CCPoolKeychainSecrets.itemLabel`); the token is untouched.
     func relabel(id: String, label: String) throws
+    /// #2007 r2 (QA R2007 F2): write `token` and `label` over the existing item `id`; throws when there is none and never
+    /// creates one, so a write that lands after the account was removed leaves no item behind.
+    func replace(token: String, id: String, label: String) throws
+}
+
+extension CCPoolSecrets {
+    // shortcut: check-then-store is not atomic, fine for the test doubles; the Keychain type overrides it with SecItemUpdate
+    func replace(token: String, id: String, label: String) throws {
+        guard try self.token(id: id) != nil else { throw CCPoolSecretsError.failed(errSecItemNotFound) }
+        try store(token: token, id: id, label: label)
+    }
 }
 
 enum CCPoolSecretsError: Error, Equatable, CustomStringConvertible {
@@ -134,6 +145,13 @@ struct CCPoolKeychainSecrets: CCPoolSecrets {
 
     func remove(id: String) throws {
         try Self.check(SecItemDelete(Self.baseQuery(id: id) as CFDictionary))
+    }
+
+    func replace(token: String, id: String, label: String) throws {
+        let update: [String: Any] = [kSecValueData as String: Data(token.utf8), kSecAttrLabel as String: Self.itemLabel(label)]
+        let status = SecItemUpdate(Self.baseQuery(id: id) as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound { throw CCPoolSecretsError.failed(status) }
+        try Self.check(status)
     }
 
     func relabel(id: String, label: String) throws {

@@ -7,8 +7,8 @@ import Foundation
 /// retried; a network error is not a sign-out (the next trigger tries again). Nothing here logs a token or a body.
 final class CodexTokenKeeper: @unchecked Sendable {
     static let productionURL = URL(string: "https://auth.openai.com/oauth/token")!
-    // shortcut: Codex's public OAuth client id as its open-source login code names it, not read from the installed
-    // binary; P5 (adding Codex accounts) checks it against the installed Codex before the first real login
+    // shortcut: Codex's public OAuth client id; the supervisor checked it against the strings of the installed Codex
+    // 0.167.2 on 2026-11-27 (codex not executed); P5 re-checks it when the Codex version changes
     static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     /// Refresh when the access token's exp is this close (or past).
     static let expMargin: Double = 3600
@@ -47,7 +47,8 @@ final class CodexTokenKeeper: @unchecked Sendable {
         cfg.httpCookieStorage = nil
         cfg.urlCache = nil
         cfg.timeoutIntervalForRequest = 30
-        session = URLSession(configuration: cfg)
+        // QA R2007 F1: a 3xx is the answer (settles as .failed); following it would re-POST the refresh token to Location.
+        session = URLSession(configuration: cfg, delegate: CCPoolNoRedirect(), delegateQueue: nil)
     }
 
     deinit { session.invalidateAndCancel() }
@@ -135,11 +136,17 @@ final class CodexTokenKeeper: @unchecked Sendable {
         cred.lastRefresh = store.now
         // Written before anyone is handed the new access token: a crash in between leaves a valid stored login.
         guard let item = cred.encoded() else { return .failed }
-        do { try secrets.store(token: item, id: id, label: label) } catch {
-            log.note(label, "token refresh failed: the new login could not be stored")
+        // QA R2007 F2: the owner as it is now. A removal during the POST writes nothing (the update-only write could not
+        // re-create the item either); a rename during it keeps the new label.
+        guard let owner = store.read({ $0.label(ofID: id) }) else {
+            log.note(label, "token refresh dropped: account removed during refresh")
             return .failed
         }
-        log.note(label, "token refreshed")
+        do { try secrets.replace(token: item, id: id, label: owner) } catch {
+            log.note(owner, "token refresh failed: the new login could not be stored")
+            return .failed
+        }
+        log.note(owner, "token refreshed")
         return .refreshed(item)
     }
 }

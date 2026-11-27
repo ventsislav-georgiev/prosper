@@ -12,16 +12,18 @@ final class CodexFakeAuth: @unchecked Sendable {
     var status = 200
     var body = Data()
     var delay: TimeInterval = 0
+    /// With a 3xx `status`: the Location the reply names.
+    var location: String?
     var posts: [Data] { lock.withLock { _posts } }
     func set(_ f: (CodexFakeAuth) -> Void) { lock.withLock { f(self) } }
 
     func reply(_ head: CCPoolRequestHead, _ data: Data) -> CCPoolFakeServer.Reply {
-        let (s, b, d) = lock.withLock { () -> (Int, Data, TimeInterval) in
+        let (s, b, d, l) = lock.withLock { () -> (Int, Data, TimeInterval, String?) in
             _posts.append(data)
-            return (status, body, delay)
+            return (status, body, delay, location)
         }
         if d > 0 { Thread.sleep(forTimeInterval: d) }
-        return .respond(s, [("content-type", "application/json")], b)
+        return .respond(s, [("content-type", "application/json")] + (l.map { [("location", $0)] } ?? []), b)
     }
 }
 
@@ -308,6 +310,85 @@ final class CodexTokenKeeperTests: XCTestCase {
             XCTAssertFalse(CodexTokenKeeper.signsOut(status: 500, body: Data(#"{"error":"\#(w)"}"#.utf8)), w)
         }
         XCTAssertFalse(CodexTokenKeeper.signsOut(status: 400, body: Data(#"{"error":"slow_down"}"#.utf8)))
+    }
+
+    final class OutcomeBox: @unchecked Sendable { var value: CodexTokenKeeper.Outcome? }
+
+    /// Runs the service's keeper on account "cx" (its stored access token is the stale one), calls `during` once the POST
+    /// is out, and returns the outcome.
+    private func refresh(_ r: Rig, during: () throws -> Void = {}) throws -> CodexTokenKeeper.Outcome? {
+        let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
+        let stale = try XCTUnwrap(r.storedItem?.accessToken)
+        let box = OutcomeBox()
+        let settled = expectation(description: "refresh settled")
+        r.service.codexKeeper.refresh(id: id, stale: stale) { o in box.value = o; settled.fulfill() }
+        try during()
+        wait(for: [settled], timeout: 10)
+        return box.value
+    }
+
+    // QA R2007 F1: a 3xx from the auth host is the answer, never followed: the Location host hears nothing (the refresh
+    // token would be re-POSTed to it), the refresh fails and the account is not signed out. Old: followed, refreshed.
+    func testRedirectFromTheAuthHostIsNotFollowed() throws {
+        let r = try rig(item: Self.item(access: "at-example-old-0007"), accepted: [])
+        let hits = CCPoolBetaBox()
+        let auth = r.auth
+        let other = try CCPoolFakeServer { h, _ in
+            hits.add(h.path)
+            return .respond(200, [("content-type", "application/json")], auth.body)
+        }
+        addTeardownBlock { other.stop() }
+        XCTAssertNotEqual(other.port, 0)
+        r.auth.set { $0.status = 307; $0.location = "http://127.0.0.1:\(other.port)/oauth/token" }
+        XCTAssertEqual(try refresh(r), .failed)
+        XCTAssertEqual(hits.values, [], "the Location host received nothing")
+        XCTAssertEqual(r.auth.posts.count, 1)
+        XCTAssertTrue(r.refused == nil, "a redirect is not a sign-out")
+        XCTAssertEqual(r.storedItem?.refreshToken, Self.refreshOld)
+        assertNoSecrets(r)
+    }
+
+    // QA R2007 F2: an account removed while its refresh is in flight stays removed: its Keychain item is not re-created.
+    // Old: the upsert re-added the item with live tokens and no row left to remove it.
+    func testRemovalDuringTheRefreshIsNotUndone() throws {
+        let r = try rig(item: Self.item(access: "at-example-old-0008"), accepted: [])
+        let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
+        r.auth.set { $0.delay = 0.5 }
+        let outcome = try refresh(r) { try r.store.removeAccount(label: "cx", secrets: r.secrets) }
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertEqual(r.auth.posts.count, 1, "the POST was out before the removal")
+        XCTAssertEqual(r.secrets.count, 0, "the item was not re-created")
+        XCTAssertTrue(r.log.lines.contains { $0.contains("account removed during refresh") }, "\(r.log.lines)")
+        // The update-only write, alone: a missing item throws and stays missing.
+        XCTAssertThrowsError(try r.secrets.replace(token: "x", id: id, label: "cx"))
+        XCTAssertEqual(r.secrets.count, 0)
+        assertNoSecrets(r)
+    }
+
+    // QA R2007 F2: an item deleted under a row that still stands (Keychain Access, a failed add) is not re-created by a
+    // refresh that lands afterwards. Old: the upsert wrote it back.
+    func testItemDeletedDuringTheRefreshIsNotRecreated() throws {
+        let r = try rig(item: Self.item(access: "at-example-old-0009"), accepted: [])
+        let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
+        r.auth.set { $0.delay = 0.5 }
+        XCTAssertEqual(try refresh(r) { try r.secrets.remove(id: id) }, .failed)
+        XCTAssertEqual(r.auth.posts.count, 1)
+        XCTAssertEqual(r.secrets.count, 0, "the item was not re-created")
+        XCTAssertTrue(r.store.snapshot.accounts["cx"] != nil)
+        assertNoSecrets(r)
+    }
+
+    // QA R2007 F2: a rename while the refresh is in flight stands: the refreshed item carries the new label. Old: the
+    // label read before the POST was written back.
+    func testRenameDuringTheRefreshKeepsTheNewLabel() throws {
+        let r = try rig(item: Self.item(access: "at-example-old-0010"), accepted: [])
+        let id = try XCTUnwrap(r.store.snapshot.accounts["cx"]?.id)
+        r.auth.set { $0.delay = 0.5 }
+        let outcome = try refresh(r) { try r.store.renameAccount("cx", to: "cx-renamed", secrets: r.secrets) }
+        guard case .refreshed? = outcome else { return XCTFail("not refreshed") }
+        XCTAssertEqual(r.secrets.label(id: id), "cx-renamed")
+        XCTAssertEqual(((try? r.secrets.token(id: id)) ?? nil).flatMap(CodexCredential.decode)?.accessToken, Self.accessNew)
+        assertNoSecrets(r)
     }
 
     // Under XCTest the keeper never dials the production auth host.
