@@ -39,16 +39,38 @@ enum AgentPoolMigration {
         // c. Files: one exclusive rename; an existing target is never replaced.
         let from = support.appendingPathComponent(oldFolder, isDirectory: true)
         let to = support.appendingPathComponent(newFolder, isDirectory: true)
-        let moved = renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno
+        let exclusiveMove = { renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno }
+        var moved = exclusiveMove()
+        var setAside = false
+        // An agentpool without state.json next to a ccpool with one is a by-product (an empty pane's store write or a
+        // Codex scratch folder from a launch whose move failed), not the person's data: set it aside, never delete it.
+        if moved == EEXIST, !hasState(to), hasState(from) {
+            let stamp = DateFormatter()
+            stamp.locale = Locale(identifier: "en_US_POSIX")
+            stamp.dateFormat = "yyyyMMdd-HHmmss"
+            let aside = support.appendingPathComponent("\(newFolder)-replaced-\(stamp.string(from: Date()))", isDirectory: true)
+            guard renamex_np(to.path, aside.path, UInt32(RENAME_EXCL)) == 0 else {
+                logger.note(nil, "agent pool migration: the agentpool folder could not be set aside (errno \(errno)); trying again next launch")
+                return
+            }
+            setAside = true
+            moved = exclusiveMove()
+        }
         switch moved {
-        case 0: logger.note(nil, "agent pool migration: moved the ccpool folder to agentpool")
+        case 0: logger.note(nil, setAside ? "agent pool migration: set aside the agentpool folder, then moved the ccpool folder to agentpool"
+                                          : "agent pool migration: moved the ccpool folder to agentpool")
         case ENOENT: break   // no old folder (a fresh install, or nothing was ever stored)
-        case EEXIST: logger.note(nil, "agent pool migration: the agentpool folder already exists; the ccpool folder was not moved")
+        case EEXIST: logger.note(nil, "agent pool migration: kept both; the agentpool folder already holds the pool's state")
         default:
-            // Leave the marker unset: the next launch tries the move again (the steps above are no-ops by then).
+            // Marker unset. This launch's pool runs on a missing agentpool folder and its writes may create one; the next
+            // launch's EEXIST branch above sets that by-product aside and moves the ccpool folder then.
             logger.note(nil, "agent pool migration: the ccpool folder could not be moved (errno \(moved)); trying again next launch")
             return
         }
         defaults.set(1, forKey: markerKey)
+    }
+
+    private static func hasState(_ dir: URL) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent("state.json").path)
     }
 }

@@ -92,16 +92,48 @@ final class AgentPoolMigrationTests: XCTestCase {
         XCTAssertEqual(log.lines, [])
     }
 
-    /// Mutant m3 (no RENAME_EXCL): rename(2) would replace the empty target.
+    /// Mutant m3 (no RENAME_EXCL): rename(2) would replace the target that holds the pool's state.
+    /// Mutant state-check-inverted: the target with state.json would be set aside.
     func testAnExistingTargetMovesNothing() throws {
         let d = scratchDefaults("agentpool-mig-target"), support = tempDir(), log = CCPoolCapturingLogger()
         try oldState(d, support)
-        try FileManager.default.createDirectory(at: support.appendingPathComponent("agentpool"), withIntermediateDirectories: true)
+        let target = support.appendingPathComponent("agentpool", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: target.appendingPathComponent("state.json"))
         AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
         XCTAssertEqual(files(support.appendingPathComponent("ccpool")).count, 4, "the source is left")
-        XCTAssertEqual(files(support.appendingPathComponent("agentpool")), [], "the target untouched")
-        XCTAssertEqual(log.lines, ["-: agent pool migration: the agentpool folder already exists; the ccpool folder was not moved"])
+        XCTAssertEqual(files(target), ["state.json"], "the target untouched")
+        XCTAssertEqual(files(support).filter { $0.hasPrefix("agentpool-replaced-") }, [], "nothing set aside")
+        XCTAssertEqual(log.lines, ["-: agent pool migration: kept both; the agentpool folder already holds the pool's state"])
         XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
+    }
+
+    /// QA R2012 n1. Mutant set-aside-skipped: the by-product stays, the move fails with EEXIST, ccpool is orphaned.
+    func testAByProductTargetIsSetAsideThenTheFolderMoves() throws {
+        let d = scratchDefaults("agentpool-mig-byproduct"), support = tempDir(), log = CCPoolCapturingLogger()
+        try oldState(d, support)
+        let target = support.appendingPathComponent("agentpool", isDirectory: true)
+        try FileManager.default.createDirectory(at: target.appendingPathComponent("codex-scratch"), withIntermediateDirectories: true)
+        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
+        XCTAssertEqual(files(target), ["events.jsonl", "state.json", "usage", "usage/2026-11-27.jsonl"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: support.appendingPathComponent("ccpool").path))
+        let aside = files(support).filter { $0.hasPrefix("agentpool-replaced-") && !$0.contains("/") }
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertEqual(files(support.appendingPathComponent(aside.first ?? "-")), ["codex-scratch"], "set aside, not deleted")
+        XCTAssertEqual(log.lines, ["-: agent pool migration: set aside the agentpool folder, then moved the ccpool folder to agentpool"])
+        XCTAssertEqual(d.integer(forKey: AgentPoolMigration.markerKey), 1)
+    }
+
+    /// The other-errno branch, driven by a read-only parent (EACCES): the marker stays unset for the next launch.
+    func testAnUnmovableFolderLeavesTheMarkerUnset() throws {
+        let d = scratchDefaults("agentpool-mig-eacces"), support = tempDir(), log = CCPoolCapturingLogger()
+        try oldState(d, support)
+        XCTAssertEqual(chmod(support.path, 0o500), 0)
+        defer { chmod(support.path, 0o700) }
+        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
+        XCTAssertEqual(log.lines, ["-: agent pool migration: the ccpool folder could not be moved (errno \(EACCES)); trying again next launch"])
+        XCTAssertTrue(d.object(forKey: AgentPoolMigration.markerKey) == nil)
+        XCTAssertEqual(files(support.appendingPathComponent("ccpool")).count, 4)
     }
 
     func testAFreshInstallOnlyWritesTheMarker() {
