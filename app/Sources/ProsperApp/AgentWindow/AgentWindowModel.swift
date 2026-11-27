@@ -2687,7 +2687,6 @@ final class AgentWindowModel: ObservableObject {
     /// #1997: the Command menu's pick sets the whole field from that agent's setting (AgentNewSession.command).
     func pickNewSessionAgent(_ a: AgentNewSession.Agent) { setNewSessionCommand(AgentNewSession.command(for: a)) }
 
-
     /// #1809: `draft: false` (an agent's sessions.new) fills the form only: the person's kept draft stays.
     func setNewSessionPrompt(_ s: String, draft: Bool = true) {
         guard newSession != nil, newSession?.starting == nil else { return }
