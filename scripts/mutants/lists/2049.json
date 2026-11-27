@@ -1,0 +1,41 @@
+{
+ "entry": "2049",
+ "filter": "XrayLookTests",
+ "mutants": [
+  {
+   "name": "richtext_link_unrouted",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "r.style.contains(.link) ? XrayInk.accentInk : XrayInk.textPrimary",
+   "new": "r.style.contains(.link) ? Neon.blue : XrayInk.textPrimary",
+   "expect": "killed"
+  },
+  {
+   "name": "richtext_hit_unrouted",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRichText.swift",
+   "old": "if hit { a.backgroundColor = XrayInk.accentRing.opacity(0.24) }",
+   "new": "if hit { a.backgroundColor = Neon.blue.opacity(0.24) }",
+   "expect": "killed"
+  },
+  {
+   "name": "refcard_tab_unrouted",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": "t == tab ? XrayInk.accentRing.opacity(0.2) : .clear",
+   "new": "t == tab ? Neon.blue.opacity(0.2) : .clear",
+   "expect": "killed"
+  },
+  {
+   "name": "refcard_sentence_unrouted",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayRefPopover.swift",
+   "old": ".fontWeight(.semibold).foregroundColor(XrayInk.accentInk)",
+   "new": ".fontWeight(.semibold).foregroundColor(Neon.blue)",
+   "expect": "killed"
+  },
+  {
+   "name": "chapter_underline_unrouted",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayChapterCard.swift",
+   "old": "XrayRefSpans.decorate(&a, refs: refs, color: XrayInk.accentRing)",
+   "new": "XrayRefSpans.decorate(&a, refs: refs, color: Neon.blue)",
+   "expect": "killed"
+  }
+ ]
+}

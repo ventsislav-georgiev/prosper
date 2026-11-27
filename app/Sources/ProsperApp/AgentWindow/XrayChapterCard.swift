@@ -198,7 +198,7 @@ struct XrayRichBlock: View {
                                       refs: [XrayRefs.Entry] = []) -> AttributedString {
         let shown = strong ? runs.map { XrayRich.Run(text: $0.text, style: $0.style.union(.bold)) } : runs
         var a = XrayRich.attributed(shown, size: size, match: match.trimmingCharacters(in: .whitespaces))
-        if XrayRefLink.decorate(), !refs.isEmpty { XrayRefSpans.decorate(&a, refs: refs, color: Neon.blue) }
+        if XrayRefLink.decorate(), !refs.isEmpty { XrayRefSpans.decorate(&a, refs: refs, color: XrayInk.accentRing) }   // #2049: an underline on XrayInk.surface
         return a
     }
 }

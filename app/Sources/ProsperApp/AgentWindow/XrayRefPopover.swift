@@ -234,7 +234,7 @@ struct XrayRefPopover: View {
                         .font(Neon.font(11, weight: .medium))
                         .foregroundStyle(t == tab ? XrayInk.textPrimary : XrayInk.textSecondary)
                         .padding(.horizontal, sz(9)).padding(.vertical, sz(4))
-                        .background(Capsule().fill(t == tab ? Neon.blue.opacity(0.2) : .clear))
+                        .background(Capsule().fill(t == tab ? XrayInk.accentRing.opacity(0.2) : .clear))   // #2049: the card panel's XrayInk.surface
                         .contentShape(Capsule())
                         .fixedSize()
                 }
@@ -432,7 +432,7 @@ struct XrayRefPopover: View {
     static func sentenceText(_ m: XrayRefStream.Mention) -> Text {
         let lead = Text(verbatim: speaker(m).map { $0 + "  " } ?? "").foregroundColor(XrayInk.textSecondary)
         guard let s = m.sentence else { return lead + Text(verbatim: m.line) }
-        return lead + Text(verbatim: s.before) + Text(verbatim: s.hit).fontWeight(.semibold).foregroundColor(Neon.blue)
+        return lead + Text(verbatim: s.before) + Text(verbatim: s.hit).fontWeight(.semibold).foregroundColor(XrayInk.accentInk)
             + Text(verbatim: s.after)
     }
 

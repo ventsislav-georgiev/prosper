@@ -322,15 +322,40 @@ final class XrayLookTests: XCTestCase {
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentWindow")
         let want: [(String, String, Int)] = [("XrayPanel.swift", ".foregroundStyle(XrayInk.accentInk)", 2),
                                              ("XrayPanel.swift", "XrayInk.accentRing.opacity", 3),
-                                             ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2)]
+                                             ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2),
+                                             // #2049: the cards' rich text, the ref card's tabs and sentence, the chapter
+                                             // card's ref underline, all in the card panel on XrayInk.surface
+                                             ("XrayRichText.swift", "? XrayInk.accentInk : XrayInk.textPrimary", 1),
+                                             ("XrayRichText.swift", "XrayInk.accentRing.opacity(0.24)", 1),
+                                             ("XrayRefPopover.swift", "XrayInk.accentRing.opacity(0.2)", 1),
+                                             ("XrayRefPopover.swift", ".foregroundColor(XrayInk.accentInk)", 1),
+                                             ("XrayChapterCard.swift", "color: XrayInk.accentRing)", 1)]
         for (f, needle, n) in want {
             let src = try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8)
             XCTAssertEqual(src.components(separatedBy: needle).count - 1, n, "\(f): \(needle)")
             XCTAssertFalse(src.contains("foregroundStyle(Neon.blue)") || src.contains("Neon.blue.opacity"), "\(f): no raw accent")
         }
+        for f in ["XrayRichText.swift", "XrayRefPopover.swift", "XrayChapterCard.swift"] {   // #2049: no Neon.blue in any form
+            XCTAssertFalse(try String(contentsOf: dir.appendingPathComponent(f), encoding: .utf8).contains("Neon.blue"), "\(f): no raw accent")
+        }
         // QA R2043: the recap strip sits on the theme's card, not the black surface, so it keeps the theme's accent.
         let recap = try String(contentsOf: dir.appendingPathComponent("XrayRecap.swift"), encoding: .utf8)
         XCTAssertEqual(recap.components(separatedBy: ".foregroundStyle(Neon.blue)").count - 1, 3, "XrayRecap keeps Neon.blue")
         XCTAssertFalse(recap.contains("XrayInk.accent"), "XrayRecap: no X-ray surface ink on the theme card")
+    }
+
+    /// #2049: off, a card's link text and the filter's highlight take the readable accent, not the dark one. Red at base:
+    /// XrayRichText.swift:162/164 drew Neon.blue.
+    func testOffTheCardsRichTextTakesTheReadableAccent() {
+        withAccent("#1A237E") {
+            let a = XrayRich.attributed([XrayRich.Run(text: "docs", style: .link)], size: 11, match: "docs")
+            let fg = a.runs.first?[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self]
+            let bg = a.runs.first?[AttributeScopes.SwiftUIAttributes.BackgroundColorAttribute.self]
+            XCTAssertEqual(a.runs.count, 1, "one hit run")
+            XCTAssertTrue(fg.map { same($0, XrayInk.accentInk) } ?? false, "link text: accentInk")
+            XCTAssertTrue(fg.map { !same($0, Neon.blue) } ?? false, "link text: not the dark accent")
+            XCTAssertTrue(bg.map { same($0, XrayInk.accentRing.opacity(0.24)) } ?? false, "highlight: accentRing")
+            XCTAssertTrue(bg.map { !same($0, Neon.blue.opacity(0.24)) } ?? false, "highlight: not the dark accent")
+        }
     }
 }
