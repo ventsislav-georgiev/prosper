@@ -64,8 +64,7 @@ tag from the now-released section and put it on the new top draft.
   (#2014)
 - Ships dch 1.189.0: X-ray's Schedules tab shows each durable cron's real status, checked against
   the session's scheduled tasks file, and a permanent durable cron no longer reads expired. (#2024, #2031)
-- Ships dch 1.191.0: an X-ray answer sent from a remote drawer reaches the host's ledger exactly as
-  typed, a blank answer is refused, and suggested answers are cleaned like titles. (#2024)
+- Ships dch 1.191.0, with fixes from QA of the X-ray answer and Codex resume features. (#2024, #2031)
 - New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
   command next to the Claude one; a command edited in the form is no longer saved as the default.
   (#1997)
