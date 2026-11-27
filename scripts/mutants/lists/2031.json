@@ -1,6 +1,6 @@
 {
  "entry": 2031,
- "filter": "CCPoolSessionRoutingTests|AgentIslandControlsTests/testRestartAllCarriesTheCodexWordsOnlyWithACodexRowOnDch1189|DchControlFramesTests/testCodexRestart",
+ "filter": "CCPoolSessionRoutingTests|AgentIslandControlsTests/testRestartAll|DchControlFramesTests/testCodexRestart",
  "mutants": [
   {
    "name": "gate-removed",
@@ -17,17 +17,31 @@
    "expect": "killed"
   },
   {
-   "name": "codex-check-removed",
-   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "(r.codex != nil || AgentIsland.isInteractiveCodex(r.argv))\n                &&",
-   "new": "true\n                &&",
+   "name": "restart-all-codex-check-removed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "let codex = rows.filter { runsCodex($0, records: []) }",
+   "new": "let codex = rows",
    "expect": "killed"
   },
   {
-   "name": "restart-all-codex-check-removed",
-   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
-   "old": "rows.contains(where: { runsCodex($0, records: []) })",
-   "new": "true",
+   "name": "pool-words-as-own",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "w == \"model_provider=\\\"\\(codexProvider)\\\"\" || w.hasPrefix",
+   "new": "w.hasPrefix",
+   "expect": "killed"
+  },
+  {
+   "name": "restart-reads-ended-history",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "read = readLiveRecords\n            prepare = {",
+   "new": "read: @Sendable ([AgentSession]) -> [DchHistoryRecord] = { [h = store.history] _ in h }\n            prepare = {",
+   "expect": "killed"
+  },
+  {
+   "name": "own-provider-dropped",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "old": "if own.contains(where: codexKeepsOwn) { return [] }",
+   "new": "if own.contains(where: codexKeepsOwn) { return [\"--codex-drop-provider\"] }",
    "expect": "killed"
   }
  ]
