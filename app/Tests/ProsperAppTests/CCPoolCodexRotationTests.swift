@@ -345,6 +345,35 @@ final class CCPoolCodexRotationTests: XCTestCase {
         XCTAssertEqual(refusedLines(r), [])
     }
 
+    // #2036: a held 400 body past the 4 KiB cap (finish400 with done:false: held bytes flushed, then streaming) reaches
+    // the client byte-equal, one send, no decision line. Unrelated error after a move.
+    func testUnrelated400BodyOverCapIsRelayedWhole() throws {
+        let r = try rig()
+        r.fake.answer(Self.token("a"), Self.spent429)
+        let msg = String(repeating: "Your input exceeds the context window of this model. ", count: 120)
+        let other = #"{"error":{"message":"\#(msg)","type":"invalid_request_error","code":"context_length_exceeded","param":"input"}}"#
+        XCTAssertGreaterThan(other.utf8.count, CCPoolCodexHarness.bodyCap + 1024)
+        r.fake.queue(Self.token("b"), [(400, Self.json, Data(other.utf8))])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 400)
+        XCTAssertEqual(resp.text, other)
+        XCTAssertEqual(r.fake.tokens, [Self.token("a"), Self.token("b")])
+        XCTAssertEqual(refusedLines(r), [])
+    }
+
+    // #2036: the body read is bounded: an encrypted-content 400 whose JSON starts after 4 KiB of whitespace is not
+    // read as encrypted (no replay) and is relayed byte-equal, one send.
+    func testEncrypted400PastTheReadCapIsNotReplayedAndRelayedWhole() throws {
+        let r = try rig(codex: ["b"])
+        let body = String(repeating: " ", count: CCPoolCodexHarness.bodyCap) + String(decoding: Self.encrypted400.body, as: UTF8.self)
+        r.fake.queue(Self.token("b"), [(400, Self.json, Data(body.utf8))])
+        let resp = try XCTUnwrap(r.codex(body: Self.sealedBody))
+        XCTAssertEqual(resp.status, 400)
+        XCTAssertEqual(resp.text, body)
+        XCTAssertEqual(r.fake.tokens, [Self.token("b")])
+        XCTAssertEqual(refusedLines(r), [])
+    }
+
     // Claude traffic is untouched: after the #1262 throttle move a Claude 400 that names encrypted content passes
     // through, one send to the destination.
     func testClaude400AfterMovePassesThrough() throws {
