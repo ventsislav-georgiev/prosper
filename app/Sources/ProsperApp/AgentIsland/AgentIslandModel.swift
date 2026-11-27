@@ -1543,14 +1543,18 @@ struct AgentPlanLimits: Equatable, Sendable {
     /// The Account pool pane's Settings id ("ext:<extension id>|<section id>", the sidebar's rule).
     static let settingsPane = "ext:com.prosper.ccpool|ccpool"
 
+    /// #1898 words kept: "Free across all accounts: ..."; a named harness: "Free across all Codex accounts: ...".
+    static func spokenPool(_ pool: String, title: String?) -> String { "Free across all \(title.map { $0 + " " } ?? "")accounts: \(pool)" }
+
     /// The row as one spoken element: "alpha, 5 hour 15 percent, resets in 2 hours 14 minutes, Tuesday 18:00; week ...".
-    static func spoken(_ a: Account, now: Double, timeZone: TimeZone) -> String {
+    /// #1999: `title` (a harness other than Claude's) leads the row, "Codex, api, 5 hour 40 percent ...", so the sections tell apart.
+    static func spoken(_ a: Account, now: Double, timeZone: TimeZone, title: String? = nil) -> String {
         let limits = a.limits.map { l in
             "\(l.name == "5h" ? "5 hour" : l.name) \(Int((l.util * 100).rounded())) percent"
                 + (l.reset.map { ", resets in \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
                 + (l.runsOut.map { ", \(l.name == "5h" ? "5 hour" : l.name) runs out at this pace in about \(duration(Double($0) - now, spoken: true)), \(clock($0, format: "EEEE HH:mm", timeZone: timeZone))" } ?? "")
         }
-        let head = [OutsideText.shown(a.label, max: 40)]
+        let head = (title.map { [$0] } ?? []) + [OutsideText.shown(a.label, max: 40)]
         let tail = (a.limits.isEmpty ? [noData] : [limits.joined(separator: "; ")])
             + (a.benchedUntil.map { [benchedText($0, timeZone: timeZone)] } ?? [])
             + (a.sampleAt.map { [updatedText($0, now: now)] } ?? [])

@@ -1876,8 +1876,14 @@ struct AgentPlanLimitsView: View {
     /// #1915: the cards (accounts with limits) and the compact rows (with their status), each in AgentPlanLimits' order.
     static func split(_ limits: AgentPlanLimits, timeZone: TimeZone)
         -> (cards: [AgentPlanLimits.Account], compact: [(account: AgentPlanLimits.Account, status: String)]) {
+        split(limits.accounts, timeZone: timeZone)
+    }
+
+    /// #1999: the same split for one harness group's accounts.
+    static func split(_ accounts: [AgentPlanLimits.Account], timeZone: TimeZone)
+        -> (cards: [AgentPlanLimits.Account], compact: [(account: AgentPlanLimits.Account, status: String)]) {
         var cards: [AgentPlanLimits.Account] = [], compact: [(account: AgentPlanLimits.Account, status: String)] = []
-        for a in limits.accounts {
+        for a in accounts {
             if let s = AgentPlanLimits.compactStatus(a, timeZone: timeZone) { compact.append((a, s)) } else { cards.append(a) }
         }
         return (cards, compact)
@@ -1886,16 +1892,13 @@ struct AgentPlanLimitsView: View {
     /// A bar's fill: 90% and over in the danger colour.
     static func barColor(_ u: Double) -> Color { u >= 0.9 ? Neon.magenta : Neon.blue }
 
+    /// #1999: a section header names a harness other than Claude's, or any harness once there are two; the Claude-only popover is as before.
+    static func showsHeader(_ g: AgentPlanLimits.Group, of limits: AgentPlanLimits) -> Bool { limits.groups.count > 1 || g.harness != AgentPlanLimits.claude }
+
     var body: some View {
-        let parts = Self.split(limits, timeZone: timeZone)
         VStack(alignment: .leading, spacing: 8) {
-            if let pool = limits.pool { poolBlock(pool) }
-            ForEach(parts.cards, id: \.label) { card($0) }
-            if !parts.compact.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(parts.compact, id: \.account.label) { compactRow($0.account, status: $0.status) }
-                }
-            }
+            ForEach(limits.groups, id: \.harness) { section($0) }
+            // #1999: navigation to the pool pane (where Codex accounts are added), not an account control: drawn for every pool.
             Button(AgentPlanLimits.settingsLink, action: onSettings)
                 .buttonStyle(.plain)
                 .font(.system(size: 11))
@@ -1906,7 +1909,28 @@ struct AgentPlanLimitsView: View {
         .background(Color.black)
     }
 
-    private func poolBlock(_ pool: String) -> some View {
+    /// #1999: one harness's section: its title (when drawn), its pool block, its cards and compact rows. Read only.
+    private func section(_ g: AgentPlanLimits.Group) -> some View {
+        let parts = Self.split(g.accounts, timeZone: timeZone)
+        let named = g.harness != AgentPlanLimits.claude   // Claude's rows keep their words; the others name their harness
+        return VStack(alignment: .leading, spacing: 8) {
+            if Self.showsHeader(g, of: limits) {
+                Text(verbatim: g.title.uppercased())
+                    .font(.system(size: 9, weight: .semibold)).tracking(0.6).foregroundStyle(Neon.faded(.white, 0.6))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityLabel(Text(verbatim: "\(g.title) limits"))
+            }
+            if let pool = g.pool { poolBlock(pool, title: named ? g.title : nil) }
+            ForEach(parts.cards, id: \.label) { card($0, title: named ? g.title : nil) }
+            if !parts.compact.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(parts.compact, id: \.account.label) { compactRow($0.account, status: $0.status, title: named ? g.title : nil) }
+                }
+            }
+        }
+    }
+
+    private func poolBlock(_ pool: String, title: String?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(verbatim: "FREE ACROSS ACCOUNTS")
                 .font(.system(size: 9, weight: .semibold)).tracking(0.6).foregroundStyle(Neon.faded(.white, 0.6))
@@ -1922,10 +1946,10 @@ struct AgentPlanLimitsView: View {
         }
         // The spoken pool keeps #1898's one sentence.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "Free across all accounts: \(pool)"))
+        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spokenPool(pool, title: title)))
     }
 
-    private func card(_ a: AgentPlanLimits.Account) -> some View {
+    private func card(_ a: AgentPlanLimits.Account, title: String?) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(verbatim: OutsideText.shown(a.label, max: 40))
@@ -1958,10 +1982,10 @@ struct AgentPlanLimitsView: View {
         // The History row's own card (white 0.05, a plain opacity): Neon.faded draws white opaque under Increase Contrast; the popover keeps white ink on black whatever the theme.
         .background(RoundedRectangle(cornerRadius: 8).fill(AgentIslandHistoryRow.ownCardFill(selected: false)))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
+        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone, title: title)))
     }
 
-    private func compactRow(_ a: AgentPlanLimits.Account, status: String) -> some View {
+    private func compactRow(_ a: AgentPlanLimits.Account, status: String, title: String?) -> some View {
         HStack(spacing: 6) {
             Text(verbatim: OutsideText.shown(a.label, max: 40)).font(.system(size: 11, weight: .medium)).lineLimit(1)
             Spacer(minLength: 6)
@@ -1970,7 +1994,7 @@ struct AgentPlanLimitsView: View {
         .foregroundStyle(Neon.faded(.white, 0.6))
         .padding(.horizontal, 10)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone)))
+        .accessibilityLabel(Text(verbatim: AgentPlanLimits.spoken(a, now: now, timeZone: timeZone, title: title)))
     }
 
     private func dim(_ s: String) -> Text {

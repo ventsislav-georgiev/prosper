@@ -635,7 +635,8 @@ extension AgentIslandPlanLimitsTests {
         c.readPlanUsage()
         store.focusKey = AgentSessionKey(dir: "/Users/example/d", name: "gone")
         c.readPlanUsage()
-        XCTAssertEqual(asked, ["claude", "claude", "codex", "claude", "claude"], "no focus, a Claude row, a Codex row (then the Claude fallback), an unknown row")
+        XCTAssertEqual(asked, ["claude", "codex", "claude", "codex", "codex", "claude", "claude", "codex"],
+                       "no focus, a Claude row (then the Codex fallback #1999), a Codex row (then the Claude fallback), an unknown row")
     }
 
     @MainActor func testACodexRowWithoutACodexLineFallsBackToClaudes() throws {
@@ -663,5 +664,104 @@ extension AgentIslandPlanLimitsTests {
         c.readPlanUsage()
         XCTAssertEqual(store.planUsage, codex, "a Codex value wins")
         XCTAssertEqual(asked, ["codex"], "no Claude call")
+    }
+}
+
+// MARK: - #1999: the popover's Codex section (read only, fed by the pool's Codex group)
+
+extension AgentIslandPlanLimitsTests {
+    private var codexClaims: [(claim: String, name: String)] { [("five_hour", "5h"), ("seven_day", "week")] }
+
+    private func codexAccount(_ label: String, util: [String: Double]) -> AgentPlanLimits.Account {
+        AgentPlanLimits.Account(label: label, isCurrent: true, util: util, at: now - 60, reset: ["five_hour": Int(now) + 7200],
+                                cooldown: [:], claims: codexClaims, now: now, harness: "codex")
+    }
+
+    private func twoGroups() -> AgentPlanLimits {
+        AgentPlanLimits(groups: [
+            .init(harness: "claude", title: "Claude", pool: "5h 62%", accounts: [account("alpha", current: true, util: ["five_hour": 0.15])]),
+            .init(harness: "codex", title: "Codex", pool: "5h 60%", accounts: [codexAccount("cx1", util: ["five_hour": 0.4])])])
+    }
+
+    @MainActor private func nodes(_ limits: AgentPlanLimits, until: @escaping (_ spoken: [AXTreeNode]) -> Bool) -> [AXTreeNode] {
+        AXTreeSupport.tree(AgentPlanLimitsView(limits: limits, now: now, timeZone: utc), CGSize(width: 340, height: 600), until: until)
+    }
+
+    private func index(_ tree: [AXTreeNode], _ name: String) -> Int? { tree.firstIndex { $0.reads(name) } }
+
+    /// Claude only: today's popover, no section header, the pool sentence and the account row as #1898 spoke them.
+    @MainActor func testClaudeOnlyPopoverIsUnchanged() {
+        let limits = AgentPlanLimits(pool: "5h 62% \u{00B7} week 18%", accounts: [account("alpha", current: true, util: ["five_hour": 0.15])])
+        let spoken = AgentPlanLimits.spoken(limits.accounts[0], now: now, timeZone: utc)
+        XCTAssertFalse(AgentPlanLimitsView.showsHeader(limits.groups[0], of: limits), "one Claude group: no header")
+        let tree = nodes(limits) { t in t.contains { $0.reads(spoken) } }
+        XCTAssertTrue(tree.contains { $0.reads(spoken) }, "the row's words as before: \(spoken)")
+        XCTAssertTrue(tree.contains { $0.reads("Free across all accounts: 5h 62% \u{00B7} week 18%") })
+        XCTAssertFalse(tree.contains { n in n.names.contains { $0.contains("Claude limits") || $0.contains("Codex") } }, "nothing extra")
+        XCTAssertEqual(tree.filter { $0.role == "AXButton" }.count, 1, "the settings link only")
+    }
+
+    /// Claude + Codex: two sections, Claude first, each with its own title, pool line and row.
+    @MainActor func testClaudeAndCodexDrawTwoSectionsInOrder() throws {
+        let limits = twoGroups()
+        let claude = AgentPlanLimits.spoken(limits.accounts[0], now: now, timeZone: utc)
+        let cx = try XCTUnwrap(limits.group("codex")?.accounts.first)
+        let codex = AgentPlanLimits.spoken(cx, now: now, timeZone: utc, title: "Codex")
+        XCTAssertTrue(codex.hasPrefix("Codex, cx1, 5 hour 40 percent"), codex)
+        let names = ["Claude limits", "Free across all accounts: 5h 62%", claude, "Codex limits", "Free across all Codex accounts: 5h 60%", codex]
+        let tree = nodes(limits) { t in names.allSatisfy { n in t.contains { $0.reads(n) } } }
+        let at = names.map { index(tree, $0) }
+        XCTAssertTrue(at.allSatisfy { $0 != nil }, "every section part is read: \(names.enumerated().filter { at[$0.offset] == nil }.map(\.element))")
+        XCTAssertEqual(at.compactMap { $0 }, at.compactMap { $0 }.sorted(), "Claude's section, then Codex's, header, pool, row in each")
+    }
+
+    /// Read only: a Codex row offers no account action; the settings link (navigation to the pool pane) is the one control, drawn once.
+    @MainActor func testCodexRowsOfferNoAccountAction() {
+        let both = twoGroups()
+        let tree = nodes(both) { t in t.contains { $0.reads("Codex limits") } }
+        XCTAssertEqual(tree.filter { $0.role == "AXButton" }.map(\.names), [[AgentPlanLimits.settingsLink]], "one control, with two sections")
+        let only = nodes(AgentPlanLimits(groups: [both.groups[1]])) { t in t.contains { $0.reads("Codex limits") } }
+        XCTAssertEqual(only.filter { $0.role == "AXButton" }.map(\.names), [[AgentPlanLimits.settingsLink]],
+                       "Codex only: the link to the pool pane, nothing else to press")
+    }
+
+    /// Codex only: the Codex section alone, titled, no Claude section and no empty card.
+    @MainActor func testCodexOnlyDrawsTheCodexSectionAlone() throws {
+        let codexOnly = AgentPlanLimits(groups: [twoGroups().groups[1]])
+        XCTAssertTrue(codexOnly.group("claude") == nil && codexOnly.accounts.isEmpty && codexOnly.pool == nil)
+        let cx = try XCTUnwrap(codexOnly.groups.first?.accounts.first)
+        let codex = AgentPlanLimits.spoken(cx, now: now, timeZone: utc, title: "Codex")
+        let tree = nodes(codexOnly) { t in t.contains { $0.reads(codex) } }
+        XCTAssertTrue(tree.contains { $0.reads("Codex limits") }, "titled, though it is one section")
+        XCTAssertTrue(tree.contains { $0.reads(codex) })
+        XCTAssertTrue(tree.contains { $0.reads("Free across all Codex accounts: 5h 60%") })
+        XCTAssertFalse(tree.contains { n in n.names.contains { $0.contains("Claude") || $0.contains("Free across all accounts") } }, "no Claude card")
+    }
+
+    /// The popover's own value with no Codex group: nothing extra is drawn (the fallback value too).
+    @MainActor func testNoCodexGroupDrawsNothingExtra() {
+        let empty = AgentPlanLimits(pool: nil, accounts: [])
+        let tree = nodes(empty) { t in t.contains { $0.role == "AXButton" } }
+        XCTAssertFalse(tree.contains { n in n.names.contains { $0.contains("Codex") } })
+        XCTAssertEqual(tree.filter { $0.role == "AXButton" }.count, 1)
+    }
+
+    /// The line shows for a Codex-only pool whatever row is focused (none, or a Claude one).
+    @MainActor func testPlanLineShowsWhenOnlyCodexHasALimit() throws {
+        let saved = Preferences.defaults.object(forKey: "agentIslandShowPlanUsage")
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: "agentIslandShowPlanUsage") } else { Preferences.defaults.removeObject(forKey: "agentIslandShowPlanUsage") } }
+        Preferences.agentIslandShowPlanUsage = true
+        let c = controller({ nil }, limits: { nil })
+        let store = try XCTUnwrap(c.store)
+        var codex = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.4], at: now, reset: [:], now: now))
+        codex.plan = "Codex"
+        c.planUsage = { _, h in h == "codex" ? codex : nil }
+        c.readPlanUsage()
+        XCTAssertEqual(store.planUsage, codex, "no focused row, no Claude account: the Codex line")
+        XCTAssertTrue(store.planUsage?.help().hasPrefix("Codex plan usage") == true)
+        store.planUsage = nil
+        store.focusKey = store.sessions.first?.key
+        c.readPlanUsage()
+        XCTAssertEqual(store.planUsage, codex, "a Claude row focused, still only Codex has one")
     }
 }
