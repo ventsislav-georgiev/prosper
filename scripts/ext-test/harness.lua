@@ -486,7 +486,8 @@ function M.makeHost(opts)
             list = uiNode("list"),
             form = uiNode("form"),
             converter = uiNode("converter"),
-            chart = uiNode("chart"),
+            -- The host stamps `type` on a chart (ExtensionHostAPI tag()): `kind` is the chart's own "line"/"bar".
+            chart = function(t) t = t or {}; t.type = "chart"; return t end,
             render = function(node) env.rendered = node; return node end,
             settings = settings,
             -- Native app chooser. Returns env.chosenApp ({ bundleID=, name= } or nil).
