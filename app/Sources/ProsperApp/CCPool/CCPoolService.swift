@@ -5,6 +5,8 @@ struct CCPoolServiceConfig: Sendable {
     var port: UInt16 = CCPoolService.defaultPort
     /// Upstream base (Python `CCPOOL_UPSTREAM`), a test seam only.
     var upstream: URL = CCPoolService.productionUpstream
+    /// #2005: the Codex (ChatGPT login) upstream that `/codex/...` is relayed to, a test seam only.
+    var codexUpstream: URL = CCPoolCodexHarness.upstream
     /// Request bodies up to this are buffered and can be replayed on another account; larger ones
     /// are streamed upstream once (errata C1).
     var replayCap: Int = 32 << 20
@@ -169,9 +171,13 @@ final class CCPoolService: @unchecked Sendable {
         return nil
     }
 
-    /// True under XCTest for the production upstream host: tests never dial it.
+    /// #2005: the OpenAI hosts a Codex account's credential could reach.
+    static let openAIHosts: Set<String> = ["chatgpt.com", "api.openai.com", "auth.openai.com"]
+
+    /// True under XCTest for the production upstream host and (#2005) the OpenAI hosts: tests never dial them.
     static func refusesUnderTest(_ url: URL) -> Bool {
-        NSClassFromString("XCTestCase") != nil && url.host?.lowercased() == productionUpstream.host
+        guard NSClassFromString("XCTestCase") != nil, let host = url.host?.lowercased() else { return false }
+        return host == productionUpstream.host || openAIHosts.contains(host)
     }
 
     /// Bind and serve. Blocks up to a few seconds (port probe + bind): call it off the main thread.

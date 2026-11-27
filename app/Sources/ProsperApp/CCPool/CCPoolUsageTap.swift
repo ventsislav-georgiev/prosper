@@ -24,6 +24,13 @@ struct CCPoolUsageTap: Sendable {
         stream = contentType?.lowercased().contains("event-stream") ?? false
     }
 
+    /// #2005: a tap that reads nothing (feed returns at once, result is nil), for a harness without a usage tap yet.
+    static var idle: CCPoolUsageTap {
+        var t = CCPoolUsageTap(contentType: nil)
+        t.dead = true
+        return t
+    }
+
     mutating func feed(_ chunk: Data) {
         guard !dead else { return }
         guard stream else {

@@ -145,8 +145,10 @@ final class CCPoolConnection: @unchecked Sendable {
     // X16: the dependencies are held strongly, never the service: a callback that outlives the
     // service (released without stop()) must find what it needs, not trap on a dead reference.
     private let config: CCPoolServiceConfig
-    /// #2004: the harness this connection's request is for, chosen once (Claude is the only one so far).
-    private let harness: any PoolHarness = ClaudeHarness()
+    /// #2004: the harness this connection's request is for, chosen once from the head (#2005: `/codex` is Codex's).
+    private var harness: any PoolHarness = ClaudeHarness()
+    /// #2005: the upstream URL text of this request: the harness's upstream plus the path, the `/codex` prefix stripped.
+    private var target = ""
     private let store: CCPoolStore
     private let secrets: CCPoolSecrets
     private let log: CCPoolLogger
@@ -304,6 +306,19 @@ final class CCPoolConnection: @unchecked Sendable {
                 control(bare, h, bodyLength: length)
                 return true
             }
+            // #2005: the harness is chosen once, here, before any account is picked.
+            let codexRest = CCPoolCodexHarness.rest(of: h.path)
+            if codexRest != nil {
+                harness = CCPoolCodexHarness()
+                // The socket speaks HTTP/1.1 only: a WebSocket upgrade is answered, never relayed as a plain GET.
+                if h.header("upgrade")?.lowercased().contains("websocket") == true {
+                    relayStarted = true
+                    sendText(501, "ccpool: Codex over WebSocket is not supported by the pool; use HTTP (SSE)")
+                    return true
+                }
+            }
+            let base = (codexRest == nil ? config.upstream : config.codexUpstream).absoluteString
+            target = (base.hasSuffix("/") ? String(base.dropLast()) : base) + (codexRest ?? h.path)
             if h.header("expect")?.lowercased() == "100-continue", length > 0 {
                 conn.send(Data("HTTP/1.1 100 Continue\r\n\r\n".utf8), completion: nil)
             }
@@ -394,6 +409,9 @@ final class CCPoolConnection: @unchecked Sendable {
         startedAt = store.now
         // #1256: accounts + the throttle retries (Python's bound), so the retries never cut the walk short.
         maxAttempts = max(1, store.read { $0.order.count }) + CCPoolCore.throttleBackoff.count
+        // #2005: this harness's accounts of a login kind it cannot use are never tried (Claude accepts every kind).
+        let h = harness
+        tried = store.read { st in Set(st.accounts.filter { $0.value.harness == h.id && !h.accepts(kind: $0.value.kind) }.keys) }
         attempt()
     }
 
@@ -478,27 +496,34 @@ final class CCPoolConnection: @unchecked Sendable {
         // #1326 (c): a retry (throttle wait, pooled resend) can outlive its account: a removed one is never sent, even
         // when its Keychain item stayed behind.
         let removed = store.read { $0.label(ofID: accountID) } == nil
-        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
-            log.note(label, removed ? "account removed; skipping this account" : "token unavailable; skipping this account")
+        func skip(_ why: String) {
+            log.note(label, why)
             // #1256: a throttle retry never moves to another account: its last 429 goes back instead.
             if let last = retryingThrottle { retryingThrottle = nil; return answerThrottle(last) }
             // #1262: after the one move nothing walks on: the conversation goes back, the first account's 429 goes out.
             if let first = movedFrom { return pinBack(first, answer: first) }
             return attempt()
         }
-        let base = config.upstream.absoluteString.hasSuffix("/")
-            ? String(config.upstream.absoluteString.dropLast()) : config.upstream.absoluteString
-        guard let url = URL(string: base + head.path) else {
+        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {
+            return skip(removed ? "account removed; skipping this account" : "token unavailable; skipping this account")
+        }
+        guard let url = URL(string: target) else {
             // #1572 (O11): the pool's own 400 after a relay began is one usage row too (acct of this attempt).
             recordAnswer(400, acct: accountID)
             return fail(400, "bad request path", type: "invalid_request_error")
+        }
+        // #2005: the Codex upstream is a config value of its own; under XCTest no production host is ever dialled.
+        guard !CCPoolService.refusesUnderTest(url) else {
+            recordAnswer(502, acct: accountID)
+            return fail(502, "refusing the production upstream under XCTest", type: "api_error")
         }
         var req = URLRequest(url: url, timeoutInterval: config.timeout)
         req.httpMethod = head.method
         for (name, value) in head.headers where !harness.stripRequest.contains(name.lowercased()) {
             req.addValue(value, forHTTPHeaderField: name)
         }
-        harness.authorize(&req, token: token)
+        // #2005: a secret the harness cannot read (a Codex item that does not decode) is skipped like a missing token.
+        guard harness.authorize(&req, token: token) else { return skip("token unavailable; skipping this account") }
         if streamed {
             req.httpBodyStream = bodyIn
             bodyIn = nil
@@ -737,7 +762,8 @@ final class CCPoolConnection: @unchecked Sendable {
     }
 
     private func addRow(acct: String, st: Int, done: Bool, usage: CCPoolTokenUsage?, lim: [String: CCPoolLimit]) {
-        guard let record else { return }
+        // shortcut: P2 stub, Phase 3 (#2006) fills it (a Codex exchange writes no usage row yet)
+        guard let record, harness.id == ClaudeHarness.id else { return }
         let end = store.now
         let keyed = head.flatMap({ harness.pinKey($0) }) != nil
         let ms = (end - startedAt) * 1000
@@ -843,6 +869,13 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func noAccounts() {
         exchange = nil
+        // #2005: no account of this login kind at all is not "benched": Codex says so plainly (Claude's answer unchanged).
+        let h = harness
+        if h.id == CCPoolCodexHarness.id,
+           !store.read({ st in st.accounts.values.contains { $0.harness == h.id && h.accepts(kind: $0.kind) } }) {
+            log.note(nil, "no Codex accounts in the pool")
+            return sendText(503, "ccpool: no Codex accounts in the pool")
+        }
         let when = store.read { CCPoolCore.nextReset($0, model: model, now: store.now, harness: harness) }
         var hint = ""
         if let when {
@@ -918,6 +951,11 @@ final class CCPoolConnection: @unchecked Sendable {
             return fail(404, "no such account", type: "not_found_error")
         }
         sendComplete(200, contentType: "application/json", body: body)
+    }
+
+    /// #2005: a short plain-text answer (the Codex 503 and 501).
+    private func sendText(_ status: Int, _ text: String) {
+        sendComplete(status, contentType: "text/plain; charset=utf-8", body: Data((text + "\n").utf8))
     }
 
     private func sendHealth() {

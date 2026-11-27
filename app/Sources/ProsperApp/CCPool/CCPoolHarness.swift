@@ -10,8 +10,12 @@ protocol PoolHarness: Sendable {
     var upstream: URL { get }
     /// Request headers never relayed: hop-by-hop, the proxy's own, and the client's credential.
     var stripRequest: Set<String> { get }
-    /// Sets the pool account's credential on a request whose client credential was stripped.
-    func authorize(_ req: inout URLRequest, token: String)
+    /// #2005: whether an account of this harness with login `kind` may serve its requests.
+    func accepts(kind: String?) -> Bool
+    /// Sets the pool account's credential on a request whose client credential was stripped. #2005: false (nothing
+    /// usable in the secret, nothing set) skips the account like a missing token.
+    @discardableResult
+    func authorize(_ req: inout URLRequest, token: String) -> Bool
     func parseLimits(_ headers: [String: String]) -> (limits: [String: CCPoolLimit], unknown: [String])
     func claims(for model: String?) -> [String]
     func isKnownModel(_ model: String?) -> Bool
@@ -174,10 +178,13 @@ struct ClaudeHarness: PoolHarness {
     var prices: [(family: String, input: Double, output: Double, read: Double)] { Self.prices }
     var env: (key: String, programs: Set<String>) { Self.env }
 
-    func authorize(_ req: inout URLRequest, token: String) {
+    func accepts(kind: String?) -> Bool { true }
+    @discardableResult
+    func authorize(_ req: inout URLRequest, token: String) -> Bool {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         // #1595: an OAuth Bearer without this beta is refused upstream (and the 401 benches the account, #1278).
         req.setValue(Self.withOAuthBeta(req.value(forHTTPHeaderField: "anthropic-beta")), forHTTPHeaderField: "anthropic-beta")
+        return true
     }
     func parseLimits(_ headers: [String: String]) -> (limits: [String: CCPoolLimit], unknown: [String]) { Self.parseLimits(headers) }
     func claims(for model: String?) -> [String] { Self.claims(for: model) }
