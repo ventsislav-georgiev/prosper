@@ -120,6 +120,7 @@ tag from the now-released section and put it on the new top draft.
   reference card's selected tab now stay readable when the theme's accent is too dark for the dark
   card. (#2049)
 - Each session group has a ••• menu to restart, stop or end just the sessions in that group. (#2060)
+- New session opens its terminal at once, and the agent's output streams in as it starts. (#2058)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

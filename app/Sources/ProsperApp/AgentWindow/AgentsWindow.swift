@@ -2591,7 +2591,12 @@ struct AgentDetailView: View {
     var inputStore: AgentIslandStore? { model.focusedEnded ? nil : model.store }
 
     var body: some View {
-        if let form = model.newSession {
+        if model.launchKey != nil {
+            // #2058: a local Start's own terminal from the click (blank until the agent draws); the form waits unseen.
+            AgentTerminalPane(controller: model.terminal, open: {})
+                .frame(minHeight: 0, maxHeight: .infinity)
+                .modifier(AgentPaneProbe(kind: "terminal"))
+        } else if let form = model.newSession {
             // #847: the form in place of the pane's content (the selected session's terminal detaches meanwhile).
             // D5.4: a short window scrolls the form instead of clipping Start.
             if scrolls {

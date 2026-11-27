@@ -1,0 +1,34 @@
+{
+ "entry": "2058",
+ "filter": "AgentWindowD1Tests/testAgentWindowNewSessionLaunch",
+ "mutants": [
+  {
+   "name": "reveal-waits",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        attach(k, leave: .detach)\n        revealed = true\n",
+   "new": "        attach(k, leave: .detach)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "pane-waits-reply",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        if visible, let k = launchKey {\n",
+   "new": "        if visible, let k = launchKey, launchAnswered == k {\n",
+   "expect": "killed"
+  },
+  {
+   "name": "queue-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "    func hold() { queue.async { if self.held == nil { self.held = [] } } }",
+   "new": "    func hold() {}",
+   "expect": "killed"
+  },
+  {
+   "name": "failure-dangles",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "                follow()   // #2058: the form again over the pane, its line saying why\n",
+   "new": "",
+   "expect": "killed"
+  }
+ ]
+}

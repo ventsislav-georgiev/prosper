@@ -65,6 +65,9 @@ extension AgentWindowD1Tests {
                 ThemeRuntime.scale = scale
                 let spawns = SpawnCalls(), m = wiringModel(store([mapped("a"), mapped("api-qa")]), spawns)
                 defer { m.close() }
+                // #2058: a local Start shows its terminal at once; the form's "Starting…" is a remote Start's (an "@host" key).
+                let local = m.spawnSession
+                m.spawnSession = { f, a, n, d in local(f, a, n, d).map { AgentTerminalSpawn.remoteKey(host: "example-host", name: $0.name) } }
                 let (win, host) = formWindow(m, CGSize(width: sz(560), height: sz(700)))
                 defer { win.close() }
                 m.openNewSession()

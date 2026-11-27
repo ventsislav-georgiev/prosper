@@ -416,6 +416,9 @@ extension AgentWindowD1Tests {
                 ThemeRuntime.scale = scale
                 let spawns = SpawnCalls(), m = wiringModel(store([mapped("a")]), spawns)
                 defer { m.close() }
+                // #2058: a local Start shows its terminal at once; the form's "Starting…" is a remote Start's (an "@host" key).
+                let local = m.spawnSession
+                m.spawnSession = { f, a, n, d in local(f, a, n, d).map { AgentTerminalSpawn.remoteKey(host: "example-host", name: $0.name) } }
                 let size = Self.oldMin(scale)
                 let win = AgentsNSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
                 win.isReleasedWhenClosed = false
@@ -529,10 +532,14 @@ extension AgentWindowD1Tests {
             m.openNewSessionNamed(folder: "/Users/example/web")
             formOver("start")
             XCTAssertTrue(m.startNewSession())
+            settle(host)
+            XCTAssertTrue(formFields(host).isEmpty, "#2058: the form leaves the pane at the click")
+            XCTAssertEqual(m.terminal.key?.name, "web", "#2058: web's terminal at once")
+            XCTAssertEqual(t.spawned().count, 3, "#2058: no client before dch answers")
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
-            formOver("answered: the form waits for the row (R2 F5)")
-            XCTAssertEqual(m.newSessionStatus, "Starting web…")
-            XCTAssertEqual(t.spawned().count, 3, "no client for a while the row is not listed")
+            settle(host)
+            XCTAssertEqual(m.newSessionStatus, "Starting web…", "R2 F5: the model waits for the row")
+            XCTAssertEqual(t.spawned().count, 4, "#2058: web's client once dch answered, before the row lists")
             st.sessions = [a, mapped("web")]
             XCTAssertEqual(m.selection, live("web"))
             back("web", attaches: 4, keys: true, "start")   // one new client: web's
@@ -777,13 +784,13 @@ extension AgentWindowD1Tests {
             XCTAssertTrue(m.startNewSession())
             spawns.done[0](AgentSessionKey(dir: "/tmp/dch-test", name: "web"), nil)
             settle(host)
-            XCTAssertNil(m.terminal.key, "answered: nothing attached")
-            XCTAssertEqual(formFields(host).count, 3, "the form waits over the pane")
+            XCTAssertEqual(m.terminal.key?.name, "web", "#2058: answered: web's terminal, attached")
+            XCTAssertTrue(formFields(host).isEmpty, "#2058: the started pane, not the form")
             clock.t += AgentWindowModel.spawnSlack
             m.refresh()
             XCTAssertEqual(m.newSessionStatus, "Starting web…", "at the slack: still waiting")
-            XCTAssertNil(m.terminal.key)
-            XCTAssertEqual(t.spawned().count, 0, "no client while it waits")
+            XCTAssertEqual(m.terminal.key?.name, "web")
+            XCTAssertEqual(t.spawned().count, 1, "#2058: web's one client while it waits")
             clock.t += 1
             m.refresh()
             settle(host)
@@ -791,8 +798,8 @@ extension AgentWindowD1Tests {
             XCTAssertEqual(m.newSessionStatus, AgentWindowModel.notListedText("web"), "and says why")
             XCTAssertTrue(m.newSession?.starting == nil, "re-enabled")
             XCTAssertNil(m.pendingSpawn)
-            XCTAssertNil(m.terminal.key, "the form still covers the pane")
-            XCTAssertEqual(t.spawned().count, 0)
+            XCTAssertNil(m.terminal.key, "the form covers the pane again")
+            XCTAssertEqual(t.spawned().count, 1, "#2058: no other client")
             XCTAssertEqual(formFields(host).count, 3)
             st.sessions = [a, mapped("web")]
             settle(host)

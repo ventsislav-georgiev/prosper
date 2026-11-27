@@ -173,9 +173,30 @@ final class AgentTerminalWriter: @unchecked Sendable {
         set { lock.withLock { current = newValue } }
     }
 
+    /// #2058: keys typed into a starting session's pane before its client exists; nil: not holding. Queue-only.
+    private var held: [UInt8]?
+    /// shortcut: a start that takes longer than 64 KiB of typing drops the rest; upgrade if a start ever waits that long.
+    static let heldCap = 64 * 1024
+
     func send(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
-        queue.async { self.child?.write(bytes) }
+        queue.async {
+            guard var h = self.held else { self.child?.write(bytes); return }
+            h += bytes.prefix(max(0, Self.heldCap - h.count))
+            self.held = h
+        }
+    }
+
+    /// #2058: from now every send waits (in order) until `release()`.
+    func hold() { queue.async { if self.held == nil { self.held = [] } } }
+
+    /// #2058: the held keys to the child, in order, before any later send.
+    func release() {
+        queue.async {
+            guard let h = self.held else { return }
+            self.held = nil
+            if !h.isEmpty { self.child?.write(h) }
+        }
     }
 
     /// Waits for every queued write (tests).
@@ -215,6 +236,8 @@ final class AgentTerminalController: ObservableObject {
     @Published private(set) var findSelected: Int?
 
     private(set) var key: AgentSessionKey?
+    /// #2058: a session the window is starting: its pane shows blank and takes keys at once; no client until `launched`.
+    private(set) var launching: AgentSessionKey?
     /// #836: the attached session is on another machine.
     var remoteHost: String? { key.flatMap(AgentTerminalSpawn.remoteHost) }
     /// #1330 (R836-q1): a remote attach takes the session from the device holding it (dch exit 5 there), so one starts
@@ -384,6 +407,7 @@ final class AgentTerminalController: ObservableObject {
         if key == nil, leave == .end { dropKept() }   // #1790: before the guard: a hidden window's are kept with no key
         if held != nil { held = nil }
         if key != armed { armed = nil }
+        if key != launching { launching = nil }
         guard key != self.key else { return }
         focusPending = false   // #845: a focus asked for on another session never lands on this one
         // #1782: a kept session comes back as it was; the one shown now is kept if it can be, else detached as before.
@@ -398,6 +422,23 @@ final class AgentTerminalController: ObservableObject {
         if let back { return restore(back) }
         Self.dropKept(key, except: self)   // #1477: one client per session: another pane's kept one goes first
         begin()
+    }
+
+    /// #2058: the New session form's Start, before dch answers: a fresh screen shown at once (a new session has no stale
+    /// screen to hide) whose keys wait for the client, which starts at `launched`.
+    func attachLaunching(_ k: AgentSessionKey) {
+        guard key != k else { return }
+        launching = k
+        attach(k, leave: .detach)
+        revealed = true
+        writer.hold()
+    }
+
+    /// #2058: dch started the session: its client may attach now.
+    func launched(_ k: AgentSessionKey) {
+        guard launching == k else { return }
+        launching = nil
+        start()
     }
 
     // MARK: #1782 kept sessions
@@ -662,7 +703,7 @@ final class AgentTerminalController: ObservableObject {
     }
 
     private func start() {
-        guard let key, let grid, child == nil, phase == .attaching,
+        guard let key, key != launching, let grid, child == nil, phase == .attaching,
               screenWaitOver || (versionKnown && screenGrid.map({ $0 == grid }) == true) else { return }
         let box = AgentTerminalInbox()
         inbox = box
@@ -673,6 +714,7 @@ final class AgentTerminalController: ObservableObject {
             let c = try spawn(req, Self.io(box, owner: self))
             child = c
             writer.child = c
+            writer.release()   // #2058: the keys typed while it started, first
             sentSize = grid
             phase = .live
             c.run()
@@ -802,7 +844,7 @@ final class AgentTerminalController: ObservableObject {
 
     /// Raw bytes to the program (an image-only paste's ^V).
     func input(_ bytes: [UInt8]) {
-        guard child != nil else { return }
+        guard child != nil || (launching != nil && launching == key) else { return }   // #2058: held until it starts
         writer.send(bytes)
     }
 
@@ -1028,7 +1070,10 @@ final class AgentTerminalController: ObservableObject {
     /// closing find). Only the first responder within this window: it never orders a window front or makes
     /// it key. #845: only a live client takes input; until then the keys stay where they are.
     func focus() {
-        guard phase == .live, let view, view.window != nil else { focusPending = true; return }
+        guard phase == .live || (launching != nil && launching == key), let view, view.window != nil else {   // #2058
+            focusPending = true
+            return
+        }
         focusPending = false
         AgentsNSWindow.focus(view)
     }

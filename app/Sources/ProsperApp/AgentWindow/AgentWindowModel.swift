@@ -1820,6 +1820,8 @@ final class AgentWindowModel: ObservableObject {
                     newSession?.starting = nil
                     newSession?.status = "No answer for \(k.name): Agent Island is off"
                 }
+                follow()   // #2058: the started pane goes either way
+
             }
             pendingSpawn = nil   // #1096 1b: the island back later would expire it over a session that runs
             claimed = [:]
@@ -2568,6 +2570,14 @@ final class AgentWindowModel: ObservableObject {
     @Published private(set) var newSession: AgentNewSessionForm?
     /// Bumped by every open: the form's Name field takes the keys (⌘N on an open form too).
     @Published private(set) var newSessionFocus = 0
+    /// #2058: the form's local Start, from the click until its row lands: the pane shows that session's terminal at once,
+    /// typeable, while the form waits unseen (a failure brings it back with dch's line). A remote Start keeps the form.
+    var launchKey: AgentSessionKey? {
+        guard let k = newSession?.starting, AgentTerminalSpawn.remoteHost(k) == nil else { return nil }
+        return k
+    }
+    /// #2058: dch answered the Start of this key: an attach for it may run its client now.
+    private var launchAnswered: AgentSessionKey?
     /// A session the window started: on the refresh its row shows, it is selected in Terminal with the keys.
     /// Dropped by a manual pick, the form reopening and after `spawnSlack`.
     /// #948 F3: `asked`, the request's time (a record that landed since is this start's).
@@ -2653,7 +2663,7 @@ final class AgentWindowModel: ObservableObject {
     /// no name: #1731 it is typed, the island's command setting, else its inference). Open already: its Name field.
     func openNewSession(folder: String? = nil) {
         newSessionFocus += 1
-        guard newSession == nil else { return }
+        guard newSession == nil || launchKey != nil else { return }   // #2058: over a started pane, a new form
         guard store?.resumeGate.isOK == true else {   // R2 F2: the one gate check for ⌘N, + and the pill
             store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887: Command-N says why too
             return
@@ -2965,6 +2975,10 @@ final class AgentWindowModel: ObservableObject {
         newSession?.starting = key
         newSession?.request = requests
         newSession?.status = nil
+        if launchKey == key {   // #2058: its pane now, before dch answers, with the keys
+            follow()
+            terminal.focus()
+        }
         return true
     }
 
@@ -3037,7 +3051,12 @@ final class AgentWindowModel: ObservableObject {
         let mine = request != nil && newSession?.request == request && newSession?.starting != nil
         guard let key else {
             claimed[name] = nil
-            if mine { newSession?.starting = nil; newSession?.status = failure }
+            if mine {
+                newSession?.starting = nil
+                newSession?.status = failure
+                follow()   // #2058: the form again over the pane, its line saying why
+                newSessionFocus += 1
+            }
             // #1313: no form open: the island wrote the same line; the window owns it, gone when the form opens or the name lists.
             else if newSession == nil, let failure { sayOnDirLine(failure, until: .listed(name)) }
             return
@@ -3047,6 +3066,8 @@ final class AgentWindowModel: ObservableObject {
         if request != nil {
             guard mine else { return }   // closed or replaced meanwhile: the human moved on (no message)
             newSession?.starting = key   // R2 F5: the form stays "Starting…" over the pane until the row lands
+            launchAnswered = key   // #2058: its pane's client may start
+            terminal.launched(key)
             if !prompt.isEmpty, prompt == lastPrompt { lastPrompt = "" }   // #847 D2.4: this start took it (#1809: not another text)
         } else if newSession != nil {
             return   // a quick shell's answer under a form opened since: the form keeps the pane
@@ -3108,6 +3129,7 @@ final class AgentWindowModel: ObservableObject {
                 newSession?.status = why
                 lateSpawn = p.key
                 lateForm = newSession
+                follow()   // #2058: the form again over the pane
             } else if newSession == nil {
                 sayOnDirLine(why, until: .listed(p.key.name))
             }
@@ -3460,6 +3482,12 @@ final class AgentWindowModel: ObservableObject {
             interaction.follow(nil)
             let k = AgentTerminalSpawn.remoteKey(host: r.host, name: r.name)
             if terminal.armed == k { terminal.attach(k) } else { terminal.hold(k) }
+            return
+        }
+        // #2058: a local Start shows its own terminal at once; its client waits for dch's answer.
+        if visible, let k = launchKey {
+            interaction.follow(nil)
+            if launchAnswered == k { terminal.attach(k, leave: .detach) } else { terminal.attachLaunching(k) }
             return
         }
         guard visible, let f = focusedRuntime, f.ended == nil, case .live(let s)? = f.content else {
