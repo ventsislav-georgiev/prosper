@@ -1,0 +1,13 @@
+{
+ "entry": "2037",
+ "filter": "AXCaretFieldLabelTests",
+ "mutants": [
+  {
+   "name": "double-read",
+   "file": "app/Sources/ProsperApp/Autocomplete/AXCaret.swift",
+   "old": "if let label = cleanLabel(read(attribute)) { return label }",
+   "new": "if cleanLabel(read(attribute)) != nil, let label = cleanLabel(read(attribute)) { return label }",
+   "expect": "killed"
+  }
+ ]
+}
