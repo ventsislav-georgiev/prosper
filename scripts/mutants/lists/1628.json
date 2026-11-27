@@ -5,8 +5,8 @@
   {
    "name": "clear_all",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "let lines = resized || marks.isEmpty || !shown() ? [] :",
-   "new": "let lines = true || resized || marks.isEmpty || !shown() ? [] :",
+   "old": "let lines = marksRead ? read : []",
+   "new": "let lines = [String]()",
    "expect": "killed"
   },
   {
@@ -26,8 +26,8 @@
   {
    "name": "hidden_keeps",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "let lines = resized || marks.isEmpty || !shown() ? [] :",
-   "new": "let lines = resized || marks.isEmpty ? [] :",
+   "old": "let marksRead = !resized && !marks.isEmpty && shown()",
+   "new": "let marksRead = !resized && !marks.isEmpty",
    "expect": "killed"
   },
   {

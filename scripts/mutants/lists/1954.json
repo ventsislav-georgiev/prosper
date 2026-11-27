@@ -5,7 +5,7 @@
   {
    "name": "no-corridor",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        if let p, !pill.isHidden, commandCorridor.contains(p), settle == nil, commandsShown() { return }   // #1954: on the way\n",
+   "old": "        if let p, !pill.isHidden, commandCorridor.contains(p), commandsShown() { return }   // #1954: on the way\n",
    "new": "",
    "expect": "killed",
    "filter": "XrayCommandPillTests/testTheCorridorKeepsThePillOnTheWayToIt"
@@ -13,8 +13,8 @@
   {
    "name": "corridor-ignores-shown",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": ", settle == nil, commandsShown() { return }   // #1954",
-   "new": " { return }   // #1954",
+   "old": ", commandCorridor.contains(p), commandsShown() { return }   // #1954",
+   "new": ", commandCorridor.contains(p) { return }   // #1954",
    "expect": "killed",
    "filter": "XrayCommandPillTests"
   },

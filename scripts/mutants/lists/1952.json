@@ -19,22 +19,6 @@
    "filter": "XrayCommandPillTests/testHitTestIsNilOutsideThePill"
   },
   {
-   "name": "no-settle-gate",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "guard settle == nil, let p, commandsShown(),",
-   "new": "guard let p, commandsShown(),",
-   "expect": "killed",
-   "filter": "XrayCommandPillTests/testOutputHidesItUntilTheSettle"
-  },
-  {
-   "name": "output-keeps-pill",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        hideCommand()   // #1952: shown only while the grid is settled\n",
-   "new": "",
-   "expect": "killed",
-   "filter": "XrayCommandPillTests/testOutputHidesItUntilTheSettle"
-  },
-  {
    "name": "keep-prefix",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
    "old": "first = String(repeating: \" \", count: col + 2) + first.dropFirst(col + 2)",
@@ -69,8 +53,8 @@
   {
    "name": "read-per-move",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayGridMarks.swift",
-   "old": "        if c.row == commandRow { return }\n",
-   "new": "",
+   "old": ", c.row != commandRow else { return }",
+   "new": " else { return }",
    "expect": "killed",
    "filter": "XrayCommandPillTests/testHoverShowsThePillOnTheHeadRowAtTheRightEdge"
   },
