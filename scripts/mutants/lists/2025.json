@@ -1,0 +1,48 @@
+{
+ "entry": "2025",
+ "filter": "CCPoolCodexRotationTests|CCPoolCodexProxyTests",
+ "mutants": [
+  {
+   "name": "n1-claude-shape",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if h.id == CCPoolCodexHarness.id { return failCodexLimit(reset: when) }",
+   "new": "// mutant",
+   "expect": "killed"
+  },
+  {
+   "name": "n1-invent-time",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "if let reset, now.isFinite, (0...1e11).contains(now) {",
+   "new": "do { let reset = reset ?? Int(now) + 60",
+   "expect": "killed"
+  },
+  {
+   "name": "n1-no-retry-after",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "extra = [(\"retry-after\", \"\\(secs)\")]",
+   "new": "extra = []",
+   "expect": "killed"
+  },
+  {
+   "name": "n2-log-twice",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "old": "guard replayable else { return false }\n        log.note(",
+   "new": "guard replayable else { log.note(ex.label, \"out on; reason=usage limit reached\"); return false }\n        log.note(",
+   "expect": "killed"
+  },
+  {
+   "name": "n4-drop-reset-tiebreak",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "(had.pct, had.reset) >= (pct ?? -1, at ?? -1)",
+   "new": "had.pct >= (pct ?? -1)",
+   "expect": "killed"
+  },
+  {
+   "name": "n4-earlier-reset",
+   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "old": "(had.pct, had.reset) >= (pct ?? -1, at ?? -1)",
+   "new": "(had.pct, -had.reset) >= (pct ?? -1, -(at ?? -1))",
+   "expect": "killed"
+  }
+ ]
+}
