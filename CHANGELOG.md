@@ -60,7 +60,8 @@ tag from the now-released section and put it on the new top draft.
 - Ships dch 1.185.0: a Codex started at a session's shell prompt is recognised too, so messages to
   it skip Claude's screen check. (#1996)
 - Ships dch 1.188.0, which streams each session's scheduled crons and /loop wake-ups to X-ray as
-  they change. (#2014)
+  they change; a Codex under a busy shell is found again, so Stop pauses it rather than ending it.
+  (#2014)
 - New session has a Claude / Codex / Login shell menu next to Command, and Settings has a Codex
   command next to the Claude one; a command edited in the form is no longer saved as the default.
   (#1997)
