@@ -462,6 +462,7 @@ enum Preferences {
         static let agentIslandAutoAllow = "agentIslandAutoAllow"   // #751, per Mac
         static let agentIslandFollowsTheme = "agentIslandFollowsTheme"   // #1452, per Mac
         static let agentIslandShowPlanUsage = "agentIslandShowPlanUsage"   // #1552, per Mac
+        static let xrayFollowsTheme = "xrayFollowsTheme"   // #2041, per Mac
         // #828: the Agent Sessions window's collapsed sidebar sections (titles); per Mac, not in SyncedKeys.
         static let agentWindowCollapsedSections = "agentWindowCollapsedSections"
         // OQ-66: a session's terminal may set the clipboard (OSC 52) while you view it; per Mac, not in SyncedKeys.
@@ -1589,6 +1590,12 @@ enum Preferences {
     static var agentIslandFollowsTheme: Bool {
         get { defaults.bool(forKey: Keys.agentIslandFollowsTheme) }
         set { defaults.set(newValue, forKey: Keys.agentIslandFollowsTheme) }
+    }
+
+    /// #2041: the X-ray drawer and its cards follow the theme; off when unset, the Agent Island's dark look.
+    static var xrayFollowsTheme: Bool {
+        get { defaults.bool(forKey: Keys.xrayFollowsTheme) }
+        set { defaults.set(newValue, forKey: Keys.xrayFollowsTheme) }
     }
 
     /// #1552: the island's plan usage line (#1537); on when unset.

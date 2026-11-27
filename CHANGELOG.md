@@ -99,6 +99,9 @@ tag from the now-released section and put it on the new top draft.
   writes output, until you hover another command or the text scrolls. (#2040)
 - A Codex sign-in left unfinished by a quit or crash no longer leaves its login files or a running
   Codex process behind. (#2039)
+- The X-ray drawer and its detail cards take the Agent Island's dark look with clearer outlines,
+  stand apart from the terminal, and can follow the theme instead (Settings, Agent Island, X-ray,
+  Follow theme). (#2041)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

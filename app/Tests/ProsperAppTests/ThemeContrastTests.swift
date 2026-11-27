@@ -519,6 +519,9 @@ final class ThemeContrastTests: XCTestCase {
             ("Theme.swift", ".darkAqua", "self==.light?.aqua:.darkAqua"),
             // the island is a black notch shape (Color.black) on every theme, no palette token
             ("AgentIslandView.swift", ".environment(\\.colorScheme,.dark)", ".environment(\\.colorScheme,.dark)"),
+            // #2041: X-ray's drawer and cards with Follow theme off are the island's dark surface on every theme; on, no pin
+            ("XrayLook.swift", ".environment(\\.colorScheme,.dark)",
+             "ifXrayInk.follows{content}else{content.environment(\\.colorScheme,.dark)}"),
         ]
         func count(_ needle: String, in hay: String) -> Int { hay.components(separatedBy: needle).count - 1 }
         var matched = [Int](repeating: 0, count: allowed.count)

@@ -1175,17 +1175,23 @@ struct XrayDrawer: View {
         if let p = panels.open[pane], p.target == target {
             GeometryReader { g in
                 XrayPanelView(panel: p)
+                    .modifier(XrayIslandScheme())   // #2041: off, the dark scheme for its native controls
                     .frame(width: XrayDrawerWidth.width(stored: width.points, offered: g.size.width))
                     .frame(maxHeight: .infinity)
                     .modifier(AgentPaneProbe(kind: "xray"))   // tests only (nil probe: nothing)
-                    .background(Neon.card)
+                    .background(XrayInk.surface)   // #2041: lifted off the terminal it overlays
                     .background(XrayDrawerFrame())   // #1760: a card goes beside the drawer, never over it
-                    .overlay(alignment: .leading) { Rectangle().fill(Neon.stroke).frame(width: 1) }
+                    // #2041: the outline on the terminal side, and a soft shadow cast onto the terminal (a gradient strip, no blur pass)
+                    .overlay(alignment: .leading) { Rectangle().fill(XrayInk.edge).frame(width: 1) }
+                    .overlay(alignment: .leading) { XrayDrawer.shade.frame(width: sz(8)).offset(x: -sz(8)).allowsHitTesting(false) }
                     .overlay(alignment: .leading) { handle(offered: g.size.width) }
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
     }
+
+    /// #2041: the soft shadow the drawer casts onto the terminal on its leading side.
+    static var shade: LinearGradient { LinearGradient(colors: [.clear, .black.opacity(0.35)], startPoint: .leading, endPoint: .trailing) }
 
     /// #1473: a few points of hit area on the leading edge (the 1 pt line stays the visual). The cursor is set while the
     /// pointer moves over it, as the split dividers do (no push or pop to unbalance when the drawer closes under it).
@@ -1228,7 +1234,7 @@ struct XrayPanelView: View {
                 }
                 Spacer(minLength: 0)
                 Button { panel.close() } label: {
-                    Image(systemName: "xmark").font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                    Image(systemName: "xmark").font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
                 }
                 .buttonStyle(.plain).fixedSize()
                 .help("Close X-Ray (Shift-Command-X)")
@@ -1236,11 +1242,11 @@ struct XrayPanelView: View {
             }
             .padding(.horizontal, sz(10)).padding(.vertical, sz(6))
             if let l = panel.corpusLine {   // #1566: the corpus label, wrapped (a shell's carries the clear note)
-                Text(verbatim: l).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                Text(verbatim: l).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, sz(10)).padding(.bottom, sz(6))
             }
-            Rectangle().fill(Neon.stroke).frame(height: 1)
+            Rectangle().fill(XrayInk.stroke).frame(height: 1)
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .focusable()
@@ -1348,7 +1354,7 @@ struct XrayPanelView: View {
     /// its own under the list (hairline above, chips with their counts inside, so no number sits in the ordinal column).
     @ViewBuilder func filterBar(_ chips: [XrayFilterChip]) -> some View {
         if !chips.isEmpty {
-            Divider().overlay(Neon.stroke)
+            Divider().overlay(XrayInk.stroke)
             HStack(spacing: sz(6)) {
                 faint("Show")
                 ForEach(chips, id: \.label) { XrayFilterChipView(chip: $0) }
@@ -1381,7 +1387,7 @@ struct XrayPanelView: View {
                             let (gi, g) = (gr.id.row, gr.e)
                             let head = XraySearch.header(g, now: panel.now())
                             Button { _ = panel.openSession(g) } label: {
-                                Text(verbatim: head).font(Neon.font(XrayText.row, weight: .semibold)).foregroundStyle(Neon.textPrimary)
+                                Text(verbatim: head).font(Neon.font(XrayText.row, weight: .semibold)).foregroundStyle(XrayInk.textPrimary)
                                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1463,7 +1469,7 @@ struct XrayPanelView: View {
     }
 
     func faint(_ s: String) -> some View {
-        Text(verbatim: s).font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+        Text(verbatim: s).font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
     }
 }
 
@@ -1573,12 +1579,12 @@ struct XrayFilterChipView: View {
                 Text(verbatim: chip.label).font(Neon.font(XrayText.small, weight: .medium))
                 Text(verbatim: "\(chip.count)").font(Neon.font(XrayText.small - 1, weight: .medium).monospacedDigit())
                     .padding(.horizontal, sz(5))
-                    .background(Capsule().fill(Neon.stroke))
+                    .background(Capsule().fill(XrayInk.stroke))
             }
-            .foregroundStyle(chip.shown ? Neon.textPrimary : Neon.textSecondary)
+            .foregroundStyle(chip.shown ? XrayInk.textPrimary : XrayInk.textSecondary)
             .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
             .background(Capsule().fill(chip.shown ? Neon.blue.opacity(0.2) : .clear))
-            .overlay(Capsule().stroke(chip.shown ? Neon.blue.opacity(0.6) : Neon.stroke, lineWidth: 1))
+            .overlay(Capsule().stroke(chip.shown ? Neon.blue.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
             .contentShape(Capsule())
             .fixedSize()
         }
@@ -1601,7 +1607,7 @@ struct XrayTabStrip: View {
                 Button { panel.select(t) } label: {
                     Text(verbatim: counts ? panel.title(t) : t.rawValue)
                         .font(Neon.font(10.5, weight: .medium))
-                        .foregroundStyle(t == panel.tab ? Neon.textPrimary : Neon.textSecondary)
+                        .foregroundStyle(t == panel.tab ? XrayInk.textPrimary : XrayInk.textSecondary)
                         .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
                         .background(Capsule().fill(t == panel.tab ? Neon.blue.opacity(0.2) : .clear))
                         .contentShape(Capsule())
@@ -1613,7 +1619,7 @@ struct XrayTabStrip: View {
             }
         }
         .padding(sz(2))
-        .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
+        .overlay(Capsule().stroke(XrayInk.stroke, lineWidth: 1))
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("X-Ray tabs")
@@ -1695,19 +1701,19 @@ struct XrayTaskRowView: View {
     var rowButton: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
-                Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)
-                XrayCol(text: row.id, widest: cols?.id ?? row.id, trailing: true).foregroundStyle(Neon.textSecondary)
+                Image(systemName: row.mark).foregroundStyle(XrayInk.textSecondary)
+                XrayCol(text: row.id, widest: cols?.id ?? row.id, trailing: true).foregroundStyle(XrayInk.textSecondary)
                 // #1956: a fixed narrow column, drawn hidden when nothing blocks the task, so the titles stay aligned
-                Image(systemName: "link").font(Neon.font(XrayText.small)).foregroundStyle(Neon.textSecondary).opacity(0.6)
+                Image(systemName: "link").font(Neon.font(XrayText.small)).foregroundStyle(XrayInk.textSecondary).opacity(0.6)
                     .opacity(row.blocked == nil ? 0 : 1)
                     .modifier(AgentPaneProbe(kind: row.blocked == nil ? "xrayNotBlocked" : "xrayBlocked"))
-                Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail)
+                Text(verbatim: row.title).foregroundStyle(XrayInk.textPrimary).lineLimit(1).truncationMode(.tail)
                     .layoutPriority(1)
                     .modifier(AgentPaneProbe(kind: "xrayTitle"))   // tests only (nil probe: nothing)
                 Spacer(minLength: sz(4))
-                XrayCol(text: row.label, widest: cols?.label ?? row.label ?? "").foregroundStyle(Neon.textSecondary)
+                XrayCol(text: row.label, widest: cols?.label ?? row.label ?? "").foregroundStyle(XrayInk.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayStatus"))
-                XrayCol(text: row.age, widest: cols?.age ?? row.age ?? "", trailing: true).foregroundStyle(Neon.textSecondary)
+                XrayCol(text: row.age, widest: cols?.age ?? row.age ?? "", trailing: true).foregroundStyle(XrayInk.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
             .font(Neon.font(XrayText.row))
@@ -1731,10 +1737,10 @@ struct XrayPromptRowView: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
-                XrayCol(text: row.ordinal, widest: ordinalWidest ?? row.ordinal, trailing: true).foregroundStyle(Neon.textSecondary)
-                if row.robot { RobotGlyph(size: XrayText.row).foregroundStyle(Neon.textSecondary) }
-                if let m = row.mark, !m.isEmpty { Text(verbatim: m).foregroundStyle(Neon.textSecondary).lineLimit(1) }
-                Text(verbatim: row.title).foregroundStyle(row.faint ? Neon.textSecondary : Neon.textPrimary)
+                XrayCol(text: row.ordinal, widest: ordinalWidest ?? row.ordinal, trailing: true).foregroundStyle(XrayInk.textSecondary)
+                if row.robot { RobotGlyph(size: XrayText.row).foregroundStyle(XrayInk.textSecondary) }
+                if let m = row.mark, !m.isEmpty { Text(verbatim: m).foregroundStyle(XrayInk.textSecondary).lineLimit(1) }
+                Text(verbatim: row.title).foregroundStyle(row.faint ? XrayInk.textSecondary : XrayInk.textPrimary)
                     .lineLimit(1).truncationMode(.tail).layoutPriority(1).modifier(AgentPaneProbe(kind: "xrayTitle"))
             }
             .font(Neon.font(XrayText.row))
@@ -1755,11 +1761,11 @@ struct XraySearchRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: sz(1)) {
             HStack(spacing: sz(6)) {
-                Text(verbatim: row.who).foregroundStyle(Neon.textSecondary).lineLimit(1)
-                if let a = row.age { Text(verbatim: a).foregroundStyle(Neon.textSecondary).fixedSize() }
+                Text(verbatim: row.who).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
+                if let a = row.age { Text(verbatim: a).foregroundStyle(XrayInk.textSecondary).fixedSize() }
                 if row.answer { Text(verbatim: XraySearchRow.answerMark).foregroundStyle(Neon.blue).fixedSize() }   // #1611
             }
-            Text(verbatim: row.snippet).foregroundStyle(Neon.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: row.snippet).foregroundStyle(XrayInk.textPrimary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
         }
         .font(Neon.font(XrayText.row))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1778,13 +1784,13 @@ struct XrayRefRowView: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
-                Text(verbatim: row.text).fontWeight(row.bold ? .semibold : .regular).foregroundStyle(Neon.textPrimary)
+                Text(verbatim: row.text).fontWeight(row.bold ? .semibold : .regular).foregroundStyle(XrayInk.textPrimary)
                     .lineLimit(1).truncationMode(.head).layoutPriority(1)
                 if !row.title.isEmpty {
-                    Text(verbatim: row.title).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.tail)
+                    Text(verbatim: row.title).foregroundStyle(XrayInk.textSecondary).lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: sz(4))
-                XrayCol(text: row.count, widest: countWidest ?? row.count, trailing: true).foregroundStyle(Neon.textSecondary)
+                XrayCol(text: row.count, widest: countWidest ?? row.count, trailing: true).foregroundStyle(XrayInk.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
             .font(Neon.font(XrayText.row))
@@ -1805,12 +1811,12 @@ struct XrayMemoryRowView: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: sz(6)) {
-                Text(verbatim: row.title).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
-                Text(verbatim: row.detail).foregroundStyle(Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                Text(verbatim: row.title).foregroundStyle(XrayInk.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                Text(verbatim: row.detail).foregroundStyle(XrayInk.textSecondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: sz(4))
-                XrayCol(text: row.session, widest: sessionWidest ?? row.session ?? "").foregroundStyle(Neon.textSecondary)
+                XrayCol(text: row.session, widest: sessionWidest ?? row.session ?? "").foregroundStyle(XrayInk.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayStatus"))
-                XrayCol(text: row.age, widest: ageWidest ?? row.age ?? "", trailing: true).foregroundStyle(Neon.textSecondary)
+                XrayCol(text: row.age, widest: ageWidest ?? row.age ?? "", trailing: true).foregroundStyle(XrayInk.textSecondary)
                     .modifier(AgentPaneProbe(kind: "xrayAge"))
             }
             .font(Neon.font(XrayText.row))
@@ -1860,8 +1866,8 @@ struct XrayMemoryCard: View {
             XrayRichBlock(text: item.title, size: 12, strong: true, match: match).lineLimit(2)
             ForEach(Array(Self.fields(item, now: now).enumerated()), id: \.offset) { _, f in
                 HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
-                    Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
-                    Text(verbatim: f.value).font(Neon.font(11)).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.middle)
+                    Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
+                    Text(verbatim: f.value).font(Neon.font(11)).foregroundStyle(XrayInk.textPrimary).lineLimit(1).truncationMode(.middle)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("\(f.label): \(f.value)")
@@ -1873,7 +1879,7 @@ struct XrayMemoryCard: View {
                 .accessibilityLabel("Body")
             }
             ForEach(Self.notes(item) + [note].compactMap { $0 }, id: \.self) {
-                Text(verbatim: $0).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                Text(verbatim: $0).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
             }
             if let readPrompt {
                 Button("Read the prompt", action: readPrompt)
@@ -1938,8 +1944,8 @@ struct XrayTaskCard: View {
                 VStack(alignment: .leading, spacing: sz(6)) {
                     ForEach(Array(Self.fields(task, now: now).enumerated()), id: \.offset) { _, f in
                         VStack(alignment: .leading, spacing: sz(1)) {
-                            Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
-                            Text(verbatim: f.value).font(Neon.font(11.5)).foregroundStyle(Neon.textPrimary)
+                            Text(verbatim: f.label).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
+                            Text(verbatim: f.value).font(Neon.font(11.5)).foregroundStyle(XrayInk.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                         }
                         .accessibilityElement(children: .combine)
@@ -1948,7 +1954,7 @@ struct XrayTaskCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let note { Text(verbatim: note).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary) }
+            if let note { Text(verbatim: note).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary) }
             HStack(spacing: sz(8)) {
                 if Self.openURL(task) != nil {
                     Button("Open", action: openLink).accessibilityLabel("Open the task's link")

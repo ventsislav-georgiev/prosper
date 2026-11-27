@@ -905,6 +905,7 @@ private struct SettingsRootView: View {
             footer = AnyView(Group {
                 AgentIslandPane(); AgentIslandShortcutSection()   // #1536
                 AgentIslandListSection(); AgentIslandRowDetailsSection(); AgentIslandLookSection(); AgentSessionsSection()
+                XrayLookSection()   // #2041
             })
         // ccpool (#871): the account pool pane as the FOOTER. The page exists only while the
         // extension is live, and going live built the owner (AppDelegate's onEnabledChanged).
@@ -1050,6 +1051,22 @@ struct AgentIslandLookSection: View {
         }
         .onChange(of: showUsage) { _, v in Preferences.agentIslandShowPlanUsage = v }
         .onChange(of: follows) { _, v in Preferences.agentIslandFollowsTheme = v; ThemeStore.shared.objectWillChange.send() }
+    }
+}
+
+/// #2041: Agent Island > X-ray > Follow theme, off by default (the island's dark look). Per Mac (not in SyncedKeys), as
+/// AgentIslandLookSection; a change redraws an open X-ray drawer as a theme switch does (its views observe ThemeStore).
+struct XrayLookSection: View {
+    static let title = "X-ray"
+    static let label = "Follow theme"
+    static let subtitle = "Off: the X-ray drawer and its cards keep the Agent Island's dark look."
+    @State private var follows = Preferences.xrayFollowsTheme
+
+    var body: some View {
+        NeonSection(Self.title) {
+            NeonRow(Self.label, subtitle: Self.subtitle) { Toggle("", isOn: $follows).labelsHidden().accessibilityLabel("X-ray \(Self.label)") }
+        }
+        .onChange(of: follows) { _, v in Preferences.xrayFollowsTheme = v; ThemeStore.shared.objectWillChange.send() }
     }
 }
 

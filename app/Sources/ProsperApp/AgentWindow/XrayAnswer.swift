@@ -220,7 +220,7 @@ struct XrayAnswerEditor: View {
                 .font(Neon.font(XrayText.small, weight: .medium))
             }
             .padding(sz(6))
-            .background(RoundedRectangle(cornerRadius: sz(6)).fill(Neon.stroke.opacity(0.35)))
+            .background(RoundedRectangle(cornerRadius: sz(6)).fill(XrayInk.follows ? XrayInk.stroke.opacity(0.35) : XrayInk.card))   // #2041: off, the island's inner card
             .padding(.top, sz(4))
         } else if panel.answerLine != nil {
             status.padding(.top, sz(4))
@@ -230,7 +230,7 @@ struct XrayAnswerEditor: View {
     var status: some View {
         let s = panel.answerStatus
         return Text(verbatim: s ?? " ")
-            .font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(Neon.textSecondary)
+            .font(Neon.font(XrayText.small, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
             .lineLimit(1).truncationMode(.tail)
             .frame(height: sz(XrayText.rowHeight))   // the fixed slot: a new line never moves a neighbour
             .help(s ?? "")
@@ -251,10 +251,10 @@ struct XrayAnswerChipView: View {
                 if chip.recommended { Text(verbatim: "Recommended").font(Neon.font(XrayText.small - 1, weight: .semibold)) }
                 Text(verbatim: chip.shown).font(Neon.font(XrayText.small, weight: .medium)).lineLimit(1)
             }
-            .foregroundStyle(Neon.textPrimary)
+            .foregroundStyle(XrayInk.textPrimary)
             .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
             .background(Capsule().fill(chip.recommended ? Neon.blue.opacity(0.2) : .clear))
-            .overlay(Capsule().stroke(chip.recommended ? Neon.blue.opacity(0.6) : Neon.stroke, lineWidth: 1))
+            .overlay(Capsule().stroke(chip.recommended ? Neon.blue.opacity(0.6) : XrayInk.stroke, lineWidth: 1))
             .contentShape(Capsule())
             .fixedSize()
         }

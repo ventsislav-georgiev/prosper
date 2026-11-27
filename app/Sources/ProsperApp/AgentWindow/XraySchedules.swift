@@ -192,13 +192,13 @@ struct XrayScheduleRowView: View {
 
     var body: some View {
         HStack(spacing: sz(6)) {
-            Image(systemName: row.mark).foregroundStyle(Neon.textSecondary)
-            Text(verbatim: row.what).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
-            Text(verbatim: row.prompt).foregroundStyle(Neon.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
+            Image(systemName: row.mark).foregroundStyle(XrayInk.textSecondary)
+            Text(verbatim: row.what).foregroundStyle(XrayInk.textSecondary).lineLimit(1).fixedSize()
+            Text(verbatim: row.prompt).foregroundStyle(XrayInk.textPrimary).lineLimit(1).truncationMode(.tail).layoutPriority(1)
             Spacer(minLength: sz(4))
-            if !row.flags.isEmpty { Text(verbatim: row.flags).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize() }
-            Text(verbatim: row.status).foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize()
-            if let c = row.countdown { Text(verbatim: c).monospacedDigit().foregroundStyle(Neon.textSecondary).lineLimit(1).fixedSize() }
+            if !row.flags.isEmpty { Text(verbatim: row.flags).foregroundStyle(XrayInk.textSecondary).lineLimit(1).fixedSize() }
+            Text(verbatim: row.status).foregroundStyle(XrayInk.textSecondary).lineLimit(1).fixedSize()
+            if let c = row.countdown { Text(verbatim: c).monospacedDigit().foregroundStyle(XrayInk.textSecondary).lineLimit(1).fixedSize() }
         }
         .font(Neon.font(XrayText.row))
         .frame(height: sz(XrayText.rowHeight))

@@ -148,7 +148,7 @@ struct XrayRefPopover: View {
                 VStack(alignment: .leading, spacing: sz(3)) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
                         Text(verbatim: l).font(i == 0 ? Neon.font(14, weight: .semibold) : Neon.font(11))
-                            .foregroundStyle(i == 0 ? Neon.textPrimary : Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(i == 0 ? XrayInk.textPrimary : XrayInk.textSecondary).lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -181,19 +181,19 @@ struct XrayRefPopover: View {
     /// #1760: the inline filter; typing narrows the shown tab and never closes the card; Esc clears it first.
     var filterField: some View {
         HStack(spacing: sz(6)) {
-            Image(systemName: "line.3.horizontal.decrease").font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary)
+            Image(systemName: "line.3.horizontal.decrease").font(Neon.font(10.5)).foregroundStyle(XrayInk.textSecondary)
                 .accessibilityHidden(true)
-            TextField("Filter", text: $filter).textFieldStyle(.plain).font(Neon.font(12)).foregroundStyle(Neon.textPrimary)
+            TextField("Filter", text: $filter).textFieldStyle(.plain).font(Neon.font(12)).foregroundStyle(XrayInk.textPrimary)
                 .focused($filterFocused)
                 .onKeyPress(.escape) { escape(); return .handled }
                 .accessibilityLabel("Filter this card")
         }
         .padding(.horizontal, sz(8)).padding(.vertical, sz(5))
-        .background(RoundedRectangle(cornerRadius: sz(7), style: .continuous).fill(Neon.textSecondary.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: sz(7), style: .continuous).strokeBorder(Neon.stroke, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: sz(7), style: .continuous).fill(XrayInk.card))   // #2041: the island's inner card
+        .overlay(RoundedRectangle(cornerRadius: sz(7), style: .continuous).strokeBorder(XrayInk.stroke, lineWidth: 1))
     }
 
-    var hairline: some View { Rectangle().fill(Neon.stroke).frame(height: 1).accessibilityHidden(true) }
+    var hairline: some View { Rectangle().fill(XrayInk.stroke).frame(height: 1).accessibilityHidden(true) }
 
     static let searching = "searching more\u{2026}"
     static let clickForAll = "click for all"
@@ -232,7 +232,7 @@ struct XrayRefPopover: View {
                 Button { tab = t } label: {
                     Text(verbatim: Self.title(t, panel, q))
                         .font(Neon.font(11, weight: .medium))
-                        .foregroundStyle(t == tab ? Neon.textPrimary : Neon.textSecondary)
+                        .foregroundStyle(t == tab ? XrayInk.textPrimary : XrayInk.textSecondary)
                         .padding(.horizontal, sz(9)).padding(.vertical, sz(4))
                         .background(Capsule().fill(t == tab ? Neon.blue.opacity(0.2) : .clear))
                         .contentShape(Capsule())
@@ -244,7 +244,7 @@ struct XrayRefPopover: View {
             }
         }
         .padding(sz(2))
-        .overlay(Capsule().stroke(Neon.stroke, lineWidth: 1))
+        .overlay(Capsule().stroke(XrayInk.stroke, lineWidth: 1))
         .fixedSize()
         .modifier(AgentPaneProbe(kind: "xrayRefTabs"))   // tests only (nil probe: nothing)
         .accessibilityElement(children: .contain)
@@ -314,11 +314,11 @@ struct XrayRefPopover: View {
                 let (i, t) = (r.id.row, r.e)
                 if i > 0 { hairline.padding(.vertical, sz(2)) }
                 if let s = Self.sessionHeader(t, now: panel.now()) {   // #1589: another session of this project
-                    Text(verbatim: s).font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textPrimary).lineLimit(1)
+                    Text(verbatim: s).font(Neon.font(11, weight: .semibold)).foregroundStyle(XrayInk.textPrimary).lineLimit(1)
                         .accessibilityAddTraits(.isHeader)
                 }
                 let head = Self.turnHeader(t, chapters: panel.chapters, now: panel.now())
-                let label = Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+                let label = Text(verbatim: head).font(Neon.font(10.5, weight: .semibold)).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if panel.turnChapter(t) != nil {   // #1900: a header with no chapter is plain text, never a no-op button
                     Button { panel.jumpTurn(t, in: c) } label: { label.contentShape(Rectangle()) }
@@ -348,15 +348,15 @@ struct XrayRefPopover: View {
         let opens = panel.mentionChapter(m, in: c) != nil
         HStack(alignment: .firstTextBaseline, spacing: sz(6)) {
             if let s = Self.speaker(m) {
-                Text(verbatim: s).font(Neon.font(9.5, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                Text(verbatim: s).font(Neon.font(9.5, weight: .semibold)).foregroundStyle(XrayInk.textSecondary)
                     .padding(.horizontal, sz(5)).padding(.vertical, sz(1))
-                    .background(Capsule().fill(Neon.textSecondary.opacity(0.12))).fixedSize()
+                    .background(Capsule().fill(XrayInk.textSecondary.opacity(0.12))).fixedSize()
                     .accessibilityHidden(Self.speakerHidden(opens: opens))
             }
             snippet(m.rich.isEmpty ? [XrayRich.Run(text: m.line)] : m.rich, q)
             if opens {
                 Button { panel.jumpRef(m, in: c) } label: {
-                    Image(systemName: "arrow.turn.down.right").font(Neon.font(10)).foregroundStyle(Neon.textSecondary)
+                    Image(systemName: "arrow.turn.down.right").font(Neon.font(10)).foregroundStyle(XrayInk.textSecondary)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -386,7 +386,7 @@ struct XrayRefPopover: View {
             if othersOpen { panel.openOthers() }
         } label: {
             Text(verbatim: (othersOpen ? "\u{25BE} " : "\u{25B8} ") + title).font(Neon.font(10, weight: .semibold))
-                .foregroundStyle(Neon.textSecondary).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                .foregroundStyle(XrayInk.textSecondary).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
@@ -430,7 +430,7 @@ struct XrayRefPopover: View {
 
     /// #1528: the row: speaker, then the sentence with the ref standing out; the line when dch sent no sentence.
     static func sentenceText(_ m: XrayRefStream.Mention) -> Text {
-        let lead = Text(verbatim: speaker(m).map { $0 + "  " } ?? "").foregroundColor(Neon.textSecondary)
+        let lead = Text(verbatim: speaker(m).map { $0 + "  " } ?? "").foregroundColor(XrayInk.textSecondary)
         guard let s = m.sentence else { return lead + Text(verbatim: m.line) }
         return lead + Text(verbatim: s.before) + Text(verbatim: s.hit).fontWeight(.semibold).foregroundColor(Neon.blue)
             + Text(verbatim: s.after)
@@ -458,7 +458,7 @@ struct XrayRefPopover: View {
             let (i, g) = (r.id.row, r.e)
             if i > 0 { hairline.padding(.vertical, sz(2)) }
             Text(verbatim: Self.groupTitle(g.session, own: c.session, target: panel.target)).font(Neon.font(10.5, weight: .semibold))
-                .foregroundStyle(Neon.textSecondary).lineLimit(1).accessibilityAddTraits(.isHeader)
+                .foregroundStyle(XrayInk.textSecondary).lineLimit(1).accessibilityAddTraits(.isHeader)
             ForEach(Self.keyed(g.mentions, part: part, block: i), id: \.id) { mentionRow($0.e, c, q) }
         }
     }
@@ -483,8 +483,8 @@ struct XrayRefPopover: View {
     /// A labelled field: the label faint, the value plain text.
     func field(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: sz(2)) {
-            Text(verbatim: label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
-            Text(verbatim: value).font(Neon.font(12)).foregroundStyle(Neon.textPrimary).lineSpacing(sz(2))
+            Text(verbatim: label).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
+            Text(verbatim: value).font(Neon.font(12)).foregroundStyle(XrayInk.textPrimary).lineSpacing(sz(2))
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
@@ -494,7 +494,7 @@ struct XrayRefPopover: View {
     /// #1760: a labelled field whose value is cached Markdown runs.
     func richField(_ label: String, _ runs: [XrayRich.Run], plain: String, _ q: String) -> some View {
         VStack(alignment: .leading, spacing: sz(2)) {
-            Text(verbatim: label).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(1)
+            Text(verbatim: label).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary).lineLimit(1)
             snippet(runs.isEmpty ? [XrayRich.Run(text: plain)] : runs, q)
         }
         .accessibilityElement(children: .combine)
@@ -502,7 +502,7 @@ struct XrayRefPopover: View {
     }
 
     func faint(_ s: String) -> some View {
-        Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(2)
+        Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary).lineLimit(2)
     }
 }
 
@@ -537,7 +537,7 @@ struct XrayExtensionBlock: View {
             VStack(alignment: .leading, spacing: sz(2)) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
                     Text(verbatim: l).font(i == 0 ? Neon.font(12, weight: .semibold) : Neon.font(10.5))
-                        .foregroundStyle(i == 0 ? Neon.textPrimary : Neon.textSecondary).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(i == 0 ? XrayInk.textPrimary : XrayInk.textSecondary).lineLimit(1).truncationMode(.middle)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -563,14 +563,14 @@ struct XrayExtensionBlock: View {
 
     @ViewBuilder var block: some View {
         if case .card(let c)? = card.outcome {
-            if !c.title.isEmpty { Text(verbatim: c.title).font(Neon.font(11.5, weight: .semibold)).foregroundStyle(Neon.textPrimary) }
-            if !c.subtitle.isEmpty { Text(verbatim: c.subtitle).font(Neon.font(10.5)).foregroundStyle(Neon.textSecondary) }
+            if !c.title.isEmpty { Text(verbatim: c.title).font(Neon.font(11.5, weight: .semibold)).foregroundStyle(XrayInk.textPrimary) }
+            if !c.subtitle.isEmpty { Text(verbatim: c.subtitle).font(Neon.font(10.5)).foregroundStyle(XrayInk.textSecondary) }
             if !c.body.isEmpty {
-                Text(verbatim: c.body).font(Neon.font(11)).foregroundStyle(Neon.textPrimary)
+                Text(verbatim: c.body).font(Neon.font(11)).foregroundStyle(XrayInk.textPrimary)
                     .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
         } else if let n = card.note {
-            Text(verbatim: n).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary).lineLimit(3)
+            Text(verbatim: n).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary).lineLimit(3)
         }
     }
 }

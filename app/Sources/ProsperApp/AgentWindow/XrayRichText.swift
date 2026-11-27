@@ -159,8 +159,8 @@ enum XrayRich {
                     : Neon.font(size, weight: bold ? .semibold : .regular)
                 if r.style.contains(.italic) { f = f.italic() }
                 a.font = f
-                a.foregroundColor = r.style.contains(.hit) || r.style.contains(.link) ? Neon.blue : Neon.textPrimary
-                if r.style.contains(.code) { a.backgroundColor = Neon.textSecondary.opacity(0.14) }
+                a.foregroundColor = r.style.contains(.hit) || r.style.contains(.link) ? Neon.blue : XrayInk.textPrimary
+                if r.style.contains(.code) { a.backgroundColor = XrayInk.textSecondary.opacity(0.14) }
                 if hit { a.backgroundColor = Neon.blue.opacity(0.24) }
                 if r.style.contains(.strike) { a.strikethroughStyle = .single }
                 if r.style.contains(.link) { a.underlineStyle = .single }

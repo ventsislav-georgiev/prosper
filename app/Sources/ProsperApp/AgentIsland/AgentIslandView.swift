@@ -1225,7 +1225,7 @@ struct AgentIslandHistoryRow: View {
         }
     }
     /// #1452: the card's fill when Follow theme is off (TIP before #1375: white over the island's black, brighter on hover).
-    static func ownCardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }
+    static func ownCardFill(selected: Bool) -> Color { AgentIslandInk.cardFill(selected: selected) }
 
     /// The card: on, #1375's session row card with the sidebar's selected fill; off, the island's own (#1452).
     @ViewBuilder private func card(selected sel: Bool) -> some View {
@@ -1394,6 +1394,12 @@ enum AgentIslandInk {
     /// #1452: Settings > Agent Island > Follow theme, off by default. The one switch: off, every ink #1375 themed is the
     /// island's own again (TIP before #1375); a change redraws the island as a theme switch does (ThemeStore publishes).
     static var follows: Bool { Preferences.agentIslandFollowsTheme }
+    /// #2041: the island's own look in one place, shared with X-ray's drawer and cards (their Follow theme off): the black
+    /// panel, a card at white 5% (10% hovered), white ink at an alpha (opaque under Increase Contrast) and a thin light outline.
+    static let panel = Color.black
+    static func cardFill(selected: Bool) -> Color { Color.white.opacity(selected ? 0.10 : 0.05) }
+    static func white(_ alpha: Double) -> Color { Neon.faded(.white, alpha) }
+    static var hairline: Color { white(0.22) }
     static func readable(_ ink: Color, on surface: Color, else fallback: Color, dim: Bool = false) -> Color {
         ThemeRuntime.contrastRatio(ink, surface) >= (dim ? 3 : 4.5) ? ink : fallback
     }
@@ -1908,7 +1914,7 @@ struct AgentPlanLimitsView: View {
         }
         .frame(width: Self.width, alignment: .leading)
         .frame(maxHeight: Self.maxHeight)
-        .background(Color.black)
+        .background(AgentIslandInk.panel)
     }
 
     private var content: some View {

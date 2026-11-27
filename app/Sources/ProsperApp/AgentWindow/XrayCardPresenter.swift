@@ -42,7 +42,7 @@ struct XrayCardBackButton: View {
         if let back {
             Button(action: back) {
                 Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
-                    .font(Neon.font(11, weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                    .font(Neon.font(11, weight: .semibold)).foregroundStyle(XrayInk.textSecondary)
                     .frame(width: sz(20), height: sz(20)).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -75,7 +75,7 @@ final class XrayCardPanel: NSPanel {
     }
 }
 
-/// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: Neon.card, the card stroke, 14 pt
+/// #1760: the product's presenter: a Prosper rich card (the X-ray drawer's surface: XrayInk's fill and edge (#2041), 14 pt
 /// corners) in its own panel, replacing the dropdown-like NSPopover. Placed by `frame` (below the anchor; beside the
 /// drawer when the drawer is open); a click outside (the panel resigns key) or Escape closes it. #1944: a card opened from
 /// inside the shown card is pushed over it; Back or Escape returns to the card under it, a click outside closes them all.
@@ -151,9 +151,10 @@ final class XrayCardPanelPresenter: XrayCardPresenter {
         let host = NSHostingView(rootView: Themed {
             content.frame(width: f.width, height: f.height, alignment: .topLeading)
                 .environment(\.xrayCardBack, back)
-                .background(shape.fill(Neon.card))
-                .overlay(shape.strokeBorder(Neon.cardStroke, lineWidth: 1))
+                .background(shape.fill(XrayInk.surface))   // #2041: the drawer's fill and outline; the panel casts the shadow
+                .overlay(shape.strokeBorder(XrayInk.edge, lineWidth: 1))
                 .clipShape(shape)
+                .modifier(XrayIslandScheme())   // #2041: off, the dark scheme for its native controls
         })
         host.frame = CGRect(origin: .zero, size: f.size)
         p.contentView = host

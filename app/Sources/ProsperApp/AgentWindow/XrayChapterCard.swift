@@ -85,7 +85,7 @@ struct XrayChapterCard: View {
         VStack(alignment: .leading, spacing: sz(8)) {
             HStack(spacing: sz(4)) {
                 XrayCardBackButton()   // #1944: opened from a ref card or a memory card
-                Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                Text(verbatim: Self.heading(chapter)).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: sz(8)) {
@@ -94,9 +94,9 @@ struct XrayChapterCard: View {
                     if let n = pp.note { faint(n) }
                     if let t = pp.tail { XrayRichBlock(text: t, size: 12, strong: true, match: match) }
                     if let t = Self.tools(chapter) {
-                        Text(verbatim: "Tools: " + t).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                        Text(verbatim: "Tools: " + t).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
                     }
-                    Text(verbatim: "Response").font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+                    Text(verbatim: "Response").font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
                     answerText(rp?.head, empty: Self.noResponse)
                         .accessibilityLabel("Response: \(rp?.head ?? Self.noResponse)")
                     if let n = rp?.note { faint(n) }
@@ -117,14 +117,14 @@ struct XrayChapterCard: View {
             if let answer {
                 XrayRichBlock(text: answer, size: 11, match: match, refs: refs)
             } else {
-                Text(verbatim: empty).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)
+                Text(verbatim: empty).font(Neon.font(11)).foregroundStyle(XrayInk.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
             }
         }
     }
 
     private func faint(_ s: String) -> some View {
-        Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(Neon.textSecondary)
+        Text(verbatim: s).font(Neon.font(10, weight: .medium)).foregroundStyle(XrayInk.textSecondary)
     }
 }
 
@@ -152,7 +152,7 @@ struct XrayRichBlock: View {
             if let p = parsed, p.text == text {
                 Text(Self.attributed(p.runs, size: size, strong: strong, match: match, refs: refs))
             } else {
-                Text(verbatim: text).font(Neon.font(size, weight: strong ? .semibold : .regular)).foregroundStyle(Neon.textPrimary)
+                Text(verbatim: text).font(Neon.font(size, weight: strong ? .semibold : .regular)).foregroundStyle(XrayInk.textPrimary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
