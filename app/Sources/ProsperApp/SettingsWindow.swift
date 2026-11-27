@@ -1244,8 +1244,8 @@ struct AgentIslandListSection: View {
                     TextField("Name", text: g.name).frame(width: sz(110))
                         .focused($focus, equals: row.id + ".name").onSubmit(commit)
                         .accessibilityLabel("Name of group \(title)")
-                    // Empty = not saved yet, so the placeholder says so (QA #434 L1).
-                    TextField("None", text: g.pattern).frame(width: sz(180))
+                    // #2062: empty = a manual-only group (sessions join it only by Move to group), so the placeholder says so.
+                    TextField("Manual only", text: g.pattern).frame(width: sz(180))
                         .focused($focus, equals: row.id + ".pattern").onSubmit(commit)
                         .accessibilityLabel("Pattern of group \(title)")
                         .accessibilityHint(AgentIsland.sidekickHint(row.pattern).text ?? "")
@@ -1291,7 +1291,8 @@ struct AgentIslandListSection: View {
 }
 
 /// #1758: the groups editor's rows and rules, a value the Settings section holds and a test drives. Rows may hold what is
-/// not saved (a bad name, a duplicate name, an invalid or match-everything regex, no pattern yet); `saved` is what is stored.
+/// not saved (a bad name, a duplicate name, an invalid or match-everything regex); `saved` is what is stored. #2062: a row
+/// with no pattern is a manual-only group and is saved.
 struct SessionGroupsEditor: Equatable {
     var rows: [SessionGroup]
 
@@ -1323,7 +1324,7 @@ struct SessionGroupsEditor: Equatable {
 
     private func patternReason(_ g: SessionGroup) -> String? {
         let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
-        if p.isEmpty { return "No pattern yet: not saved" }
+        if p.isEmpty { return nil }   // #2062 (dch #721): a manual-only group, saved
         // #1777 (QA n96): never store a pattern the phone's 0x2d/0x2f cannot echo.
         if g.pattern.utf8.count > DchSidekickOps.maxBytes { return "Pattern over \(DchSidekickOps.maxBytes) bytes: not saved" }
         switch AgentIsland.sidekickMatch(p) {
@@ -1334,7 +1335,7 @@ struct SessionGroupsEditor: Equatable {
     }
 
     private func stored(_ id: String, in stored: [SessionGroup]) -> SessionGroup? {
-        stored.first { $0.id == id && !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        stored.first { $0.id == id }   // #2062: a stored manual-only group is kept as well
     }
 
     /// Ids of the rows that are not saved. A row that is not saved is stored under its stored name, so a duplicate is

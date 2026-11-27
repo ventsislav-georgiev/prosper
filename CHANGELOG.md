@@ -128,6 +128,8 @@ tag from the now-released section and put it on the new top draft.
   (#2064)
 - The X-ray drawer docks beside the terminal, which makes room for it, and can open with every new
   session; each session remembers whether its drawer was open. (#2055)
+- Right-click a session to move it into another group, back to automatic grouping, or into a new
+  group; groups can be manual-only, with no name pattern. (#2062)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

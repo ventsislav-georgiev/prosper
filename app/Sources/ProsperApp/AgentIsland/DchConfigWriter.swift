@@ -53,9 +53,12 @@ enum DchConfigWriter {
     }
 
     /// #1757: each group's line value, `<name> = <regex>`, in order: the regex as sidekickValue gives it, and a group
-    /// dch would skip (a name it does not keep, an empty regex) left out, so no line Prosper writes is one dch drops.
+    /// dch would skip (a name it does not keep, a regex sidekickValue refuses) left out, so no line Prosper writes is one
+    /// dch drops. #2062 (dch #721): a manual-only group (blank pattern) is `<name> =`, so `render` writes
+    /// `group = <name> =`; a dch before #721 skips that line, so it is never a placeholder regex.
     static func groupValues(_ groups: [SessionGroup]) -> [String] {
         SessionGroup.normalized(groups).compactMap { g in
+            if g.isManual { return "\(g.name) =" }
             let v = sidekickValue(g.pattern)
             return v.isEmpty ? nil : "\(g.name) = \(v)"
         }
@@ -88,8 +91,9 @@ enum DchConfigWriter {
     static func adoptable(_ values: [String]) -> [SessionGroup] {
         SessionGroup.normalized(values.compactMap { v in
             guard let eq = v.firstIndex(of: "=") else { return nil }
-            let name = String(v[..<eq]), p = sidekickValue(String(v[v.index(after: eq)...]))
-            guard !p.isEmpty else { return nil }
+            let name = String(v[..<eq]), raw = String(v[v.index(after: eq)...]), p = sidekickValue(raw)
+            // #2062 (dch #721): a blank regex is a manual-only group, adopted with no pattern.
+            guard !p.isEmpty || raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
             return SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: p)
         })
     }

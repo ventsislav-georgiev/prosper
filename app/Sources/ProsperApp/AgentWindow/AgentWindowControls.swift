@@ -631,10 +631,11 @@ extension AgentWindowControls {
     }
 
     /// #2062: the list with `name` appended (trimmed, an empty pattern, a new short id), or the refusal; nothing stored here.
+    /// The name is trimmed once, first: what is checked is what is stored.
     static func addingGroup(_ name: String, to stored: [SessionGroup]) -> Result<[SessionGroup], NewGroupRefused> {
+        let name = name.trimmingCharacters(in: .whitespaces)
         if let why = newGroupRefusal(name, stored: stored) { return .failure(NewGroupRefused(reason: why)) }
-        return .success(stored + [SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(),
-                                               name: name.trimmingCharacters(in: .whitespaces), pattern: "")])
+        return .success(stored + [SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: "")])
     }
     struct NewGroupRefused: Error, Equatable { let reason: String }
 

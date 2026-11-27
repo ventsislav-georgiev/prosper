@@ -97,7 +97,6 @@ final class SessionGroupsEditorTests: XCTestCase {
             ("reserved name Sessions", { g, _ in g.name = "SESSIONS" }, "dch uses this name for its own tab: not saved"),
             ("empty name", { g, _ in g.name = "  " }, "A name is 1-32 bytes, without \"=\": not saved"),
             ("duplicate name", { g, other in g.name = " \(other.uppercased()) " }, "Another group has this name: not saved"),
-            ("no pattern", { g, _ in g.pattern = "" }, "No pattern yet: not saved"),
             // #1777 (QA n96): 513 bytes, more than the phone can echo.
             ("long pattern", { g, _ in g.pattern = String(repeating: "é", count: 256) + "x" }, "Pattern over 512 bytes: not saved"),
         ]
@@ -122,10 +121,10 @@ final class SessionGroupsEditorTests: XCTestCase {
         e.rows[1].pattern = "-rev2$"
         SessionGroupsEditor.save(e, now: Self.t0)
         XCTAssertEqual(e.rows.count, 3)
-        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["-qa", "-rev2$"], "the empty new row is left out")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["-qa", "-rev2$", ""], "#2062: the empty new row is manual-only, saved")
         e.rows[2].pattern = "b("
         SessionGroupsEditor.save(e, now: Self.t0)
-        XCTAssertEqual(Preferences.agentIslandSessionGroups.count, 2, "an invalid new row is left out")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["-qa", "-rev2$", ""], "an invalid edit keeps the stored row")
         e.rows[2].pattern = "-new$"
         SessionGroupsEditor.save(e, now: Self.t0)
         XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Sidekicks", "Reviews", "Group 3"])

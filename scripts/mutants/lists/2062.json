@@ -1,0 +1,86 @@
+{
+ "entry": "2062",
+ "filter": "AgentSessionGroupMoveTests|DchConfigWriterTests/testGroupValuesSkipWhatDchWouldSkipAndStopAtEight",
+ "mutants": [
+  {
+   "name": "manual-group-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "let i: Int? = if let g = s.group {",
+   "new": "let i: Int? = if let g = Optional<String>.none {",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testSplitPlacesByDchsGroupAndKeepsPatternGroupingForOlderRows"
+  },
+  {
+   "name": "auto-dropped",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "named(\"--group-set\", [name], [group ?? \"--auto\", \"--json\"])",
+   "new": "named(\"--group-set\", [name], [group ?? \"\", \"--json\"])",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testChoosingAGroupSendsGroupSetAndAFailedReplyReachesTheRowOnce"
+  },
+  {
+   "name": "failure-swallowed",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "if last?.result == \"ok\", r.status == 0 { return nil }",
+   "new": "if true { return nil }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testChoosingAGroupSendsGroupSetAndAFailedReplyReachesTheRowOnce|AgentSessionGroupMoveTests/testGroupSetFailureWordsEachReasonAndHowTheCallEnded"
+  },
+  {
+   "name": "cap-check-removed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "if stored.count >= SessionGroup.maxCount { return AgentIsland.groupsFullText }",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNewGroupAddsAValidNameWithAnEmptyPatternAndRefusesBadOnesAndTheNinth"
+  },
+  {
+   "name": "manual-group-filtered",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups : []",
+   "new": "Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups.filter { !$0.isManual } : []",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit"
+  },
+  {
+   "name": "writer-drops-manual",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "if g.isManual { return \"\\(g.name) =\" }",
+   "new": "if g.isManual { return nil }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit|DchConfigWriterTests/testGroupValuesSkipWhatDchWouldSkipAndStopAtEight"
+  },
+  {
+   "name": "editor-drops-manual",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if p.isEmpty { return nil }   // #2062",
+   "new": "if p.isEmpty { return \"No pattern yet: not saved\" }   // #2062",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit"
+  },
+  {
+   "name": "move-before-flush",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "prepare = { q.sync {}; return (args, Data()) }",
+   "new": "prepare = { (args, Data()) }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNewGroupFromARowWritesDchsConfigBeforeTheGroupSet"
+  },
+  {
+   "name": "model-no-config-first",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let s = ask.session, let g = list.last { setGroup(s, g.name, true) }",
+   "new": "if let s = ask.session, let g = list.last { setGroup(s, g.name, false) }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheNameFieldStoresTheGroupAndARowsAskMovesItIn"
+  },
+  {
+   "name": "typing-name-ignores-new-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "var typingName: Bool { renaming != nil || layoutRenaming != nil || newGroup != nil }",
+   "new": "var typingName: Bool { renaming != nil || layoutRenaming != nil }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheNewGroupFieldStandsTheKeyChordsDown"
+  }
+ ]
+}

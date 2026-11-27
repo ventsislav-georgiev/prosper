@@ -1608,6 +1608,10 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
         return (1...maxNameBytes).contains(n.utf8.count) && !isReserved(n) && !n.unicodeScalars.contains { $0 == "=" || $0.value < 0x20 || $0.value == 0x7F }
     }
 
+    /// #2062 (dch #721): a blank pattern is a manual-only group, `group = <name> =`: it never matches by name, sessions
+    /// reach it only by --group-set.
+    var isManual: Bool { pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
     /// A name as dch and the editor compare it: trimmed, ignoring case.
     static func nameKey(_ name: String) -> String { name.trimmingCharacters(in: .whitespaces).lowercased() }
 

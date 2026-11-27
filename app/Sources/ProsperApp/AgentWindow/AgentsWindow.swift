@@ -515,17 +515,17 @@ final class AgentsNSWindow: NSWindow {
         // otherwise (the gate off, an edge, one pane) today's route below, unchanged.
         let pane = PaneKeys.Context(responder: responderKind, keyFocus: model.keyFocus, panes: model.layout.panes.count,
                                     splitsEnabled: AgentPaneLayout.splitsEnabled)
-        if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.renaming != nil || model.layoutRenaming != nil,
+        if let a = PaneKeys.treeAction(for: event, context: pane, renaming: model.typingName,
                                        form: model.newSession != nil), perform(pane: a) { return true }
         // #1379: Slide's Control-Command-S pins the sidebar with the split gate off too (on, the line above took it already).
-        if model.sidebarMode == .slide, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
+        if model.sidebarMode == .slide, !model.typingName, model.newSession == nil,
            PaneKeys.action(for: event, context: pane) == .toggleSidebar, perform(pane: .toggleSidebar) { return true }
         // #901 B3 step 6 (section 10): ⌘J, gate on only (read first) and never under the rename field or the New session
         // form; nothing to jump to: today's route below. Gate off: the line is skipped, ⌘J travels as before.
-        if AgentPaneLayout.splitsEnabled, model.renaming == nil, model.layoutRenaming == nil, model.newSession == nil,
+        if AgentPaneLayout.splitsEnabled, !model.typingName, model.newSession == nil,
            PaneKeys.action(for: event, context: pane) == .nextNeedsYou, perform(pane: .nextNeedsYou) { return true }
         let r = Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused,
-                           terminalMode: model.paneHasTerminal, renaming: model.renaming != nil || model.layoutRenaming != nil,
+                           terminalMode: model.paneHasTerminal, renaming: model.typingName,
                            form: model.newSession != nil)
         if perform(r) { return true }
         // #1916: a pane "⋯" item shows its key as a SwiftUI shortcut; the route above stays the key's only performer. A
@@ -762,7 +762,7 @@ final class AgentsNSWindow: NSWindow {
         if focusClick.take(event.type, focusing: focusing) { return }   // 7.6: the first click only focuses
         let routed = model.map { m in
             Self.route(event, responder: responderKind, sidebarFocused: sidebarFocused, terminalMode: m.paneHasTerminal,
-                       renaming: m.renaming != nil || m.layoutRenaming != nil, form: m.newSession != nil)
+                       renaming: m.typingName, form: m.newSession != nil)
         }
         if AgentPaneLayout.splitsEnabled, let model, Self.layoutKey(event, model, responder: responderKind) { return }
         if event.type == .keyDown, event.keyCode == 48, responderKind != .terminal { sidebarFocused = false }   // Tab: focus moves on
@@ -776,7 +776,7 @@ final class AgentsNSWindow: NSWindow {
     /// session form keep the key, as for the tree keys. Gate off: PaneKeys is nil, false, the key travels as before.
     /// Runs on the main actor, inside sendEvent; rows pass a built event.
     @MainActor static func layoutKey(_ event: NSEvent, _ m: AgentWindowModel, responder: ResponderKind) -> Bool {
-        guard m.renaming == nil, m.layoutRenaming == nil, m.newSession == nil else { return false }   // 4b: the layout field too
+        guard !m.typingName, m.newSession == nil else { return false }   // 4b: the layout field too
         let c = PaneKeys.Context(responder: responder, keyFocus: m.keyFocus, panes: m.layout.panes.count,
                                  splitsEnabled: AgentPaneLayout.splitsEnabled)
         switch PaneKeys.action(for: event, context: c) {

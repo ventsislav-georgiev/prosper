@@ -1389,8 +1389,8 @@ extension DchConfigWriterTests {
     func testGroupValuesSkipWhatDchWouldSkipAndStopAtEight() {
         let bad = [Self.group("a=b", "-x"), Self.group(String(repeating: "n", count: 33), "-x"),
                    Self.group("Dots", "a.b"), Self.group("Blank", " ")]
-        XCTAssertEqual(DchConfigWriter.groupValues(bad + [Self.group(" Ok ", "-ok$")]), ["Ok = -ok$"],
-                       "an \"=\" or a 33-byte name, a non-portable or an empty regex: no line")
+        XCTAssertEqual(DchConfigWriter.groupValues(bad + [Self.group(" Ok ", "-ok$")]), ["Blank =", "Ok = -ok$"],
+                       "an \"=\" or a 33-byte name, a non-portable regex: no line; #2062: a blank one is manual-only")
         let ten = (1...10).map { Self.group("g\($0)", "-p\($0)$") }
         XCTAssertEqual(DchConfigWriter.groupValues(ten), (1...8).map { "g\($0) = -p\($0)$" })
     }
@@ -1504,9 +1504,9 @@ extension DchConfigWriterTests {
     func testAdoptableKeepsWhatDchKeepsAndStopsAtEight() {
         let got = DchConfigWriter.adoptable(["Rev = -rev$", "Dots = a.b", " = -x", String(repeating: "n", count: 33) + " = -x",
                                             "Blank = ", "noequal", "rev = -dup$", "Older=y"])
-        XCTAssertEqual(got.map { "\($0.name) = \($0.pattern)" }, ["Rev = -rev$", "Older = y"],
-                       "a non-portable or empty regex, a blank or 33-byte name, no \"=\", a second Rev: dropped")
-        XCTAssertEqual(Set(got.map(\.id)).count, 2, "an id each")
+        XCTAssertEqual(got.map { "\($0.name) = \($0.pattern)" }, ["Rev = -rev$", "Blank = ", "Older = y"],
+                       "a non-portable regex, a blank or 33-byte name, no \"=\", a second Rev: dropped; #2062: a blank regex is manual-only")
+        XCTAssertEqual(Set(got.map(\.id)).count, 3, "an id each")
         XCTAssertTrue(got.allSatisfy { $0.id.count == 8 && $0.id != SessionGroup.sidekicksID })
         let ten = DchConfigWriter.adoptable((1...10).map { "g\($0) = -p\($0)$" })
         XCTAssertEqual(ten.map(\.name), (1...8).map { "g\($0)" })

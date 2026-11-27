@@ -28,12 +28,15 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         return s
     }
 
-    /// The argv of every launch; each answers `status` and `output`.
+    /// The argv of every launch; each answers `status` and `output`. #2062 r2: `configPath` set, each launch also keeps
+    /// that file's text as it stands at the launch ("" when missing).
     final class Launches: @unchecked Sendable {
         let lock = NSLock()
         var all: [[String]] = []
         var status: Int32 = 0
         var output = ""
+        var configPath: String?
+        var configs: [String] = []
         var args: [[String]] { lock.withLock { all } }
     }
 
@@ -51,7 +54,11 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         c.seedDirs = { [] }
         c.listSessions = { _ in [] }
         c.runner = DchActionRunner(bound: 60, launch: { _, args, _, _, onPid, onOutput in
-            let (status, out) = rec.lock.withLock { rec.all.append(args); return (rec.status, Data(rec.output.utf8)) }
+            let (status, out) = rec.lock.withLock {
+                rec.all.append(args)
+                if let p = rec.configPath { rec.configs.append((try? String(contentsOfFile: p, encoding: .utf8)) ?? "") }
+                return (rec.status, Data(rec.output.utf8))
+            }
             onPid(4242)
             onOutput(out)
             return (status, out)
@@ -211,10 +218,10 @@ final class AgentSessionGroupMoveTests: XCTestCase {
             r.transcript.tickInterval = 3600
         }
         m.runtimes.values.forEach(m.onNewRuntime)
-        var stored = [work], moves: [(String, String?)] = []
+        var stored = [work], moves: [(String, String?)] = [], order: [String] = []
         m.storedGroups = { stored }
-        m.saveGroups = { stored = $0 }
-        m.setGroup = { moves.append(($0.name, $1)) }
+        m.saveGroups = { stored = $0; order.append("save") }
+        m.setGroup = { s, g, configFirst in moves.append((s.name, g)); order.append(configFirst ? "move, config first" : "move") }
         m.runSidebar(.newGroup)
         XCTAssertEqual(m.newGroup, AgentWindowModel.NewGroupAsk())
         m.newGroup?.name = "a=b"
@@ -236,9 +243,115 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         m.runMove(.moveToGroup(nil), s)
         XCTAssertEqual(moves.count, 2)
         XCTAssertTrue(moves.last?.1 == nil, "Automatic: --auto")
+        XCTAssertEqual(order, ["save", "save", "move, config first", "move"],
+                       "#2062 r2: the new group is saved, then moved into with dch's config written first; a plain move is not")
         m.runSidebar(.newGroup)
         m.answerNewGroup(false)
         XCTAssertTrue(m.newGroup == nil, "Cancel")
         XCTAssertEqual(stored.count, 3)
+    }
+
+    // MARK: - Round 2: manual-only groups, the config before the move, the name field
+
+    let ops = SessionGroup(id: "o1", name: "Ops", pattern: "")
+
+    /// The groups list and the tabs in the XCTest store (never the operator's defaults), put back after the row.
+    func useGroups(_ list: [SessionGroup]) {
+        let keys = ["agentIslandSidekickTabs", "agentIslandSessionGroups", "agentIslandSessionGroupsUpdated",
+                    "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandDchGroupsAdoptChecked"]
+        let saved = keys.map { Preferences.defaults.object(forKey: $0) }
+        addTeardownBlock {
+            for (k, v) in zip(keys, saved) {
+                if let v { Preferences.defaults.set(v, forKey: k) } else { Preferences.defaults.removeObject(forKey: k) }
+            }
+        }
+        Preferences.agentIslandSidekickTabs = true
+        Preferences.agentIslandSessionGroups = list
+    }
+
+    /// dch #721: a group with no pattern is manual-only. The controller gives it to the store (its tab, Move to group),
+    /// the writer gives dch `group = Ops =`, the Settings editor saves it, and the local pattern split never fills it.
+    @MainActor
+    func testAManualGroupIsKeptEverywhereAndNeverFilledByThePatternSplit() {
+        let blank = SessionGroup(id: "b1", name: "Blank", pattern: " \t")
+        useGroups([work, ops, blank])
+        let s = session("api", group: ""), st = store([s]), c = controller(st, Launches())
+        c.rowDetailsChanged()
+        XCTAssertEqual(st.sessionGroups.map(\.name), ["Work", "Ops", "Blank"], "the controller keeps manual groups")
+        XCTAssertEqual(items(AgentWindowControls.moveToGroupMenu(s, store: st)).prefix(3), [
+            .item("Work", enabled: true, checked: false, verb: .moveToGroup("Work")),
+            .item("Ops", enabled: true, checked: false, verb: .moveToGroup("Ops")),
+            .item("Blank", enabled: true, checked: false, verb: .moveToGroup("Blank")),
+        ])
+        let values = DchConfigWriter.groupValues([work, ops, blank])
+        XCTAssertEqual(values, ["Work = zzz", "Ops =", "Blank ="])
+        XCTAssertEqual(String(decoding: DchConfigWriter.render(Data(), autoAllow: false, pattern: "zzz", groups: values), as: UTF8.self),
+                       "auto_allow = false\nsidekick_pattern = zzz\ngroup = Work = zzz\ngroup = Ops =\ngroup = Blank =\n",
+                       "dch #721's form, never a placeholder regex")
+        let e = SessionGroupsEditor([work, ops, blank])
+        XCTAssertTrue(e.reason(ops, stored: []) == nil && e.reason(blank, stored: []) == nil, "no reason: saved")
+        XCTAssertEqual(e.saved(stored: []), [work, ops, blank], "the editor's save keeps them")
+        let split = AgentIsland.split([session("Ops"), session("ops-1"), session("Blank")], groups: [ops, blank])
+        XCTAssertEqual(split.primary.map(\.name), ["Ops", "ops-1", "Blank"], "an older dch's rows: no pattern, no match")
+        XCTAssertTrue(split.groups.allSatisfy { $0.sessions.isEmpty })
+        let placed = AgentIsland.split([session("api", group: "ops", manual: "Ops")], groups: [ops])
+        XCTAssertEqual(placed.firstGroup.map(\.name), ["api"], "dch's group places it")
+    }
+
+    /// New group… from a row: dch's config holds the new group's line when --group-set launches. The probe on `queue`
+    /// is slow, so a launch that did not wait for the write would read the file before the line lands. A plain move
+    /// writes nothing first (the debounce's timer is held here and never fires).
+    @MainActor
+    func testNewGroupFromARowWritesDchsConfigBeforeTheGroupSet() {
+        useGroups([work, ops])
+        let file = tempDir("groupConfigFirst").appendingPathComponent("config").path
+        let s = session("api", group: ""), rec = Launches(), st = store([s]), c = controller(st, rec)
+        rec.configPath = file
+        let v = Self.v196
+        c.controlDch = { Thread.sleep(forTimeInterval: 0.3); return v }
+        c.dchConfigPath = { file }
+        c.autoAllowOn = { false }
+        c.after = { _, _ in }
+        rec.output = #"{"name":"api","group":"Ops","result":"ok"}"# + "\n"
+        XCTAssertTrue(c.setGroup(s, group: "Work"))
+        settle(c) { rec.args.count == 1 && !c.runner.isBusy(s.key) }
+        XCTAssertEqual(rec.lock.withLock { rec.configs }, [""], "a plain move: no write first")
+        XCTAssertTrue(c.setGroup(s, group: "Ops", configFirst: true))
+        settle(c) { rec.args.count == 2 && !c.runner.isBusy(s.key) }
+        XCTAssertEqual(rec.args.last, ["--group-set", "api", "Ops", "--json"])
+        XCTAssertEqual(rec.lock.withLock { rec.configs }.last,
+                       "auto_allow = false\nsidekick_pattern = zzz\ngroup = Work = zzz\ngroup = Ops =\n", "written before the launch")
+    }
+
+    /// The New group… field stands the window's key chords down as a rename field does, and only while it is up.
+    @MainActor
+    func testTheNewGroupFieldStandsTheKeyChordsDown() {
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
+        m.runtimes.values.forEach(m.onNewRuntime)
+        let k = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .option], timestamp: 0, windowNumber: 0,
+                                 context: nil, characters: "1", charactersIgnoringModifiers: "1", isARepeat: false, keyCode: 18)!
+        func route() -> AgentsNSWindow.KeyRoute {
+            AgentsNSWindow.route(k, responder: .text, sidebarFocused: false, terminalMode: false, renaming: m.typingName)
+        }
+        XCTAssertFalse(m.typingName)
+        XCTAssertNotEqual(route(), .pass, "no field: Option-Command-1 is the window's")
+        m.runSidebar(.newGroup)
+        XCTAssertTrue(m.typingName, "the field is up")
+        XCTAssertEqual(route(), .pass, "the field keeps the chord")
+        m.answerNewGroup(false)
+        XCTAssertFalse(m.typingName, "Cancel: the chords are back")
+    }
+
+    /// The name is trimmed before it is checked: " Work" beside Work and a blank name are refused; " Ops " is stored as Ops.
+    func testNewGroupTrimsTheNameBeforeItIsChecked() {
+        XCTAssertEqual(AgentWindowControls.addingGroup(" Work", to: [work]), .failure(.init(reason: "Another group has this name")))
+        XCTAssertEqual(AgentWindowControls.addingGroup("  ", to: [work]), .failure(.init(reason: "A name is 1-32 bytes, without \"=\"")))
+        guard case .success(let list) = AgentWindowControls.addingGroup(" Ops ", to: [work]) else { return XCTFail("added") }
+        XCTAssertEqual(list.last?.name, "Ops")
     }
 }

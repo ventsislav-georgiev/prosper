@@ -136,7 +136,6 @@ final class ControlSessionGroupsTests: XCTestCase {
             refused(try ControlSessionGroups.set(groups(group(String(repeating: "n", count: 33), "x"))),
                     "group 1: A name is 1-32 bytes, without \"=\": not saved")
             refused(try ControlSessionGroups.set(groups(group("History", "x"))), "group 1: dch uses this name for its own tab: not saved")
-            refused(try ControlSessionGroups.set(groups(group("Docs", "  "))), "group 1: No pattern yet: not saved")
             refused(try ControlSessionGroups.set(groups(group("Docs", "(unclosed"))), "group 1: Not a valid regex: not saved")
             refused(try ControlSessionGroups.set(groups(group("Docs", ".*"))), "group 1: Matches every session: not saved")
             refused(try ControlSessionGroups.set(groups(group("Docs", "a"), group("docs", "b"))), "group 1: Another group has this name: not saved")

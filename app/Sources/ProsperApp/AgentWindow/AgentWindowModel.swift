@@ -1210,7 +1210,7 @@ final class AgentWindowModel: ObservableObject {
     /// #2062: a row's Move to group item: the island's --group-set (nil: --auto), or New group… for this session.
     func runMove(_ v: AgentSidebarVerb, _ s: AgentSession) {
         switch v {
-        case .moveToGroup(let g): setGroup(s, g)
+        case .moveToGroup(let g): setGroup(s, g, false)
         case .newGroup: newGroup = NewGroupAsk(session: s)
         default: break
         }
@@ -1223,9 +1223,13 @@ final class AgentWindowModel: ObservableObject {
         var refused: String? = nil
     }
     @Published var newGroup: NewGroupAsk?
-    /// #2062 seams: the island's --group-set; the stored list and its save as Settings saves it (the island regroups, then
-    /// writes dch's group lines).
-    lazy var setGroup: (AgentSession, String?) -> Void = { [weak self] s, g in self?.island().setGroup(s, group: g) }
+    /// #2062: a name field is up (a session's or a layout's rename, New group…): the window's key chords stand down for it.
+    var typingName: Bool { renaming != nil || layoutRenaming != nil || newGroup != nil }
+    /// #2062 seams: the island's --group-set (`configFirst`: dch's config is written before it runs, for a group just
+    /// added); the stored list and its save as Settings saves it (the island regroups, then writes dch's group lines).
+    lazy var setGroup: (AgentSession, String?, _ configFirst: Bool) -> Void = { [weak self] s, g, first in
+        self?.island().setGroup(s, group: g, configFirst: first)
+    }
     var storedGroups: () -> [SessionGroup] = { Preferences.agentIslandSessionGroups }
     lazy var saveGroups: ([SessionGroup]) -> Void = { [weak self] list in
         Preferences.editSessionGroups(list)
@@ -1242,7 +1246,8 @@ final class AgentWindowModel: ObservableObject {
         case .success(let list):
             newGroup = nil
             saveGroups(list)
-            if let s = ask.session, let g = list.last { setGroup(s, g.name) }
+            // #2062: the save's dch config write is debounced; this move writes it first, or dch has no such group yet.
+            if let s = ask.session, let g = list.last { setGroup(s, g.name, true) }
         }
     }
 

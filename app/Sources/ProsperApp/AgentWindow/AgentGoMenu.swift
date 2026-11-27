@@ -202,7 +202,7 @@ extension AgentsNSWindow {
     /// responder reads as .other). Pane items: the split gate on, no rename field, no New session form.
     func enabled(_ a: AgentGoMenu.Action) -> Bool {
         guard let model else { return false }
-        let renaming = model.renaming != nil || model.layoutRenaming != nil, form = model.newSession != nil
+        let renaming = model.typingName, form = model.newSession != nil
         switch a {
         case .sidebarMode: return true
         case .pane: return AgentPaneLayout.splitsEnabled && !renaming && !form

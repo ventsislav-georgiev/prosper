@@ -451,11 +451,11 @@ final class AgentIslandController {
         layout()
     }
 
-    /// #571, #1757: the groups the store splits by and dch's config gets, the ones with a pattern; none while the
-    /// tabs are off. Read on a Settings or phone change only (Preferences decodes the list).
+    /// #571, #1757: the groups the store splits by and dch's config gets; none while the tabs are off. #2062: a manual-only
+    /// group (no pattern) is kept: its tab, its Move to group item, its `group = <name> =` line. Read on a Settings or phone
+    /// change only (Preferences decodes the list).
     private static var groups: [SessionGroup] {
-        guard Preferences.agentIslandSidekickTabs else { return [] }
-        return Preferences.agentIslandSessionGroups.filter { !$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        Preferences.agentIslandSidekickTabs ? Preferences.agentIslandSessionGroups : []
     }
 
     /// #571: a Sessions or group tab click (#1759: the group's id; nil: Sessions). Only the shown rows get cards.
@@ -976,13 +976,21 @@ final class AgentIslandController {
     /// dir's control env, as rename runs. A failure is the row's line (AgentIsland.groupSetFailure), never retried; any
     /// answer asks the poller for a list now, which moves the row under its header (no local move before it).
     /// False: nothing ran (not live, no dch, a name dch reads as a flag, or a busy row, which says so).
+    /// `configFirst` (New group…, the group just stored): dch's config is written now through syncDchConfig, the debounced
+    /// write dropped, and the job's `prepare` waits on `queue` (serial: that write is queued before it) before the launch.
     @discardableResult
-    func setGroup(_ s: AgentSession, group: String?) -> Bool {
+    func setGroup(_ s: AgentSession, group: String?, configFirst: Bool = false) -> Bool {
         guard let store, let dch = store.controlDch?.path,
               let live = store.sessions.first(where: { $0.key == s.key }),
               let args = AgentIsland.groupSetArgs(live.name, group) else { return false }
-        let key = live.key
-        let started = run(key, dch: dch, args: args, running: nil) { [weak self] r in
+        let key = live.key, q = queue
+        var prepare: (@Sendable () -> (args: [String]?, out: Data))?
+        if configFirst {
+            dchConfigGen += 1   // the pending debounced write stands down: this one writes the same list
+            syncDchConfig()
+            prepare = { q.sync {}; return (args, Data()) }
+        }
+        let started = run(key, dch: dch, args: args, running: nil, prepare: prepare) { [weak self] r in
             guard let self, let store = self.store else { return }
             if let failed = AgentIsland.groupSetFailure(r) {
                 store.actions[key] = failed
@@ -2067,7 +2075,7 @@ final class AgentIslandController {
     /// meanwhile, and checkAutoAllow syncs again when the newest list's masters move in or out of that set.
     func syncDchConfig() {
         guard let path = dchConfigPath() else { return }
-        let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first?.pattern ?? "")
+        let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first { !$0.isManual }?.pattern ?? "")   // #2062: an older dch's one pattern
         let lines = DchConfigWriter.groupValues(groups)
         let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
         // #1788: adopt only on the first check; after it the file's lines are Prosper's last write, not the user's.
