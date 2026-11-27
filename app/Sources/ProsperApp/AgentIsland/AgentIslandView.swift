@@ -1051,12 +1051,15 @@ struct AgentIslandView: View {
     func planUsageLine(_ u: AgentPlanUsage) -> some View {
         let help = u.help()
         return Button { onPlanLimits(store.planLimits == nil) } label: {
-            Text(verbatim: u.text)
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(Neon.faded(.white, 0.7))
-                .lineLimit(1)
-                .fixedSize()
-                .contentShape(Rectangle())
+            // #2034: the mark leads, so the right-anchored figures stay where they are when it appears.
+            HStack(spacing: 4) {
+                if let k = u.other { Image(systemName: k.symbol).font(.system(size: 10, weight: .medium)) }
+                Text(verbatim: u.text).font(.system(size: 11, weight: .medium).monospacedDigit())
+            }
+            .foregroundStyle(Neon.faded(.white, 0.7))
+            .lineLimit(1)
+            .fixedSize()
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: help))
@@ -1895,7 +1898,20 @@ struct AgentPlanLimitsView: View {
     /// #1999: a section header names a harness other than Claude's, or any harness once there are two; the Claude-only popover is as before.
     static func showsHeader(_ g: AgentPlanLimits.Group, of limits: AgentPlanLimits) -> Bool { limits.groups.count > 1 || g.harness != AgentPlanLimits.claude }
 
+    /// #2034: the popover's height cap, past it the content scrolls (two pools with many accounts); few accounts stay under it.
+    static var maxHeight: CGFloat { 10 * AgentIslandGeometry.rowHeight }
+
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView(.vertical) { content }
+        }
+        .frame(width: Self.width, alignment: .leading)
+        .frame(maxHeight: Self.maxHeight)
+        .background(Color.black)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(limits.groups, id: \.harness) { section($0) }
             // #1999: navigation to the pool pane (where Codex accounts are added), not an account control: drawn for every pool.
@@ -1906,7 +1922,6 @@ struct AgentPlanLimitsView: View {
         }
         .padding(Self.padding)
         .frame(width: Self.width, alignment: .leading)
-        .background(Color.black)
     }
 
     /// #1999: one harness's section: its title (when drawn), its pool block, its cards and compact rows. Read only.

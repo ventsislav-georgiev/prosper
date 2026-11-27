@@ -1517,6 +1517,13 @@ final class AgentIslandController {
         return p
     }
 
+    /// #2034: the line's agent mark (the row marker's AgentKind) when its harness is not the focused row's; internal for the rows.
+    static func marked(_ u: AgentPlanUsage, line: String, focused: String) -> AgentPlanUsage {
+        var u = u
+        u.other = line == focused ? nil : (line == "codex" ? .codex : .claude)
+        return u
+    }
+
     /// #1537: the plan usage line, re-read with the clock now (a value past its reset drops); assigned only on a change.
     func readPlanUsage() {   // internal for #1898's rows
         guard let store else { return }
@@ -1525,7 +1532,7 @@ final class AgentIslandController {
         // #1999: and with no Claude account at all, the Codex line (a Codex-only pool still shows its limits).
         // Not lazy.compactMap.first: on an Array it reads the winning harness twice (startIndex, then subscript).
         var u: AgentPlanUsage? = nil
-        if Preferences.agentIslandShowPlanUsage { for h in planHarness == "claude" ? ["claude", "codex"] : ["codex", "claude"] { if let v = planUsage(now, h) { u = v; break } } }
+        if Preferences.agentIslandShowPlanUsage { for h in planHarness == "claude" ? ["claude", "codex"] : ["codex", "claude"] { if let v = planUsage(now, h) { u = Self.marked(v, line: h, focused: planHarness); break } } }
         guard store.planUsage != u else { return }
         store.planUsage = u
         // #1898: the line's value moved (the pool published a sample or a reset): an open popover re-reads; no line, no popover.

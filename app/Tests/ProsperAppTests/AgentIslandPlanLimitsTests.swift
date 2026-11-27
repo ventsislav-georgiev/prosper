@@ -656,7 +656,8 @@ extension AgentIslandPlanLimitsTests {
         var asked: [String] = []
         c.planUsage = { _, h in asked.append(h); return h == "codex" ? codex : claude }
         c.readPlanUsage()
-        XCTAssertEqual(store.planUsage, claude, "no Codex current: Claude's line stays")
+        var marked = claude; marked.other = .claude   // #2034: Claude's line on a Codex row is marked
+        XCTAssertEqual(store.planUsage, marked, "no Codex current: Claude's line stays")
         XCTAssertEqual(asked, ["codex", "claude"])
         codex = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.9], at: t, reset: [:], now: t))
         codex?.plan = "Codex"
@@ -757,11 +758,59 @@ extension AgentIslandPlanLimitsTests {
         codex.plan = "Codex"
         c.planUsage = { _, h in h == "codex" ? codex : nil }
         c.readPlanUsage()
-        XCTAssertEqual(store.planUsage, codex, "no focused row, no Claude account: the Codex line")
+        var marked = codex; marked.other = .codex   // #2034
+        XCTAssertEqual(store.planUsage, marked, "no focused row, no Claude account: the Codex line")
         XCTAssertTrue(store.planUsage?.help().hasPrefix("Codex plan usage") == true)
         store.planUsage = nil
         store.focusKey = store.sessions.first?.key
         c.readPlanUsage()
-        XCTAssertEqual(store.planUsage, codex, "a Claude row focused, still only Codex has one")
+        XCTAssertEqual(store.planUsage, marked, "a Claude row focused, still only Codex has one")
+    }
+}
+
+// MARK: - #2034: the line's visible harness mark and the popover's height cap
+
+extension AgentIslandPlanLimitsTests {
+    @MainActor func testTheLineIsMarkedOnlyWhenItsHarnessIsNotTheFocusedRows() throws {
+        let saved = Preferences.defaults.object(forKey: "agentIslandShowPlanUsage")
+        defer { if let v = saved { Preferences.defaults.set(v, forKey: "agentIslandShowPlanUsage") } else { Preferences.defaults.removeObject(forKey: "agentIslandShowPlanUsage") } }
+        Preferences.agentIslandShowPlanUsage = true
+        let c = controller({ nil }, limits: { nil })
+        let store = try XCTUnwrap(c.store)
+        store.focusKey = store.sessions.first?.key   // a Claude row
+        var codex = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.4], at: now, reset: [:], now: now))
+        codex.plan = "Codex"
+        c.planUsage = { _, h in h == "codex" ? codex : nil }
+        c.readPlanUsage()
+        XCTAssertTrue(store.planUsage?.other == .codex, "Codex numbers on a Claude row carry the Codex mark")
+        let claude = try XCTUnwrap(AgentPlanUsage(util: ["five_hour": 0.2], at: now, reset: [:], now: now))
+        c.planUsage = { _, h in h == "claude" ? claude : nil }
+        c.readPlanUsage()
+        XCTAssertTrue(store.planUsage?.other == nil, "Claude numbers on a Claude row: today's look, no mark")
+        XCTAssertEqual(store.planUsage?.text, claude.text, "the text itself never carries the mark")
+        c.planUsage = { _, h in h == "codex" ? codex : nil }
+        let codexKey = AgentSessionKey(dir: "/Users/example/d", name: "api-qa")
+        var row = AgentSession(key: codexKey, alias: "", activity: 0, state: .idle, agents: 0)
+        row.agent = "codex"
+        store.sessions.append(row)
+        store.focusKey = codexKey
+        c.readPlanUsage()
+        XCTAssertTrue(store.planUsage?.other == nil, "Codex numbers on a Codex row: no mark")
+    }
+
+    private func manyAccounts(_ n: Int) -> AgentPlanLimits {
+        AgentPlanLimits(groups: [
+            .init(harness: "claude", title: "Claude", pool: "5h 62%", accounts: (0..<n).map { account("cl\($0)", util: ["five_hour": 0.15, "seven_day": 0.3]) }),
+            .init(harness: "codex", title: "Codex", pool: "5h 60%", accounts: (0..<n).map { codexAccount("cx\($0)", util: ["five_hour": 0.4]) })])
+    }
+
+    @MainActor func testThePopoverIsCappedAndScrollsOnlyWithManyAccounts() {
+        XCTAssertEqual(AgentPlanLimitsView.maxHeight, 10 * AgentIslandGeometry.rowHeight, "the cap, a multiple of the row height (sz-scaled)")
+        func height(_ n: Int) -> CGFloat {
+            NSHostingView(rootView: AgentPlanLimitsView(limits: manyAccounts(n), now: now, timeZone: utc)).fittingSize.height
+        }
+        XCTAssertLessThan(height(1), AgentPlanLimitsView.maxHeight, "few accounts: the popover is its content's height")
+        XCTAssertLessThanOrEqual(height(12), AgentPlanLimitsView.maxHeight + 0.5, "many accounts reach the cap and no more")
+        XCTAssertGreaterThan(height(12), AgentPlanLimitsView.maxHeight - 60, "and they do reach it")
     }
 }

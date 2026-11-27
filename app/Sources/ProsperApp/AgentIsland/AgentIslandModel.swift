@@ -1296,6 +1296,8 @@ struct AgentPlanUsage: Equatable, Sendable {
     var weekReset: Int?
     /// #2011: whose plan the line is ("Claude", "Codex"), the focused session's harness; the help's first words.
     var plan = "Claude"
+    /// #2034: the agent mark drawn before the line when it shows another harness than the focused row's; nil: the same harness.
+    var other: AgentSidebar.AgentKind?
 
     static let sessionWindow: Double = 5 * 3600
     static let weekWindow: Double = 7 * 86400
