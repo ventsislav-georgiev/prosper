@@ -2105,7 +2105,7 @@ struct ExtensionHost {
         -- A line or bar chart (#2023): x is text or a number, y a number.
         --   host.ui.chart{ title=, kind="line"|"bar", x_label=, y_label=,
         --                  series={ { name=, points={ {x=, y=}, ... } }, ... }, empty_text= }
-        -- At most 12 series of 1000 points; a NaN/inf point is dropped.
+        -- At most 12 series, 1000 points each and 2000 in total; a NaN/inf point is dropped.
         chart   = tag("chart"),
         -- Native encode: a view command serialises its result tree on every
         -- keystroke, so this is the hot path that most benefits from going native.

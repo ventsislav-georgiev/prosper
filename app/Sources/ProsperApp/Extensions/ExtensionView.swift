@@ -224,12 +224,15 @@ struct ConverterNode: Decodable, Equatable {
 /// A line or bar chart, built by `host.ui.chart{ title=, kind="line"|"bar", x_label=,
 /// y_label=, series={ {name=, points={ {x=, y=}, ... }}, ... }, empty_text= }` (#2023).
 /// The tree comes from an extension, so decoding is the trust boundary: more than
-/// `maxSeries` series or `maxPoints` points in one series is a decode error (the
-/// count is checked before any element is decoded), and a point whose x or y is
+/// `maxSeries` series, `maxPoints` points in one series or `maxTotalPoints` across
+/// all series is a decode error (each count is checked before that list's elements
+/// are decoded), and a point whose x or y is
 /// null (Lua's NaN/inf encode as null) or non-finite is dropped.
 struct ChartNode: Decodable, Equatable {
     static let maxSeries = 12
     static let maxPoints = 1000
+    /// Across all series: bounds the marks one chart draws (12 x 1000 would be 12,000).
+    static let maxTotalPoints = 2000
 
     enum Kind: String, Decodable, Equatable { case line, bar }
 
@@ -270,7 +273,7 @@ struct ChartNode: Decodable, Equatable {
     let isNumericX: Bool
 
     var emptyMessage: String { emptyText ?? "No data" }
-    /// At most maxSeries * maxPoints, so the sum cannot overflow.
+    /// At most maxTotalPoints, so the sum cannot overflow.
     var pointCount: Int { series.reduce(0) { $0 + $1.points.count } }
     var isEmpty: Bool { pointCount == 0 }
     var accessibilitySummary: String {
@@ -290,6 +293,7 @@ struct ChartNode: Decodable, Equatable {
         emptyText = try c.decodeIfPresent(String.self, forKey: .empty_text)
 
         var out: [Series] = []
+        var total = 0
         if var sc = try Self.list(c, .series) {
             guard (sc.count ?? 0) <= Self.maxSeries else {
                 throw DecodingError.dataCorruptedError(
@@ -302,6 +306,12 @@ struct ChartNode: Decodable, Equatable {
                     guard (pc.count ?? 0) <= Self.maxPoints else {
                         throw DecodingError.dataCorruptedError(
                             in: pc, debugDescription: "chart series has more than \(Self.maxPoints) points")
+                    }
+                    // Each count is <= maxPoints and the running total is checked every series, so no overflow.
+                    total += pc.count ?? 0
+                    guard total <= Self.maxTotalPoints else {
+                        throw DecodingError.dataCorruptedError(
+                            in: pc, debugDescription: "chart has more than \(Self.maxTotalPoints) points in total")
                     }
                     points.reserveCapacity(pc.count ?? 0)
                     while !pc.isAtEnd {

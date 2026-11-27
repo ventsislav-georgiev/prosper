@@ -70,6 +70,8 @@ tag from the now-released section and put it on the new top draft.
 - The agent window and island now mark Claude and Codex rows, and on a Codex session the Stop and
   Restart questions, the message notices and the conversation pane name Codex; folders used only
   with Codex now show under recent folders (#2002)
+- Extension charts with more than 2000 points across all series now fail to load with a message,
+  which keeps a chart quick to draw
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

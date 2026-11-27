@@ -104,6 +104,24 @@ final class ExtensionChartViewTests: XCTestCase {
         XCTAssertThrowsError(try ExtensionViewNode.decode(json: series(1, points: 1001)))
     }
 
+    private func chartJSON(counts: [Int]) -> String {
+        let all = counts.map { n in
+            let pts = (0..<n).map { #"{"x":\#($0),"y":1}"# }.joined(separator: ",")
+            return #"{"name":"s","points":[\#(pts)]}"#
+        }
+        return #"{"type":"chart","kind":"line","series":[\#(all.joined(separator: ","))]}"#
+    }
+
+    func testTotalPointsAcrossSeriesIsCappedAtTwoThousand() throws {
+        XCTAssertEqual(ChartNode.maxTotalPoints, 2000)
+        XCTAssertEqual(try chart(chartJSON(counts: [1000, 1000])).pointCount, 2000)
+        XCTAssertEqual(try chart(chartJSON(counts: [1000])).pointCount, 1000)
+        // Each series is within the per-series cap, so only the total guard can reject this.
+        XCTAssertThrowsError(try ExtensionViewNode.decode(json: chartJSON(counts: [667, 667, 667]))) {
+            XCTAssertTrue(String(describing: $0).contains("2000 points in total"), "\($0)")
+        }
+    }
+
     func testNonFinitePointsAreDropped() throws {
         // Lua's NaN and inf encode as null; such a point is dropped, the rest stay.
         let n = try chart(try luaChart("""
@@ -150,6 +168,24 @@ final class ExtensionChartViewTests: XCTestCase {
     func testTwelveSeriesGetTwelveDistinctColours() {
         let colours = (0..<ChartNode.maxSeries).map { ChartRender.colour($0) }
         XCTAssertEqual(Set(colours).count, ChartNode.maxSeries)
+    }
+
+    /// A 12-series chart at the 2000-point cap: layout plus one display pass, off-screen.
+    @MainActor
+    func testFullChartRendersWithinABound() throws {
+        let counts = Array(repeating: 166, count: 11) + [174]
+        let node = try ExtensionViewNode.decode(json: chartJSON(counts: counts))
+        let start = Date()
+        let host = NSHostingView(rootView: ExtensionRenderedView(node: node, onAction: { _, _, _ in }))
+        host.frame = NSRect(x: 0, y: 0, width: 520, height: 460)
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        let ms = Date().timeIntervalSince(start) * 1000
+        print("CHART_TIMING ms=\(Int(ms))")
+        XCTAssertTrue(host.window == nil)
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        // shortcut: generous bound until CI timings are known, tighten after the first CI run
+        XCTAssertLessThan(ms, 2000)
     }
 
     /// Builds the view in an NSHostingView that is never put in a window.
