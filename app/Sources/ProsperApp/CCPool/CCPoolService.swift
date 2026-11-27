@@ -74,7 +74,7 @@ final class CCPoolThresholdBox: @unchecked Sendable {
 /// (`CCPoolStore`, `lock` here). No closure handed to Network or URLSession comes from @MainActor code.
 final class CCPoolService: @unchecked Sendable {
     static let defaultPort: UInt16 = 8790
-    static let productionUpstream = URL(string: "https://api.anthropic.com")!
+    static let productionUpstream = ClaudeHarness.upstream
     static let healthPath = "/ccpool/health"
     static let serviceName = "ccpool-proxy"
     /// First token of the `Server` header: how a probe tells a ccpool proxy from anything else.

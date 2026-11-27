@@ -4,8 +4,8 @@ import Foundation
 /// account, straight to the upstream base (never through ANTHROPIC_BASE_URL), so nothing between
 /// can forge a header. For the explicit Refresh only: never polled. No UI wiring in P1.
 enum CCPoolUsage {
-    static let probeModel = "claude-haiku-4-5-20251001"
-    static let marker = "You are Claude Code, Anthropic's official CLI for Claude."
+    static let probeModel = ClaudeHarness.probeModel
+    static let marker = ClaudeHarness.marker
 
     struct Probe: Equatable, Sendable {
         var status: Int
@@ -30,46 +30,24 @@ enum CCPoolUsage {
 
     /// nil on a network error. A 401/403 comes back as a Probe with that status (spec 3.4: "Token rejected").
     static func probe(token: String, base: URL, model: String = probeModel, timeout: TimeInterval = 30) async -> Probe? {
-        let payload: [String: Any] = [
-            "model": model, "max_tokens": 1,
-            "system": [["type": "text", "text": marker, "cache_control": ["type": "ephemeral"]]],
-            "messages": [["role": "user", "content": "hi"]],
-        ]
-        // N4: under XCTest the production upstream is never dialled, so no token can leave in a test.
-        guard !CCPoolService.refusesUnderTest(base),
-              let body = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
-        var req = URLRequest(url: base.appendingPathComponent("v1/messages"), timeoutInterval: timeout)
-        req.httpMethod = "POST"
-        req.httpBody = body
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        // QA #734 INFO-10: never follow a redirect (a 3xx is the answer and reads as "could not
-        // answer": no rate-limit headers), so the token reaches no host but `base`.
-        let session = CCPoolUpstream.probeSession()
-        defer { session.finishTasksAndInvalidate() }
-        guard let result = try? await session.data(for: req, delegate: CCPoolNoRedirect()),
-              let http = result.1 as? HTTPURLResponse else { return nil }
-        var headers: [String: String] = [:]
-        for (k, v) in http.allHeaderFields { if let k = k as? String { headers[k] = "\(v)" } }
-        return Probe(status: http.statusCode, limits: CCPoolCore.parseLimits(headers).limits)
+        await ClaudeHarness.probe(token: token, base: base, model: model, timeout: timeout)
     }
 
     /// Probe every account in order, bench what the probe says is spent, record rollovers, and
     /// compute the pool headroom row. Costs one call per account.
     static func refresh(store: CCPoolStore, secrets: CCPoolSecrets, base: URL, logger: CCPoolLogger,
-                        threshold: Double = CCPoolCore.exhaustedDefault) async -> Report {
+                        threshold: Double = CCPoolCore.exhaustedDefault, harness: any PoolHarness = ClaudeHarness()) async -> Report {
         var rows: [Row] = []
         var live: [CCPoolCore.LiveAccount] = []
-        for label in store.read({ $0.order }) {
+        // #2004: only this harness's accounts, each through its probe.
+        for label in store.read({ st in st.order.filter { (st.accounts[$0]?.harness ?? harness.id) == harness.id } }) {
             guard let id = store.read({ $0.accounts[label]?.id }),
                   let token = (try? secrets.token(id: id)) ?? nil, !token.isEmpty else {
                 logger.note(label, "refresh: token unavailable")
                 rows.append(Row(label: label, limits: nil, status: nil))
                 continue
             }
-            let answer = await probe(token: token, base: base)
+            let answer = await harness.probe(token: token, base: base, timeout: 30)
             // R1190-1: the verdict belongs to the account probed, by its Keychain id, not to its label: a rename, a
             // remove and add or an import Replace during the probe can move the label to another account. An account
             // gone by now gets no row and no write (the pane keys its flags by a row's label).

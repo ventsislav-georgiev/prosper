@@ -20,14 +20,24 @@ struct CCPoolState: Codable, Equatable, Sendable {
         /// #1278: epoch of the first 401 this token got on /v1/messages; while set the account is not routed. Cleared by
         /// a 2xx reply, Release or a new token (a fresh Account). Absent from the file when nil.
         var refused: Int?
+        /// #2004: the harness this account serves (PoolHarness.id). Absent from the file for claude, so a Claude-only
+        /// state.json is written byte for byte as before the key existed.
+        var harness: String = ClaudeHarness.id
+        /// #2004: the login kind within the harness (a later phase's "codex-chatgpt", "openai-key"); nil (absent) for claude.
+        var kind: String?
 
-        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:], held: Int? = nil, refused: Int? = nil) {
+        init(id: String, cooldown: [String: Int] = [:], reset: [String: Int] = [:], held: Int? = nil, refused: Int? = nil,
+             harness: String = ClaudeHarness.id, kind: String? = nil) {
             self.id = id
             self.cooldown = cooldown
             self.reset = reset
             self.held = held
             self.refused = refused
+            self.harness = harness
+            self.kind = kind
         }
+
+        private enum CodingKeys: String, CodingKey { case id, cooldown, reset, held, refused, harness, kind }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -36,6 +46,20 @@ struct CCPoolState: Codable, Equatable, Sendable {
             reset = try c.decodeIfPresent([String: Int].self, forKey: .reset) ?? [:]
             held = try c.decodeIfPresent(Int.self, forKey: .held)
             refused = try c.decodeIfPresent(Int.self, forKey: .refused)
+            harness = try c.decodeIfPresent(String.self, forKey: .harness) ?? ClaudeHarness.id
+            kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        }
+
+        /// The synthesized shape (optionals only when set), plus harness only when it is not claude.
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(cooldown, forKey: .cooldown)
+            try c.encode(reset, forKey: .reset)
+            try c.encodeIfPresent(held, forKey: .held)
+            try c.encodeIfPresent(refused, forKey: .refused)
+            if harness != ClaudeHarness.id { try c.encode(harness, forKey: .harness) }
+            try c.encodeIfPresent(kind, forKey: .kind)
         }
     }
 
@@ -49,7 +73,13 @@ struct CCPoolState: Codable, Equatable, Sendable {
         static func == (a: Pin, b: Pin) -> Bool { a.account == b.account }
     }
 
-    var current: String?
+    /// #2004: harness id -> the account that harness last served from (`remember`; `pick` prefers it).
+    var currents: [String: String] = [:]
+    /// Claude's current: the file's single legacy "current" key.
+    var current: String? {
+        get { currents[ClaudeHarness.id] }
+        set { currents[ClaudeHarness.id] = newValue }
+    }
     var order: [String] = []
     var accounts: [String: Account] = [:]
     /// Conversation key ("<session id>/<agent id>") -> pin. Saved as "pins": {key: account}, Python's shape.
@@ -64,7 +94,7 @@ struct CCPoolState: Codable, Equatable, Sendable {
     /// counts by its `written` numbers only, so a reply that only adds pending dollars never rewrites the file.
     /// #1261 (R1260-f): and only the rows encode writes, so a row of an id outside the pool rewrites nothing.
     static func == (a: CCPoolState, b: CCPoolState) -> Bool {
-        a.current == b.current && a.order == b.order && a.accounts == b.accounts && a.pins == b.pins
+        a.currents == b.currents && a.order == b.order && a.accounts == b.accounts && a.pins == b.pins
             && a.savedCapacity.compactMapValues(\.written) == b.savedCapacity.compactMapValues(\.written)
     }
 
@@ -113,6 +143,7 @@ struct CCPoolState: Codable, Equatable, Sendable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
+        // shortcut: only Claude's current is saved (the legacy key); the phase that adds a second harness saves the others.
         try c.encodeIfPresent(current, forKey: .current)
         try c.encode(order, forKey: .order)
         try c.encode(accounts, forKey: .accounts)
@@ -168,48 +199,34 @@ enum CCPoolCore {
 
     static let fiveHour = "five_hour"
 
-    /// Which claims a model draws on (ccpool_watch.CLAIMS), matched by substring, first hit wins.
-    /// fable is seven_day_overage_included, not seven_day_opus.
-    static let claimsTable: [(model: String, claims: [String])] = [
-        ("opus", ["five_hour", "seven_day", "seven_day_opus"]),
-        ("fable", ["five_hour", "seven_day", "seven_day_overage_included"]),
-        ("sonnet", ["five_hour", "seven_day", "seven_day_sonnet"]),
-        ("haiku", ["five_hour", "seven_day"]),
-    ]
-    /// Unknown model: it is held back by every claim.
-    static let mostRestrictive = ["five_hour", "seven_day", "seven_day_opus",
-                                  "seven_day_sonnet", "seven_day_overage_included"]
+    /// #2004: Claude's claim tables live in ClaudeHarness; these names forward to them.
+    static let claimsTable = ClaudeHarness.claimsTable
+    static let mostRestrictive = ClaudeHarness.mostRestrictive
     /// The claims every model draws on (haiku's): a cooldown on one takes the whole account out.
     static let shared = ["five_hour", "seven_day"]
 
-    static let headerPrefix = "anthropic-ratelimit-unified-"
-    /// Header abbreviation -> claim name.
-    static let abbrev = ["5h": "five_hour", "7d": "seven_day",
-                         "7d-opus": "seven_day_opus", "7d-sonnet": "seven_day_sonnet",
-                         "7d-overage-included": "seven_day_overage_included"]
-    /// Display names (the binary reads seven_day_overage_included as "Fable 5 limit").
-    static let display = ["five_hour": "5h", "seven_day": "week", "seven_day_opus": "opus",
-                          "seven_day_sonnet": "sonnet", "seven_day_overage_included": "fable"]
-    static let displayOrder = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet",
-                               "seven_day_overage_included"]
+    static let headerPrefix = ClaudeHarness.headerPrefix
+    static let abbrev = ClaudeHarness.abbrev
+    static let display = ClaudeHarness.display
+    static let displayOrder = ClaudeHarness.displayOrder
 
     // MARK: Model -> claims
 
-    static func claims(for model: String?) -> [String] {
-        guard let model else { return mostRestrictive }
-        return claimsTable.first { model.contains($0.model) }?.claims ?? mostRestrictive
-    }
+    static func claims(for model: String?) -> [String] { ClaudeHarness.claims(for: model) }
 
-    static func isKnownModel(_ model: String?) -> Bool {
-        guard let model else { return false }
-        return claimsTable.contains { model.contains($0.model) }
-    }
+    static func isKnownModel(_ model: String?) -> Bool { ClaudeHarness.isKnownModel(model) }
 
     // MARK: Selection
 
-    static func eligible(_ account: CCPoolState.Account?, model: String?, now: Double) -> Bool {
+    static func eligible(_ account: CCPoolState.Account?, model: String?, now: Double,
+                         harness: any PoolHarness = ClaudeHarness()) -> Bool {
         let cd = account?.cooldown ?? [:]
-        return claims(for: model).allSatisfy { Double(cd[$0] ?? 0) <= now }
+        return harness.claims(for: model).allSatisfy { Double(cd[$0] ?? 0) <= now }
+    }
+
+    /// #2004: `name` may serve `harness`: its account is of that harness, or (as before the seam) not in `accounts`.
+    static func serves(_ state: CCPoolState, _ name: String, _ harness: any PoolHarness) -> Bool {
+        (state.accounts[name]?.harness ?? harness.id) == harness.id
     }
 
     /// Cooldown keys no claim list reads: an account benched on one would never be skipped.
@@ -221,13 +238,14 @@ enum CCPoolCore {
     /// One account serves everything until it is exhausted, then the next: every switch rewrites the
     /// prompt cache (per organisation). The next is the eligible account whose five-hour window rolls
     /// over soonest; never-measured accounts last; ties by label (#1838).
-    static func pick(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double) -> String? {
-        let names = state.order
-        if let current = state.current, names.contains(current), !exclude.contains(current),
-           eligible(state.accounts[current], model: model, now: now) {
+    static func pick(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double,
+                     harness: any PoolHarness = ClaudeHarness()) -> String? {
+        let names = state.order.filter { serves(state, $0, harness) }
+        if let current = state.currents[harness.id], names.contains(current), !exclude.contains(current),
+           eligible(state.accounts[current], model: model, now: now, harness: harness) {
             return current
         }
-        let ready = names.filter { !exclude.contains($0) && eligible(state.accounts[$0], model: model, now: now) }
+        let ready = names.filter { !exclude.contains($0) && eligible(state.accounts[$0], model: model, now: now, harness: harness) }
         return ready.min { a, b in
             let ra = resetAt(state.accounts[a], fiveHour, now: now)
             let rb = resetAt(state.accounts[b], fiveHour, now: now)
@@ -249,8 +267,11 @@ enum CCPoolCore {
     /// account; a quota check only touches a pin it follows.
     /// `followed` is true when a pin gave the answer (#1259 R1259-a). `share` (#1677) only steers `place`; a pin is followed whatever its use.
     static func route(_ state: CCPoolState, key: String?, quotaCheck: Bool, model: String?,
-                      exclude: Set<String>, now: Double, share: Double = exhaustedDefault) -> (account: String?, state: CCPoolState, followed: Bool) {
-        guard let key, CCPoolState.validPinKey(key) else { return (pick(state, model: model, exclude: exclude, now: now), state, false) }
+                      exclude: Set<String>, now: Double, share: Double = exhaustedDefault,
+                      harness: any PoolHarness = ClaudeHarness()) -> (account: String?, state: CCPoolState, followed: Bool) {
+        guard let key, CCPoolState.validPinKey(key) else {
+            return (pick(state, model: model, exclude: exclude, now: now, harness: harness), state, false)
+        }
         // Lookups read an expired copy: a lookup alone never changes what the file holds (expired pins leave it
         // with the next pin or move, which expires first).
         var live = state
@@ -259,11 +280,13 @@ enum CCPoolCore {
         let siblings = live.pins.filter { $0.key.hasPrefix(sid) && $0.key != key }
             .sorted { ($0.key == sid ? 1 : 0, $0.value.seen, $0.value.account) > ($1.key == sid ? 1 : 0, $1.value.seen, $1.value.account) }
             .map(\.value.account)
-        let usable = { (n: String) in state.order.contains(n) && state.accounts[n] != nil && !exclude.contains(n)
-            && eligible(state.accounts[n], model: model, now: now) }
+        let usable = { (n: String) in state.order.contains(n) && state.accounts[n]?.harness == harness.id && !exclude.contains(n)
+            && eligible(state.accounts[n], model: model, now: now, harness: harness) }
         // followed: the answer came from a pin, not from `place`; its reply then leaves `current` where it is.
         let pinned = ([live.pins[key]?.account].compactMap { $0 } + siblings).first(where: usable)
-        guard let name = pinned ?? place(state, model: model, exclude: exclude, now: now, share: share) else { return (nil, state, false) }
+        guard let name = pinned ?? place(state, model: model, exclude: exclude, now: now, share: share, harness: harness) else {
+            return (nil, state, false)
+        }
         var st = state
         if live.pins[key]?.account == name {   // the expired copy: an idle pin is never revived by a touch (R1259-q1)
             st.touchPin(key, now: now)   // stamp only: kept in memory, never written (Pin == ignores it)
@@ -285,7 +308,7 @@ enum CCPoolCore {
     /// now is at or above it ranks after every account under it, before the full ones; all over: the order above. It
     /// never excludes, so it never turns an answer into none. At 1.0 (or NaN) no account is over without being full.
     static func place(_ state: CCPoolState, model: String?, exclude: Set<String>, now: Double,
-                      share: Double = exhaustedDefault) -> String? {
+                      share: Double = exhaustedDefault, harness: any PoolHarness = ClaudeHarness()) -> String? {
         var live = state
         live.expirePins(now: now)
         var sessions: [String: Set<Substring>] = [:]   // bounded by the pin cap
@@ -299,8 +322,8 @@ enum CCPoolCore {
             let score = (1 - util) * CCPoolCapacity.capacity(of: row, among: rows) / Double((sessions[n]?.count ?? 0) + 1)
             return (util >= 1 ? 2 : util >= share ? 1 : 0, score.isFinite && score > 0 ? score : 0)
         }
-        let ready = state.order.filter { state.accounts[$0] != nil && !exclude.contains($0)
-            && eligible(state.accounts[$0], model: model, now: now) }
+        let ready = state.order.filter { state.accounts[$0]?.harness == harness.id && !exclude.contains($0)
+            && eligible(state.accounts[$0], model: model, now: now, harness: harness) }
             .map { (name: $0, rank: rank($0), reset: resetAt(state.accounts[$0], fiveHour, now: now),
                     shunned: (state.shunned[$0] ?? 0) > now) }
         return ready.min { a, b in
@@ -326,9 +349,9 @@ enum CCPoolCore {
     }
 
     /// Earliest cooldown end among the claims `model` draws on, for the all-benched message.
-    static func nextReset(_ state: CCPoolState, model: String?, now: Double) -> Int? {
-        let wanted = Set(claims(for: model))
-        return state.accounts.values.flatMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values }.min()
+    static func nextReset(_ state: CCPoolState, model: String?, now: Double, harness: any PoolHarness = ClaudeHarness()) -> Int? {
+        let wanted = Set(harness.claims(for: model))
+        return state.accounts.values.filter { $0.harness == harness.id }.flatMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values }.min()
     }
 
     // MARK: Header parse
@@ -337,26 +360,7 @@ enum CCPoolCore {
     /// `fallback` are skipped (overage-status reads "rejected" on a healthy account). An unknown
     /// abbreviation is returned in `unknown`, for a log line; it never benches.
     static func parseLimits(_ headers: [String: String]) -> (limits: [String: CCPoolLimit], unknown: [String]) {
-        var limits: [String: CCPoolLimit] = [:]
-        var unknown: Set<String> = []
-        for (rawKey, value) in headers {
-            let key = rawKey.lowercased()
-            guard key.hasPrefix(headerPrefix) else { continue }
-            let rest = key.dropFirst(headerPrefix.count)
-            for field in ["status", "utilization", "reset"] where rest.hasSuffix("-" + field) {
-                let ab = String(rest.dropLast(field.count + 1))
-                if ab.isEmpty || ab == "overage" || ab == "fallback" { continue }
-                guard let claim = abbrev[ab] else { unknown.insert(ab); continue }
-                var row = limits[claim] ?? CCPoolLimit()
-                switch field {
-                case "status": row.status = value
-                case "utilization": row.utilization = value
-                default: row.reset = value
-                }
-                limits[claim] = row
-            }
-        }
-        return (limits, unknown.sorted())
+        ClaudeHarness.parseLimits(headers)
     }
 
     /// An epoch from a header value; nil for anything that is not a finite, sane number.
@@ -457,8 +461,9 @@ extension CCPoolState {
         accounts[label]?.reset = fresh
     }
 
+    /// `label` becomes the current account of its own harness.
     mutating func remember(_ label: String) {
-        if accounts[label] != nil { current = label }
+        if let h = accounts[label]?.harness { currents[h] = label }
     }
 
     /// Hold an account out of rotation by hand: a bench on five_hour, the one claim every model reads.

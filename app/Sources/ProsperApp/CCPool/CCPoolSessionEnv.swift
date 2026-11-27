@@ -30,7 +30,7 @@ enum CCPool {
     static func baseURL(port: UInt16) -> String { "http://127.0.0.1:\(port)" }
 
     /// #1890: the variable a session's own upstream lives in.
-    static let baseURLKey = "ANTHROPIC_BASE_URL"
+    static let baseURLKey = ClaudeHarness.env.key
 
     /// #1890 (operator 2026-11-23): a session whose env already points ANTHROPIC_BASE_URL anywhere other than this pool
     /// is left alone. `inherited` is that value (nil or "": none). Returns it when it is foreign, nil when the pool may
@@ -124,11 +124,9 @@ enum CCPool {
     static func sessionEnv(command: [String], base: String, on: Bool, healthy: Bool, hasAccounts: Bool,
                            inherited: String? = nil) -> EnvDelta {
         guard on, healthy, hasAccounts, foreignBaseURL(inherited, base: base) == nil, let first = command.first else { return EnvDelta() }
-        switch programName(first) {
-        case "claude": return EnvDelta(set: ["ANTHROPIC_BASE_URL": base])
-        case "headroom": return EnvDelta()
-        default: return EnvDelta()
-        }
+        // #2004: the harness env rule (claude: ANTHROPIC_BASE_URL); `headroom` and anything else: no change.
+        let rule = ClaudeHarness.env
+        return rule.programs.contains(programName(first)) ? EnvDelta(set: [rule.key: base]) : EnvDelta()
     }
 
     /// spec 3.6 at spawn time: the person's toggle, the proxy's status and the pool's accounts, each read

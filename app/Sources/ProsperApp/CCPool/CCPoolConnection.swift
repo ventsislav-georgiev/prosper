@@ -109,9 +109,7 @@ final class CCPoolExchange: CCPoolUpstreamHandler, @unchecked Sendable {
 final class CCPoolConnection: @unchecked Sendable {
     /// Hop-by-hop headers plus the ones the proxy owns (B10). The client's own credential never
     /// goes upstream. accept-encoding: URLSession decodes what it asked for, so it asks itself.
-    static let stripRequest: Set<String> = ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-                                            "te", "trailers", "trailer", "proxy-connection", "transfer-encoding", "upgrade", "host",
-                                            "authorization", "x-api-key", "content-length", "expect", "accept-encoding"]
+    static let stripRequest = ClaudeHarness.stripRequest
     /// content-encoding: URLSession hands over decoded bytes, so the upstream's encoding no longer applies.
     static let stripResponse: Set<String> = ["connection", "transfer-encoding", "content-length", "keep-alive",
                                              "content-encoding"]
@@ -127,17 +125,9 @@ final class CCPoolConnection: @unchecked Sendable {
 
     static func capped(_ s: String) -> String { String(decoding: s.utf8.prefix(logFieldCap), as: UTF8.self) }
 
-    static let oauthBeta = "oauth-2025-04-20"
-    /// #1595: the client's anthropic-beta list with the OAuth beta appended once; a list that already
-    /// names it (any case or spacing) goes out unchanged.
-    static func withOAuthBeta(_ list: String?) -> String {
-        let list = list ?? ""
-        let has = list.split(separator: ",").contains {
-            $0.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(oauthBeta) == .orderedSame
-        }
-        if has { return list }
-        return list.trimmingCharacters(in: .whitespaces).isEmpty ? oauthBeta : list + "," + oauthBeta
-    }
+    /// #2004: Claude's request rules live in ClaudeHarness; these names forward to them.
+    static let oauthBeta = ClaudeHarness.oauthBeta
+    static func withOAuthBeta(_ list: String?) -> String { ClaudeHarness.withOAuthBeta(list) }
 
     /// #1256 delay seam: run `go` on `queue` after `seconds`. Tests install a recorder that records the
     /// seconds and continues at once; no test runs this default.
@@ -146,21 +136,8 @@ final class CCPoolConnection: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + .seconds(seconds), execute: go)
     }
 
-    /// #1256: the client's quota check is a JSON body whose max_tokens is the integer 1 (Python
-    /// `req.get("max_tokens") == 1`); a bool, a float, a string or any other value is not one.
-    static func isQuotaCheck(_ obj: [String: Any]?) -> Bool {
-        guard let n = obj?["max_tokens"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-              !["f", "d"].contains(String(cString: n.objCType)) else { return false }
-        return n.int64Value == 1
-    }
-
-    /// #1259: the conversation key "<session id>/<agent id>" as Python conversation() builds it (ccpool_proxy.py 83-85),
-    /// header names case-insensitive; outside data, so nil unless the whole key passes validPinKey. Never logged.
-    static func pinKey(_ head: CCPoolRequestHead) -> String? {
-        guard let sid = head.header("x-claude-code-session-id"), !sid.isEmpty else { return nil }
-        let key = sid + "/" + (head.header("x-claude-code-agent-id") ?? "")
-        return CCPoolState.validPinKey(key) ? key : nil
-    }
+    static func isQuotaCheck(_ obj: [String: Any]?) -> Bool { ClaudeHarness.isQuotaCheck(obj) }
+    static func pinKey(_ head: CCPoolRequestHead) -> String? { ClaudeHarness.pinKey(head) }
 
     let queue = DispatchQueue(label: "com.prosper.ccpool.conn")
     /// #1675: the client socket (CCPoolFDTransport in production; NWConnection before).
@@ -168,6 +145,8 @@ final class CCPoolConnection: @unchecked Sendable {
     // X16: the dependencies are held strongly, never the service: a callback that outlives the
     // service (released without stop()) must find what it needs, not trap on a dead reference.
     private let config: CCPoolServiceConfig
+    /// #2004: the harness this connection's request is for, chosen once (Claude is the only one so far).
+    private let harness: any PoolHarness = ClaudeHarness()
     private let store: CCPoolStore
     private let secrets: CCPoolSecrets
     private let log: CCPoolLogger
@@ -344,7 +323,7 @@ final class CCPoolConnection: @unchecked Sendable {
             guard body.count >= expected else { return true }
             let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
             model = obj?["model"] as? String
-            quotaCheck = Self.isQuotaCheck(obj)
+            quotaCheck = harness.isQuotaCheck(obj)
             shape = CCPoolThrottleShape.request(bytes: body.count, obj)
             startRelay()
             return true
@@ -431,22 +410,22 @@ final class CCPoolConnection: @unchecked Sendable {
         attempts += 1
         let now = store.now
         // #1259: a keyed request follows (and pins) its session; no usable key = `pick` as before, nothing changed.
-        let key = head.flatMap(Self.pinKey)
+        let key = head.flatMap({ harness.pinKey($0) })
         let picked: String?
         // #1278: a refused token is skipped (pins too). Nothing else left and not the move: a last resort routes once
         // more ignoring refusal only (cooldowns still count), so the result can only be a refused account.
         // R1278b-a: only when no account outside the refused ones is left at all; one that is merely benched could
         // serve later, so the client gets today's 429 with its reset time instead of a rejected token's 401.
         func lastResort(_ st: CCPoolState) -> Bool {
-            last == nil && replacedFrom == nil && !st.accounts.contains { !tried.contains($0.key) && $0.value.refused == nil }
+            last == nil && replacedFrom == nil && !st.accounts.contains { $0.value.harness == harness.id && !tried.contains($0.key) && $0.value.refused == nil }
         }
         var anyway = false
         if key == nil {
             picked = store.read { st -> String? in
-                if let n = CCPoolCore.pick(st, model: model, exclude: tried.union(st.refusedLabels), now: now) { return n }
+                if let n = CCPoolCore.pick(st, model: model, exclude: tried.union(st.refusedLabels), now: now, harness: harness) { return n }
                 guard lastResort(st) else { return nil }
                 anyway = true
-                return CCPoolCore.pick(st, model: model, exclude: tried, now: now)
+                return CCPoolCore.pick(st, model: model, exclude: tried, now: now, harness: harness)
             }
             followedPin = false
             routed = "pick"
@@ -458,15 +437,16 @@ final class CCPoolConnection: @unchecked Sendable {
             picked = store.mutate { st -> String? in
                 var exclude = tried.union(st.refusedLabels)
                 var (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model,
-                                                       exclude: exclude, now: now, share: share)
+                                                       exclude: exclude, now: now, share: share, harness: harness)
                 if name == nil, lastResort(st) {
                     anyway = true
                     exclude = tried
-                    (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: exclude, now: now, share: share)
+                    (name, next, f) = CCPoolCore.route(st, key: key, quotaCheck: quotaCheck, model: model, exclude: exclude, now: now, share: share,
+                                                       harness: harness)
                 }
                 // The account a placement at 1.0 would have taken, when the share moved it elsewhere (only below 1.0).
                 if share < CCPoolCore.exhaustedDefault, !f, let name,
-                   let plain = CCPoolCore.place(st, model: model, exclude: exclude, now: now), plain != name {
+                   let plain = CCPoolCore.place(st, model: model, exclude: exclude, now: now, harness: harness), plain != name {
                     skipped = plain
                 }
                 st = next
@@ -515,12 +495,10 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         var req = URLRequest(url: url, timeoutInterval: config.timeout)
         req.httpMethod = head.method
-        for (name, value) in head.headers where !Self.stripRequest.contains(name.lowercased()) {
+        for (name, value) in head.headers where !harness.stripRequest.contains(name.lowercased()) {
             req.addValue(value, forHTTPHeaderField: name)
         }
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        // #1595: an OAuth Bearer without this beta is refused upstream (and the 401 benches the account, #1278).
-        req.setValue(Self.withOAuthBeta(req.value(forHTTPHeaderField: "anthropic-beta")), forHTTPHeaderField: "anthropic-beta")
+        harness.authorize(&req, token: token)
         if streamed {
             req.httpBodyStream = bodyIn
             bodyIn = nil
@@ -544,7 +522,7 @@ final class CCPoolConnection: @unchecked Sendable {
         for (k, v) in response.allHeaderFields {
             if let k = k as? String { headers[k.lowercased()] = "\(v)" }
         }
-        let (limits, unknown) = CCPoolCore.parseLimits(headers)
+        let (limits, unknown) = harness.parseLimits(headers)
         if !unknown.isEmpty { log.note(label, "unknown claim window \(unknown.joined(separator: ",")); not benching on it") }
         // #1190 INFO-2: what this answer says belongs to the account that sent it, by its Keychain id: the
         // label may have moved to another account (rename, remove and add, a Replace) while it was in flight.
@@ -581,7 +559,7 @@ final class CCPoolConnection: @unchecked Sendable {
             var reason = spent.isEmpty ? "no exhausted quota" : "reported exhausted quota"
             if spent.isEmpty, wait > CCPoolCore.longRetryAfter {
                 // The cooldown belongs to the requested model's weekly claim, not every model.
-                let claim = CCPoolCore.isKnownModel(model) ? CCPoolCore.claims(for: model).last! : CCPoolCore.fiveHour
+                let claim = harness.isKnownModel(model) ? harness.claims(for: model).last! : CCPoolCore.fiveHour
                 spent = [claim: Int(now) + wait]
                 reason = "long Retry-After for requested model"
             }
@@ -644,7 +622,7 @@ final class CCPoolConnection: @unchecked Sendable {
         }
         writeHead(response.statusCode, headers)
         // #1482: the tap reads every relayed reply for the usage record.
-        ex.tap = CCPoolUsageTap(contentType: headers["content-type"])
+        ex.tap = harness.usageTap(contentType: headers["content-type"])
         ex.status = response.statusCode
         ex.limits = limits
         // #1260 (D5): learn keeps its gate: only a 200 that is real work.
@@ -755,13 +733,13 @@ final class CCPoolConnection: @unchecked Sendable {
     private func event(_ ev: CCPoolEventRow.Kind, acct: String? = nil, from: String? = nil, to: String? = nil,
                        claim: String? = nil, reset: Int? = nil) {
         events?.add(CCPoolEventRow(t: store.now, ev: ev, acct: acct, from: from, to: to, claim: claim, reset: reset,
-                                   sess: head.flatMap(Self.pinKey)))
+                                   sess: head.flatMap({ harness.pinKey($0) })))
     }
 
     private func addRow(acct: String, st: Int, done: Bool, usage: CCPoolTokenUsage?, lim: [String: CCPoolLimit]) {
         guard let record else { return }
         let end = store.now
-        let keyed = head.flatMap(Self.pinKey) != nil
+        let keyed = head.flatMap({ harness.pinKey($0) }) != nil
         let ms = (end - startedAt) * 1000
         record.add(CCPoolUsageRow(t: end, acct: acct, model: CCPoolUsageRow.modelWord(model),
                                   sess: keyed ? head?.header("x-claude-code-session-id") : nil,
@@ -783,7 +761,7 @@ final class CCPoolConnection: @unchecked Sendable {
         var next = ThrottleNext.returned
         // #1262: after the same-account retries, ONE move (Python relay() 486-496). No usable key, a quota check or a
         // body that cannot be sent again never moves.
-        if replayable, !quotaCheck, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil {
+        if replayable, !quotaCheck, attempts < maxAttempts, head.flatMap({ harness.pinKey($0) }) != nil {
             next = .move
         }
         // #1262: refused at the destination too (Python relay() 497-502): back where the cache is, never a second move.
@@ -792,7 +770,7 @@ final class CCPoolConnection: @unchecked Sendable {
         // the refusing one excluded (it is in `tried`); no same-account retry, no wait. A second refusal is returned.
         // #1878: only a 429 with the unified rate-limit headers; one without them is upstream refusing the check itself
         // (every account refuses it while serving real work), so a second account would only spend a second refusal.
-        if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts, head.flatMap(Self.pinKey) != nil, ex.unified {
+        if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts, head.flatMap({ harness.pinKey($0) }) != nil, ex.unified {
             next = .replace
         }
         // #1855: an account that refused a placement ranks last in place() for a short while (memory only, no write).
@@ -848,7 +826,7 @@ final class CCPoolConnection: @unchecked Sendable {
     /// stamp; no write when it is already there) and ONE 429 goes out, `answer`'s Retry-After. #1263 (R1262-a):
     /// `answer` nil = the pool answers itself (its 502 after a transport failure at the destination).
     private func pinBack(_ first: CCPoolExchange, answer: CCPoolExchange?) {
-        if let key = head.flatMap(Self.pinKey) {
+        if let key = head.flatMap({ harness.pinKey($0) }) {
             let now = store.now, id = first.accountID
             store.mutate { st in if let owner = st.label(ofID: id) { st.pin(key, to: owner, now: now) } }
         }
@@ -865,7 +843,7 @@ final class CCPoolConnection: @unchecked Sendable {
 
     private func noAccounts() {
         exchange = nil
-        let when = store.read { CCPoolCore.nextReset($0, model: model, now: store.now) }
+        let when = store.read { CCPoolCore.nextReset($0, model: model, now: store.now, harness: harness) }
         var hint = ""
         if let when {
             let f = DateFormatter()

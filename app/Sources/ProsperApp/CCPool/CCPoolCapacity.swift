@@ -79,11 +79,8 @@ enum CCPoolCapacity {
     /// Utilization is a fraction (0.10 = 10 points); above this it is absurd.
     static let maxUtilization = 10.0
 
-    /// ccpool_proxy.py:173-174, in the reference's order: (family, input, output, cache read) $/MTok.
-    static let prices: [(family: String, input: Double, output: Double, read: Double)] = [
-        ("fable", 8, 40, 0.2), ("mythos", 8, 40, 0.2), ("opus", 4, 20, 0.2),
-        ("sonnet", 2, 10, 0.1), ("haiku", 0.1, 0.5, 0.01),
-    ]
+    /// #2004: Claude's price table lives in ClaudeHarness.
+    static let prices = ClaudeHarness.prices
 
     private static func okCount(_ v: Double) -> Bool { v.isFinite && v >= 0 && v <= maxTokens }
 
