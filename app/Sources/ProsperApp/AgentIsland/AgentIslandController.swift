@@ -1501,7 +1501,9 @@ final class AgentIslandController {
         let now = Date().timeIntervalSince1970
         // #1552: off, never read. A harness with no current account yet (Codex before its pool) keeps Claude's line, not none.
         // #1999: and with no Claude account at all, the Codex line (a Codex-only pool still shows its limits).
-        let u = Preferences.agentIslandShowPlanUsage ? (planHarness == "claude" ? ["claude", "codex"] : ["codex", "claude"]).lazy.compactMap { self.planUsage(now, $0) }.first : nil
+        // Not lazy.compactMap.first: on an Array it reads the winning harness twice (startIndex, then subscript).
+        var u: AgentPlanUsage? = nil
+        if Preferences.agentIslandShowPlanUsage { for h in planHarness == "claude" ? ["claude", "codex"] : ["codex", "claude"] { if let v = planUsage(now, h) { u = v; break } } }
         guard store.planUsage != u else { return }
         store.planUsage = u
         // #1898: the line's value moved (the pool published a sample or a reset): an open popover re-reads; no line, no popover.
