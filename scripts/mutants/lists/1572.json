@@ -5,8 +5,8 @@
   {
    "name": "token-before-removed",
    "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "        let removed = store.read { $0.label(ofID: accountID) } == nil\n        guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {",
-   "new": "        let early = (try? secrets.token(id: accountID)) ?? nil\n        let removed = store.read { $0.label(ofID: accountID) } == nil\n        guard !removed, let token = early, !token.isEmpty else {",
+   "old": "guard !removed, let token = (try? secrets.token(id: accountID)) ?? nil, !token.isEmpty else {",
+   "new": "guard let token = (try? secrets.token(id: accountID)) ?? nil, !removed, !token.isEmpty else {",
    "expect": "killed"
   },
   {
