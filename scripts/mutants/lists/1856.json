@@ -33,7 +33,7 @@
   {
    "name": "set-no-idreuse",
    "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
-   "old": "id = old.first { SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id\n                    ?? String(",
+   "old": "id = old.first { !$0.isOff && SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id\n                    ?? String(",
    "new": "id = String(",
    "expect": "killed"
   },
