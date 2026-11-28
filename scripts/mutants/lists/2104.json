@@ -71,6 +71,20 @@
    "old": "checked: checked, verb: .moveToGroup(checked ? nil : $0.name))",
    "new": "checked: checked, verb: .moveToGroup($0.name))",
    "expect": "killed"
+  },
+  {
+   "name": "row-menu-move-omitted",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "AgentSidebarMenuEntries(entries: snap.move) { m.runMove($0, s) }",
+   "new": "EmptyView()",
+   "expect": "killed"
+  },
+  {
+   "name": "row-menu-open-not-selecting",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "open: { m.select(.live(s.key)); m.openSelected() }, side: { m.openToTheSide(row.id) })",
+   "new": "open: { m.openSelected() }, side: { m.openToTheSide(row.id) })",
+   "expect": "killed"
   }
  ]
 }
