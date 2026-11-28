@@ -1,0 +1,54 @@
+{
+ "entry": "2066",
+ "filter": "XrayBottomPaneTests|AgentWindowD1Tests/testXrayCount",
+ "mutants": [
+  {
+   "name": "bottom-clamp-removed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "            return min(max(n.doubleValue, 0), 1)\n        }\n        set {\n            if let newValue { defaults.set(newValue, forKey: Keys.xrayBottomFraction) }",
+   "new": "            return n.doubleValue\n        }\n        set {\n            if let newValue { defaults.set(newValue, forKey: Keys.xrayBottomFraction) }",
+   "expect": "killed",
+   "filter": "XrayBottomPaneTests/testFractionDefaultsAndStoredValuesReadClampedNeverTrap"
+  },
+  {
+   "name": "bottom-no-collapse",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "fraction = h < Self.strip + Self.snap ? 0 : min(1, h / total)",
+   "new": "fraction = min(1, max(0, h / total))",
+   "expect": "killed",
+   "filter": "XrayBottomPaneTests/testDraggingDownToTheStripFoldsAndShowUnfolds"
+  },
+  {
+   "name": "bottom-tab-not-stored",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "didSet { if tab != oldValue { Preferences.xrayBottomTab = tab } }",
+   "new": "didSet { }",
+   "expect": "killed",
+   "filter": "XrayBottomPaneTests/testSelectedTabIsRememberedPerMac"
+  },
+  {
+   "name": "count-click-no-tab",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        XrayBottomPane.shared.show(tab)\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayCountGroupClickOpensTheDrawerAtItsTab"
+  },
+  {
+   "name": "count-gate-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "guard let pane, XrayPanels.dch() != nil, XrayTarget.of(row) != nil else { return nil }",
+   "new": "guard let pane else { return nil }",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testXrayCountGroupsAreButtonsOnlyWithTheGateOpen"
+  },
+  {
+   "name": "bottom-floor-dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "max(0, min(total - floor, max(strip, total * fraction)))",
+   "new": "max(0, max(strip, total * fraction))",
+   "expect": "killed",
+   "filter": "XrayBottomPaneTests/testContentAboveKeepsItsFloorAtSmallDrawerHeights"
+  }
+ ]
+}
