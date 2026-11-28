@@ -2166,6 +2166,13 @@ struct DchListRow: Equatable, Sendable {
     static let maxHarnessBytes = 3 * 8191
     /// #1467 m1: the sub-agent count kept from dch's unbounded `agents`, so a sum over every session cannot overflow.
     static let maxAgents = 9_999
+    /// #2087: dch 1.195's `subagents` (files-based, so it holds while Claude Code's agent panel is hidden or covered,
+    /// unlike the panel-scraped `agents`): the entries whose state is "running"; nil when the key is not an array (an
+    /// older dch, a non-Claude or --remote row), so the caller falls back to `agents`. A non-object entry or a
+    /// non-string state is not running.
+    static func runningSubagents(_ v: Any?) -> Int? {
+        (v as? [Any]).map { $0.lazy.filter { ($0 as? [String: Any])?["state"] as? String == "running" }.count }
+    }
     /// #1558: dch 1.101's `shells` (DchShell.list), newest first; nil when the key is left out (an older dch, no Claude,
     /// a --remote row): the row stays as before.
     var shells: [DchShell]? = nil
@@ -2639,7 +2646,8 @@ enum DchCommand {
             if alias.isEmpty { alias = harness }
             return DchListRow(name: name, alias: alias,
                               activityEpoch: o["activity_epoch"] as? Int ?? 0, state: o["state"] as? String ?? "",
-                              agents: min(DchSessionMeta.count(o["agents"]) ?? 0, DchListRow.maxAgents),
+                              agents: min(DchListRow.runningSubagents(o["subagents"]) ?? DchSessionMeta.count(o["agents"]) ?? 0,
+                                          DchListRow.maxAgents),
                               meta: DchSessionMeta(json: o["meta"]),
                               metaEpoch: DchSessionMeta.count(o["meta_epoch"]) ?? 0,
                               version: o["version"] as? String ?? "",

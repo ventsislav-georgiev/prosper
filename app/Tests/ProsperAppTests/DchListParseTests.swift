@@ -61,6 +61,36 @@ final class DchListParseTests: XCTestCase {
         XCTAssertEqual(rows.map(\.agents), [9_999, 0, 0, 0, 9_999, 9_999])
     }
 
+    /// #2087: dch 1.195's `subagents` is the truth when it is an array: its "running" entries, whatever the
+    /// panel-scraped `agents` says (0 while the panel is hidden or covered); `agents` only when the key is missing or
+    /// not an array. Junk entries (not an object, no state, a non-string state) are not running. The phone's wire
+    /// key carries the count.
+    func testSubagentsRunningCountWinsOverPanelAgents() {
+        let json = """
+        [{"name":"a","agents":0,"subagents":[{"id":"1","state":"running"},{"id":"2","state":"done","ended":5},
+          {"id":"3","state":"failed","ended":6},{"id":"4","state":"running","row":null}]},
+         {"name":"b","agents":3,"subagents":[]},
+         {"name":"c","agents":3},
+         {"name":"d","agents":4,"subagents":["running",{"id":"5"},{"state":5},{"state":"running"},7,null,[]]},
+         {"name":"e","agents":2,"subagents":{"state":"running"}},
+         {"name":"f","agents":2,"subagents":null}]
+        """
+        let rows = DchCommand.parseListJSON(Data(json.utf8))
+        XCTAssertEqual(rows.map(\.name), ["a", "b", "c", "d", "e", "f"])
+        XCTAssertEqual(rows.map(\.agents), [2, 0, 3, 1, 2, 2])
+        let wire = (try? JSONSerialization.jsonObject(with: DchFrame.listPayload(rows))) as? [[String: Any]] ?? []
+        XCTAssertEqual(wire.count, 6)
+        XCTAssertEqual(wire.first?["agents"] as? Int, 2, "the phone gets the running count")
+        XCTAssertTrue(wire.dropFirst().first?["agents"] == nil, "an empty array is none on the wire too")
+    }
+
+    /// #2087: the running count is kept to DchListRow.maxAgents like `agents`.
+    func testSubagentsRunningCountIsCapped() {
+        let entries = Array(repeating: #"{"state":"running"}"#, count: DchListRow.maxAgents + 1).joined(separator: ",")
+        let rows = DchCommand.parseListJSON(Data(#"[{"name":"a","agents":0,"subagents":[\#(entries)]}]"#.utf8))
+        XCTAssertEqual(rows.map(\.agents), [DchListRow.maxAgents])
+    }
+
     /// An older dch prints nothing for `--ls-json` — the caller must see "no rows"
     /// and fall back to the TSV list, not a half-built row.
     func testEmptyAndGarbageJsonYieldNoRows() {
