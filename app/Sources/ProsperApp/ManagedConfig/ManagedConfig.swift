@@ -86,6 +86,8 @@ final class ManagedConfig: Sendable {
     let beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)?
     /// #1431 test seam, nil in the product: the path of the directory the commit holds open (a nil answer: F_GETPATH).
     let pinnedDirPath: (@Sendable (_ dir: Int32) -> String?)?
+    /// #2099 test seam, nil in the product: told the path of every file read, so a row can count the reads of one status.
+    let onRead: (@Sendable (_ path: String) -> Void)?
 
     /// errata C9: re-plan at most 3 times on a concurrent write, then "file changed, retry".
     static let maxReplans = 3
@@ -99,13 +101,14 @@ final class ManagedConfig: Sendable {
     init(roots: ManagedConfigRoots, consent: any ManagedConfigConsent,
          writer: any ManagedConfigFileWriter = ManagedConfigPOSIXWriter(), now: @escaping @Sendable () -> Date = { Date() },
          beforeRename: (@Sendable (_ temp: URL, _ handle: Int32) -> Void)? = nil,
-         pinnedDirPath: (@Sendable (_ dir: Int32) -> String?)? = nil) {
+         pinnedDirPath: (@Sendable (_ dir: Int32) -> String?)? = nil, onRead: (@Sendable (_ path: String) -> Void)? = nil) {
         self.roots = roots
         self.consent = consent
         self.writer = writer
         self.now = now
         self.beforeRename = beforeRename
         self.pinnedDirPath = pinnedDirPath
+        self.onRead = onRead
     }
 
     var stateURL: URL { roots.stateDir.appendingPathComponent("state.json") }
@@ -556,20 +559,28 @@ final class ManagedConfig: Sendable {
         var state = loadState()
         let readable = stateIsReadable()
         sweepStaleTemps(beside: state)
+        // #2099: each target is read once per status, not once per piece (settings.json holds several); `.some(nil)` is a cached miss
+        var files: [String: [UInt8]?] = [:]
+        func bytes(_ url: URL) -> [UInt8]? {
+            if let b = files[url.path] { return b }
+            let b = read(url)
+            files[url.path] = .some(b)
+            return b
+        }
         var out = state.records.filter { $0.owner == owner.id }.map { r in
             // the live file: the target may have become (or stopped being) a symlink since the write
             var live = r
             if case .success(let t) = ManagedConfigPaths.resolve(r.target, kind: r.piece.kind, owner: owner, roots: roots) { live.path = t.url.path }
-            return ManagedConfigPieceStatus(id: r.piece.id, state: pieceState(live, in: state), target: r.target, path: live.path)
+            return ManagedConfigPieceStatus(id: r.piece.id, state: pieceState(live, in: state, bytes: bytes), target: r.target, path: live.path)
         }
         var adopted: [ManagedConfigRecord] = []
         for p in declared where !state.records.contains(where: { $0.owner == owner.id && $0.piece.id == p.id }) {
             var s = ManagedConfigPieceStatus(id: p.id, state: .notApplied, target: p.target, path: "")
             if readable, p.kind == .block, case .success(let t) = ManagedConfigPaths.resolve(p.target, kind: .block, owner: owner, roots: roots) {
                 s.path = t.url.path
-                let bytes = read(t.url) ?? []
-                if case .present(let b, let e) = ManagedTextBlock.find(owner: owner.id, piece: p.id, in: bytes) {
-                    let onDisk = ManagedTextBlock.bytes(of: bytes, begin: b, end: e)
+                let text = bytes(t.url) ?? []
+                if case .present(let b, let e) = ManagedTextBlock.find(owner: owner.id, piece: p.id, in: text) {
+                    let onDisk = ManagedTextBlock.bytes(of: text, begin: b, end: e)
                     let block = p.text.flatMap { body in ManagedTextBlock.syntax(for: t.url).map {
                         ManagedTextBlock.render(owner: owner.id, piece: p.id, version: owner.version, body: body, syntax: $0)
                     } }
@@ -607,7 +618,7 @@ final class ManagedConfig: Sendable {
         return true
     }
 
-    private func pieceState(_ r: ManagedConfigRecord, in state: ManagedConfigState) -> ManagedConfigPieceState {
+    private func pieceState(_ r: ManagedConfigRecord, in state: ManagedConfigState, bytes read: (URL) -> [UInt8]?) -> ManagedConfigPieceState {
         let url = URL(fileURLWithPath: r.path)
         if let src = r.sourceDir, !FileManager.default.fileExists(atPath: src) { return .orphaned }
         let bytes = read(url)
@@ -708,7 +719,10 @@ final class ManagedConfig: Sendable {
         return state
     }
 
-    private func read(_ url: URL) -> [UInt8]? { FileManager.default.contents(atPath: url.path).map { Array($0) } }
+    private func read(_ url: URL) -> [UInt8]? {
+        onRead?(url.path)
+        return FileManager.default.contents(atPath: url.path).map { Array($0) }
+    }
     private func hash(_ bytes: [UInt8]?) -> String { bytes.map(OrderedJSON.sha256) ?? "absent" }
     /// #1240: what is at `url` now, against a plan's hash. read() answers nil for an existing file it cannot
     /// read too: that is "unreadable", which no plan holds, so the commit answers changed and the replan refuses.

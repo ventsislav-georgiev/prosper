@@ -74,10 +74,11 @@ struct KitPaneView: View {
         return parts.joined(separator: " - ")
     }
 
-    /// The plain notes under the header: the A9 line, user scope, edited, hooks off, untrusted.
+    /// The plain notes under the header: the A9 line, user scope, edited, drifted pieces, hooks off, untrusted.
     static func notes(_ m: KitPaneModel) -> [String] {
         var out = [applyNote, userScopeNote]
         if m.facts?.filesEdited == true { out.append(editedNote) }
+        out += (m.facts?.drifted ?? []).map(KitPaneModel.driftNote) // #2099
         if m.facts?.hooksDisabled == true { out.append(hooksOffNote) }
         if !m.trusted { out.append(untrustedNote) }
         return out

@@ -122,6 +122,30 @@ final class ControlKitsTests: XCTestCase {
         XCTAssertEqual(k["refused"], .array([]))
     }
 
+    /// #2099: an applied piece whose slot was removed by hand is listed as drifted with its note; nothing is repaired.
+    func testListShowsAPieceRemovedByHandAsDrifted() async throws {
+        let e = try kitPaneEnv()
+        _ = try fakeKit(e)
+        let r = registry()
+        let applied = await call(r, "kits.apply", ["id": .string(Self.ext)])
+        XCTAssertTrue(applied.ok, applied.error ?? "")
+        func row() async -> [String: ControlJSON] {
+            if case .array(let kits)? = object(await call(r, "kits.list"))["kits"], case .object(let k)? = kits.first { return k }
+            return [:]
+        }
+        let clean = await row()
+        XCTAssertEqual(clean["drifted"], .array([]), "\(clean)")
+        var s = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: e.settings)) as? [String: Any])
+        s["statusLine"] = nil
+        try JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys]).write(to: e.settings)
+        let k = await row()
+        XCTAssertEqual(k["drifted"], .array([.string("hud")]), "\(k)")
+        guard case .array(let notes)? = k["notes"] else { return XCTFail("no notes: \(k)") }
+        XCTAssertTrue(notes.contains(.string("hud was changed outside Prosper; Repair puts it back")), "\(notes)")
+        XCTAssertEqual(k["applied"], .bool(true))
+        XCTAssertTrue((try JSONSerialization.jsonObject(with: Data(contentsOf: e.settings)) as? [String: Any])?["statusLine"] == nil, "no repair on read")
+    }
+
     // MARK: kits.install
 
     func testInstallFromAFolderClosesTheSelectionStoresTheSettingAndAppliesOnce() async throws {

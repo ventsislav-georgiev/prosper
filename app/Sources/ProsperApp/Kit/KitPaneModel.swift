@@ -44,6 +44,8 @@ final class KitPaneModel: ObservableObject {
         var sourceRefusal: String? = nil
         /// #922: the kit's bin dir ({{kit_bin}}), for the shell-path piece's line shown before it is applied
         var kitBin: String = ""
+        /// #2099: applied pieces whose slot or block was changed or removed outside Prosper (shown; never repaired here)
+        var drifted: [String] = []
     }
 
     let extID: String
@@ -84,6 +86,18 @@ final class KitPaneModel: ObservableObject {
     var warnings: [String] { (facts?.status.map(\.notes) ?? (facts?.restoreRefusal.map { [$0] } ?? [])).map(Self.restoreShown) }
 
     nonisolated static let notValidated = "not validated again"
+
+    /// #2099: the states of an applied piece whose JSON slot is gone or holds another value, or whose block is gone or edited
+    nonisolated static let driftStates: Set<ManagedConfigPieceState> = [.missing, .replaced, .drifted, .conflict]
+
+    /// #2099: the ids of the live kit's switched-on pieces in a drift state, from the status the refresh already read (no
+    /// file read of its own). Not applied, off, or with no managed-config record (agents): never drifted.
+    nonisolated static func drifted(_ s: KitRuntimeStatus?) -> [String] {
+        guard let s, s.live != nil else { return [] }
+        return s.pieces.filter { driftStates.contains($0.state) && !s.off.contains($0.id) }.map(\.id)
+    }
+
+    nonisolated static func driftNote(_ id: String) -> String { "\(id) was changed outside Prosper; Repair puts it back" }
 
     /// R1409-i1: the runtime's restore refusal ends ": nothing applied"; the pane says the state was not validated again.
     nonisolated static func restoreShown(_ s: String) -> String {
@@ -179,7 +193,8 @@ final class KitPaneModel: ObservableObject {
         return Facts(status: status, preview: rt.preview(ext, source: source, otherKitSlugs: others), requirements: reqs,
                      overrides: hooksDir.flatMap { KitPaneFacts.overrides($0, uid: getuid()) }, inUse: inUse, hooksDisabled: hooksOff,
                      filesEdited: edited, updateAvailable: await rt.updateAvailable(ext), restoreRefusal: rt.restoreRefusal,
-                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools(), sourceRefusal: capped, kitBin: layout.bin)
+                     settingsEnv: store.readSettingsEnv(), offTools: rt.offTools(), sourceRefusal: capped, kitBin: layout.bin,
+                     drifted: drifted(status))
     }
 
     // MARK: actions

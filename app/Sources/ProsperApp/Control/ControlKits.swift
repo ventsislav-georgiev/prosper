@@ -216,7 +216,7 @@ enum ControlKits {
 
     // MARK: - commands
 
-    /// {"kits": [{id, title, version, trusted, applied, live, pieces [{id, kind, on}], settings [{key, value}], notes, refused}]}
+    /// {"kits": [{id, title, version, trusted, applied, live, pieces [{id, kind, on}], settings [{key, value}], notes, refused, drifted}]}
     static func list() async throws -> ControlJSON {
         let o = try runtimes()
         var rows: [ControlJSON] = []
@@ -235,6 +235,7 @@ enum ControlKits {
             // as the pane's warnings: the refresh notes, else the restore refusal
             let notes = (f.status.map(\.notes) ?? (f.restoreRefusal.map { [$0] } ?? [])).map(KitPaneModel.restoreShown)
                 + (f.filesEdited ? ["kit files edited since they were applied"] : []) + (f.sourceRefusal.map { [$0] } ?? [])
+                + f.drifted.map(KitPaneModel.driftNote) // #2099
             let form = KitPaneModel.form(kit, env: f.settingsEnv)
             rows.append(.object([
                 "id": .string(rec.id), "title": .string(title(rec)),
@@ -243,7 +244,7 @@ enum ControlKits {
                 "live": f.status?.live.map { .string($0) } ?? .null, "updateAvailable": .bool(f.updateAvailable),
                 "pieces": .array(kit.pieces.map { .object(["id": .string($0.id), "kind": .string($0.kind.rawValue), "on": .bool(!off.contains($0.id))]) }),
                 "settings": .array(kit.settings.map { .object(["key": .string($0.key), "value": .string(form[$0.key] ?? "")]) }),
-                "notes": strings(notes), "refused": strings(refused),
+                "notes": strings(notes), "refused": strings(refused), "drifted": strings(f.drifted),
             ]))
         }
         return .object(["kits": .array(rows)])
@@ -409,7 +410,7 @@ extension ControlRegistry {
         let id = ControlArg(type: "string", required: true, summary: "a kit id from kits.list")
         let settings = ControlArg(type: "object", summary: "kit settings: {key: text} with the kit's declared keys")
         let off = ControlArg(type: "array", summary: "piece ids to leave out; the pieces that need one go with it")
-        r.register(ControlCommand(name: "kits.list", summary: "Every installed agent kit: id, title, version, trusted, applied, live, updateAvailable, pieces (id, kind, on), settings (key, value), notes, refused.",
+        r.register(ControlCommand(name: "kits.list", summary: "Every installed agent kit: id, title, version, trusted, applied, live, updateAvailable, pieces (id, kind, on), settings (key, value), notes, refused, drifted (applied piece ids changed or removed outside Prosper; kits.repair puts them back).",
                                   args: [:], mutates: false, run: { _, _ in throw ControlError("kits.list reads off main: send it through the control channel") },
                                   runAsync: { _, _ in try await ControlKits.list() }))
         r.register(ControlKits.change("kits.install", "Install an agent kit from https://github.com/<owner>/<repo> (or .../tree/<tag>) or an absolute folder, trust it, write its selection and settings, and apply it; the config file changes it is asked about are approved for this call (listed in the reply with the Claude Code slots they write). Refuses an id already installed. Undo (a kit not applied before) removes what it applied and uninstalls it.",
