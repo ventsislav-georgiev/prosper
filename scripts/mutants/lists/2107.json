@@ -1,0 +1,69 @@
+{
+ "entry": "2107",
+ "filter": "SessionGroupsEditorTests|AgentWindowSidebarMenuTests/testColourItemSavesThePickOnItsGroup|AgentWindowSidebarMenuTests/testGroupMenuColourSubmenuTitlesAndChecks",
+ "mutants": [
+  {
+   "name": "no_saved_colour_on_bad_row",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "return stored(g.id, in: st).map { var s = $0; s.color = g.color; return s }",
+   "new": "return stored(g.id, in: st)",
+   "expect": "killed"
+  },
+  {
+   "name": "pick_noop",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "        rows[i].color = hex\n",
+   "new": "        _ = hex\n",
+   "expect": "killed"
+  },
+  {
+   "name": "adopt_noop",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "if let s = stored.first(where: { $0.id == rows[i].id }) { rows[i].color = s.color }",
+   "new": "if let s = stored.first(where: { $0.id == rows[i].id }), s.color != nil { rows[i].color = s.color }",
+   "expect": "killed"
+  },
+  {
+   "name": "shown_ignores_auto",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "SessionGroup.colors(rows, auto: auto)",
+   "new": "SessionGroup.colors(rows, auto: [:])",
+   "expect": "killed"
+  },
+  {
+   "name": "value_no_automatic",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "return automatic && hex != nil ?",
+   "new": "return false && hex != nil ?",
+   "expect": "killed"
+  },
+  {
+   "name": "swatch_ax_label",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": ".accessibilityLabel(\"Colour of group \\(title)\")",
+   "new": ".accessibilityLabel(\"Colour \\(title)\")",
+   "expect": "killed"
+  },
+  {
+   "name": "no_window_notice",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "return NotificationCenter.default.post(name: .sessionGroupColorPickedInWindow, object: nil)",
+   "new": "return",
+   "expect": "killed"
+  },
+  {
+   "name": "no_settings_observer",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "editor.adoptColors(Preferences.agentIslandSessionGroups)",
+   "new": "_ = editor",
+   "expect": "killed"
+  },
+  {
+   "name": "automatic_unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "checked: automatic, verb: .groupColor(nil)",
+   "new": "checked: false, verb: .groupColor(nil)",
+   "expect": "killed"
+  }
+ ]
+}
