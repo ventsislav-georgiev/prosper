@@ -1229,7 +1229,9 @@ final class AgentWindowModel: ObservableObject {
             var list = storedGroups()
             guard let i = list.firstIndex(where: { $0.name == name }), list[i].color != hex else { return }
             list[i].color = hex
-            return saveGroups(list)
+            saveGroups(list)
+            // #2107: Settings' open group rows show the pick (its editor holds its own copy of the list).
+            return NotificationCenter.default.post(name: .sessionGroupColorPickedInWindow, object: nil)
         }
         AgentWindowControls.runGroup(v, name: name, rows: rows, island: island())
     }

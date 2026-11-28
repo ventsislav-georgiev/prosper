@@ -8,7 +8,8 @@ import XCTest
 /// never-shown window and read on its accessibility tree. Nothing is clicked, no event is posted; each row puts the keys back.
 final class SessionGroupsEditorTests: XCTestCase {
     private static let keys = ["agentIslandSessionGroups", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated",
-                               "agentIslandSidekickTabs", "agentIslandSessionGroupsUpdated"]
+                               "agentIslandSidekickTabs", "agentIslandSessionGroupsUpdated",
+                               "agentIslandSessionGroupAutoColors"]
 
     override func setUp() {
         super.setUp()
@@ -191,7 +192,8 @@ final class SessionGroupsEditorTests: XCTestCase {
         Preferences.agentIslandSessionGroups = [Self.g(SessionGroup.sidekicksID, "Sidekicks", "-qa"), Self.g("r1", "Reviews", "-rev$")]
         let names = ["Name of group Sidekicks", "Pattern of group Sidekicks", "Move group Sidekicks up", "Move group Sidekicks down",
                      "Remove group Sidekicks", "Name of group Reviews", "Pattern of group Reviews", "Move group Reviews up",
-                     "Move group Reviews down", "Remove group Reviews", "Add group", "Group tabs", "Hide empty groups"]
+                     "Move group Reviews down", "Remove group Reviews", "Add group", "Group tabs", "Hide empty groups",
+                     "Colour of group Sidekicks", "Colour of group Reviews"]   // #2107
         func node(_ t: [AXTreeNode], _ n: String) -> AXTreeNode? { t.first { $0.reads(n) } }
         let tree = axTree { t in names.allSatisfy { node(t, $0) != nil } }
         for n in names { XCTAssertTrue(node(tree, n) != nil, n) }
@@ -199,11 +201,91 @@ final class SessionGroupsEditorTests: XCTestCase {
         XCTAssertEqual(node(tree, "Move group Reviews down")?.enabled, false, "the last row does not move down")
         XCTAssertEqual(node(tree, "Remove group Sidekicks")?.enabled, true, "Sidekicks is removable")
         XCTAssertEqual(node(tree, "Add group")?.enabled, true)
+        XCTAssertEqual(node(tree, "Colour of group Sidekicks")?.value, "Blue, Automatic", "#2107: its automatic colour by name")
+        XCTAssertEqual(node(tree, "Colour of group Reviews")?.value, "Green, Automatic")
 
         Preferences.agentIslandSessionGroups = (1...8).map { Self.g("g\($0)", "G\($0)", "-g\($0)$") }
         let full = axTree { t in node(t, "Remove group G8") != nil && node(t, "Add group") != nil }
         XCTAssertTrue(node(full, "Remove group G8") != nil, "eight rows drawn")
         XCTAssertEqual(node(full, "Add group")?.enabled, false, "Add is off at eight")
+    }
+
+    // MARK: - #2107: a row's colour
+
+    /// The swatch shows what the sidebar draws (Preferences.sessionGroupColors): a pick, and an automatic group's colour,
+    /// the stored one when there is one, else the first free palette colour.
+    func testSwatchColourIsTheSidebarsForAPickAndAnAutomaticGroup() {
+        var a = Self.g("a", "Alpha", "-a$"); a.color = SessionGroup.palette[3].hex
+        Preferences.agentIslandSessionGroups = [a, Self.g("b", "Beta", "-b$")]
+        let e = SessionGroupsEditor()
+        XCTAssertEqual(e.shownColors(), ["a": SessionGroup.palette[3].hex, "b": SessionGroup.palette[0].hex])
+        XCTAssertEqual(e.shownColors(), Preferences.sessionGroupColors(), "the sidebar's colours")
+        Preferences.defaults.set(["b": SessionGroup.palette[5].hex], forKey: "agentIslandSessionGroupAutoColors")
+        XCTAssertEqual(e.shownColors()["b"], SessionGroup.palette[5].hex, "a kept automatic colour")
+        XCTAssertEqual(e.shownColors(), Preferences.sessionGroupColors())
+        XCTAssertEqual(SessionGroupsEditor.colourValue(SessionGroup.palette[3].hex, automatic: false), "Purple")
+        XCTAssertEqual(SessionGroupsEditor.colourValue(SessionGroup.palette[5].hex, automatic: true), "Teal, Automatic")
+    }
+
+    /// Each item the swatch offers is the group menu's Colour ▸ item (same titles, checks and verbs); a pick stores its
+    /// hex on that group only, as the group menu's runGroup stores it; Automatic stores nil.
+    @MainActor
+    func testAPickFromSettingsStoresWhatTheGroupMenuStores() {
+        Preferences.agentIslandSessionGroups = [Self.g("a", "Alpha", "-a$"), Self.g("b", "Beta", "-b$")]
+        var e = SessionGroupsEditor()
+        let items = AgentWindowControls.colourItems(shown: e.shownColors()["a"], automatic: true)
+        let verbs = items.compactMap { (x: AgentSidebarMenuEntry) -> AgentSidebarVerb? in
+            if case .item(_, _, _, let v) = x { return v }
+            return nil
+        }
+        XCTAssertEqual(verbs, SessionGroup.palette.map { .groupColor($0.hex) } + [.groupColor(nil)])
+        for case .groupColor(let hex) in verbs {
+            e.pick("a", hex)
+            SessionGroupsEditor.save(e, now: Self.t0)
+            XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.color), [hex, nil], "the pick \(hex ?? "Automatic")")
+        }
+        e.pick("b", SessionGroup.palette[6].hex)
+        e.rows[1].name = "a=b"   // a name not saved: the row's pick still is, on its stored group
+        SessionGroupsEditor.save(e, now: Self.t0)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Alpha", "Beta"])
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.last?.color, SessionGroup.palette[6].hex)
+    }
+
+    /// A pick stored from the sidebar's Colour ▸ (the list saved, then the window's notice) reaches the editor's row; the
+    /// row's unsaved name edit stays.
+    func testAdoptColorsTakesTheStoredPicksAndKeepsEdits() {
+        Preferences.agentIslandSessionGroups = [Self.g("a", "Alpha", "-a$")]
+        var e = SessionGroupsEditor()
+        e.rows[0].name = "Edited"
+        var stored = Preferences.agentIslandSessionGroups
+        stored[0].color = SessionGroup.palette[2].hex
+        e.adoptColors(stored)
+        XCTAssertEqual(e.rows.first?.color, SessionGroup.palette[2].hex)
+        XCTAssertEqual(e.rows.first?.name, "Edited")
+        stored[0].color = nil
+        e.adoptColors(stored)
+        XCTAssertTrue(e.rows.first?.color == nil, "Automatic from the sidebar")
+    }
+
+    /// Offscreen: the section is drawn, then the sidebar stores a pick and posts its notice; the row's swatch reads it.
+    @MainActor
+    func testASidebarPickShowsOnTheSettingsRow() {
+        Preferences.agentIslandSidekickTabs = true
+        Preferences.agentIslandSessionGroups = [Self.g("r1", "Reviews", "-rev$")]
+        var posted = false
+        func value(_ t: [AXTreeNode]) -> String? { t.first { $0.label == "Colour of group Reviews" }?.value }
+        let tree = axTree { t in
+            if !posted, value(t) == "Blue, Automatic" {
+                posted = true
+                var list = Preferences.agentIslandSessionGroups
+                list[0].color = SessionGroup.palette[3].hex
+                Preferences.agentIslandSessionGroups = list
+                NotificationCenter.default.post(name: .sessionGroupColorPickedInWindow, object: nil)
+            }
+            return value(t) == "Purple"
+        }
+        XCTAssertTrue(posted)
+        XCTAssertEqual(value(tree), "Purple")
     }
 
     @MainActor

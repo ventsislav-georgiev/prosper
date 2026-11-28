@@ -32,6 +32,9 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: every session group now shows in the sidebar even before it has a session, so its
   "⋯" menu can start one there; turn on Settings › Agent Island › Session list › Hide empty groups
   to hide groups with no sessions as before.
+- Settings › Agent Island › Session list: each session group row now shows its colour as a small
+  swatch; click it to pick another colour or Automatic, the same choice as the sidebar group menu's
+  Colour, and a pick made in either place shows in the other.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

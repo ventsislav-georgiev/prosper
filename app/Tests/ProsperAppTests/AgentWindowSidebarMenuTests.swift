@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftUI
 import XCTest
 @testable import ProsperApp
@@ -687,6 +688,8 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(verbs, SessionGroup.palette.map { .groupColor($0.hex) } + [.groupColor(nil)])
+        XCTAssertEqual(items, AgentWindowControls.colourItems(shown: SessionGroup.palette[0].hex, automatic: true),
+                       "#2107: Settings' swatch offers these items")
         st.sessionGroups[0].color = SessionGroup.palette[4].hex
         st.groupColors["qa"] = SessionGroup.palette[4].hex
         guard case .submenu(_, _, let picked)? = AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"), name: "QA").last
@@ -719,8 +722,14 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         let rec = Launches(), c = controller(st, rec), m = model(st, c)
         defer { m.close() }
         var stored = st.sessionGroups, saves = 0
+        let notices = OSAllocatedUnfairLock(initialState: 0)
         m.storedGroups = { stored }
         m.saveGroups = { stored = $0; saves += 1 }
+        // #2107: each save tells Settings' open rows
+        let token = NotificationCenter.default.addObserver(forName: .sessionGroupColorPickedInWindow, object: nil, queue: nil) { _ in
+            notices.withLock { $0 += 1 }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
         let qa = try groupRows(st, "qa")
         m.runGroup(.groupColor(SessionGroup.palette[2].hex), name: "QA", rows: qa)
         XCTAssertEqual(stored.map(\.color), [SessionGroup.palette[2].hex, nil, nil])
@@ -729,6 +738,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         m.runGroup(.groupColor(nil), name: "QA", rows: qa)
         XCTAssertEqual(stored.map(\.color), [nil, nil, nil])
         XCTAssertEqual(saves, 2)
+        XCTAssertEqual(notices.withLock { $0 }, 2, "a notice per save, none for the same pick again")
         XCTAssertEqual(rec.args.count, 0, "nothing ran")
     }
 

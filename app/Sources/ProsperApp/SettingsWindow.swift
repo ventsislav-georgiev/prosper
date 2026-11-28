@@ -216,6 +216,8 @@ private final class CommandWClosableWindow: MinimumKeepingWindow {
 extension Notification.Name {
     /// Posted by the settings window on Tab/⇧Tab; userInfo["delta"] is +1/-1.
     static let prosperSettingsCycleSection = Notification.Name("prosper.settings.cycleSection")
+    /// #2107: the Agent Sessions sidebar's Colour ▸ stored a group's pick (AgentWindowModel.runGroup).
+    static let sessionGroupColorPickedInWindow = Notification.Name("prosper.sessionGroups.colorPickedInWindow")
 }
 
 // MARK: - Model
@@ -1235,6 +1237,10 @@ struct AgentIslandListSection: View {
         .onReceive(NotificationCenter.default.publisher(for: .sidekickPatternChangedExternally)) { _ in
             editor = SessionGroupsEditor()
         }
+        // #2107: a pick from the sidebar's Colour ▸ shows on its row; the row's other edits stay.
+        .onReceive(NotificationCenter.default.publisher(for: .sessionGroupColorPickedInWindow)) { _ in
+            editor.adoptColors(Preferences.agentIslandSessionGroups)
+        }
     }
 
     private func commit() { SessionGroupsEditor.save(editor) }
@@ -1247,6 +1253,7 @@ struct AgentIslandListSection: View {
         return NeonRow(title, subtitle: reason ?? Self.hintLine(row.pattern)) {
             VStack(alignment: .trailing, spacing: sz(2)) {
                 HStack(spacing: sz(4)) {
+                    colourSwatch(row, title)
                     TextField("Name", text: g.name).frame(width: sz(110))
                         .focused($focus, equals: row.id + ".name").onSubmit(commit)
                         .accessibilityLabel("Name of group \(title)")
@@ -1273,6 +1280,27 @@ struct AgentIslandListSection: View {
             .disabled(!tabs)
         }
     }
+
+    /// #2107: the row's colour (a pick, or its automatic one, as the sidebar draws it) and the group menu's Colour items.
+    /// A pick is stored as the row's other buttons store an edit (commit), the same list save as the sidebar's pick.
+    private func colourSwatch(_ row: SessionGroup, _ title: String) -> some View {
+        let shown = editor.shownColors()[row.id]
+        return StableMenu(Self.colourMenuID, entries: AgentWindowControls.colourItems(shown: shown, automatic: row.color == nil),
+                          run: { (v: AgentSidebarVerb) in
+                              guard case .groupColor(let hex) = v else { return }
+                              editor.pick(row.id, hex)
+                              commit()
+                          }) { e, r in
+            AgentSidebarMenuEntries(entries: e, run: r)
+        } label: { _ in
+            Circle().fill(shown.flatMap { Color(hex: $0) } ?? .clear).frame(width: sz(12), height: sz(12))
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("Colour of group \(title)")
+        .accessibilityLabel("Colour of group \(title)")
+        .accessibilityValue(SessionGroupsEditor.colourValue(shown, automatic: row.color == nil))
+    }
+    static let colourMenuID = "settings.sessionGroupColour"
 
     private func iconButton(_ symbol: String, _ label: String, off: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: symbol) }
@@ -1316,6 +1344,29 @@ struct SessionGroupsEditor: Equatable {
     }
 
     mutating func remove(_ id: String) { rows.removeAll { $0.id == id } }
+
+    /// #2107: a row's colour pick (nil: Automatic), as the group menu's Colour ▸ sets it.
+    mutating func pick(_ id: String, _ hex: String?) {
+        guard let i = rows.firstIndex(where: { $0.id == id }) else { return }
+        rows[i].color = hex
+    }
+
+    /// #2107: each stored row's pick as `stored` has it (the sidebar's Colour ▸ stored it); names and patterns stay as edited.
+    mutating func adoptColors(_ stored: [SessionGroup]) {
+        for i in rows.indices { if let s = stored.first(where: { $0.id == rows[i].id }) { rows[i].color = s.color } }
+    }
+
+    /// #2107: each row's colour as the sidebar draws it: SessionGroup.colors over the rows with the stored automatic colours
+    /// (read only; Preferences.sessionGroupColors stores them on the list's save).
+    func shownColors(auto: [String: String] = Preferences.sessionGroupAutoColors) -> [String: String] {
+        SessionGroup.colors(rows, auto: auto)
+    }
+
+    /// #2107: the swatch's accessibility value: the palette name (else the hex), ", Automatic" while nothing is picked.
+    static func colourValue(_ hex: String?, automatic: Bool) -> String {
+        let name = hex.map { h in SessionGroup.palette.first { $0.hex == h }?.name ?? h } ?? AgentWindowControls.automaticColourLabel
+        return automatic && hex != nil ? "\(name), \(AgentWindowControls.automaticColourLabel)" : name
+    }
 
     mutating func move(_ id: String, by step: Int) {
         guard let i = rows.firstIndex(where: { $0.id == id }), rows.indices.contains(i + step) else { return }
@@ -1380,7 +1431,11 @@ struct SessionGroupsEditor: Equatable {
     /// pattern), else left out; so an invalid edit leaves the stored group as it was.
     func saved(stored st: [SessionGroup]) -> [SessionGroup] {
         let bad = unsavedIDs(stored: st).all
-        return SessionGroup.normalized(rows.compactMap { g in bad.contains(g.id) ? stored(g.id, in: st) : g })
+        // #2107: a row not saved still saves its colour pick (always valid) onto its stored group.
+        return SessionGroup.normalized(rows.compactMap { g in
+            guard bad.contains(g.id) else { return g }
+            return stored(g.id, in: st).map { var s = $0; s.color = g.color; return s }
+        })
     }
 
     /// Stores `saved` when it differs (an unchanged editor stores nothing: the migration stays lazy). The first group's

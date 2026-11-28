@@ -699,9 +699,14 @@ extension AgentWindowControls {
         // #2063: gated as the form's Group picker is (a group it offers), so the form opens with it chosen.
         let here: [AgentSidebarMenuEntry] = AgentNewSession.groupChoices(store).contains { $0.id == group.id }
             ? [.item(newSessionHereLabel, enabled: true, checked: nil, verb: .newSessionInGroup(group.name))] : []
-        return actions + (actions.isEmpty ? [] : [.divider]) + here + [.submenu(colourLabel, enabled: true, SessionGroup.palette.map {
-            .item($0.name, enabled: true, checked: shown == $0.hex, verb: .groupColor($0.hex))
-        } + [.divider, .item(automaticColourLabel, enabled: true, checked: group.color == nil, verb: .groupColor(nil))])]
+        return actions + (actions.isEmpty ? [] : [.divider]) + here + [.submenu(colourLabel, enabled: true, colourItems(shown: shown, automatic: group.color == nil))]
+    }
+
+    /// #2061: Colour ▸'s items: the palette (`shown`, the colour drawn now, checked) and Automatic (checked while
+    /// `automatic`, no pick). #2107: Settings' group row swatch offers the same items.
+    static func colourItems(shown: String?, automatic: Bool) -> [AgentSidebarMenuEntry] {
+        SessionGroup.palette.map { .item($0.name, enabled: true, checked: shown == $0.hex, verb: .groupColor($0.hex)) }
+            + [.divider, .item(automaticColourLabel, enabled: true, checked: automatic, verb: .groupColor(nil))]
     }
 
     /// #2060: a group menu item's run: the island's ask with the group's name and rows (its answer reaches no other row).
