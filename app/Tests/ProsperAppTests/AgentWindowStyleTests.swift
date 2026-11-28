@@ -12,6 +12,8 @@ import XCTest
 final class AgentWindowStyleTests: XCTestCase {
     /// The D1 class's fakes (store, sessions, a model with every outside effect replaced); its rows are not run from here.
     private let d1 = AgentWindowD1Tests()
+    /// The X-ray rows' seams (a fake follow, its gate and dch path), for the follow-release row.
+    private let marks = XrayGridMarksTests()
     static let keys = ["agentWindowStyle", "agentWindowRoundedCorners"]
     static let standardMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
     static let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
@@ -631,6 +633,49 @@ final class AgentWindowStyleTests: XCTestCase {
         XCTAssertTrue(AgentsWindow.rebuilds(styleMask: fs, old: .borderless, new: .borderless) == nil, "full screen: wait")
         XCTAssertEqual(AgentsWindow.rebuilds(styleMask: plain, old: .borderless, new: .standard), true)
         XCTAssertEqual(AgentsWindow.rebuilds(styleMask: plain, old: .borderless, new: .borderless), false)
+    }
+
+    /// #2076 (QA R2045 r7 n3): a style change made in full screen waits (nothing rebuilt), and the window's
+    /// didExitFullScreen applies it. The mask bit is set by hand on the never-shown window, never a real full screen.
+    func testDidExitFullScreenAppliesAStyleChangeMadeInFullScreen() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = false
+            try opened { r, old in
+                old.styleMask.insert(.fullScreen)
+                XCTAssertTrue(old.styleMask.contains(.fullScreen), "marked full screen")
+                Preferences.agentWindowStyle = .standard
+                r.w.restyle()
+                XCTAssertTrue(r.w.window === old && old.style == .borderless, "full screen: pending, no rebuild")
+                old.styleMask.remove(.fullScreen)   // AppKit has cleared the bit when it posts the exit
+                NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: old)
+                let win = try XCTUnwrap(r.w.window as? AgentsNSWindow)
+                XCTAssertFalse(win === old, "the exit rebuilt the window")
+                XCTAssertEqual(win.style, .standard, "with the pending style")
+            }
+        }
+    }
+
+    /// #2076 (QA R2045 r7 n3): the rebuild releases the old window's pane follow (the old window is never closed, so
+    /// nothing else would).
+    func testAStyleSwitchReleasesTheOldWindowsPaneFollow() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = false
+            try opened { r, old in
+                try marks.withSeams { _ in
+                    let follows = XrayPanels.shared.follows, id = ObjectIdentifier(old)
+                    let target = XrayTarget(name: "api", dir: marks.local.dir)
+                    let f = try XCTUnwrap(follows.focus(target, window: id, dch: "/fake/dch"))
+                    XCTAssertTrue(follows.focused(in: id) === f, "held before the switch")
+                    Preferences.agentWindowStyle = .standard
+                    r.w.restyle()
+                    XCTAssertFalse(r.w.window === old)
+                    XCTAssertTrue(follows.focused(in: id) == nil, "the old window holds no follow")
+                    XCTAssertEqual(f.users, 0, "detached")
+                }
+            }
+        }
     }
 
     /// #2068's gate note reaches the rebuilt window alone: the old window's observer went with it.

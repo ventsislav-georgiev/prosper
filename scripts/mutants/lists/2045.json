@@ -71,6 +71,22 @@
    "new": "",
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testFullScreenWaitsAndAStyleChangeRebuilds"
+  },
+  {
+   "name": "exit_fullscreen_apply_dropped",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                MainActor.assumeIsolated { self?.restyle() }\n",
+   "new": "                MainActor.assumeIsolated { _ = self }\n",
+   "expect": "killed",
+   "filter": "AgentWindowStyleTests/testDidExitFullScreenAppliesAStyleChangeMadeInFullScreen"
+  },
+  {
+   "name": "old_follow_not_released",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        XrayPanels.shared.follows.focus(nil, window: ObjectIdentifier(old), dch: nil)   // #2045 QA n1: the old window's pane follow lets go\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentWindowStyleTests/testAStyleSwitchReleasesTheOldWindowsPaneFollow"
   }
  ]
 }
