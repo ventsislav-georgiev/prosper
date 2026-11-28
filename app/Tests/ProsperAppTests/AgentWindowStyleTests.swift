@@ -519,4 +519,133 @@ final class AgentWindowStyleTests: XCTestCase {
             }
         }
     }
+
+    // MARK: #2045: a live style switch rebuilds the window
+
+    /// The open window for the settings in force, built by makeWindow through AgentsWindow.show (#1784's rig: present and
+    /// dismissed are recorders, so it is never shown), then torn down after `body`.
+    func opened(_ body: (AgentWindowD1Tests.HideRig, AgentsNSWindow) throws -> Void) throws {
+        let r = AgentWindowD1Tests.HideRig(d1.store([d1.session("api", .working), d1.session("api-qa", .idle)]), real: true)
+        let w = r.w
+        defer { w.window?.close(); w.grace?.fire() }
+        w.show()
+        _ = try r.model()
+        let win = try XCTUnwrap(w.window as? AgentsNSWindow)
+        XCTAssertFalse(win.isVisible, "built, never shown")
+        try body(r, win)
+        XCTAssertFalse(w.window?.isVisible ?? false, "never shown")
+    }
+
+    /// A window's look for its style, to compare a rebuilt window with a fresh build (frames aside).
+    static func look(_ win: AgentsNSWindow) -> String {
+        "\(win.style) \(win.roundedCorners) \(win.styleMask.rawValue) \(buttons.map { win.standardWindowButton($0)?.isHidden ?? true }) "
+            + "\(win.isOpaque) \(rgba(win.backgroundColor)) \(win.hasShadow) \(win.titlebarAppearsTransparent) \(win.titleVisibility.rawValue) "
+            + "\(win.contentView?.layer?.cornerRadius ?? -1) \(win.contentView?.layer?.masksToBounds ?? false)"
+    }
+
+    /// #2045 round 6 (operator 2026-11-28: Borderless square switched live to Standard kept the traffic lights over the
+    /// sidebar's header until a restart): Settings' style change (the setting, then restyle) replaces the window with a fresh
+    /// build for the new style around the same model, pane runtime and content, in the old window's frame; the old one keeps
+    /// no observer (its willClose starts no grace), the new one's willClose hides as before.
+    func testALiveStyleSwitchRebuildsTheWindowAroundTheSameModel() throws {
+        try withStyleRow {
+            let switches: [(AgentWindowStyle, Bool, AgentWindowStyle)] = [(.borderless, false, .standard), (.borderless, true, .standard),
+                                                                          (.noTitleBar, true, .standard), (.standard, true, .borderless),
+                                                                          (.standard, true, .noTitleBar)]
+            for (from, rounded, to) in switches {
+                let what = "\(from) rounded \(rounded) -> \(to)"
+                Preferences.agentWindowStyle = from
+                Preferences.agentWindowRoundedCorners = rounded
+                try opened { r, old in
+                    let w = r.w, m = try XCTUnwrap(w.model, what)
+                    let runtime = try XCTUnwrap(m.focusedRuntime, what), content = try XCTUnwrap(old.contentViewController, what)
+                    let frame = old.frame
+                    Preferences.agentWindowStyle = to
+                    w.restyle()
+                    let win = try XCTUnwrap(w.window as? AgentsNSWindow, what)
+                    XCTAssertFalse(win === old, "\(what): a new window")
+                    XCTAssertTrue(w.model === m && win.model === m, "\(what): the same model")
+                    XCTAssertTrue(m.focusedRuntime === runtime, "\(what): the same pane runtime")
+                    XCTAssertTrue(win.contentViewController === content && old.contentViewController == nil, "\(what): the content moved")
+                    XCTAssertEqual(win.frame, frame, "\(what): the old window's frame")
+                    XCTAssertEqual(win.identifier, AgentsWindow.themedIdentifier, what)
+                    XCTAssertTrue(old.identifier == nil && old.model == nil, "\(what): the old window keeps no hook")
+                    let fm = d1.windowModel(d1.store([d1.session("api", .working)]))
+                    defer { fm.close() }
+                    let fresh = AgentsWindow.makeWindow(fm, autosave: nil)
+                    defer { fresh.contentViewController = nil }
+                    XCTAssertEqual(Self.look(win), Self.look(fresh), "\(what): as a fresh build")
+                    XCTAssertEqual(win.style, to, what)
+
+                    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: old)
+                    XCTAssertTrue(w.grace == nil && w.isOpen, "\(what): the old window's willClose starts no grace")
+                    XCTAssertEqual(r.dismissed, 0, what)
+                    NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: win)
+                    XCTAssertTrue(w.grace != nil && w.window === win, "\(what): the new window's willClose hides it")
+                    XCTAssertEqual(r.built, 1, "\(what): show built once; the rebuild is restyle's")
+                }
+            }
+        }
+    }
+
+    /// #1378: Rounded corners alone (Borderless round <-> square) restyle the open window in place: the same object.
+    func testRoundedCornersAloneRestyleTheSameWindow() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = true
+            try opened { r, win in
+                for rounded in [false, true] {
+                    Preferences.agentWindowRoundedCorners = rounded
+                    r.w.restyle()
+                    XCTAssertTrue(r.w.window === win, "rounded \(rounded): in place")
+                    XCTAssertEqual(win.roundedCorners, rounded)
+                    XCTAssertEqual(win.contentView?.layer?.cornerRadius ?? -1, rounded ? AgentsWindow.cornerRadius : 0)
+                }
+            }
+        }
+    }
+
+    /// #2068's gate note reaches the rebuilt window alone: the old window's observer went with it.
+    func testTheXrayGateNoteReachesOnlyTheRebuiltWindow() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = false
+            try opened { r, old in
+                Preferences.agentWindowStyle = .standard
+                r.w.restyle()
+                let win = try XCTUnwrap(r.w.window as? AgentsNSWindow)
+                XCTAssertFalse(win === old)
+                let (o, n) = (old.gateOpenings, win.gateOpenings)
+                NotificationCenter.default.post(name: XrayPanels.gateOpened, object: nil)
+                XCTAssertEqual(old.gateOpenings, o, "the old window takes no note")
+                XCTAssertEqual(win.gateOpenings, n + 1, "the new window takes it once")
+            }
+        }
+    }
+
+    /// #1784: a window hidden in its grace and switched stays hidden under the same timer; the grace's end tears down the
+    /// rebuilt window (the model with it), and a show inside the grace presents the rebuilt one.
+    func testAStyleSwitchWhileHiddenKeepsTheGrace() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .standard
+            try opened { r, old in
+                let w = r.w, m = try XCTUnwrap(w.model)
+                old.close()
+                let g = try XCTUnwrap(w.grace)
+                Preferences.agentWindowStyle = .borderless
+                w.restyle()
+                let win = try XCTUnwrap(w.window as? AgentsNSWindow)
+                XCTAssertFalse(win === old)
+                XCTAssertTrue(w.grace === g && g.isValid && !w.isOpen, "still hidden, the same timer")
+                XCTAssertFalse(win.isVisible)
+                XCTAssertTrue(w.model === m)
+                XCTAssertEqual(r.dismissed, 1, "the hide's alone")
+                w.show()
+                XCTAssertTrue(w.window === win && w.grace == nil && r.presented == 2, "the rebuilt window presented")
+                win.close()
+                try XCTUnwrap(w.grace).fire()
+                XCTAssertTrue(w.window == nil && w.model == nil, "the grace's end tears down the rebuilt window")
+            }
+        }
+    }
 }

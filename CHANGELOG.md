@@ -141,6 +141,8 @@ tag from the now-released section and put it on the new top draft.
 - The New session form has a Group picker: Automatic shows which group the name you type lands in,
   or you pick a group yourself; a group's ••• menu has "New session here…", which opens the form
   with that group already chosen (#2063)
+- Switching the Agent Sessions window's style in Settings now rebuilds the window, so Standard shows
+  its title bar above the sidebar right away, without restarting Prosper. (#2045)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

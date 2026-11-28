@@ -89,7 +89,13 @@ final class AgentsWindow {
         window = win
         XrayPanels.warm()   // #1351: the gate's dch probe, off main (none under XCTest)
         self.model = model
+        observe(win, model)
+        present(win)
+        model.setVisible(win.occlusionState.contains(.visible))
+    }
 
+    /// The open window's own observers: show's, and a style rebuild's for its new window (#2045).
+    private func observe(_ win: NSWindow, _ model: AgentWindowModel) {
         let nc = NotificationCenter.default
         observers = [
             // #1847: weak: a block NotificationCenter holds must not keep the window (an owner gone without a teardown)
@@ -102,8 +108,6 @@ final class AgentsWindow {
                 MainActor.assumeIsolated { if let win { model?.setVisible(win.occlusionState.contains(.visible)) } }
             },
         ]
-        present(win)
-        model.setVisible(win.occlusionState.contains(.visible))
     }
 
     /// #797: the status menu's "Agent Sessions…" item; its action opens `shared`. #805 (QA #629 R2):
@@ -133,15 +137,23 @@ final class AgentsWindow {
 
     /// The window, built but not shown (tests render it offscreen from here; #860: they pass a nil
     /// `autosave`, so no frame is read from or written to the defaults).
-    static func makeWindow(_ model: AgentWindowModel, autosave: String? = "ProsperAgentsWindow") -> AgentsNSWindow {
-        let hosting = NSHostingController(rootView: Themed(keepsViews: true) { AgentWindowRootView(model: model) })   // #891: in place
-        // #1378: no title bar safe area for SwiftUI. Under No title bar's .fullSizeContentView it would pad the content
-        // by the hidden bar, and a list touching that band grows under the title row (Standard has no such band).
-        hosting.safeAreaRegions = []
-        // #1925: by default the hosting controller writes SwiftUI's own minimum (the panes' is 0) over contentMinSize on
-        // each layout, so the window's edge could hide the panes; the minimum is set here alone.
-        hosting.sizingOptions = []
-        let win = AgentsNSWindow(contentViewController: hosting)
+    /// #2045: `replacing`, a style rebuild (restyle): the old window's content moves here (the same SwiftUI tree, pane
+    /// runtimes and terminal views, none rebuilt) and the new window takes the old one's frame.
+    static func makeWindow(_ model: AgentWindowModel, autosave: String? = "ProsperAgentsWindow",
+                           replacing old: NSWindow? = nil) -> AgentsNSWindow {
+        let content = old?.contentViewController ?? {
+            let hosting = NSHostingController(rootView: Themed(keepsViews: true) { AgentWindowRootView(model: model) })   // #891: in place
+            // #1378: no title bar safe area for SwiftUI. Under No title bar's .fullSizeContentView it would pad the content
+            // by the hidden bar, and a list touching that band grows under the title row (Standard has no such band).
+            hosting.safeAreaRegions = []
+            // #1925: by default the hosting controller writes SwiftUI's own minimum (the panes' is 0) over contentMinSize on
+            // each layout, so the window's edge could hide the panes; the minimum is set here alone.
+            hosting.sizingOptions = []
+            return hosting
+        }()
+        let frame = old?.frame
+        old?.contentViewController = nil
+        let win = AgentsNSWindow(contentViewController: content)
         win.model = model
         model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }
         model.firstShown = { [weak win] in win?.xrayShown() }   // #2068: the session the window opens on
@@ -157,15 +169,47 @@ final class AgentsWindow {
         win.setContentSize(NSSize(width: 1000 * s, height: 680 * s))
         applyStyle(win)   // #2045: every style, Standard too, is built by the live switch's own path
         win.isReleasedWhenClosed = false
+        if let frame { win.setFrame(frame, display: false) }   // #2045: a titled style's content gives up the bar's height
         if let autosave { win.setFrameAutosaveName(autosave) }
-        if !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
+        if frame == nil, !(autosave.map { win.setFrameUsingName($0) } ?? false) { win.centerOnScreen() }
         win.clampToContentMinSize()
         return win
     }
 
-    /// #1378: Settings changed the style or the corners: the open window is restyled in place (a reopen would tear down
-    /// the model, the panes' terminals and their last live sights). No window: nothing, the next build reads the settings.
-    func restyle() { (window as? AgentsNSWindow).map { Self.applyStyle($0) } }
+    /// #1378: Settings changed the corners: the open window is restyled in place. No window: nothing, the next build reads
+    /// the settings. #2045 (operator 2026-11-28: Borderless square switched live to Standard kept the traffic lights over the
+    /// sidebar's header, no resize or sidebar toggle fixed it, a restart did): a change of style builds the window anew
+    /// through makeWindow, as a launch does, around the same model and content (moved, so no teardown: the model, the
+    /// panes' terminals and their last live sights stay). The old window is ordered out with none of its hooks left, so its
+    /// willClose never runs hide; a hidden window (#1784 grace) stays hidden under the same timer.
+    func restyle() {
+        guard let old = window as? AgentsNSWindow else { return }
+        guard let model, old.style != Preferences.agentWindowStyle else { return Self.applyStyle(old) }
+        let nc = NotificationCenter.default
+        observers.forEach(nc.removeObserver)
+        nc.removeObserver(old, name: XrayPanels.gateOpened, object: nil)
+        let (shown, mini, key, main) = (old.isVisible, old.isMiniaturized, old.isKeyWindow, old.isMainWindow)
+        let responder = old.firstResponder as? NSView, autosave = old.frameAutosaveName
+        old.setFrameAutosaveName("")   // AppKit gives a name to one window only
+        old.cards.close()
+        let win = Self.makeWindow(model, autosave: autosave.isEmpty ? nil : autosave, replacing: old)
+        old.model = nil
+        old.identifier = nil
+        window = win
+        observe(win, model)
+        win.level = old.level
+        win.collectionBehavior = old.collectionBehavior
+        if let responder, responder.window === win { win.makeFirstResponder(responder) }   // the terminal keeps the keys
+        if shown {
+            win.order(.above, relativeTo: old.windowNumber)
+            if main { win.makeMain() }
+            if key { win.makeKey() }
+        } else if mini {
+            win.miniaturize(nil)
+        }
+        if shown || mini { DockPolicy.windowDidShow(win); dismissed(old) }   // registered before the old lets go: no demotion
+        old.orderOut(nil)
+    }
 
     /// #1379: Settings' sidebar mode: saved, and the open window's sidebar redrawn at once (no window: the next build reads it).
     func setSidebarMode(_ m: AgentSidebarMode) {
@@ -190,13 +234,6 @@ final class AgentsWindow {
         // window, and the Window menu still lists `title`); the strip is painted by applyWindowOpacity.
         win.titleVisibility = .hidden
         win.titlebarAppearsTransparent = true
-        // #2045: a live mask change keeps the window's frame but can leave the content view where the old mask put it
-        // (the whole frame under Borderless or No title bar), under the new title bar and its buttons: it is set to the
-        // new mask's content rect. The frame stays, so the content gives up the bar's height (the window keeps its place).
-        if let cv = win.contentView, let frameView = cv.superview {
-            let r = win.contentRect(forFrameRect: win.frame).offsetBy(dx: -win.frame.minX, dy: -win.frame.minY)
-            cv.frame = frameView.convert(r, from: nil)
-        }
         for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             win.standardWindowButton(b)?.isHidden = style != .standard
         }
@@ -712,7 +749,9 @@ final class AgentsNSWindow: NSWindow {
     }
 
     /// #2068: XrayPanels.publish opened the gate: the session the window shows takes the drawer state it was refused.
-    @objc func xrayGateOpened(_ note: Notification) { xrayShown() }
+    @objc func xrayGateOpened(_ note: Notification) { gateOpenings += 1; xrayShown() }
+    /// #2045 (tests): the gate notes this window took; a style rebuild's old window takes none.
+    private(set) var gateOpenings = 0
 
     /// Q3: the Todos chip opens the panel on Tasks when X-ray is there and the read finds a Tasks tab; else (the list
     /// already open, the gate off, no Tasks tab) `list` runs, today's AgentTodosList.
