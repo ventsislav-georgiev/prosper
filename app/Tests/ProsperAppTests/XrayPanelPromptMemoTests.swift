@@ -118,6 +118,15 @@ final class XrayPanelPromptMemoTests: XCTestCase {
         func seen(_ t: [AXTreeNode]) -> [String] { t.filter { !$0.ignored }.map(\.label) }
         let before = seen(AXTreeSupport.poll(host) { seen($0).contains("Filter tasks") })
         XCTAssertTrue(before.contains("Filter tasks"), "the shown tab's field: \(before)")
+        // #2114: the SHOWN kept list redraws on a data change (XrayKeptList == is equal only while hidden).
+        func rowDrawn(_ t: [AXTreeNode], _ id: Int) -> Bool { t.contains { $0.named(prefix: "Pending task \(id),") } }
+        let drawn = AXTreeSupport.poll(host) { rowDrawn($0, 1) && rowDrawn($0, 2) }
+        XCTAssertTrue(rowDrawn(drawn, 1) && rowDrawn(drawn, 2), "both rows before the filter: \(seen(drawn))")
+        p.filter = "Task number 2 with"
+        let filtered = AXTreeSupport.poll(host) { !rowDrawn($0, 1) }
+        XCTAssertFalse(rowDrawn(filtered, 1), "task 1 left the drawn list: \(seen(filtered))")
+        XCTAssertTrue(rowDrawn(filtered, 2), "task 2 stays")
+        p.filter = ""
         p.select(.prompts)
         let after = seen(AXTreeSupport.poll(host) { seen($0).contains("Filter prompts") })
         XCTAssertTrue(after.contains("Filter prompts"), "\(after)")

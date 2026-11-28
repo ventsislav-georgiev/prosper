@@ -515,6 +515,57 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertFalse(win.isVisible, "never on screen")
     }
 
+    /// #2114 (QA n2 of #2104): the body itself, run on a model whose sidebar sections are built (so `row(id)` finds the
+    /// row). The body's tree is read as values (its menu-entry views are structs holding their entries), no menu opens.
+    @MainActor
+    func testRowMenuBodyBuildsTheLiveRowsItemsAndNothingForARemoteRowOrAMissingId() throws {
+        var s0 = session("api")
+        s0.group = ""   // dch 1.196's group key: Move to group is listed
+        let st = store([s0, session("api-qa")], dch: bin([1, 196, 0]))
+        st.sessionGroups = [SessionGroup(id: "w1", name: "Work", pattern: "zzz")]
+        let m = model(st, controller(st, Launches()))
+        defer { m.close() }
+        m.remoteRun = { _, _ in Data(#"[{"name":"api","alias":"","host":"host-a","state":"idle","stale":false,"cwd":null}]"#.utf8) }
+        m.setVisible(true)
+        func parts(_ id: AgentSidebar.RowID) -> (entries: [[AgentWindowMenuEntry]], switches: [[AgentModelSwitch.Submenu]],
+                                                  move: [[AgentSidebarMenuEntry]], dividers: Int, open: [() -> Void]) {
+            var e: [AgentMenuEntries] = [], w: [AgentSwitchMenus] = [], mv: [AgentSidebarMenuEntries] = [], d = 0
+            func walk(_ v: Any, _ depth: Int) {
+                if let x = v as? AgentMenuEntries { e.append(x); return }
+                if let x = v as? AgentSwitchMenus { w.append(x); return }
+                if let x = v as? AgentSidebarMenuEntries { mv.append(x); return }
+                if v is Divider { d += 1; return }
+                if depth < 12 { Mirror(reflecting: v).children.forEach { walk($0.value, depth + 1) } }
+            }
+            walk(AgentRowMenu(id: id, model: m).body, 0)
+            return (e.map(\.entries), w.map(\.menus), mv.map(\.entries), d, e.map(\.open))
+        }
+        let live = AgentSidebar.RowID.live(s0.key)
+        let row = try XCTUnwrap(m.row(live), "precondition: the model's drawn sections hold the row")
+        let want = AgentRowMenu.snapshot(row, store: st, model: m)
+        XCTAssertFalse(want.entries.isEmpty)
+        let before = rowMenuBodies
+        let p = parts(live)
+        XCTAssertEqual(rowMenuBodies, before + 1, "one body run builds the items once")
+        XCTAssertEqual(p.entries, [want.entries], "the row menu's entries")
+        XCTAssertEqual(p.switches, [want.switches])
+        XCTAssertEqual(p.switches.first?.map(\.title), [AgentModelSwitch.modelLabel, AgentModelSwitch.effortLabel], "Model and Effort")
+        XCTAssertEqual(p.move, [want.move])
+        XCTAssertEqual(p.move.first?.count, 1, "Move to group")
+        XCTAssertEqual(p.dividers, 2, "one before the switches, one before Move to group")
+        // Open in terminal selects the row first (as the header's action), then opens the selection.
+        m.select(.live(AgentSessionKey(dir: Self.dir, name: "api-qa")))
+        p.open.first?()
+        XCTAssertEqual(m.selection, live, "open selected the row it was asked on")
+        // A remote row (no session, no record) and an id no section holds build nothing.
+        let remote = AgentSidebar.RowID.remote(host: "host-a", name: "api")
+        XCTAssertTrue(m.row(remote) != nil, "precondition: the remote row is drawn")
+        for id in [remote, .live(AgentSessionKey(dir: Self.dir, name: "gone"))] {
+            let q = parts(id)
+            XCTAssertTrue(q.entries.isEmpty && q.switches.isEmpty && q.move.isEmpty && q.dividers == 0, "nothing for \(id)")
+        }
+    }
+
     // MARK: #1540: the pane header "..." (Model and Effort submenus) is not rebuilt by an equal publish
 
     /// The header's parent: observes the store (as the window does) and hands the "⋯" the store's first session.

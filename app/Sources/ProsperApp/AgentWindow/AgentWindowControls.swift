@@ -813,7 +813,7 @@ struct AgentRowMenu: View {
             let snap = Self.snapshot(row, store: store, model: model), m = model
             if let s = row.session {
                 AgentMenuEntries(entries: snap.entries, act: { m.ask($0, s) },
-                                 open: { AgentSidebarView(model: m).open(s) }, side: { m.openToTheSide(row.id) })
+                                 open: { m.select(.live(s.key)); m.openSelected() }, side: { m.openToTheSide(row.id) })
                 if !snap.switches.isEmpty {
                     Divider()
                     AgentSwitchMenus(menus: snap.switches, act: { m.ask($0, s) })

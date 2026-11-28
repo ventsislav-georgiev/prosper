@@ -42,7 +42,7 @@
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
    "old": "nonisolated static func == (a: Self, b: Self) -> Bool { !a.on && !b.on }",
    "new": "nonisolated static func == (a: Self, b: Self) -> Bool { a.on == b.on }",
-   "expect": "survives"
+   "expect": "killed"
   }
  ]
 }
