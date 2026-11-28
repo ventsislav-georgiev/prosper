@@ -400,7 +400,7 @@ final class AgentIslandController {
     private func apply(_ sessions: [AgentSession], dirs: [String]) {
         guard timer != nil, let store else { return }   // a tick that raced teardown
         listedDirs = dirs
-        let sessions = withSent(sessions)
+        let sessions = withMoved(withSent(sessions))
         // #768: only ages moved and nobody sees them (collapsed, or the display
         // asleep or locked): Live status and the watch stream still get the list,
         // the store, cards and panel do not.
@@ -978,7 +978,9 @@ final class AgentIslandController {
 
     /// #2062: Move to group / Automatic (by name): `dch --group-set <name> <group>|--auto --json` on the row's key with its
     /// dir's control env, as rename runs. A failure is the row's line (AgentIsland.groupSetFailure), never retried; any
-    /// answer asks the poller for a list now, which moves the row under its header (no local move before it).
+    /// answer asks the poller for a list now (forced: dch's `.group` file is no sidecar the poll gate stats).
+    /// #2105: the row moves under its target at once (a local placement, `movedGroups`); a failure puts it back, and the
+    /// list read after the answer (or any list that places it elsewhere) wins.
     /// False: nothing ran (not live, no dch, a name dch reads as a flag, or a busy row, which says so).
     /// `configFirst` (New group…, the group just stored): dch's config is written now through syncDchConfig, the debounced
     /// write dropped, and the job's `prepare` waits on `queue` (serial: that write is queued before it) before the launch.
@@ -998,17 +1000,45 @@ final class AgentIslandController {
             syncDchConfig()
             prepare = { q.sync {}; return (args, Data()) }
         }
+        // Automatic: the group the patterns give the row (split's rule on the live row, its alias included).
+        var auto = live
+        auto.group = nil
+        let to = AgentIsland.MovedGroup(
+            to: (group ?? AgentIsland.split([auto], groups: store.sessionGroups).groups.first { !$0.sessions.isEmpty }?.group.name ?? "",
+                 group ?? ""),
+            was: (live.group, live.groupManual))
         let started = run(key, dch: dch, args: args, running: nil, prepare: prepare) { [weak self] r in
             guard let self, let store = self.store else { return }
             if let failed = AgentIsland.groupSetFailure(r, manual: manual) {
                 store.actions[key] = failed
+                // Back where it was, unless a list has placed it since (that list's place stands).
+                if self.movedGroups.removeValue(forKey: key) != nil, let i = store.sessions.firstIndex(where: { $0.key == key }),
+                   store.sessions[i].group == to.to.group, store.sessions[i].groupManual == to.to.manual {
+                    store.sessions[i] = AgentIsland.placed(store.sessions[i], to.was)
+                }
             } else if store.actions[key].map(AgentIsland.isGroupSetFailure) == true {
                 store.actions[key] = nil   // an earlier move's failure goes with the move that worked
             }
-            self.refreshList()
+            // The list read after dch's answer wins: the local move goes just before it is applied.
+            self.refreshList(force: true) { [weak self] in self?.movedGroups[key] = nil }
         }
         if !started { refuseBusy(key, AgentIsland.groupSetBusyText) }
+        else if let i = store.sessions.firstIndex(where: { $0.key == key }) {
+            movedGroups[key] = to
+            store.sessions[i] = AgentIsland.placed(store.sessions[i], to.to)   // one publish, not one per field
+        }
         return started
+    }
+
+    /// #2105: the moves setGroup placed, until the list after dch's answer (AgentIsland.overlayMoved).
+    private var movedGroups: [AgentSessionKey: AgentIsland.MovedGroup] = [:]
+
+    /// #2105: a list read before dch wrote the move keeps it shown.
+    private func withMoved(_ sessions: [AgentSession]) -> [AgentSession] {
+        guard !movedGroups.isEmpty else { return sessions }
+        let r = AgentIsland.overlayMoved(sessions, movedGroups)
+        movedGroups = r.moved
+        return r.sessions
     }
 
     /// QA #693 INFO-3: the aliases renames set, until the poller lists them (AgentIsland.overlaySent).
@@ -1022,13 +1052,14 @@ final class AgentIslandController {
     }
 
     /// One poller tick now, not on the next second: the list (and the window's title) shows the
-    /// new alias as soon as the poll gate lets it fetch.
-    private func refreshList() {
-        guard let poller else { return }
+    /// new alias as soon as the poll gate lets it fetch. #2105 `force` (Move to group, one per user action, never on the
+    /// timer): lists past the gate and always applies; `before` runs on main just before that list (no poller: at once).
+    private func refreshList(force: Bool = false, before: (@MainActor @Sendable () -> Void)? = nil) {
+        guard let poller else { before?(); return }
         queue.async { [weak self] in
-            guard let sessions = poller.tick() else { return }
+            guard let sessions = poller.tick(force: force) else { return }
             let dirs = poller.listedDirs
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply(sessions, dirs: dirs) } }
+            DispatchQueue.main.async { MainActor.assumeIsolated { before?(); self?.apply(sessions, dirs: dirs) } }
         }
     }
 

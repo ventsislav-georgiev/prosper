@@ -522,6 +522,33 @@ extension AgentIsland {
         }
     }
 
+    /// #2105: a move shown before dch's list says it: the row's `group`/`groupManual` as placed (`to`) and as the list
+    /// had them when the user picked (`was`).
+    struct MovedGroup {
+        let to: (group: String?, manual: String?)
+        let was: (group: String?, manual: String?)
+    }
+
+    /// #2105: the listing with each local move over a row that still lists exactly `was` (a list read before dch wrote);
+    /// a row listing anything else (the move, or another place) is the list's: that move goes, as does a row that left.
+    static func overlayMoved(_ sessions: [AgentSession], _ moved: [AgentSessionKey: MovedGroup])
+        -> (sessions: [AgentSession], moved: [AgentSessionKey: MovedGroup]) {
+        var kept: [AgentSessionKey: MovedGroup] = [:]
+        let out = sessions.map { s in
+            guard let m = moved[s.key], s.group == m.was.group, s.groupManual == m.was.manual else { return s }
+            kept[s.key] = m
+            return placed(s, m.to)
+        }
+        return (out, kept)
+    }
+
+    static func placed(_ s: AgentSession, _ at: (group: String?, manual: String?)) -> AgentSession {
+        var s = s
+        s.group = at.group
+        s.groupManual = at.manual
+        return s
+    }
+
     // MARK: - Restart (#579)
 
     static let restartingText = "Restarting…"

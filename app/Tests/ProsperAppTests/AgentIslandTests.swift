@@ -286,6 +286,27 @@ final class AgentIslandTests: XCTestCase {
         XCTAssertEqual(f.calls.count, 3, "#768: 30 s backstop")
     }
 
+    /// #2105: a `.group` file (what `dch --group-set` writes) is no sidecar the gate stats, so the timer's tick never lists
+    /// for it (the move waited for the next printing cap or backstop); a forced tick (a user's action) lists inside the
+    /// floor and returns the list even unchanged. One listing per forced tick, none added to the timer's.
+    func testAForcedTickListsPastTheGateAndReturnsAnUnchangedList() {
+        let dir = tempDir(), f = Fake()
+        touch(dir, "s.sock")
+        touch(dir, "s.sock.act", mtime: 9_000)
+        f.rows = [session("s", .idle, activity: 9_000, dir: dir.path)]
+        let p = poller([dir.path], f)
+        XCTAssertEqual(p.tick()?.map(\.name), ["s"])
+        f.now += 1
+        XCTAssertTrue(p.tick() == nil, "the 2 s floor: the timer's tick lists nothing")
+        XCTAssertEqual(f.calls.count, 1)
+        XCTAssertEqual(p.tick(force: true)?.map(\.name), ["s"], "forced: listed inside the floor, returned unchanged")
+        XCTAssertEqual(f.calls.count, 2, "one listing")
+        f.now += 3
+        touch(dir, "s.group")
+        XCTAssertTrue(p.tick() == nil, "a .group file moves nothing the gate reads")
+        XCTAssertEqual(f.calls.count, 2, "no timer listing for it")
+    }
+
     func testActBumpFetchesButNeverWithinTheTwoSecondFloor() {
         let dir = tempDir(), f = Fake()
         touch(dir, "s.sock")

@@ -23,6 +23,8 @@ tag from the now-released section and put it on the new top draft.
   fails at the approval step; the approval sheet now lists the old piece's removal. (#2101)
 - Ships dch 1.202.0: the iPhone app can start a session on this Mac in one of its groups
   (dch serve --allow-create).
+- Moving a session to a group now shows it under the new group at once, instead of after a few
+  seconds; if the move fails, it goes back and says why.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

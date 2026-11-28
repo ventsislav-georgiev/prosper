@@ -37,6 +37,8 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         var output = ""
         var configPath: String?
         var configs: [String] = []
+        /// #2105: set, each launch waits on it (the answer held back).
+        var hold: DispatchSemaphore?
         var args: [[String]] { lock.withLock { all } }
     }
 
@@ -54,6 +56,7 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         c.seedDirs = { [] }
         c.listSessions = { _ in [] }
         c.runner = DchActionRunner(bound: 60, launch: { _, args, _, _, onPid, onOutput in
+            rec.lock.withLock { rec.hold }?.wait()
             let (status, out) = rec.lock.withLock {
                 rec.all.append(args)
                 if let p = rec.configPath { rec.configs.append((try? String(contentsOfFile: p, encoding: .utf8)) ?? "") }
@@ -175,6 +178,67 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         XCTAssertTrue(st.actions[s.key] == nil, "the next move that works drops the failure")
         XCTAssertFalse(c.setGroup(session("gone", group: ""), group: "Work"), "not live: nothing")
         XCTAssertEqual(rec.args.count, 4)
+    }
+
+    // MARK: - #2105: the move shows at once
+
+    /// The row is under its target group the moment the user picks, before dch answers; a failed answer puts it back
+    /// where it was and shows the row's line, as before.
+    @MainActor
+    func testTheMoveShowsAtOnceAndAFailedAnswerPutsItBack() {
+        let s = session("api", group: "", manual: ""), rec = Launches(), st = store([s]), c = controller(st, rec)
+        let hold = DispatchSemaphore(value: 0)
+        rec.hold = hold
+        rec.status = 1
+        rec.output = #"{"name":"api","group":null,"result":"failed","reason":"no_group"}"# + "\n"
+        XCTAssertTrue(c.setGroup(s, group: "Work"))
+        XCTAssertEqual(st.sessions.first?.group, "Work", "placed before any answer")
+        XCTAssertEqual(st.sessions.first?.groupManual, "Work")
+        XCTAssertEqual(AgentIsland.split(st.sessions, groups: st.sessionGroups).groups.first?.sessions.map(\.name), ["api"])
+        XCTAssertTrue(c.runner.isBusy(s.key) && st.actions[s.key] == nil, "dch has not answered")
+        hold.signal()
+        settle(c) { !c.runner.isBusy(s.key) && st.actions[s.key] == AgentIsland.noGroupText }
+        XCTAssertEqual(st.actions[s.key], AgentIsland.noGroupText)
+        XCTAssertEqual(st.sessions.first?.group, "", "back where it was")
+        XCTAssertEqual(st.sessions.first?.groupManual, "")
+        XCTAssertEqual(AgentIsland.split(st.sessions, groups: st.sessionGroups).primary.map(\.name), ["api"])
+    }
+
+    /// Automatic shows the row where the patterns put it (Sidekicks for "api-qa"), at once; an ok answer keeps it there,
+    /// and a busy row (refused) never moves.
+    @MainActor
+    func testAutomaticShowsThePatternGroupAtOnceAndARefusedMoveStays() {
+        let s = session("api-qa", group: "Work", manual: "Work"), rec = Launches(), st = store([s]), c = controller(st, rec)
+        let hold = DispatchSemaphore(value: 0)
+        rec.hold = hold
+        rec.output = #"{"name":"api-qa","group":null,"result":"ok"}"# + "\n"
+        XCTAssertTrue(c.setGroup(s, group: nil))
+        XCTAssertEqual(st.sessions.first?.group, "Sidekicks", "the pattern's group, before any answer")
+        XCTAssertEqual(st.sessions.first?.groupManual, "")
+        XCTAssertFalse(c.setGroup(s, group: "Work"), "busy: refused")
+        XCTAssertEqual(st.sessions.first?.group, "Sidekicks", "a refused move places nothing")
+        hold.signal()
+        settle(c) { rec.args.count == 1 && !c.runner.isBusy(s.key) }
+        XCTAssertEqual(st.sessions.first?.group, "Sidekicks", "ok: kept until the list says otherwise")
+        XCTAssertEqual(AgentIsland.split(st.sessions, groups: st.sessionGroups).groups.last?.sessions.map(\.name), ["api-qa"])
+    }
+
+    /// A list read before dch wrote (it still shows where the row was) keeps the local move; a list that places the row
+    /// anywhere else wins and ends the move, as does one without the row.
+    func testAStaleListKeepsTheMoveAndAListThatDisagreesWins() {
+        let key = session("api").key, m = AgentIsland.MovedGroup(to: ("Work", "Work"), was: ("", ""))
+        let stale = AgentIsland.overlayMoved([session("api", group: "", manual: ""), session("b", group: "")], [key: m])
+        XCTAssertEqual(stale.sessions.map(\.group), ["Work", ""], "the stale list: the move shown, the other row as listed")
+        XCTAssertEqual(stale.sessions.first?.groupManual, "Work")
+        XCTAssertEqual(stale.moved.count, 1, "kept for the next list")
+        let other = AgentIsland.overlayMoved([session("api", group: "Sidekicks", manual: "Sidekicks")], [key: m])
+        XCTAssertEqual(other.sessions.first?.group, "Sidekicks", "the list wins")
+        XCTAssertTrue(other.moved.isEmpty)
+        let manualOnly = AgentIsland.overlayMoved([session("api", group: "", manual: "Gone")], [key: m])
+        XCTAssertEqual(manualOnly.sessions.first?.group, "", "only the manual one differs: still the list's")
+        XCTAssertTrue(manualOnly.moved.isEmpty)
+        XCTAssertTrue(AgentIsland.overlayMoved([session("api", group: "Work", manual: "Work")], [key: m]).moved.isEmpty, "shown")
+        XCTAssertTrue(AgentIsland.overlayMoved([], [key: m]).moved.isEmpty, "the row left")
     }
 
     func testGroupSetFailureWordsEachReasonAndHowTheCallEnded() {

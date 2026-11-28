@@ -1170,7 +1170,9 @@ final class AgentIslandPoller: @unchecked Sendable {
     }
 
     /// The sorted sessions when they differ from the last tick's, else nil.
-    func tick() -> [AgentSession]? {
+    /// #2105: `force` (a user's dch action, never the timer): list now past the gate (a `.group` file is no sidecar
+    /// the gate stats) and return the list even when unchanged, so a local placement it does not show is undone.
+    func tick(force: Bool = false) -> [AgentSession]? {
         let dirs = dirs()
         listedDirs = dirs
         let snap = scanner.scan(dirs)
@@ -1179,7 +1181,7 @@ final class AgentIslandPoller: @unchecked Sendable {
             // Nothing to list: no fork, and the next session to appear fetches at once.
             fetched = []
             gate = AgentPollGate()
-        } else if gate.shouldFetch(snap, now: t, hidden: hidden) {
+        } else if force || gate.shouldFetch(snap, now: t, hidden: hidden) {
             let live = Set(snap.keys.map(\.dir))
             fetched = list(dirs.filter(live.contains), fetched)
             gate.didFetch(snap, sessions: fetched, now: t)
@@ -1191,7 +1193,7 @@ final class AgentIslandPoller: @unchecked Sendable {
             if let act = stamp.act { s.activity = act.rounded(.down) }
             return s
         })
-        guard current != published else { return nil }
+        guard force || current != published else { return nil }
         published = current
         return current
     }
