@@ -261,6 +261,13 @@ final class KitRuntime: @unchecked Sendable {
 
     private func plan(_ v: KitValidated) -> KitPlan { KitRender.plan(v, context(v.slug), off: off(v), offTools: offTools()) }
 
+    /// #2101: this kit's recorded pieces the plan no longer has (renamed, dropped or switched off). Records are keyed by the
+    /// owner id (the extension id), the same for the staged and the live owner, so askConsent and applyWiring agree.
+    private static func gone(_ p: KitPlan, _ config: ManagedConfig, _ who: ManagedConfigOwner) -> [String] {
+        let planned = Set(p.pieces.map(\.id))
+        return config.status(owner: who).map(\.id).filter { !planned.contains($0) }
+    }
+
     // MARK: the S2 off set (kits/<ext-id>/pieces.json, Prosper's own file: no sheet)
 
     /// #918 S1: offTools is optional, so a pieces.json written before it still decodes.
@@ -523,7 +530,9 @@ final class KitRuntime: @unchecked Sendable {
             guard let v = kit(version), let st = s.staged else { return }
             let p = plan(v)
             guard p.refusals.isEmpty else { out.notes += p.refusals.map(\.description); return }
-            let mc = config.plan(p.pieces, owner: owner(ext, v, dir: store.stagedPath(st.version, st.treeHash)))
+            let who = owner(ext, v, dir: store.stagedPath(st.version, st.treeHash))
+            // #2101: a piece leaving (hud renamed dch-bridge) is removed in this same plan, so the sheet shows it
+            let mc = config.plan(p.pieces, owner: who, dropping: Self.gone(p, config, who))
             guard mc.refusals.isEmpty else { out.configRefusals += mc.refusals; return }
             var yes = true
             if mc.writesUserFiles {
@@ -540,15 +549,8 @@ final class KitRuntime: @unchecked Sendable {
             let once = lock.withLock { () -> ManagedConfigChangeSet? in defer { approved = nil }; return approved }
             let mc = ManagedConfig(roots: config.roots, consent: KitApprovedConsent(approved: once, fallback: config.consent),
                                    writer: config.writer, now: config.now)
-            // a piece the new version no longer plans (or one switched off) leaves first
-            let planned = Set(p.pieces.map(\.id))
-            let gone = config.status(owner: who).map(\.id).filter { !planned.contains($0) }
-            if !gone.isEmpty {
-                let r = await mc.remove(owner: who, ids: gone)
-                out.configRefusals += r.refusals
-                guard r.ok else { lock.withLock { wiring = "remove: \(r.status.rawValue) \(r.message)" }; return }
-            }
-            let r = await mc.apply(p.pieces, owner: who)
+            // a piece the new version no longer plans (or one switched off) leaves first, in the one plan askConsent showed
+            let r = await mc.apply(mc.plan(p.pieces, owner: who, dropping: Self.gone(p, config, who)))
             out.configRefusals += r.refusals
             lock.withLock { wiring = r.ok ? nil : "\(r.status.rawValue) \(r.message)" }
             // #920: after the wiring landed; a refused agent is a note, never a failed apply (the other pieces stay)

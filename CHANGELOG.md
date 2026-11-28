@@ -19,6 +19,8 @@ never leaks into release notes. When you start the next version's draft, drop th
 tag from the now-released section and put it on the new top draft.
 
 ## v2.182.0 *(unreleased)*
+- Updating a kit whose new version renames a piece (like the Agent Kit's status line) no longer
+  fails at the approval step; the approval sheet now lists the old piece's removal. (#2101)
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

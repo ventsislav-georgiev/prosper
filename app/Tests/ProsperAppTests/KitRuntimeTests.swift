@@ -89,12 +89,12 @@ final class KitRuntimeTests: XCTestCase {
 
     /// A kit source dir with every piece kind (KitFixture.kit), its own extension.toml, under the row's tempDir.
     private func source(_ e: Env, id: String = KitRuntimeTests.ext, name: String = KitRuntimeTests.slug, version: String,
-                        timeout: Int = 10, seed: String = "# your notes\n") throws -> LoadedExtension {
+                        timeout: Int = 10, seed: String = "# your notes\n", kit: String = KitFixture.kit) throws -> LoadedExtension {
         let dir = e.root.appendingPathComponent("sources/\(id)-\(name)-\(version)", isDirectory: true)
         let head = KitFixture.head.replacingOccurrences(of: "\"dev.example.kit.calm-agent\"", with: "\"\(id)\"")
             .replacingOccurrences(of: "\"calm-agent\"", with: "\"\(name)\"").replacingOccurrences(of: "\"1.0.0\"", with: "\"\(version)\"")
             .replacingOccurrences(of: "\"2.170.0\"", with: "\"0.0.1\"") // any host the test bundle reports loads it
-        let kit = KitFixture.kit.replacingOccurrences(of: "timeout = 10", with: "timeout = \(timeout)")
+        let kit = kit.replacingOccurrences(of: "timeout = 10", with: "timeout = \(timeout)")
         let files: [(String, String, Int)] = [
             ("extension.toml", head + "\n" + kit + "\n", 0o644), ("README.md", KitDirFixture.readme, 0o644),
             ("CLAUDE.md", KitDirFixture.claudeMD, 0o644), ("init.lua", "return {}\n", 0o644),
@@ -561,6 +561,77 @@ final class KitRuntimeTests: XCTestCase {
         XCTAssertEqual(try statusCommand(e), "my-own-status", "the off piece stays off")
         XCTAssertEqual(rt.status(v2)?.off, ["hud"])
         XCTAssertEqual(rt.status(v2)?.pieces.contains { $0.id == "hud" }, false)
+    }
+
+    // MARK: #2101 a piece renamed across versions (the Agent Kit's hud -> dch-bridge)
+
+    private static let renamedHud = KitFixture.kit(replacing: "id          = \"hud\"", with: "id          = \"dch-bridge\"")
+
+    private func dropStatusLine(_ e: Env) throws {
+        var s = try settings(e)
+        s["statusLine"] = nil
+        try JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted, .sortedKeys]).write(to: e.settings)
+    }
+
+    /// One sheet for the update: it lists hud leaving and dch-bridge coming, and the wiring applies it without asking again.
+    private func assertRenamed(_ e: Env, _ rt: KitRuntime, _ r: KitRuntimeResult, hudAction: ManagedConfigPieceAction.Kind,
+                               line: UInt = #line) throws {
+        XCTAssertEqual(r.configRefusals, [], line: line) // base: "pieces hud and dch-bridge both set statusLine"
+        XCTAssertEqual(r.failures, [], line: line)
+        XCTAssertEqual(r.state?.live.version, "2.0.0", line: line)
+        XCTAssertEqual(e.consent.seen.count, 2, "asked once at askConsent; the wiring applied what was approved", line: line)
+        let sheet = try XCTUnwrap(e.consent.seen.last, line: line)
+        XCTAssertTrue(sheet.pieces.contains { $0.id == "hud" && $0.action == hudAction }, "\(sheet.pieces)", line: line)
+        XCTAssertTrue(sheet.pieces.contains { $0.id == "dch-bridge" && $0.action == .insert }, "\(sheet.pieces)", line: line)
+        let ctx = KitRenderContext.standard(extensionID: Self.ext, slug: Self.slug, kitDir: URL(fileURLWithPath: rt.store.layout.live),
+                                            home: e.root, configHome: e.roots.configHome)
+        XCTAssertEqual(try statusCommand(e), KitRender.runnerLine(ctx, pieceID: "dch-bridge", name: "dch-bridge",
+                                                                  target: rt.store.layout.live + "/statusline/hud.mjs", interpreter: "node"), line: line)
+        let ids = try records(e).filter { $0.owner == Self.ext }.map(\.piece.id)
+        XCTAssertFalse(ids.contains("hud"), "\(ids)", line: line)
+        XCTAssertTrue(ids.contains("dch-bridge"), "\(ids)", line: line)
+    }
+
+    func testRenamedPieceUpdateRemovesTheOldOneInTheConsentPlan() async throws {
+        let e = try env()
+        let rt = try runtime(e)
+        let first = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(first.failures, [])
+        let v2 = try source(e, version: "2.0.0", kit: Self.renamedHud)
+        let r = await rt.apply(v2)
+        try assertRenamed(e, rt, r, hudAction: .remove)
+        // hud restored the person's own status line in the same plan, so dch-bridge recorded it as its previous value
+        let removed = await rt.remove(v2)
+        XCTAssertEqual(removed.config?.status, .done, removed.config?.message ?? "")
+        XCTAssertEqual(try statusCommand(e), "my-own-status")
+    }
+
+    func testRenamedPieceUpdateWithItsNodeRemovedByHandForgetsIt() async throws {
+        let e = try env()
+        let rt = try runtime(e)
+        let first = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(first.failures, [])
+        try dropStatusLine(e)
+        let v2 = try source(e, version: "2.0.0", kit: Self.renamedHud)
+        let r = await rt.apply(v2)
+        try assertRenamed(e, rt, r, hudAction: .forget) // record only: no write, the pre-kit value is not restored
+        let removed = await rt.remove(v2)
+        XCTAssertEqual(removed.config?.status, .done, removed.config?.message ?? "")
+        XCTAssertTrue(try settings(e)["statusLine"] == nil, "nothing restored: the person had removed it")
+    }
+
+    /// #2101 is scoped to leaving pieces: hud stays in v2, its node removed by hand, and the update is refused as before.
+    func testStayingPieceWithItsNodeRemovedByHandStillRefuses() async throws {
+        let e = try env()
+        let rt = try runtime(e)
+        let first = try await rt.apply(source(e, version: "1.0.0"))
+        XCTAssertEqual(first.failures, [])
+        try dropStatusLine(e)
+        let r = try await rt.apply(source(e, version: "2.0.0", timeout: 20))
+        XCTAssertTrue(r.configRefusals.contains { $0.pieceID == "hud" && $0.reason == .missing }, "\(r.configRefusals)")
+        XCTAssertEqual(r.state?.live.version, "1.0.0")
+        XCTAssertEqual(try kitHookTimeout(e), 10)
+        XCTAssertTrue(try records(e).contains { $0.owner == Self.ext && $0.piece.id == "hud" })
     }
 
     func testSeedNeverOverwritten() async throws {

@@ -6,6 +6,9 @@ import Foundation
 struct ManagedConfigPlan: Sendable {
     enum Operation: Sendable, Equatable {
         case apply([ManagedConfigPiece])
+        /// #2101: a kit update: the owner's recorded `gone` pieces (renamed, dropped or switched off) leave first, in the same
+        /// plan and sheet, so a renamed piece's old record never trips the one-slot rule or asks a second time
+        case applyDropping([ManagedConfigPiece], gone: [String])
         case remove([String]?)
         case repair([String]?)
         /// A-INFO-1: repair by declared pieces, record or not
@@ -115,6 +118,10 @@ final class ManagedConfig: Sendable {
     // MARK: public surface
 
     func plan(_ pieces: [ManagedConfigPiece], owner: ManagedConfigOwner) -> ManagedConfigPlan { prepare(.apply(pieces), owner: owner) }
+    /// #2101: `pieces` after the owner's recorded `gone` ids are removed (one sheet for both).
+    func plan(_ pieces: [ManagedConfigPiece], owner: ManagedConfigOwner, dropping gone: [String]) -> ManagedConfigPlan {
+        prepare(gone.isEmpty ? .apply(pieces) : .applyDropping(pieces, gone: gone), owner: owner)
+    }
     func planRemove(owner: ManagedConfigOwner, ids: [String]? = nil) -> ManagedConfigPlan { prepare(.remove(ids), owner: owner) }
     func planRepair(owner: ManagedConfigOwner, ids: [String]? = nil) -> ManagedConfigPlan { prepare(.repair(ids), owner: owner) }
 
@@ -184,7 +191,7 @@ final class ManagedConfig: Sendable {
         let stateBytes = read(stateURL)
         let action: ManagedConfigChangeSet.Action
         switch operation {
-        case .apply: action = .apply
+        case .apply, .applyDropping: action = .apply
         case .remove, .uninstall: action = .remove
         case .repair, .repairPieces: action = .repair
         }
@@ -202,9 +209,12 @@ final class ManagedConfig: Sendable {
         }
         var planner = ManagedConfigPlanner(roots: roots, owner: owner, now: now(), state: state)
         switch operation {
-        case .apply(let pieces), .repairPieces(let pieces):
+        case .apply(let pieces), .repairPieces(let pieces), .applyDropping(let pieces, _):
             let ids = pieces.map(\.id)
             if Set(ids).count != ids.count { return refused(.invalidPiece("two pieces share an id")) }
+            if case .applyDropping(_, let gone) = operation {
+                for r in state.records where r.owner == owner.id && gone.contains(r.piece.id) { planner.remove(r) }
+            }
             let repair = if case .repairPieces = operation { true } else { false }
             for p in pieces { planner.apply(p, repair: repair) }
         case .remove(let ids), .repair(let ids):
