@@ -85,6 +85,25 @@ final class XrayPaneSlotTests: XCTestCase {
             XCTAssertGreaterThan(n("button", a), a0[0], "A's button shows it closed")
             XCTAssertGreaterThan(n("button", b), b0[0], "B's button shows it open")
             XCTAssertGreaterThan(n("drawer", b), b0[1], "B's drawer draws the panel")
+            XCTAssertGreaterThan(n("drawer", a), a0[1], "A's drawer lets the panel go")   // QA r2093 n2
+            XCTAssertGreaterThan(n("dock", a), a0[2], "A's dock gives the room back")
+            XCTAssertGreaterThan(n("dock", b), b0[2], "B's dock makes room")
+        }
+    }
+
+    /// QA r2093 n1: only panes whose entry changes are told. With B's panel open and unchanged, A's open and close leave
+    /// B's bodies alone. Mutant slot-notify-all (every key in the union told, the !== filter gone) redraws B.
+    func testAnOpenBesideAnOpenPaneLeavesThatPaneAlone() {
+        rig { host in
+            XrayPanels.shared.open[b] = XrayPanelModel(target: tb, tab: .tasks)
+            settle(host)
+            let b0 = counts(b)
+            XrayPanels.shared.open[a] = XrayPanelModel(target: ta, tab: .tasks)
+            settle(host)
+            XCTAssertEqual(counts(b), b0, "B's open panel is not told of A's open")
+            XrayPanels.shared.close(a)
+            settle(host)
+            XCTAssertEqual(counts(b), b0, "nor of A's close")
         }
     }
 

@@ -33,6 +33,14 @@
       "new": "struct XrayDock: ViewModifier {\n    var panels = XrayPanels.shared",
       "expect": "killed",
       "note": "the dock no longer hears a docked flip"
+    },
+    {
+      "name": "slot-notify-all",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+      "old": "        willSet { for k in Set(open.keys).union(newValue.keys) where open[k] !== newValue[k] { slots[k]?.objectWillChange.send() } }\n",
+      "new": "        willSet { for k in Set(open.keys).union(newValue.keys) { slots[k]?.objectWillChange.send() } }\n",
+      "expect": "killed",
+      "note": "every key in the union is told: B's open panel redraws on A's open (QA r2093 n1)"
     }
   ]
 }
