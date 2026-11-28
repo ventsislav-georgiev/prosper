@@ -49,6 +49,35 @@ final class XrayTasksParseTests: XCTestCase {
         XCTAssertTrue(XrayTasks.date("v1.2") == nil, "a '.' that is no ISO date reads as null")
     }
 
+    /// #2116: the date styles' accepted inputs (Z, an offset, fractional or not) and null for junk.
+    func testDateInputs() {
+        let t = Date(timeIntervalSince1970: 1_793_520_000)
+        XCTAssertTrue(XrayTasks.date("2026-11-01T08:00:00Z") == t)
+        XCTAssertTrue(XrayTasks.date("2026-11-01T10:00:00+02:00") == t)
+        XCTAssertTrue(XrayTasks.date("2026-11-01T08:00:00.500Z") == t + 0.5)
+        XCTAssertTrue(XrayTasks.date("2026-11-01T10:00:00.250+02:00") == t + 0.25)
+        XCTAssertTrue(XrayTasks.date("yesterday") == nil && XrayTasks.date("") == nil && XrayTasks.date(nil) == nil)
+    }
+
+    /// #2116: Tasks and Questions parse at once off main: many concurrent date() calls all give the expected Date.
+    func testDateIsSafeUnderConcurrency() async {
+        let t = Date(timeIntervalSince1970: 1_793_520_000)
+        let bad = await withTaskGroup(of: Int.self) { g -> Int in
+            for k in 0..<8 {
+                g.addTask {
+                    var n = 0
+                    for i in 0..<25 {
+                        let s = (k + i) % 2 == 0 ? "2026-11-01T08:00:00Z" : "2026-11-01T08:00:00.500Z"
+                        if XrayTasks.date(s) != ((k + i) % 2 == 0 ? t : t + 0.5) { n += 1 }
+                    }
+                    return n
+                }
+            }
+            return await g.reduce(0, +)
+        }
+        XCTAssertEqual(bad, 0)
+    }
+
     func testNulls() {
         let r = parse([#"{"schema":1,"session":"api","session_id":"s-1","source":"none","title":null,"partial":false}"#,
                        row("1", "pending", extra: #","active":null,"note":null,"created":null,"updated":"yesterday","chapter":null,"created_chapter":null,"blocked_by":[],"url":null,"group":null"#), done])

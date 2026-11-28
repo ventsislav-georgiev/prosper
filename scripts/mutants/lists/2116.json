@@ -1,0 +1,20 @@
+{
+ "entry": 2116,
+ "filter": "XrayRefMergeTests|XrayTasksParseTests",
+ "mutants": [
+  {
+   "name": "memory-empty-kept",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "p.memory = XrayMemory.parse(r.out); if p.memory?.count == 0 { p.memory = nil }",
+   "new": "p.memory = XrayMemory.parse(r.out)",
+   "expect": "killed"
+  },
+  {
+   "name": "date-fractional-as-plain",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayTasks.swift",
+   "old": "Date.ISO8601FormatStyle(timeZoneSeparator: .colon, includingFractionalSeconds: true)",
+   "new": "Date.ISO8601FormatStyle(timeZoneSeparator: .colon)",
+   "expect": "killed"
+  }
+ ]
+}

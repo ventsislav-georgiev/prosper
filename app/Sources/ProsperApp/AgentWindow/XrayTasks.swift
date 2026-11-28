@@ -131,18 +131,15 @@ struct XrayTasks: Equatable {
         let warn: String?
     }
 
-    // Built once and shared: parse runs per poll and a row has two dates.
-    nonisolated(unsafe) private static let plainISO: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
-    }()
-    nonisolated(unsafe) private static let fractionalISO: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
-    }()
+    // Built once and shared: parse runs per poll and a row has two dates. A Sendable value, not an
+    // ISO8601DateFormatter (not documented thread-safe; Tasks and Questions now parse at once, off main). "+02:00" needs .colon.
+    private static let plainISO = Date.ISO8601FormatStyle(timeZoneSeparator: .colon)
+    private static let fractionalISO = Date.ISO8601FormatStyle(timeZoneSeparator: .colon, includingFractionalSeconds: true)
 
     static func date(_ s: String?) -> Date? {   // a non-ISO value reads as null
         guard let s else { return nil }
         // #1787: one formatter per date: only a fractional form has a '.', and each formatter reads only its own form
-        return (s.contains(".") ? fractionalISO : plainISO).date(from: s)
+        return try? (s.contains(".") ? fractionalISO : plainISO).parse(s)
     }
 
     /// #1787: a follow's parsed rows by their line bytes, from its last parse (rows no longer sent drop out), so a build

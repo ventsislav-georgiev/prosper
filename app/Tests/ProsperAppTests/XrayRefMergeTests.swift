@@ -118,4 +118,13 @@ final class XrayRefMergeTests: XCTestCase {
         XCTAssertEqual(publishes(p) { p.takeMemory((0, XrayPanelMemoryTests.memoryOut)) }, 1)
         XCTAssertEqual(publishes(p) { p.takeMemory((0, XrayPanelMemoryTests.memoryOut)) }, 0)
     }
+
+    /// #2116: an empty Memory answer parses to nil, so the Memory tab is not offered (mutant memory-empty-kept).
+    func testAnEmptyMemoryAnswerParsesToNilAndHidesTheTab() {
+        let empty = XrayPanelTasksTests.ndjson([XrayPanelMemoryTests.header, #"{"done":true,"count":0,"dropped":0}"#])
+        XCTAssertTrue(XrayPanelModel.parse(.memory, (0, empty)).memory == nil)
+        let p = panel()
+        p.takeMemory((0, empty))
+        XCTAssertFalse(p.tabs.contains(.memory))
+    }
 }
