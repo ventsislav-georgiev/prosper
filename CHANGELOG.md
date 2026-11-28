@@ -143,9 +143,8 @@ tag from the now-released section and put it on the new top draft.
   with that group already chosen (#2063)
 - Switching the Agent Sessions window's style in Settings now rebuilds the window, so Standard shows
   its title bar above the sidebar right away, without restarting Prosper. (#2045)
-- The X-ray drawer has a bottom pane with Agents, Shells and Pull requests tabs; click a session's
-  agents or shells count in its header to open the drawer there. Drag the divider to resize it, or
-  down to fold it away. (#2066)
+- The X-ray drawer has a bottom pane with Agents, Shells and Pull requests tabs; drag its divider to
+  resize it, or down to fold it away. (#2066)
 - On 1x displays, Claude Code's dim grey text in Agent Sessions is drawn with enough contrast to
   read. (#2075)
 
