@@ -1317,7 +1317,7 @@ struct AgentSidebarView: View {
     /// One session's row: its click, its number and its context menu, as before.
     @ViewBuilder
     func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>) -> some View {
-        let button = Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
+        Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: number, inView: inView.contains(row.id),
                                 model: model, mini: mini, show: details,   // #1455
@@ -1326,12 +1326,8 @@ struct AgentSidebarView: View {
         }
         .buttonStyle(.plain)
         .modifier(AgentRowDrag(token: AgentWindowModel.dragToken(row.id)))   // #1492: onto a pane
-        // #829, #1103, #2062: a live row's or a History row's right-click menu; #2104: rebuilt only on a change.
-        if let store = model.store {
-            button.modifier(AgentRowMenu(store: store, row: row, model: model, open: { open($0) }))
-        } else {
-            button
-        }
+        // #829, #1103, #2062: a live row's or a History row's right-click menu; #2104: built on the right-click only.
+        .contextMenu { AgentRowMenu(id: row.id, model: model) }
     }
 
     /// #1103: a live row's Open in terminal: that row selected first (as ask does), then the header's action.

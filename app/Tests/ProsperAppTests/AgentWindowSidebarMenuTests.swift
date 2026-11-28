@@ -439,7 +439,8 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
 
     // MARK: #2104: a row's right-click menu (Model, Effort, Move to group) is not rebuilt by an equal publish
 
-    /// The row's parent: observes the store (as the window does) and draws the store's first session's row with its menu.
+    /// The row's parent: observes the store (as the window does) and draws the store's first session's row with the
+    /// sidebar's right-click menu (AgentsWindow line(): `.contextMenu { AgentRowMenu(id:model:) }`).
     struct RowMenuProbe: View {
         @ObservedObject var store: AgentIslandStore
         let model: AgentWindowModel
@@ -447,8 +448,7 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         var body: some View {
             let _ = Self.bodies += 1
             if let s = store.sessions.first {
-                Text(s.name).modifier(AgentRowMenu(store: store, row: AgentSidebar.row(s, details: store.details, now: 0),
-                                                   model: model, open: { _ in }))
+                Text(s.name).contextMenu { AgentRowMenu(id: .live(s.key), model: model) }
             }
         }
     }
@@ -457,8 +457,13 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
 
     /// The operator's 3rd report (#2104): a live row's right-click menu and its Move to group submenu hid and showed
     /// again about every second: the items observed the store inside the `.contextMenu`, so each poll publish re-declared
-    /// them. Equal publishes must leave the menu alone; a changed effort (the Effort check) or a changed group (the Move
-    /// to group check) rebuilds it once. Offscreen: a hosted tree, no window, no menu popped.
+    /// them. Round 2 (CI 46123156427): a menu's items are built when it opens, never by a hosted draw, so this row pins
+    /// what can be pinned offscreen: (1) the items hold only the row's id and the model, nothing observed and no closure,
+    /// so a publish (equal or not) gives SwiftUI an equal items view and no reason to re-run its body while it is open;
+    /// (2) the sidebar's draws build no menu (0 item builds through hosting, equal publishes and changes: the cost the
+    /// pane-cost row counts); (3) what the menu shows when it opens is read then: equal across equal publishes, the
+    /// changed Effort check and Move to group check after a change. It cannot pin what AppKit does with an open menu
+    /// (no menu is opened here). Offscreen: a never-shown window, no menu popped.
     @MainActor
     func testSidebarRowMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange() throws {
         var s0 = session("api")
@@ -466,16 +471,23 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         let st = store([s0, session("api-qa")], dch: bin([1, 196, 0]))
         st.sessionGroups = [SessionGroup(id: "w1", name: "Work", pattern: "zzz")]
         let m = model(st, controller(st, Launches()))
-        let host = NSHostingView(rootView: RowMenuProbe(store: st, model: m).frame(width: 40, height: 40))
+        let id = AgentSidebar.RowID.live(s0.key)
+        let items = AgentRowMenu(id: id, model: m)
+        XCTAssertEqual(Mirror(reflecting: items).children.map { $0.label ?? "" }, ["id", "model"],
+                       "the items hold the row's id and the model only: no observed store, no closure")
+        let (win, host) = AXTreeSupport.hosted(RowMenuProbe(store: st, model: m), CGSize(width: 40, height: 40))
+        defer { win.contentView = nil; win.close() }
         func pump(_ moved: () -> Bool) {
             settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() }
         }
+        // What the menu shows when it opens: the body's snapshot of the store's row (the body finds it by id in the
+        // model's drawn sections, which this unshown model does not build).
         func snap() -> AgentRowMenu.Snapshot? {
             st.sessions.first.map { AgentRowMenu.snapshot(AgentSidebar.row($0, details: st.details, now: 0), store: st, model: m) }
         }
-        pump { rowMenuBodies > 0 }
-        let menu0 = rowMenuBodies
-        XCTAssertGreaterThan(menu0, 0, "precondition: the menu is drawn")
+        let built0 = rowMenuBodies
+        pump { RowMenuProbe.bodies > 0 }
+        XCTAssertGreaterThan(RowMenuProbe.bodies, 0, "precondition: the row is drawn")
         XCTAssertEqual(snap()?.switches.map(\.title), [AgentModelSwitch.modelLabel, AgentModelSwitch.effortLabel],
                        "precondition: the menu holds Model and Effort")
         XCTAssertEqual(snap()?.move.count, 1, "precondition: the menu holds Move to group")
@@ -487,17 +499,20 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
             pump { RowMenuProbe.bodies > probe }
             XCTAssertGreaterThan(RowMenuProbe.bodies, probe, "precondition: the publish reached the hosted tree")
         }
-        XCTAssertTrue(snap() == before, "precondition: the snapshot is equal")
-        XCTAssertEqual(rowMenuBodies, menu0, "equal publishes: the row menu is not rebuilt")
+        XCTAssertTrue(snap() == before, "equal publishes: the menu would show the same")
         var s1 = try XCTUnwrap(st.sessions.first)
         s1.effort = s1.effort == "high" ? "low" : "high"   // the Effort submenu's checked item moves
         st.sessions = [s1] + st.sessions.dropFirst()
-        pump { rowMenuBodies > menu0 }
-        XCTAssertEqual(rowMenuBodies, menu0 + 1, "a changed effort rebuilds the menu once")
+        pump { snap() != before }
+        let effort = snap()
+        XCTAssertNotEqual(effort?.switches.last, before?.switches.last, "a changed effort shows on the next right-click")
+        XCTAssertEqual(effort?.move, before?.move)
         s1.groupManual = "Work"   // Move to group's checked item moves
         st.sessions = [s1] + st.sessions.dropFirst()
-        pump { rowMenuBodies > menu0 + 1 }
-        XCTAssertEqual(rowMenuBodies, menu0 + 2, "a changed group rebuilds the menu once")
+        pump { snap() != effort }
+        XCTAssertNotEqual(snap()?.move, effort?.move, "a changed group shows on the next right-click")
+        XCTAssertEqual(rowMenuBodies, built0, "the draws (hosting, equal publishes, changes) built no menu item")
+        XCTAssertFalse(win.isVisible, "never on screen")
     }
 
     // MARK: #1540: the pane header "..." (Model and Effort submenus) is not rebuilt by an equal publish

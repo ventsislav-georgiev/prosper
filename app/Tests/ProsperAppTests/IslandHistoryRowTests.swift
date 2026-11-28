@@ -45,11 +45,14 @@ final class IslandHistoryRowTests: XCTestCase {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentIsland/AgentIslandView.swift")
         let src = try String(contentsOf: url, encoding: .utf8)
-        let attach = ".contextMenu { ForEach(r.menu, id: \\.title) { Button($0.title, action: $0.action) } }"
+        // #2104: a stableContextMenu of the row's own menu lines (rebuilt only when they change), run by index.
+        let attach = ".stableContextMenu(Self.historyMenuID, entries: r.menu.map { MenuLine(title: $0.title) },"
         let at = try XCTUnwrap(src.range(of: "ForEach(historyDrawn) { r in"), "the History rows loop")
         let tail = String(src[at.upperBound...])
         let end = try XCTUnwrap(tail.range(of: "ForEach(drawn) { r in"), "the Sessions rows loop follows")
         XCTAssertTrue(tail[..<end.lowerBound].contains(attach), "each drawn History row carries its context menu")
+        XCTAssertTrue(tail[..<end.lowerBound].contains("run: { (i: Int) in let m = r.menu; if m.indices.contains(i) { m[i].action() } },"),
+                      "an item runs its own line's action")
         // QA #569 INFO-3: the two play icons (an inner button is not its own AX element, so pinned here): the filled
         // one runs the row's `action` (Resume with the message), the outline one `resumeNoMessage`.
         // #1069 (QA #742 INFO-1): each by its own symbol constant (AgentIslandWordingTests pins the two shapes).

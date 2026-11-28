@@ -28,14 +28,17 @@ final class StableMenuGuardTests: XCTestCase {
     /// #2104: every right-click menu left outside stableContextMenu, by file: how many, and why it is safe.
     static let allowedContext: [String: (count: Int, why: String)] = [
         "ProsperApp/StableMenu.swift": (1, "the shared piece's own contextMenu (stableContextMenu)"),
+        "ProsperApp/AgentWindow/AgentsWindow.swift":
+            (1, "the sidebar row's AgentRowMenu: holds an id and the model, observes nothing, reads the store on the right-click (AgentWindowSidebarMenuTests pins it)"),
         "ProsperApp/LayoutEditorView.swift":
             (2, "the layout editor sheet's layout and group menus: its LayoutStore binding changes only on an edit, no timer"),
     ]
 
     /// A SwiftUI Menu: `Menu {`, `Menu(title) {`, `SwiftUI.Menu {`; never StableMenu, NSMenu or a lower-case `menu(`.
     static let pattern = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_])Menu\s*[{(]"#)
-    /// #2104: a right-click menu: `.contextMenu {`, `.contextMenu(forSelectionType:`; never `.stableContextMenu(`.
-    static let contextPattern = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_])\.contextMenu\s*[{(]"#)
+    /// #2104: a right-click menu: `.contextMenu {`, `x.contextMenu {`, `.contextMenu(forSelectionType:`; never
+    /// `.stableContextMenu(` (its capital C never matches).
+    static let contextPattern = try! NSRegularExpression(pattern: #"\.contextMenu\s*[{(]"#)
 
     static func menus(in line: Substring, _ p: NSRegularExpression = pattern) -> Int {
         let code = String(line.components(separatedBy: "//").first ?? "")   // a comment that names a Menu is not one
@@ -82,6 +85,7 @@ final class StableMenuGuardTests: XCTestCase {
     /// `.contextMenu` in app/Sources is a stableContextMenu or on allowedContext with its reason.
     func testEveryContextMenuIsAStableContextMenuOrOnTheAllowList() throws {
         for (text, n) in [(".contextMenu {", 1), ("Text(x).contextMenu {", 1), (".contextMenu(forSelectionType: Int.self) {", 1),
+                          ("content.contextMenu { m.content(m.entries) }", 1), ("button.contextMenu(menuItems: {", 1),
                           (".stableContextMenu(id, entries: e", 0), ("x.contextMenu = menu", 0),
                           ("let x = 1 // a .contextMenu { here", 0)] {
             XCTAssertEqual(Self.menus(in: Substring(text), Self.contextPattern), n, "the pattern on \(text)")
@@ -104,11 +108,7 @@ final class StableMenuGuardTests: XCTestCase {
     /// #2104: the shared piece: a right-click menu's items are re-declared only when its entries change.
     @MainActor
     func testAStableContextMenuIsNotRebuiltByAnEqualTick() {
-        assertStable("test.context") { v in
-            Text("api").stableContextMenu("test.context", entries: v, run: { (_: Int) in }) { v, run in
-                Button("\(v)") { run(v) }
-            }
-        }
+        assertStableContext { $0 }
     }
 
     /// #2104: the Agent Island row's right-click menu under its 1 s TimelineView: equal lines, no rebuild.
@@ -116,12 +116,33 @@ final class StableMenuGuardTests: XCTestCase {
     func testIslandRowMenuIsNotRebuiltByAnEqualTick() {
         let s = AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"), alias: "", activity: 0, state: .idle,
                              agents: 0)
-        assertStable(AgentIslandView.rowMenuID) { v in
-            let d = AgentIslandView.Drawn(session: s, card: nil, open: {}, answer: { _, _ in },
-                                          refused: v == 0 ? nil : "need dch 1.38", canStop: true, needs: nil)
-            return Text("api").stableContextMenu(AgentIslandView.rowMenuID, entries: AgentIslandView.rowMenu(d),
-                                                 run: { (_: Int) in }, items: { AgentIslandView.menuLines($0, $1) })
+        assertStableContext { v in
+            AgentIslandView.rowMenu(AgentIslandView.Drawn(session: s, card: nil, open: {}, answer: { _, _ in },
+                                                          refused: v == 0 ? nil : "need dch 1.38", canStop: true, needs: nil))
         }
+    }
+
+    /// A right-click menu's body (the modifier that declares `.contextMenu`) is not run by a hosted tree offscreen
+    /// (testAContextMenusItemsAreBuiltOnlyWhenItOpens), so its rows pin what decides a re-declaration instead:
+    /// `entries(0)` rebuilt by three equal ticks is equal and the shared model does not publish; `entries(1)` publishes
+    /// once; and StableContextMenuBody, which declares the `.contextMenu`, holds the model and nothing else (so a
+    /// parent's redraw hands it an equal input). Not pinned here: SwiftUI's own skip of an equal input, and an open
+    /// NSMenu (none is opened).
+    @MainActor
+    func assertStableContext<E: Equatable>(file: StaticString = #filePath, line: UInt = #line, _ entries: (Int) -> E) {
+        let m = StableMenuModel<E, Int, EmptyView, EmptyView>("test.context", entries(0), content: { _, _ in EmptyView() },
+                                                              label: { _ in EmptyView() })
+        var published = 0
+        let sub = m.objectWillChange.sink { published += 1 }
+        defer { sub.cancel() }
+        for _ in 0..<3 { m.show(entries(0)) }   // three ticks: the parent rebuilds the entries from equal inputs
+        XCTAssertEqual(published, 0, "equal ticks: the menu is not re-declared", file: file, line: line)
+        XCTAssertTrue(entries(1) != entries(0), "precondition: the change is a change", file: file, line: line)
+        m.show(entries(1))
+        XCTAssertEqual(published, 1, "a changed menu is re-declared once", file: file, line: line)
+        XCTAssertTrue(m.entries == entries(1), "it shows the change", file: file, line: line)
+        XCTAssertEqual(Mirror(reflecting: StableContextMenuBody(model: m)).children.map { $0.label ?? "" }, ["_model"],
+                       "the .contextMenu is declared by a view that holds only the model", file: file, line: line)
     }
 
     @MainActor
@@ -170,6 +191,58 @@ final class StableMenuGuardTests: XCTestCase {
         t.value = 1
         pump { bodies() > menu0 }
         XCTAssertEqual(bodies(), menu0 + 1, "a changed menu rebuilds once", file: file, line: line)
+    }
+
+    /// #2104: what a hosted tree builds of a right-click menu. Its items are built when the menu opens, never by the
+    /// draw: hosting, three equal ticks and a change of a parent that draws `.contextMenu { Items }` run Items' body
+    /// 0 times, in a never-shown window and in a bare host. This is what keeps the sidebar's body pass flat with the
+    /// rows (AgentRowMenu reads the store in its items). The modifier that declares the menu is printed with the
+    /// counts: in these hosts it ran 0 times too (round 2 ticket 1), so the context rows below pin the model and the
+    /// values, not a body count.
+    @MainActor
+    func testAContextMenusItemsAreBuiltOnlyWhenItOpens() {
+        for windowed in [true, false] {
+            ProbeItems.bodies = 0
+            ProbeModifier.bodies = 0
+            let t = Ticker()
+            let view = Parent(ticker: t) { v in Text("api").modifier(ProbeModifier(value: v)) }.frame(width: 200, height: 40)
+            let size = CGSize(width: 200, height: 40)
+            var win: NSWindow?
+            let host: NSView
+            if windowed { let (w, h) = AXTreeSupport.hosted(view, size); win = w; host = h } else { host = NSHostingView(rootView: view) }
+            func pump(_ moved: () -> Bool) { settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() } }
+            pump { t.bodies > 0 }
+            for _ in 0..<3 {
+                let parent = t.bodies
+                t.tick += 1
+                pump { t.bodies > parent }
+            }
+            let parent = t.bodies
+            t.value = 1
+            pump { t.bodies > parent }
+            print("CONTEXT PROBE windowed \(windowed): parent \(t.bodies), modifier \(ProbeModifier.bodies), items \(ProbeItems.bodies)")
+            XCTAssertGreaterThanOrEqual(t.bodies, 5, "precondition: hosting, three ticks and a change redrew the parent")
+            XCTAssertEqual(ProbeItems.bodies, 0, "windowed \(windowed): the draw builds no right-click menu item")
+            if let win { win.contentView = nil; win.close() }
+        }
+    }
+
+    struct ProbeItems: View {
+        let value: Int
+        @MainActor static var bodies = 0
+        var body: some View {
+            let _ = Self.bodies += 1
+            Button("\(value)") {}
+        }
+    }
+
+    struct ProbeModifier: ViewModifier {
+        let value: Int
+        @MainActor static var bodies = 0
+        func body(content: Content) -> some View {
+            let _ = Self.bodies += 1
+            content.contextMenu { ProbeItems(value: value) }
+        }
     }
 
     @MainActor

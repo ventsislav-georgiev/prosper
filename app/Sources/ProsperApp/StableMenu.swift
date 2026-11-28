@@ -8,7 +8,8 @@ import SwiftUI
 /// `run` handed to `content` (it calls the newest `run` the parent passed, never one kept from an older draw).
 /// StableMenuGuardTests fails on a SwiftUI Menu built anywhere else that is not on its literal allow-list.
 /// #2104: a right-click menu goes through `stableContextMenu` below, on the same model and the same rules; the guard
-/// covers `.contextMenu` the same way.
+/// covers `.contextMenu` the same way. A menu whose snapshot costs work per row (the sidebar row's AgentRowMenu) holds no
+/// observed object and reads its values when it opens instead, so a body pass builds nothing for it.
 struct StableMenu<Entries: Equatable, Verb, Content: View, MenuLabel: View>: View {
     let entries: Entries
     let run: (Verb) -> Void

@@ -772,20 +772,19 @@ extension AgentWindowControls {
 
 // MARK: - Menus
 
-/// #2104 (the 3rd report of a blinking menu, after #1466 and #1540): a sidebar row's right-click menu. The old items
-/// observed the store inside the `.contextMenu`, so each poll publish (about every second) rebuilt the open menu and it
-/// hid and showed again, its Model, Effort and Move to group submenus too. The store is read here, outside the menu, and
-/// a stableContextMenu rebuilds the menu only when what it shows changes. A live row: rowMenu (#1103, #900), Model and
-/// Effort (#1469, #627: none for a name dch would read as a flag), Move to group (#2062). A local History row: its
-/// historyMenu (#829). A remote row: nothing.
-struct AgentRowMenu: ViewModifier {
-    @ObservedObject var store: AgentIslandStore
-    let row: AgentSidebar.Row
+/// #2104 (the 3rd report of a blinking menu, after #1466 and #1540): a sidebar row's right-click menu items. The old
+/// items observed the store inside the `.contextMenu`, so each poll publish (about every second) rebuilt the open menu
+/// and it hid and showed again, its Model, Effort and Move to group submenus too. These hold only the row's id and the
+/// model (no observed object, no closure: equal on every redraw of the sidebar, so SwiftUI never re-runs this body
+/// for a publish) and read the store when SwiftUI builds the menu, on the right-click; a body pass of the sidebar
+/// builds nothing per row (AgentWindowPaneCostTests). A change shows on the next right-click. A live row: rowMenu
+/// (#1103, #900), Model and Effort (#1469, #627: none for a name dch would read as a flag), Move to group (#2062).
+/// A local History row: its historyMenu (#829). A remote row, or no store: nothing.
+struct AgentRowMenu: View {
+    let id: AgentSidebar.RowID
     let model: AgentWindowModel
-    /// #1103: Open in terminal (the sidebar selects the row first).
-    let open: (AgentSession) -> Void
 
-    /// StableMenuProbe.bodies key.
+    /// StableMenuProbe.bodies key: counts this body, i.e. each build of the menu's items.
     static let menuID = "agent.sidebar.row"
 
     struct Snapshot: Equatable {
@@ -793,9 +792,6 @@ struct AgentRowMenu: ViewModifier {
         var switches: [AgentModelSwitch.Submenu] = []
         var move: [AgentSidebarMenuEntry] = []
     }
-
-    /// A menu item's verb, run through the newest row and closures of the sidebar's draw.
-    enum Verb { case ask(AgentWindowVerb), open, side, move(AgentSidebarVerb) }
 
     @MainActor
     static func snapshot(_ row: AgentSidebar.Row, store: AgentIslandStore, model: AgentWindowModel) -> Snapshot {
@@ -811,28 +807,23 @@ struct AgentRowMenu: ViewModifier {
         return Snapshot()
     }
 
-    func body(content: Content) -> some View {
-        let row = row, model = model, open = open
-        content.stableContextMenu(Self.menuID, entries: Self.snapshot(row, store: store, model: model), run: { (v: Verb) in
+    var body: some View {
+        let _ = StableMenuProbe.bodies[Self.menuID, default: 0] += 1
+        if let store = model.store, let row = model.row(id) {
+            let snap = Self.snapshot(row, store: store, model: model), m = model
             if let s = row.session {
-                switch v {
-                case .ask(let a): model.ask(a, s)
-                case .open: open(s)
-                case .side: model.openToTheSide(row.id)
-                case .move(let m): model.runMove(m, s)
+                AgentMenuEntries(entries: snap.entries, act: { m.ask($0, s) },
+                                 open: { AgentSidebarView(model: m).open(s) }, side: { m.openToTheSide(row.id) })
+                if !snap.switches.isEmpty {
+                    Divider()
+                    AgentSwitchMenus(menus: snap.switches, act: { m.ask($0, s) })
                 }
-            } else if let r = row.record, case .ask(let a) = v {
-                model.act(a, r)
-            }
-        }) { snap, run in
-            AgentMenuEntries(entries: snap.entries, act: { run(.ask($0)) }, open: { run(.open) }, side: { run(.side) })
-            if !snap.switches.isEmpty {
-                Divider()
-                AgentSwitchMenus(menus: snap.switches, act: { run(.ask($0)) })
-            }
-            if !snap.move.isEmpty {
-                Divider()
-                AgentSidebarMenuEntries(entries: snap.move) { run(.move($0)) }
+                if !snap.move.isEmpty {
+                    Divider()
+                    AgentSidebarMenuEntries(entries: snap.move) { m.runMove($0, s) }
+                }
+            } else if let r = row.record {
+                AgentMenuEntries(entries: snap.entries, act: { m.act($0, r) }, open: {}, side: {})
             }
         }
     }
