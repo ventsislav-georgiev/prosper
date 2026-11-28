@@ -39,16 +39,16 @@
   },
   {
    "name": "q-take-ignores-status",
-   "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "put(\\.questions, Self.tasksTab(r))",
-   "new": "put(\\.questions, Self.tasksTab((0, r.out)))",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "guard r.status == 0 else { return p }",
+   "new": "guard r.status == 0 || kind == .questions else { return p }",
    "expect": "killed"
   },
   {
    "name": "q-unreached-clears",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "    func takeQuestions(_ r: (status: Int32, out: Data)) {\n        if unreached(r.status) { unreachable = true; return }",
-   "new": "    func takeQuestions(_ r: (status: Int32, out: Data)) {\n        if unreached(r.status) { unreachable = true }",
+   "old": "if p.kind != .memory, unreached(p.status) { unreachable = true; return }",
+   "new": "if p.kind != .memory, p.kind != .questions, unreached(p.status) { unreachable = true; return }",
    "expect": "killed"
   },
   {

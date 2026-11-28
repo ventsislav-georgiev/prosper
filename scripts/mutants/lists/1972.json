@@ -61,22 +61,22 @@
   {
    "name": "M9-tasksPublish",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "put(\\.tasks, Self.tasksTab(r))",
-   "new": "tasks = Self.tasksTab(r)",
+   "old": "put(\\.tasks, p.tasks)",
+   "new": "tasks = p.tasks",
    "expect": "killed"
   },
   {
    "name": "M10-unreachablePublish",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "        put(\\.unreachable, false)\n        put(\\.tasks,",
-   "new": "        unreachable = false\n        put(\\.tasks,",
+   "old": "            put(\\.unreachable, false)\n            put(\\.tasks,",
+   "new": "            unreachable = false\n            put(\\.tasks,",
    "expect": "killed"
   },
   {
    "name": "M11-memoryTwice",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "put(\\.memory, m?.count == 0 ? nil : m)",
-   "new": "memory = m; if memory?.count == 0 { memory = nil }",
+   "old": "put(\\.memory, m)   // #1972",
+   "new": "memory = m   // #1972",
    "expect": "killed"
   },
   {

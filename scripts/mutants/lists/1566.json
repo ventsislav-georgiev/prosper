@@ -145,8 +145,8 @@
   {
    "name": "no-read-corpus",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPoller.swift",
-   "old": "        put(\\.corpus, r.status == 0 ? XrayChapters.corpus(r.out) : nil)",
-   "new": "        _ = 0",
+   "old": "            put(\\.corpus, p.corpus)",
+   "new": "            _ = 0",
    "expect": "killed"
   },
   {
