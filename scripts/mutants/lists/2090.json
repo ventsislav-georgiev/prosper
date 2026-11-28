@@ -1,0 +1,48 @@
+{
+ "entry": "2090",
+ "filter": "XrayPanelPromptMemoTests|XrayPanel|XrayDrawerWidthTests",
+ "mutants": [
+  {
+   "name": "filter-not-invalidating",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        promptMemo = nil   // #2090: the filter or a Prompts chip changed what Prompts shows\n",
+   "new": "\n",
+   "expect": "killed"
+  },
+  {
+   "name": "chapters-not-invalidating",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "    @Published var dchChapters: [TranscriptOutline.Chapter]? { didSet { promptMemo = nil } }   // #2090\n",
+   "new": "    @Published var dchChapters: [TranscriptOutline.Chapter]?\n",
+   "expect": "killed"
+  },
+  {
+   "name": "hidden-list-accessible",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": ".disabled(!on).accessibilityHidden(!on)",
+   "new": ".disabled(!on)",
+   "expect": "killed"
+  },
+  {
+   "name": "tab-switch-clears-memo",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "topRow = nil; listGen &+= 1; visitedTabs.insert(tab) }",
+   "new": "topRow = nil; listGen &+= 1; visitedTabs.insert(tab); promptMemo = nil }",
+   "expect": "killed"
+  },
+  {
+   "name": "anchors-not-invalidating",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "didSet { if chapterAnchors != oldValue { promptMemo = nil } }",
+   "new": "didSet { }",
+   "expect": "killed"
+  },
+  {
+   "name": "kept-list-always-equal",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "nonisolated static func == (a: Self, b: Self) -> Bool { !a.on && !b.on }",
+   "new": "nonisolated static func == (a: Self, b: Self) -> Bool { a.on == b.on }",
+   "expect": "killed"
+  }
+ ]
+}
