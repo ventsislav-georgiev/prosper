@@ -95,10 +95,10 @@ final class KitDriftTests: XCTestCase {
         XCTAssertEqual(KitPaneModel.drifted(KitRuntimeStatus(pieces: [hud, ok], off: ["hud"], live: "1.0.0")), [])
         XCTAssertEqual(KitPaneModel.drifted(KitRuntimeStatus(pieces: [hud, ok], off: [], live: nil)), [])
         XCTAssertEqual(KitPaneModel.drifted(nil), [])
-        for st in [ManagedConfigPieceState.replaced, .drifted, .conflict] {
+        for st in [ManagedConfigPieceState.replaced, .drifted] {
             XCTAssertEqual(KitPaneModel.drifted(KitRuntimeStatus(pieces: [.init(id: "x", state: st, target: "", path: "")], off: [], live: "1")), ["x"], "\(st)")
         }
-        for st in [ManagedConfigPieceState.applied, .adopted, .notApplied, .unwritable, .corrupt, .orphaned, .importMissing] {
+        for st in [ManagedConfigPieceState.applied, .adopted, .notApplied, .unwritable, .corrupt, .orphaned, .importMissing, .conflict] {
             XCTAssertEqual(KitPaneModel.drifted(KitRuntimeStatus(pieces: [.init(id: "x", state: st, target: "", path: "")], off: [], live: "1")), [], "\(st)")
         }
     }

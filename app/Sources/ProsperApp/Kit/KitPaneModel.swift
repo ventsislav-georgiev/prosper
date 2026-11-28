@@ -87,8 +87,9 @@ final class KitPaneModel: ObservableObject {
 
     nonisolated static let notValidated = "not validated again"
 
-    /// #2099: the states of an applied piece whose JSON slot is gone or holds another value, or whose block is gone or edited
-    nonisolated static let driftStates: Set<ManagedConfigPieceState> = [.missing, .replaced, .drifted, .conflict]
+    /// #2099: the states of an applied piece whose JSON slot is gone or holds another value, or whose block is gone or edited.
+    /// Not .conflict: that value is another kit's, written through Prosper, and Repair would fight it.
+    nonisolated static let driftStates: Set<ManagedConfigPieceState> = [.missing, .replaced, .drifted]
 
     /// #2099: the ids of the live kit's switched-on pieces in a drift state, from the status the refresh already read (no
     /// file read of its own). Not applied, off, or with no managed-config record (agents): never drifted.

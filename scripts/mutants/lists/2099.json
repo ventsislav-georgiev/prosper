@@ -1,0 +1,94 @@
+{
+  "entry": "2099",
+  "filter": "KitDriftTests|ControlKitsTests/testListShowsAPieceRemovedByHandAsDrifted",
+  "mutants": [
+    {
+      "name": "drop-compare",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "drifted: drifted(status))",
+      "new": "drifted: [])",
+      "expect": "killed",
+      "note": "nothing is reported drifted"
+    },
+    {
+      "name": "invert-compare",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "filter { driftStates.contains($0.state) &&",
+      "new": "filter { !driftStates.contains($0.state) &&",
+      "expect": "killed",
+      "note": "every applied piece reads drifted"
+    },
+    {
+      "name": "drop-off-filter",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": " && !s.off.contains($0.id) }",
+      "new": " }",
+      "expect": "killed",
+      "note": "an off piece reads drifted"
+    },
+    {
+      "name": "drop-live-guard",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "guard let s, s.live != nil else",
+      "new": "guard let s else",
+      "expect": "killed",
+      "note": "a never-applied kit reads drifted"
+    },
+    {
+      "name": "drop-missing",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "[.missing, .replaced, .drifted]",
+      "new": "[.replaced, .drifted]",
+      "expect": "killed",
+      "note": "a removed slot or block is not drifted"
+    },
+    {
+      "name": "drop-replaced",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "[.missing, .replaced, .drifted]",
+      "new": "[.missing, .drifted]",
+      "expect": "killed",
+      "note": "a hand-changed slot is not drifted"
+    },
+    {
+      "name": "add-conflict",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
+      "old": "[.missing, .replaced, .drifted]",
+      "new": "[.missing, .replaced, .drifted, .conflict]",
+      "expect": "killed",
+      "note": "another kit's value in the slot reads as changed outside Prosper (review touch-up)"
+    },
+    {
+      "name": "drop-pane-note",
+      "file": "app/Sources/ProsperApp/Kit/KitPaneView.swift",
+      "old": "        out += (m.facts?.drifted ?? []).map(KitPaneModel.driftNote) // #2099\n",
+      "new": "",
+      "expect": "killed",
+      "note": "the Settings kit notes lose the drift line"
+    },
+    {
+      "name": "drop-list-note",
+      "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+      "old": "                + f.drifted.map(KitPaneModel.driftNote) // #2099\n",
+      "new": "",
+      "expect": "killed",
+      "note": "kits.list notes lose the drift line"
+    },
+    {
+      "name": "drop-list-key",
+      "file": "app/Sources/ProsperApp/Control/ControlKits.swift",
+      "old": ", \"drifted\": strings(f.drifted),",
+      "new": ",",
+      "expect": "killed",
+      "note": "kits.list loses the drifted key"
+    },
+    {
+      "name": "drop-read-memo",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfig.swift",
+      "old": "            if let b = files[url.path] { return b }\n",
+      "new": "",
+      "expect": "killed",
+      "note": "status reads settings.json once per piece again"
+    }
+  ]
+}
