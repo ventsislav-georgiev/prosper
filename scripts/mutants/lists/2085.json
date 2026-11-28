@@ -1,0 +1,27 @@
+{
+  "entry": "2085",
+  "filter": "AgentSessionGroupMoveTests|AgentWindowRemoteSpawnTests",
+  "mutants": [
+    {
+      "name": "remote-gate-back",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "return AgentNewSession.groupChoices(store, remote: f.host != nil)",
+      "new": "guard f.host == nil else { return [] }; return AgentNewSession.groupChoices(store, remote: false)",
+      "expect": "killed"
+    },
+    {
+      "name": "group-dropped-from-remote-argv",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+      "old": "[\"--host\", host, \"--spawn\", name] + (group.map { [\"--group\", $0] } ?? []) + [\"--cwd\"",
+      "new": "[\"--host\", host, \"--spawn\", name] + [\"--cwd\"",
+      "expect": "killed"
+    },
+    {
+      "name": "exit6-generic",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+      "old": "if r.status == 6 && all.contains(\"does not support --group\")",
+      "new": "if false && all.contains(\"does not support --group\")",
+      "expect": "killed"
+    }
+  ]
+}
