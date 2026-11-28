@@ -273,7 +273,7 @@ final class SessionGroupsEditorTests: XCTestCase {
         Preferences.agentIslandSidekickTabs = true
         Preferences.agentIslandSessionGroups = [Self.g("r1", "Reviews", "-rev$")]
         var posted = false
-        func value(_ t: [AXTreeNode]) -> String? { t.first { $0.label == "Colour of group Reviews" }?.value }
+        func value(_ t: [AXTreeNode]) -> String? { t.first { $0.reads("Colour of group Reviews") }?.value }   // any name field, as the sibling row
         let tree = axTree { t in
             if !posted, value(t) == "Blue, Automatic" {
                 posted = true
