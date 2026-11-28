@@ -18,7 +18,9 @@ pipeline matches on the `vX.Y.Z` substring and never prints the heading line, so
 never leaks into release notes. When you start the next version's draft, drop the
 tag from the now-released section and put it on the new top draft.
 
-## v2.181.0 *(unreleased)*
+## v2.182.0 *(unreleased)*
+
+## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory
   list commands, and can read a session's open questions. (#1973)
 - X-ray: when you Cmd+click a ref, the card no longer jumps when the fuller answer arrives a few
