@@ -1,0 +1,38 @@
+{
+  "entry": "2093",
+  "filter": "XrayPaneSlotTests",
+  "mutants": [
+    {
+      "name": "slot-shared-map",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+      "old": "    var open: [UUID: XrayPanelModel] = [:] {\n",
+      "new": "    @Published var open: [UUID: XrayPanelModel] = [:] {\n",
+      "expect": "killed",
+      "note": "B's views hear every open again (B redraws on A's open)"
+    },
+    {
+      "name": "slot-no-notify",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+      "old": "        willSet { for k in Set(open.keys).union(newValue.keys) where open[k] !== newValue[k] { slots[k]?.objectWillChange.send() } }\n",
+      "new": "        willSet { }\n",
+      "expect": "killed",
+      "note": "no slot is told: A's button and drawer stay stale"
+    },
+    {
+      "name": "slot-button-drops-panels",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+      "old": "    @ObservedObject var panels = XrayPanels.shared   // #2093: the gate (publish)",
+      "new": "    var panels = XrayPanels.shared   // #2093: the gate (publish)",
+      "expect": "killed",
+      "note": "the button no longer hears the gate's publish"
+    },
+    {
+      "name": "slot-dock-drops-panels",
+      "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+      "old": "struct XrayDock: ViewModifier {\n    @ObservedObject var panels = XrayPanels.shared",
+      "new": "struct XrayDock: ViewModifier {\n    var panels = XrayPanels.shared",
+      "expect": "killed",
+      "note": "the dock no longer hears a docked flip"
+    }
+  ]
+}
