@@ -1,0 +1,83 @@
+{
+ "entry": "2106",
+ "filter": "SessionGroupSectionsTests|AgentWindowSidebarMenuTests/testEmptyGroupMenuOffersNewSessionHereAndColourOnly|SessionGroupsEditorTests",
+ "mutants": [
+  {
+   "name": "always-hide",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "for g in rest.groups where !(hideEmptyGroups && g.sessions.isEmpty) {",
+   "new": "for g in rest.groups where !g.sessions.isEmpty {",
+   "expect": "killed"
+  },
+  {
+   "name": "never-hide",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "for g in rest.groups where !(hideEmptyGroups && g.sessions.isEmpty) {",
+   "new": "for g in rest.groups where true {",
+   "expect": "killed"
+  },
+  {
+   "name": "store-flag-ignored",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "remoteHistory: remoteHistory, hideEmptyGroups: store?.hideEmptyGroups ?? false)",
+   "new": "remoteHistory: remoteHistory, hideEmptyGroups: false)",
+   "expect": "killed"
+  },
+  {
+   "name": "header-rows-only",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "static func drawsHeader(_ section: Section, items: Int) -> Bool { items > 0 || groupSessions(section) != nil }",
+   "new": "static func drawsHeader(_ section: Section, items: Int) -> Bool { items > 0 }",
+   "expect": "killed"
+  },
+  {
+   "name": "header-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "static func drawsHeader(_ section: Section, items: Int) -> Bool { items > 0 || groupSessions(section) != nil }",
+   "new": "static func drawsHeader(_ section: Section, items: Int) -> Bool { true }",
+   "expect": "killed"
+  },
+  {
+   "name": "unfold-empty-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "sections.first(where: { isCollapsed($0.id) && !$0.rows.isEmpty })",
+   "new": "sections.first(where: { isCollapsed($0.id) })",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-empty-on-no-rows",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "        let g = AgentIslandController.controlGates(store), needs = g.needs\n",
+   "new": "        guard !rows.isEmpty else { return [] }\n        let g = AgentIslandController.controlGates(store), needs = g.needs\n",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-actions-on-no-rows",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "let actions: [AgentSidebarMenuEntry] = rows.isEmpty ? [] : [",
+   "new": "let actions: [AgentSidebarMenuEntry] = [false].isEmpty ? [] : [",
+   "expect": "killed"
+  },
+  {
+   "name": "menu-leading-divider",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "return actions + (actions.isEmpty ? [] : [.divider]) + here",
+   "new": "return actions + [.divider] + here",
+   "expect": "killed"
+  },
+  {
+   "name": "pref-default-on",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "get { defaults.bool(forKey: Keys.agentIslandHideEmptyGroups) }",
+   "new": "get { defaults.object(forKey: Keys.agentIslandHideEmptyGroups) as? Bool ?? true }",
+   "expect": "killed"
+  },
+  {
+   "name": "store-default-on",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandView.swift",
+   "old": "    var hideEmptyGroups = false\n",
+   "new": "    var hideEmptyGroups = true\n",
+   "expect": "killed"
+  }
+ ]
+}
