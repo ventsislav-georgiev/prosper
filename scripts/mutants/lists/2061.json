@@ -125,7 +125,7 @@
   {
    "name": "menu-automatic-unchecked",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
-   "old": "checked: group.color == nil, verb: .groupColor(nil))",
+   "old": "checked: automatic, verb: .groupColor(nil))",
    "new": "checked: false, verb: .groupColor(nil))",
    "expect": "killed",
    "filter": "AgentWindowSidebarMenuTests/testGroupMenuColourSubmenuTitlesAndChecks"

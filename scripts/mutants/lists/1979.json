@@ -96,8 +96,8 @@
   {
    "name": "changed-keeps-anchor",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "        listGen &+= 1\n        (topRow, topOffset, settle) = (nil, 0, nil)",
-   "new": "        listGen &+= 1",
+   "old": "promptMemo = nil   // #2090: the filter or a Prompts chip changed what Prompts shows\n        (topRow, topOffset, settle) = (nil, 0, nil)",
+   "new": "promptMemo = nil   // #2090: the filter or a Prompts chip changed what Prompts shows",
    "expect": "killed"
   }
  ]

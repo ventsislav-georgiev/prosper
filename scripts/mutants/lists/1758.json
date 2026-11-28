@@ -61,8 +61,8 @@
   {
    "name": "saved-drops-fallback",
    "file": "app/Sources/ProsperApp/SettingsWindow.swift",
-   "old": "bad.contains(g.id) ? stored(g.id, in: st) : g",
-   "new": "bad.contains(g.id) ? nil : g",
+   "old": "return stored(g.id, in: st).map { var s = $0; s.color = g.color; return s }",
+   "new": "return nil",
    "expect": "killed"
   },
   {

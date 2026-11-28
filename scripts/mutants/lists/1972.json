@@ -145,8 +145,8 @@
   {
    "name": "tab-keeps-anchor",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
-   "old": "didSet { if tab != oldValue { topRow = nil } }",
-   "new": "didSet { }",
+   "old": "topRow = nil; listGen &+= 1; visitedTabs.insert(tab)",
+   "new": "listGen &+= 1; visitedTabs.insert(tab)",
    "expect": "killed"
   },
   {
