@@ -487,6 +487,8 @@ extension AgentIsland {
 
     /// #2062 (#2059 contract): dch 1.196.0 takes `--group-set` and lists `group`/`group_manual`.
     static let groupSetMinimum = [1, 196, 0]
+    /// #2085: from dch 1.202.0 `--host H --spawn --group` forwards the group over ctl (an older host answers exit 6).
+    static let groupRemoteMinimum = [1, 202, 0]
     static let moveToGroupLabel = "Move to group"
     static let automaticGroupLabel = "Automatic (by name)"
     static let newGroupLabel = "New group\u{2026}"
@@ -1591,7 +1593,7 @@ extension AgentIsland {
     /// sweep: "--" so a setting's command starting with "-" is never a dch flag.
     /// #847: `name` given (the window's form): used as is; the caller checked it (AgentNewSession.nameError).
     /// #847 D1.3: an interactive Claude gets `--name <name>` (naming), the island's New session too.
-    /// #2063: `group`, the form's chosen group: `--group <group>` (dch 1.196.0, local only); nil, placed by pattern.
+    /// #2063: `group`, the form's chosen group: `--group <group>` (dch 1.196.0; 1.202.0 for another Mac); nil, placed by pattern.
     static func newSessionArgs(folder: String, command: [String], taken: Set<String>, name: String? = nil,
                                group: String? = nil) -> [String] {
         let n = name ?? freeName(sessionName(folder: folder), taken: taken)

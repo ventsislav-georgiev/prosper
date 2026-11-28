@@ -365,10 +365,11 @@ enum AgentNewSession {
     static func automaticLabel(_ group: String?) -> String { "Automatic (\(group ?? "Sessions"))" }
 
     /// The groups a new session can be put in: the store's (stored order, not isOff, none while Group tabs is off), with a
-    /// name dch would not read as a flag. Empty below dch 1.196.0 (no `--spawn --group`): no picker, no New session here.
+    /// name dch would not read as a flag. Empty below dch 1.196.0 (no `--spawn --group`), or 1.202.0 for another Mac (#2085).
     @MainActor
-    static func groupChoices(_ store: AgentIslandStore) -> [SessionGroup] {
-        guard store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }
+    static func groupChoices(_ store: AgentIslandStore, remote: Bool = false) -> [SessionGroup] {
+        let least = remote ? AgentIsland.groupRemoteMinimum : AgentIsland.groupSetMinimum
+        guard store.controlDch.map({ DchCommand.isAtLeast($0.version, least) }) == true else { return [] }
         return store.sessionGroups.filter { !$0.isOff && AgentIsland.passable($0.name) }
     }
 
@@ -380,8 +381,9 @@ enum AgentNewSession {
 
     /// `dch --host <host> --spawn <name> --cwd <path> -- <command>`: host and path raw (argv); the command named as the local
     /// one. The --host form (remote Resume's): a local session or record named "host:name" would keep `--spawn host:name` here.
-    static func remoteArgs(host: String, name: String, cwd: String, command: [String]) -> [String] {
-        ["--host", host, "--spawn", name, "--cwd", cwd, "--"] + AgentIsland.naming(command, name: name)
+    /// #2085: `group` (the form's chosen one) adds `--group <group>`, as the local spawn's argv does.
+    static func remoteArgs(host: String, name: String, cwd: String, command: [String], group: String? = nil) -> [String] {
+        ["--host", host, "--spawn", name] + (group.map { ["--group", $0] } ?? []) + ["--cwd", cwd, "--"] + AgentIsland.naming(command, name: name)
     }
 
     /// v1 has no folder browser on the host: a typed absolute path, which dch checks there ("no such directory").
@@ -405,6 +407,7 @@ enum AgentNewSession {
         guard r.status != 0 else { return nil }
         let h = OutsideText.shown(host), all = r.text.joined(separator: "\n")
         if r.stopped { return "No answer from \(h)" }
+        if r.status == 6 && all.contains("does not support --group") { return "\(h) runs an older dch: update it to use groups" }   // #2085
         if all.contains("no such directory") { return "No such folder on \(h)" }
         if all.contains("--allow-create") { return "\(h) does not allow new sessions: run dch serve --allow-create there" }
         if r.status == 7 || all.contains(": unreachable") { return "Can't reach \(h)" }
@@ -530,7 +533,7 @@ struct AgentNewSessionView: View {
                     .focused($focus, equals: .name)
                     .accessibilityLabel("Name")
             }
-            // #2063: hidden (as the On picker is) on another Mac, below dch 1.196.0, or with no group to pick.
+            // #2063: hidden (as the On picker is) below dch 1.196.0 (1.202.0 on another Mac, #2085), or with no group to pick.
             let groups = model.newSessionGroups
             if !groups.isEmpty {
                 field(AgentNewSession.groupLabel, error: nil) {

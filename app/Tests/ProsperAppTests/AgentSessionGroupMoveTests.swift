@@ -709,6 +709,34 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         XCTAssertEqual(AgentIsland.spawnText(other, name: "api"), "New session failed: dch: api: exists")
     }
 
+    /// #2085: the remote spawn's refusals as the form's lines: the host's no_group is the local line; exit 6 from a host
+    /// whose dch cannot forward --group says so (never a generic failure); the argv carries --group.
+    func testRemoteSpawnGroupRefusalsAndArgv() {
+        let gone = DchActionResult(status: 1, text: ["dch: --group: no group Gone in the config (no_group)"])
+        XCTAssertEqual(AgentNewSession.remoteFailure(gone, host: "host-a", name: "api"), AgentIsland.spawnText(gone, name: "api"))
+        XCTAssertEqual(AgentNewSession.remoteFailure(gone, host: "host-a", name: "api"), "New session failed: " + AgentIsland.noGroupText)
+        let old = DchActionResult(status: 6, text: ["dch: host-a: does not support --group (needs dch serve 1.202.0+)"])
+        XCTAssertEqual(AgentNewSession.remoteFailure(old, host: "host-a", name: "api"), "host-a runs an older dch: update it to use groups")
+        let shown = DchActionResult(status: 6, text: ["dch: x: does not support --group (needs dch serve 1.202.0+)"])
+        XCTAssertEqual(AgentNewSession.remoteFailure(shown, host: "h\u{202E}a", name: "api"), "\(OutsideText.shown("h\u{202E}a")) runs an older dch: update it to use groups")
+        XCTAssertEqual(AgentNewSession.remoteArgs(host: "host-a", name: "api", cwd: "/Users/example/api", command: ["make"], group: "Work").prefix(6).map { $0 },
+                       ["--host", "host-a", "--spawn", "api", "--group", "Work"])
+        XCTAssertFalse(AgentNewSession.remoteArgs(host: "host-a", name: "api", cwd: "/Users/example/api", command: ["make"]).contains("--group"))
+    }
+
+    /// #2085: the picker is on for another Mac from dch 1.202.0 (the local dch forwards it), and its group is the arg.
+    @MainActor
+    func testTheGroupPickerIsOnForAnotherMacFromDch1202() {
+        let st = store([], dch: DchCommand.Binary(path: "/fake/dch", version: [1, 202, 0])), rec = Launches(), c = controller(st, rec)
+        let m = groupModel(st, c)
+        defer { m.close() }
+        m.openNewSession(folder: "/Users/example/api")
+        m.setNewSessionHost("example-host")
+        XCTAssertEqual(m.newSessionGroups.map(\.name), ["Work", "Sidekicks"], "another Mac: the picker")
+        m.setNewSessionGroup("Work")
+        XCTAssertEqual(m.newSessionGroupArg, "Work", "another Mac: --group")
+    }
+
     @MainActor
     func groupModel(_ st: AgentIslandStore, _ c: AgentIslandController) -> AgentWindowModel {
         let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
@@ -753,8 +781,8 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         XCTAssertEqual(m.newSession?.status, "New session failed: " + AgentIsland.noGroupText)
         XCTAssertTrue(m.newSession?.starting == nil, "the form is back, nothing started")
         m.setNewSessionHost("example-host")
-        XCTAssertTrue(m.newSessionGroups.isEmpty, "another Mac: no picker")
-        XCTAssertTrue(m.newSessionGroupArg == nil, "another Mac: no --group")
+        XCTAssertTrue(m.newSessionGroups.isEmpty, "another Mac below dch 1.202.0: no picker")
+        XCTAssertTrue(m.newSessionGroupArg == nil, "another Mac below dch 1.202.0: no --group")
         m.setNewSessionHost(nil)
         XCTAssertEqual(m.newSessionGroupArg, "Work")
         st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 195, 9])

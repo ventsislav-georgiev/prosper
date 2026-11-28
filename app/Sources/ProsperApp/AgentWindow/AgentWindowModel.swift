@@ -2918,10 +2918,10 @@ final class AgentWindowModel: ObservableObject {
 
     // MARK: #2063 Group picker
 
-    /// The picker's groups: AgentNewSession.groupChoices on this Mac only (dch takes no --group with --host). Empty: no picker.
+    /// The picker's groups: AgentNewSession.groupChoices (#2085: another Mac too, from dch 1.202.0). Empty: no picker.
     var newSessionGroups: [SessionGroup] {
-        guard let store, newSession != nil, newSession?.host == nil else { return [] }
-        return AgentNewSession.groupChoices(store)
+        guard let store, let f = newSession else { return [] }
+        return AgentNewSession.groupChoices(store, remote: f.host != nil)
     }
 
     /// The picker: nil is Automatic. Off while a Start runs.
@@ -2930,11 +2930,12 @@ final class AgentWindowModel: ObservableObject {
         newSession?.group = g
     }
 
-    /// What a local Start sends as `--group`: the chosen group under the picker's gate (this Mac, dch 1.196.0), never a
+    /// What a Start sends as `--group`: the chosen group under the picker's gate (dch 1.196.0; #2085: 1.202.0 for a host), never a
     /// name dch would read as a flag. A group deleted since it was chosen still goes: dch's no_group says so (spawnText).
     var newSessionGroupArg: String? {
-        guard let g = newSession?.group, AgentIsland.passable(g), newSession?.host == nil, let store,
-              store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return nil }
+        guard let g = newSession?.group, AgentIsland.passable(g), let store,
+              store.controlDch.map({ DchCommand.isAtLeast($0.version, newSession?.host == nil ? AgentIsland.groupSetMinimum : AgentIsland.groupRemoteMinimum) }) == true
+        else { return nil }
         return g
     }
 
@@ -2979,7 +2980,7 @@ final class AgentWindowModel: ObservableObject {
         guard let store, case .ok(let dch) = store.resumeGate else { return false }
         requests += 1
         let request = requests, key = AgentTerminalSpawn.remoteKey(host: host, name: name)
-        let args = AgentNewSession.remoteArgs(host: host, name: name, cwd: newSessionFolder, command: argv)
+        let args = AgentNewSession.remoteArgs(host: host, name: name, cwd: newSessionFolder, command: argv, group: newSessionGroupArg)
         let started = remoteVerb(key, dch, args) { [weak self] res in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.remoteSpawned(key, request: request, res) } }
         }

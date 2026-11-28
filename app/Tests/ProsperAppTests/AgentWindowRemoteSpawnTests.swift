@@ -111,6 +111,29 @@ final class AgentWindowRemoteSpawnTests: XCTestCase {
         }
     }
 
+    /// #2085: a chosen group reaches a remote spawn's argv as `--group <g>`; Automatic sends none.
+    @MainActor
+    func testRemoteStartCarriesTheChosenGroup() throws {
+        try withPrefs {
+            let (m, _, calls) = model(version: [1, 202, 0])
+            defer { m.close() }
+            m.store?.sessionGroups = [SessionGroup(id: "w1", name: "Work", pattern: "zzz")]
+            m.setNewSessionHost("host-a")
+            m.setNewSessionFolder("/Users/example/site")
+            m.setNewSessionName("site")
+            XCTAssertEqual(m.newSessionGroups.map(\.name), ["Work"])
+            m.setNewSessionGroup("Work")
+            XCTAssertTrue(m.startNewSession())
+            XCTAssertEqual(calls.verbs.last?.args,
+                           ["--host", "host-a", "--spawn", "site", "--group", "Work", "--cwd", "/Users/example/site", "--", "make", "test"])
+            // exit 6 from an older host: the form's line, the form open again, no session.
+            calls.done?(DchActionResult(status: 6, text: ["dch: host-a: does not support --group (needs dch serve 1.202.0+)"]))
+            rows.spin { m.newSession?.starting == nil }
+            XCTAssertEqual(m.newSession?.status, "host-a runs an older dch: update it to use groups")
+            XCTAssertTrue(m.newSession?.starting == nil)
+        }
+    }
+
     /// #1919: an empty Name on another Mac: New shell takes the folder's free name there.
     @MainActor
     func testAnEmptyNameShellOnAnotherMacTakesTheFoldersName() throws {
