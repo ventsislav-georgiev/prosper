@@ -62,8 +62,8 @@
   {
    "name": "adopt_appends",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "if !list.isEmpty { list[0].pattern = newValue }",
-   "new": "if !list.isEmpty { list.append(SessionGroup(id: \"x\", name: \"x\", pattern: newValue)) }",
+   "old": "if let i = legacyIndex(list) { list[i].pattern = newValue }",
+   "new": "if legacyIndex(list) != nil { list.append(SessionGroup(id: \"x\", name: \"x\", pattern: newValue)) }",
    "expect": "killed"
   }
  ]

@@ -73,20 +73,6 @@
    "expect": "killed"
   },
   {
-   "name": "n97-blank-ok",
-   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "if list.contains(where: { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }",
-   "new": "",
-   "expect": "killed"
-  },
-  {
-   "name": "n97-no-trim",
-   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "$0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }",
-   "new": "$0.pattern.isEmpty }) { return blankPattern }",
-   "expect": "killed"
-  },
-  {
    "name": "n99-no-early",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
    "old": "            if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }\n",
