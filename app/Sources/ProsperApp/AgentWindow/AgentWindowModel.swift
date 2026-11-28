@@ -829,6 +829,8 @@ final class AgentWindowModel: ObservableObject {
     /// #1817 (operator 2026-11-21): a close is saved; the single-pane view's one
     /// pane never closes (close refuses the last pane).
     func closePane(_ pane: UUID) {
+        let sp = Perf.signposter.beginInterval("agents.paneClose")   // #2077
+        defer { Perf.signposter.endInterval("agents.paneClose", sp) }
         let shown = layout.focused
         if case let .success(l) = layout.close(pane) {
             keyFocus = .pane; adopt(l); autosave(); cancelFormOfClosed(pane, shown: shown); closedToOne()
@@ -861,6 +863,10 @@ final class AgentWindowModel: ObservableObject {
     @discardableResult
     func perform(_ a: PaneAction, pane: UUID? = nil) -> Bool {
         guard !closed else { return false }
+        // #2077: split and close pane only (the focus moves are not timed)
+        let spName: StaticString = a == .closePane ? "agents.paneClose" : "agents.paneOpen"
+        var sp = a == .closePane || a == .split(.columns) || a == .split(.rows) ? Perf.signposter.beginInterval(spName) : nil
+        defer { Perf.end(spName, &sp) }
         // #900 B2 step 6b1 (R900-6a-1): `pane` (a header "⋯" item's) is focused in the result, so a choice writes once.
         let shown = layout.focused
         let base = pane.flatMap { try? layout.focus($0).get() } ?? layout
@@ -2315,6 +2321,8 @@ final class AgentWindowModel: ObservableObject {
     /// Any change of row drops the confirm strip's question (R5).
     /// #847: a manual pick also closes the New session form and drops a pending spawn's selection.
     func select(_ id: AgentSidebar.RowID?, manual: Bool = true, placement: PaneLayout.Placement = .focused) {
+        let sp = Perf.signposter.beginInterval("agents.switch")   // #2077
+        defer { Perf.signposter.endInterval("agents.switch", sp) }
         if manual { removing = nil; pendingSpawn = nil; newSession = nil; pendingResume = nil }
         // #831 A2 (3.5): into the focused pane through the browse rule, never straight into the tree. One pane: the
         // pick replaces its target (or swaps it for the name's own record, #580); B1: `selection` is its resolve, and
@@ -2553,6 +2561,8 @@ final class AgentWindowModel: ObservableObject {
     /// already showing it). A refusal (the cap, no room) is the key's refused split: the notice alone; layout,
     /// selection, the New session form and the keys stay.
     func openToTheSide(_ id: AgentSidebar.RowID) {
+        let sp = Perf.signposter.beginInterval("agents.paneOpen")   // #2077
+        defer { Perf.signposter.endInterval("agents.paneOpen", sp) }
         guard AgentPaneLayout.splitsEnabled, case .live = id, row(id) != nil else { return click(id) }
         if case let .failure(r) = showing(id, placement: .side) { paneRefusal = r; return }
         select(id, placement: .side)

@@ -442,6 +442,8 @@ final class XrayPanelModel: ObservableObject {
                     // #1368: closed or switched away: the SIGTERMed answer is not news; #1974: the reads still out end too
                     guard !Task.isCancelled, let self else { g.cancelAll(); return }
                     guard let r else { continue }
+                    let sp = Perf.signposter.beginInterval("xray.apply")   // #2077: the answer's parse and publish, on main
+                    defer { Perf.signposter.endInterval("xray.apply", sp) }
                     switch k {
                     case 0: self.take(r)
                     case 1: self.takeMemory(r)
@@ -459,6 +461,8 @@ final class XrayPanelModel: ObservableObject {
 
     func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data),
                chapters kr: (status: Int32, out: Data)? = nil, refsOnly: Bool = false) {
+        let sp = Perf.signposter.beginInterval("xray.apply")   // #2077
+        defer { Perf.signposter.endInterval("xray.apply", sp) }
         take(tr)
         takeMemory(mr)
         if let kr { takeChapters(kr, refsOnly: refsOnly) }
@@ -613,6 +617,8 @@ final class XrayPanelModel: ObservableObject {
     /// #1352: a tab chosen in the strip; Memory is read again then: at once, or (#1381, R1352-i1) when the read in
     /// flight ends. The 30 s Memory poll is the poller's (XrayPoller.swift).
     func select(_ t: XrayTab) {
+        let sp = Perf.signposter.beginInterval("xray.tab")   // #2077
+        defer { Perf.signposter.endInterval("xray.tab", sp) }
         tab = t
         quiet.reset()   // #1636
         if XrayPanels.rememberTab() { Preferences.xrayLastTab = t }   // #1463: only the person's choice, never a jump
@@ -1263,6 +1269,8 @@ final class XrayBottomPane: ObservableObject {
 
     /// A header count group: its tab, unfolded.
     func show(_ t: XrayBottomTab) {
+        let sp = Perf.signposter.beginInterval("xray.bottomTab")   // #2077
+        defer { Perf.signposter.endInterval("xray.bottomTab", sp) }
         tab = t
         if collapsed { reset() }
     }

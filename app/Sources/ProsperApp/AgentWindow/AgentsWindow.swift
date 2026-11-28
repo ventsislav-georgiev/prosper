@@ -697,6 +697,9 @@ final class AgentsNSWindow: NSWindow {
     @discardableResult func toggleXray(on tab: XrayTab? = nil, fallback: (() -> Void)? = nil) -> Bool {
         guard let model, let dch = XrayPanels.dch() else { return false }
         let pane = model.layout.focused, panels = XrayPanels.shared
+        let spName: StaticString = panels.open[pane] == nil ? "xray.open" : "xray.close"   // #2077
+        let sp = Perf.signposter.beginInterval(spName)
+        defer { Perf.signposter.endInterval(spName, sp) }
         let target = model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil
         if let open = panels.open[pane] {
             panels.close(pane)
