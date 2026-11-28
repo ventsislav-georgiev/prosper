@@ -254,6 +254,8 @@ enum AgentSidebar {
         guard section.id.hasPrefix("group:") else { return nil }
         return colors[String(section.id.dropFirst("group:".count))].flatMap { Color(hex: $0) }
     }
+    /// #2106: the sidebar draws a section's header (Full mode) when it has rows, or for a group's (an empty one included).
+    static func drawsHeader(_ section: Section, items: Int) -> Bool { items > 0 || groupSessions(section) != nil }
     /// #1759: what a header click folds: a fixed title above or any group's section.
     static func folds(_ id: String) -> Bool { collapsible.contains(id) || id.hasPrefix("group:") }
 
@@ -263,12 +265,13 @@ enum AgentSidebar {
 
     /// "Needs you" first (blocked before done, newest first), then the island's own
     /// Sessions / Sidekicks split in its sort order, then History. A session sits in
-    /// one group only; empty groups are left out.
+    /// one group only; empty sections are left out, but for a session group's (#2106: every group shows, with its
+    /// "\u{22EF}", unless `hideEmptyGroups`).
     /// #829 G0: `actions` are the island's row texts; a running one replaces the state word.
     static func sections(sessions: [AgentSession], history: [DchHistoryRecord], sort: AgentIslandSort,
                          groups: [SessionGroup], details: AgentIslandRowDetails, now: TimeInterval,
                          actions: [AgentSessionKey: String] = [:], remote: [Remote] = [],
-                         remoteHistory: [RemoteRecord] = []) -> [Section] {
+                         remoteHistory: [RemoteRecord] = [], hideEmptyGroups: Bool = false) -> [Section] {
         let needs = sessions.filter(needsYou).sorted(by: before)
         let rest = AgentIsland.split(AgentIsland.sorted(sessions.filter { !needsYou($0) }, by: sort), groups: groups)
         var out: [Section] = []
@@ -276,7 +279,10 @@ enum AgentSidebar {
         let live = { (s: AgentSession) in row(s, details: details, now: now, action: actions[s.key]) }
         add(needsYouTitle, needs.map(live))
         add("Sessions", rest.primary.map(live))
-        for g in rest.groups { add(g.group.name, g.sessions.map(live), id: groupFold(g.group.id)) }   // #1757: one section per group, in order
+        // #1757: one section per group, in order. #2106: an empty one too (its header and "\u{22EF}"), unless hideEmptyGroups.
+        for g in rest.groups where !(hideEmptyGroups && g.sessions.isEmpty) {
+            out.append(Section(title: g.group.name, rows: g.sessions.map(live), id: groupFold(g.group.id)))
+        }
         // #836: grouped under their host (host, then name), after the local live rows.
         add(otherMachinesTitle, remote.sorted { ($0.host, $0.name) < ($1.host, $1.name) }.map(row))
         // #1324 (a): after the local records (unchanged), each host's, capped per host as dch's picker does (50 names).
@@ -1443,6 +1449,7 @@ final class AgentWindowModel: ObservableObject {
     private struct SidebarInputs: Equatable {
         let history: [DchHistoryRecord], sort: AgentIslandSort, groups: [SessionGroup], details: AgentIslandRowDetails
         let actions: [AgentSessionKey: String], remote: [AgentSidebar.Remote], remoteHistory: [AgentSidebar.RemoteRecord]
+        let hideEmptyGroups: Bool   // #2106: a Settings flip rebuilds
     }
     private var built: (sessions: [AgentSession], inputs: SidebarInputs)?
 
@@ -2142,7 +2149,7 @@ final class AgentWindowModel: ObservableObject {
         // #1324: a remote Resume's text by its record id ("@" + host: never a local key).
         let inputs = SidebarInputs(history: history, sort: sort, groups: groups, details: details,
                                    actions: actions.merging(remoteResumeText) { a, _ in a }, remote: remoteSessions,
-                                   remoteHistory: remoteHistory)
+                                   remoteHistory: remoteHistory, hideEmptyGroups: store?.hideEmptyGroups ?? false)
         let t = now()
         let new: [AgentSidebar.Section]
         // #1634: the same sessions, titles and order, only activity or the clock moved: the ages are read again, no build;
@@ -2155,7 +2162,7 @@ final class AgentWindowModel: ObservableObject {
             sectionBuilds += 1
             new = AgentSidebar.sections(sessions: sessions, history: history, sort: sort, groups: groups,
                                         details: details, now: t, actions: inputs.actions, remote: remoteSessions,
-                                        remoteHistory: remoteHistory)
+                                        remoteHistory: remoteHistory, hideEmptyGroups: inputs.hideEmptyGroups)
         }
         built = (sessions, inputs)
         publishing = (sessions, history)
@@ -2303,7 +2310,7 @@ final class AgentWindowModel: ObservableObject {
             // QA #660 note 1: Right with nothing selected and nothing shown unfolds the first
             // folded section; then (or when rows show) it selects the first shown row.
             if !on, selection == nil {
-                if navigableIDs.isEmpty, let s = sections.first(where: { isCollapsed($0.id) }) { setCollapsed(s.id, false) }
+                if navigableIDs.isEmpty, let s = sections.first(where: { isCollapsed($0.id) && !$0.rows.isEmpty }) { setCollapsed(s.id, false) }   // #2106
                 move(1)
             }
             return

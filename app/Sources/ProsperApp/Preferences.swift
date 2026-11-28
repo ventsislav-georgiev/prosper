@@ -452,6 +452,7 @@ enum Preferences {
         static let agentIslandSidekickPattern = "agentIslandSidekickPattern"
         static let agentIslandSidekickPatternUpdated = "agentIslandSidekickPatternUpdated"
         static let agentIslandSessionGroups = "agentIslandSessionGroups"   // #1757: JSON [SessionGroup], per Mac
+        static let agentIslandHideEmptyGroups = "agentIslandHideEmptyGroups"   // #2106: Bool, per Mac
         static let agentIslandSessionGroupsUpdated = "agentIslandSessionGroupsUpdated"   // #1756: ms, per Mac
         static let agentIslandDchGroupsAdoptChecked = "agentIslandDchGroupsAdoptChecked"   // #1788: Bool, per Mac
         static let agentIslandSessionGroupAutoColors = "agentIslandSessionGroupAutoColors"   // #2061: [id: "#RRGGBB"], per Mac
@@ -1349,6 +1350,13 @@ enum Preferences {
     static var agentIslandSidekickTabs: Bool {
         get { defaults.bool(forKey: Keys.agentIslandSidekickTabs) }
         set { defaults.set(newValue, forKey: Keys.agentIslandSidekickTabs) }
+    }
+
+    /// #2106: Settings > Session list > Hide empty groups: the sidebar leaves out a group with no sessions; off when unset
+    /// (operator 2026-11-28: every group shows, so its "\u{22EF}" can start a session in it).
+    static var agentIslandHideEmptyGroups: Bool {
+        get { defaults.bool(forKey: Keys.agentIslandHideEmptyGroups) }
+        set { defaults.set(newValue, forKey: Keys.agentIslandHideEmptyGroups) }
     }
 
     /// #1757: the session groups in order. Until a list is stored it reads as the one Sidekicks group with the #571

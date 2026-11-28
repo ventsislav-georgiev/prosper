@@ -191,7 +191,7 @@ final class SessionGroupsEditorTests: XCTestCase {
         Preferences.agentIslandSessionGroups = [Self.g(SessionGroup.sidekicksID, "Sidekicks", "-qa"), Self.g("r1", "Reviews", "-rev$")]
         let names = ["Name of group Sidekicks", "Pattern of group Sidekicks", "Move group Sidekicks up", "Move group Sidekicks down",
                      "Remove group Sidekicks", "Name of group Reviews", "Pattern of group Reviews", "Move group Reviews up",
-                     "Move group Reviews down", "Remove group Reviews", "Add group", "Group tabs"]
+                     "Move group Reviews down", "Remove group Reviews", "Add group", "Group tabs", "Hide empty groups"]
         func node(_ t: [AXTreeNode], _ n: String) -> AXTreeNode? { t.first { $0.reads(n) } }
         let tree = axTree { t in names.allSatisfy { node(t, $0) != nil } }
         for n in names { XCTAssertTrue(node(tree, n) != nil, n) }

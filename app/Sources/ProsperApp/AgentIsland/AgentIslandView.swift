@@ -287,6 +287,9 @@ final class AgentIslandStore: ObservableObject {
     var groupColors: [String: String] = [:]
     /// #2062 r3: Group tabs is on (dch is given the groups); off, New group… is off. Set with storedGroupCount.
     var groupTabs = true
+    /// #2106: Settings' Hide empty groups (Preferences.agentIslandHideEmptyGroups): the sidebar leaves out a group with no
+    /// sessions. Set by the controller just before sessionGroups, whose publish the window rebuilds on (as groupColors).
+    var hideEmptyGroups = false
     /// The one Sidekicks group's pattern, the #571 single-pattern form (rows and single-pattern callers).
     var sidekickPattern: String {
         get { sessionGroups.first?.pattern ?? "" }

@@ -675,12 +675,11 @@ extension AgentWindowControls {
 
     /// #2060: a group header's "\u{22EF}": the window menu's restart, stop and end items, for `rows` (the group's section
     /// as the sidebar draws it) only, with the same gates read over those rows. Clear unpinned is History's (records, not
-    /// live sessions), so it is not here. No rows: no menu (the header of an empty group is not drawn either).
+    /// live sessions), so it is not here. #2106: no rows (an empty group's header): no actions, New session here and Colour only.
     @MainActor
     /// #2061: `name`, the group's: Colour ▸ with the palette (the colour it shows now checked) and Automatic (checked
     /// while no colour is picked); no such group in the store, no Colour.
     static func groupMenu(store: AgentIslandStore, rows: [AgentSession], name: String? = nil) -> [AgentSidebarMenuEntry] {
-        guard !rows.isEmpty else { return [] }
         let g = AgentIslandController.controlGates(store), needs = g.needs
         let restart = g.on && needs == nil, stop = restart && !store.stopTargets(global: false, in: rows).stop.isEmpty
         let kill = g.on && !store.killTargets(global: false, in: rows).kill.isEmpty
@@ -688,7 +687,8 @@ extension AgentWindowControls {
             .item(on ? (label.hasSuffix("\u{2026}") ? label : label + "\u{2026}") : AgentIsland.label(label, needs: needs),
                   enabled: on, checked: nil, verb: verb)
         }
-        let actions: [AgentSidebarMenuEntry] = [
+        // #2106: an empty group's header has no session to act on: New session here and Colour only.
+        let actions: [AgentSidebarMenuEntry] = rows.isEmpty ? [] : [
             ask(AgentIsland.restartAllLabel, restart, .restartAll(force: false)),
             ask(AgentIsland.restartAllForceLabel, restart, .restartAll(force: true)),
             ask(AgentIsland.stopAllGlobalLabel, stop, .stopAll),
@@ -699,7 +699,7 @@ extension AgentWindowControls {
         // #2063: gated as the form's Group picker is (a group it offers), so the form opens with it chosen.
         let here: [AgentSidebarMenuEntry] = AgentNewSession.groupChoices(store).contains { $0.id == group.id }
             ? [.item(newSessionHereLabel, enabled: true, checked: nil, verb: .newSessionInGroup(group.name))] : []
-        return actions + [.divider] + here + [.submenu(colourLabel, enabled: true, SessionGroup.palette.map {
+        return actions + (actions.isEmpty ? [] : [.divider]) + here + [.submenu(colourLabel, enabled: true, SessionGroup.palette.map {
             .item($0.name, enabled: true, checked: shown == $0.hex, verb: .groupColor($0.hex))
         } + [.divider, .item(automaticColourLabel, enabled: true, checked: group.color == nil, verb: .groupColor(nil))])]
     }

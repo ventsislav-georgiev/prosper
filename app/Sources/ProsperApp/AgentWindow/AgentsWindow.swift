@@ -1262,7 +1262,7 @@ struct AgentSidebarView: View {
                                 // (remembered per Mac); a folded section keeps its selection.
                                 let folded = !mini && model.isCollapsed(section.id), inView = model.inViewRows
                                 let items = drawn[section.id] ?? []
-                                if !mini && !items.isEmpty {
+                                if !mini && AgentSidebar.drawsHeader(section, items: items.count) {   // #2106
                                     AgentSectionHeader(title: section.title, count: items.reduce(0) { $0 + $1.rows.count },
                                                        collapsed: folded,
                                                        toggle: AgentSidebar.folds(section.id)

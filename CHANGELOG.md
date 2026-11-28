@@ -29,6 +29,9 @@ tag from the now-released section and put it on the new top draft.
   submenus), group headers, Layouts rows, Agent Island rows and Mixer rows no longer flicker closed
   and reopen every second, and choosing a session's checked group in Move to group now puts it back
   to Automatic.
+- Agent Sessions: every session group now shows in the sidebar even before it has a session, so its
+  "⋯" menu can start one there; turn on Settings › Agent Island › Session list › Hide empty groups
+  to hide groups with no sessions as before.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

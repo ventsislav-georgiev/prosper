@@ -48,7 +48,7 @@ final class SessionGroupSectionsTests: XCTestCase {
                        secs.map(\.id), "a clock-only rebuild keeps each group's fold key")
         let noDocs = AgentSidebar.sections(sessions: ["api", "web-rev"].map(live), history: [], sort: .name, groups: Self.three,
                                            details: .all, now: AgentWindowD1Tests.now)
-        XCTAssertEqual(noDocs.map(\.title), ["Sessions", "Reviews"], "a group with no sessions draws nothing")
+        XCTAssertEqual(noDocs.map(\.title), ["Sessions", "Reviews", "QA", "Docs"], "#2106: a group with no sessions still shows")
         let none = AgentSidebar.sections(sessions: names.map(live), history: [], sort: .name, groups: [],
                                          details: .all, now: AgentWindowD1Tests.now)
         XCTAssertEqual(none.map(\.title), ["Sessions"], "an empty list: every session in Sessions, no group section")
@@ -100,6 +100,82 @@ final class SessionGroupSectionsTests: XCTestCase {
         m.setCollapsed("Sessions", true)
         XCTAssertEqual(Preferences.defaults.stringArray(forKey: Self.pref), ["History", "Sessions", "group:sidekicks"],
                        "the next write stores the id form")
+    }
+
+    // MARK: - #2106: empty groups
+
+    /// Every group shows by default, an empty one as a header with no rows, in list order; Hide empty groups leaves it
+    /// out (the old rule); no group list: no group section either way. Red at base: the empty groups were dropped.
+    func testAnEmptyGroupShowsByDefaultAndHideEmptyGroupsLeavesItOut() {
+        func secs(_ hide: Bool?) -> [AgentSidebar.Section] {
+            let s = ["api", "web-qa"].map(live)
+            return hide.map { AgentSidebar.sections(sessions: s, history: [], sort: .name, groups: Self.three, details: .all,
+                                                    now: AgentWindowD1Tests.now, hideEmptyGroups: $0) }
+                ?? AgentSidebar.sections(sessions: s, history: [], sort: .name, groups: Self.three, details: .all, now: AgentWindowD1Tests.now)
+        }
+        XCTAssertEqual(secs(nil).map(\.id), ["Sessions", "group:g-rev", "group:g-qa", "group:g-doc"], "the default shows every group")
+        XCTAssertEqual(secs(false).map { $0.rows.count }, [1, 0, 1, 0], "an empty group: a header, no rows")
+        XCTAssertEqual(secs(true).map(\.id), ["Sessions", "group:g-qa"], "Hide empty groups: today's rule")
+        let rev = secs(false).first { $0.id == "group:g-rev" }
+        XCTAssertEqual(rev.flatMap(AgentSidebar.groupSessions)?.count, 0, "its header gets its (empty) rows: a menu")
+        XCTAssertTrue(rev.map { AgentSidebar.drawsHeader($0, items: 0) } == true, "an empty group's header is drawn")
+        XCTAssertFalse(AgentSidebar.drawsHeader(AgentSidebar.Section(title: "Sessions", rows: []), items: 0), "no other empty header")
+        XCTAssertEqual(AgentSidebar.sections(sessions: ["api"].map(live), history: [], sort: .name, groups: [], details: .all,
+                                             now: AgentWindowD1Tests.now).map(\.id), ["Sessions"], "Group tabs off: no group at all")
+    }
+
+    /// The preference is off when unset (scratch store) and is what the store hands the sidebar: the window follows a flip
+    /// on the next groups publish (the controller sets it just before). Red at base: no such key; the window dropped empties.
+    func testHideEmptyGroupsDefaultsOffAndTheWindowFollowsIt() {
+        let key = "agentIslandHideEmptyGroups", saved = Preferences.defaults.object(forKey: key)
+        defer { if let saved { Preferences.defaults.set(saved, forKey: key) } else { Preferences.defaults.removeObject(forKey: key) } }
+        Preferences.defaults.removeObject(forKey: key)
+        XCTAssertFalse(Preferences.agentIslandHideEmptyGroups, "off by default")
+        Preferences.agentIslandHideEmptyGroups = true
+        XCTAssertTrue(Preferences.defaults.bool(forKey: key), "stored under its key with the other group settings")
+        XCTAssertTrue(Preferences.agentIslandHideEmptyGroups)
+        let store = storeWith(Self.three, ["api", "api-qa"])
+        XCTAssertFalse(store.hideEmptyGroups, "a new store shows every group")
+        let m = d1.windowModel(store)
+        m.setVisible(true)
+        defer { m.close() }
+        XCTAssertEqual(m.sections.map(\.id), ["Sessions", "group:g-rev", "group:g-qa", "group:g-doc"])
+        store.hideEmptyGroups = true
+        store.sessionGroups = store.sessionGroups   // the controller's order: the flag, then the groups' publish
+        XCTAssertEqual(m.sections.map(\.id), ["Sessions", "group:g-qa"], "the setting on: the empty groups go")
+        store.hideEmptyGroups = false
+        store.sessionGroups = store.sessionGroups
+        XCTAssertEqual(m.sections.map(\.id), ["Sessions", "group:g-rev", "group:g-qa", "group:g-doc"], "and come back")
+    }
+
+    /// An empty group's header is no row: the Command-N numbers count the sessions only, a fold on an empty group hides
+    /// nothing, and Right with nothing shown unfolds the first folded section that has rows, not an empty group's.
+    func testAnEmptyGroupKeepsTheNumbersAndTheFold() {
+        let store = storeWith(Self.three, ["api", "api-qa"])
+        let m = d1.windowModel(store)
+        m.setVisible(true)
+        defer { m.close() }
+        let api = AgentSidebar.RowID.live(live("api").key), qa = AgentSidebar.RowID.live(live("api-qa").key)
+        XCTAssertEqual(m.sections.map(\.id), ["Sessions", "group:g-rev", "group:g-qa", "group:g-doc"], "precondition: two empty groups")
+        XCTAssertEqual(m.number(api), 1)
+        XCTAssertEqual(m.number(qa), 2, "the empty Reviews header between takes no number")
+        XCTAssertEqual(m.numberedItems().count, 2)
+        m.setCollapsed(AgentSidebar.groupFold("g-rev"), true)
+        XCTAssertTrue(m.isCollapsed(AgentSidebar.groupFold("g-rev")), "an empty group folds by its id")
+        XCTAssertEqual(m.navigableIDs, [api, qa], "folding an empty group hides no row")
+        XCTAssertEqual(m.number(qa), 2)
+        let only = storeWith(Self.three, ["api-qa"])   // no Sessions section: Reviews (empty) is the first section
+        let n = d1.windowModel(only)
+        n.setVisible(true)
+        defer { n.close() }
+        n.setCollapsed(AgentSidebar.groupFold("g-rev"), true)
+        n.setCollapsed(AgentSidebar.groupFold("g-qa"), true)
+        n.select(nil)
+        XCTAssertTrue(n.selection == nil && n.navigableIDs.isEmpty, "precondition: nothing shown, nothing selected")
+        n.collapseSelected(false)
+        XCTAssertFalse(n.isCollapsed(AgentSidebar.groupFold("g-qa")), "Right unfolds the folded group with rows")
+        XCTAssertTrue(n.isCollapsed(AgentSidebar.groupFold("g-rev")), "not the empty one before it")
+        XCTAssertEqual(n.selection, qa, "and selects its row")
     }
 
     // MARK: - Island

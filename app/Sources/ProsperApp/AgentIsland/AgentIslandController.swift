@@ -338,6 +338,7 @@ final class AgentIslandController {
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort)
         store?.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
+        store?.hideEmptyGroups = Preferences.agentIslandHideEmptyGroups   // #2106: the same
         store?.sessionGroups = Self.groups
         store?.storedGroupCount = Preferences.agentIslandSessionGroups.filter { !$0.isOff }.count   // #2062, #2070 n8
         store?.groupTabs = Preferences.agentIslandSidekickTabs
@@ -448,6 +449,7 @@ final class AgentIslandController {
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
         store.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
+        store.hideEmptyGroups = Preferences.agentIslandHideEmptyGroups   // #2106: the same
         store.sessionGroups = Self.groups
         store.storedGroupCount = Preferences.agentIslandSessionGroups.filter { !$0.isOff }.count   // #2062, #2070 n8
         store.groupTabs = Preferences.agentIslandSidekickTabs

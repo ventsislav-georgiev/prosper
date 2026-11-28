@@ -630,14 +630,21 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(rec.args.count, 0, "nothing ran")
     }
 
-    /// An empty group draws no header, and its menu is empty (no menu, not disabled items).
+    /// #2106: an empty group draws its header (Hide empty groups off, the default), and its menu has no actions (no disabled
+    /// items either): New session here and Colour only. No group named: no menu. Hide empty groups on: no header.
     @MainActor
-    func testEmptyGroupShowsNoMenu() throws {
+    func testEmptyGroupMenuOffersNewSessionHereAndColourOnly() throws {
         let st = groupedStore()
-        let sections = AgentSidebar.sections(sessions: st.sessions, history: [], sort: .name, groups: st.sessionGroups,
-                                             details: .all, now: Self.now)
-        XCTAssertFalse(sections.contains { $0.id == AgentSidebar.groupFold("none") })
-        XCTAssertEqual(AgentWindowControls.groupMenu(store: st, rows: []), [])
+        st.controlDch = bin([1, 196, 0])
+        XCTAssertEqual(try groupRows(st, "none"), [], "the empty group's section is there, with no rows")
+        XCTAssertEqual(AgentWindowControls.groupMenu(store: st, rows: []), [], "no group: no menu")
+        let menu = AgentWindowControls.groupMenu(store: st, rows: [], name: "Empty")
+        XCTAssertEqual(titles(menu), [AgentWindowControls.newSessionHereLabel, AgentWindowControls.colourLabel])
+        XCTAssertEqual(menu.first, .item(AgentWindowControls.newSessionHereLabel, enabled: true, checked: nil,
+                                         verb: .newSessionInGroup("Empty")))
+        let hidden = AgentSidebar.sections(sessions: st.sessions, history: [], sort: .name, groups: st.sessionGroups,
+                                           details: .all, now: Self.now, hideEmptyGroups: true)
+        XCTAssertFalse(hidden.contains { $0.id == AgentSidebar.groupFold("none") }, "Hide empty groups: no header")
     }
 
     /// The items in order, pinned; each off by the window menu's rule over the group's rows.

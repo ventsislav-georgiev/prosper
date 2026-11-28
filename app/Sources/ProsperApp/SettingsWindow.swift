@@ -1193,6 +1193,7 @@ struct AgentSessionsSection: View {
 struct AgentIslandListSection: View {
     @State private var sort = Preferences.agentIslandSort
     @State private var tabs = Preferences.agentIslandSidekickTabs
+    @State private var hideEmpty = Preferences.agentIslandHideEmptyGroups   // #2106
     @State private var editor = SessionGroupsEditor()
     @FocusState private var focus: String?
     /// #1210: dch's picker matches all three (pk_load), so the caption names them.
@@ -1210,6 +1211,10 @@ struct AgentIslandListSection: View {
             }
             NeonDivider()
             NeonRow("Group tabs") { Toggle("", isOn: $tabs).labelsHidden().accessibilityLabel("Group tabs") }   // #1758: every group's tabs; key stays agentIslandSidekickTabs
+            NeonDivider()
+            NeonRow("Hide empty groups", subtitle: "Leave out a group with no sessions in the Agent Sessions sidebar") {   // #2106
+                Toggle("", isOn: $hideEmpty).labelsHidden().accessibilityLabel("Hide empty groups").disabled(!tabs)
+            }
             ForEach($editor.rows) { $g in
                 NeonDivider()
                 groupRow($g)
@@ -1223,6 +1228,7 @@ struct AgentIslandListSection: View {
         }
         .onChange(of: sort) { _, v in Preferences.agentIslandSort = v; AgentIslandController.shared.rowDetailsChanged() }
         .onChange(of: tabs) { _, v in Preferences.agentIslandSidekickTabs = v; AgentIslandController.shared.rowDetailsChanged() }
+        .onChange(of: hideEmpty) { _, v in Preferences.agentIslandHideEmptyGroups = v; AgentIslandController.shared.rowDetailsChanged() }
         .onChange(of: focus) { old, _ in if old != nil { commit() } }   // focus left a field: its edit is done
         .onDisappear { if focus != nil { commit() } }   // closed mid-edit; a view that was only drawn writes nothing
         // #760: a phone's adopted pattern shows here; the save after it finds the list stored and stamps nothing.
