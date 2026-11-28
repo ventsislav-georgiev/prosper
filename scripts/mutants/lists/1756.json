@@ -19,7 +19,7 @@
   {
    "name": "no_adopt_store",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "Preferences.adoptSessionGroups(list, updated: phone.updated)",
+   "old": "Preferences.adoptSessionGroups(list, updated: phone.updated, automatic: phone.automatic)",
    "new": "_ = list",
    "expect": "killed"
   },

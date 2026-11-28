@@ -77,8 +77,8 @@
   {
    "name": "phone-adopt-drops-pick",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "if g.color == nil { g.color = stored.first { $0.id == g.id }?.color }",
-   "new": "if g.color == nil, Bool(\"false\") == true { g.color = stored.first { $0.id == g.id }?.color }",
+   "old": "if g.color == nil, !automatic.contains(g.id) { g.color = stored.first { $0.id == g.id }?.color }",
+   "new": "if g.color == nil, !automatic.contains(g.id), Bool(\"false\") == true { g.color = stored.first { $0.id == g.id }?.color }",
    "expect": "killed",
    "filter": "SessionGroupColorTests/testThePhonesAdoptKeepsAPickOnAGroupItKeeps"
   },

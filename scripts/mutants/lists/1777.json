@@ -47,8 +47,8 @@
   {
    "name": "n96-limits-in-parse",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "        return .success(.write(Value(groups: list, updated: updated)))",
-   "new": "        if let m = limitFailure(list) { return .failure(Failure(m)) }\n        return .success(.write(Value(groups: list, updated: updated)))",
+   "old": "        return .success(.write(Value(groups: list, updated: updated, automatic: automatic)))",
+   "new": "        if let m = limitFailure(list) { return .failure(Failure(m)) }\n        return .success(.write(Value(groups: list, updated: updated, automatic: automatic)))",
    "expect": "killed"
   },
   {
