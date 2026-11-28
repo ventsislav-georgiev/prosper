@@ -4,7 +4,7 @@ import Security
 import os
 
 /// #1676: the ccpool port keeper's core, shared by the keeper executable (Sources/CCPoolKeeper) and the app's link
-/// (CCPool/CCPoolKeeperLink.swift). It holds a dup of the proxy's listening socket across a Prosper relaunch and hands it
+/// (AgentPool/AgentPoolKeeperLink.swift). It holds a dup of the proxy's listening socket across a Prosper relaunch and hands it
 /// back over SCM_RIGHTS to a same-user peer that passes the code-sign check. It never accept()s on that socket (queued
 /// connections wait in the backlog), never polls, never opens a network connection, never reads the Keychain, never execs.
 ///

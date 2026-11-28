@@ -2,7 +2,7 @@ import CCPoolKeeperCore
 import Darwin
 import Foundation
 
-// #1676: the ccpool port keeper. Spawned detached by Prosper (CCPoolKeeperLink.posixSpawn: setsid, every other fd
+// #1676: the ccpool port keeper. Spawned detached by Prosper (AgentPoolKeeperLink.posixSpawn: setsid, every other fd
 // closed, stdio on /dev/null, an empty environment) with the proxy's listening socket on fd 3 and the spawning app's
 // control socketpair end on fd 4. argv: --port <n> --dir <0700 dir>. It holds the port across a relaunch and hands it
 // to the next Prosper; see PortKeeper. Exit 0 also when another keeper already holds the lock.
