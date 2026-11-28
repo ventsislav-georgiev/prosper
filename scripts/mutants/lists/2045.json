@@ -28,7 +28,7 @@
    "name": "model_replaced",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
    "old": "        let win = Self.makeWindow(model, autosave: autosave.isEmpty ? nil : autosave, replacing: old)\n",
-   "new": "        let win = Self.makeWindow(AgentWindowModel(lastLive: lastLive, layouts: Preferences.defaults), autosave: autosave.isEmpty ? nil : autosave, replacing: old)\n",
+   "new": "        let win = Self.makeWindow(AgentWindowModel(lastLive: lastLive), autosave: autosave.isEmpty ? nil : autosave, replacing: old)\n",
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testALiveStyleSwitchRebuildsTheWindowAroundTheSameModel"
   },
