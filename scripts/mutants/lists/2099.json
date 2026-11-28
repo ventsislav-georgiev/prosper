@@ -13,8 +13,8 @@
     {
       "name": "invert-compare",
       "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
-      "old": "filter { driftStates.contains($0.state) &&",
-      "new": "filter { !driftStates.contains($0.state) &&",
+      "old": "filter { $0.state.isDrift &&",
+      "new": "filter { !$0.state.isDrift &&",
       "expect": "killed",
       "note": "every applied piece reads drifted"
     },
@@ -36,25 +36,33 @@
     },
     {
       "name": "drop-missing",
-      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
-      "old": "[.missing, .replaced, .drifted]",
-      "new": "[.replaced, .drifted]",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigModel.swift",
+      "old": "self == .missing || self == .replaced || self == .drifted }",
+      "new": "self == .replaced || self == .drifted }",
       "expect": "killed",
       "note": "a removed slot or block is not drifted"
     },
     {
       "name": "drop-replaced",
-      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
-      "old": "[.missing, .replaced, .drifted]",
-      "new": "[.missing, .drifted]",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigModel.swift",
+      "old": "self == .missing || self == .replaced || self == .drifted }",
+      "new": "self == .missing || self == .drifted }",
       "expect": "killed",
       "note": "a hand-changed slot is not drifted"
     },
     {
+      "name": "drop-drifted",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigModel.swift",
+      "old": "self == .missing || self == .replaced || self == .drifted }",
+      "new": "self == .missing || self == .replaced }",
+      "expect": "killed",
+      "note": "an edited block is not drifted (QA r2099 n1)"
+    },
+    {
       "name": "add-conflict",
-      "file": "app/Sources/ProsperApp/Kit/KitPaneModel.swift",
-      "old": "[.missing, .replaced, .drifted]",
-      "new": "[.missing, .replaced, .drifted, .conflict]",
+      "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfigModel.swift",
+      "old": "self == .missing || self == .replaced || self == .drifted }",
+      "new": "self == .missing || self == .replaced || self == .drifted || self == .conflict }",
       "expect": "killed",
       "note": "another kit's value in the slot reads as changed outside Prosper (review touch-up)"
     },

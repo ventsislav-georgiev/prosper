@@ -44,6 +44,10 @@ enum ManagedConfigPieceState: String, Codable, Sendable {
     case importMissing
     /// declared by the owner but never applied.
     case notApplied
+
+    /// #2099: an applied piece's JSON slot is gone or holds another value, or its block is gone or edited, outside Prosper.
+    /// Not .conflict: that value is another owner's, written through Prosper, and a repair would fight it.
+    var isDrift: Bool { self == .missing || self == .replaced || self == .drifted }
 }
 
 struct ManagedConfigPieceStatus: Equatable, Sendable {
