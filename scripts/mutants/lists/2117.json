@@ -1,0 +1,13 @@
+{
+  "entry": 2117,
+  "filter": "ControlSessionsReadTests/testGetReturnsTheFullRow|AgentPoolGuardTests|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+  "mutants": [
+    {
+      "name": "get-monitor-dropped",
+      "file": "app/Sources/ProsperApp/Control/ControlSessionsRead.swift",
+      "old": "\"command\": .string($0.command), \"monitor\": .bool($0.monitor)",
+      "new": "\"command\": .string($0.command)",
+      "expect": "killed"
+    }
+  ]
+}

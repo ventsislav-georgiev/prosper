@@ -43,6 +43,7 @@ tag from the now-released section and put it on the new top draft.
 - Agent Sessions: the shells count and its list include Claude Code monitors, marked as such.
 - Agent Sessions: a new session on another Mac can be put in a group (needs dch 1.202.0+ there).
 - Agent Sessions: the X-ray drawer follows the focused pane at once, without rebuilding.
+- Control CLI: sessions.get marks Claude Code monitors among a session's shells.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

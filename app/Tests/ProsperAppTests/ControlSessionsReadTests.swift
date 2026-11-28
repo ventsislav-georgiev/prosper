@@ -69,6 +69,8 @@ final class ControlSessionsReadTests: XCTestCase {
         api.cwd = "/Users/example/api"
         api.model = "opus"
         api.pty = AgentSessionPty(cols: 120, rows: 40, clients: 1)
+        api.shells = [DchShell(id: "1", pid: 11, started: 0, command: "make"),
+                      DchShell(id: nil, pid: 12, started: 0, command: "tail -f log", monitor: true)]
         api.meta = DchSessionMeta(json: ["prs": ["open": [
             ["url": "https://github.com/example/api/pull/12", "repo": "example/api", "num": 12, "title": "Fix it"],
             ["url": "https://evil.example/x", "repo": "example/web", "num": 3, "title": "Other"],
@@ -85,6 +87,9 @@ final class ControlSessionsReadTests: XCTestCase {
         XCTAssertEqual(r["effort"], .null)
         XCTAssertEqual(obj(r["pty"])["cols"], .number(120))
         XCTAssertEqual(r["merged"], .number(4))
+        XCTAssertEqual(r["shells"], .array([
+            .object(["pid": .number(11), "command": .string("make"), "monitor": .bool(false)]),
+            .object(["pid": .number(12), "command": .string("tail -f log"), "monitor": .bool(true)])]), "a monitor is marked")
         XCTAssertEqual(r["transcript"], .bool(true))
         guard case .array(let prs)? = r["prs"] else { return XCTFail("no prs") }
         XCTAssertEqual(prs.count, 2)

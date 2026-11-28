@@ -113,7 +113,7 @@ enum ControlSessionsRead {
                      "url": p.pullURL.map { .string($0.absoluteString) } ?? .null])
         })
         o["merged"] = s.meta?.merged.map { .number(Double($0)) } ?? .null
-        o["shells"] = .array(s.shells.map { .object(["pid": .number(Double($0.pid)), "command": .string($0.command)]) })
+        o["shells"] = .array(s.shells.map { .object(["pid": .number(Double($0.pid)), "command": .string($0.command), "monitor": .bool($0.monitor)]) })
         o["transcript"] = .bool(s.transcriptPath?.isEmpty == false)
         return .object(o)
     }
@@ -321,7 +321,7 @@ extension ControlRegistry {
         }
         func timeout(_ d: Double) -> ControlArg { ControlArg(type: "number", summary: "seconds, 1 to 60, default \(Int(d))") }
         r.register(ControlCommand(name: "sessions.get",
-                                  summary: "One session's full row: sessions.list's fields plus status, activity, model, pty, PRs, shells.",
+                                  summary: "One session's full row: sessions.list's fields plus status, activity, model, pty, PRs, shells (pid, command, monitor).",
                                   args: ["name": name], mutates: false) { _, a in try ControlSessionsRead.get(a) })
         r.register(ControlCommand(
             name: "sessions.wait",
