@@ -19,8 +19,8 @@
   {
    "name": "rebuild_skipped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "        guard let model, old.style != Preferences.agentWindowStyle else { return Self.applyStyle(old) }\n",
-   "new": "        guard let model, old.style != old.style else { return Self.applyStyle(old) }\n",
+   "old": "        return old != new\n",
+   "new": "        return false\n",
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testALiveStyleSwitchRebuildsTheWindowAroundTheSameModel"
   },
@@ -43,8 +43,8 @@
   {
    "name": "corners_only_rebuilds",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "        guard let model, old.style != Preferences.agentWindowStyle else { return Self.applyStyle(old) }\n",
-   "new": "        guard let model, old.style != Preferences.agentWindowStyle || old.roundedCorners != Preferences.agentWindowRoundedCorners else { return Self.applyStyle(old) }\n",
+   "old": "        guard let model, rebuild else { return Self.applyStyle(old) }\n",
+   "new": "        guard let model, rebuild || old.roundedCorners != Preferences.agentWindowRoundedCorners else { return Self.applyStyle(old) }\n",
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testRoundedCornersAloneRestyleTheSameWindow"
   },
@@ -72,5 +72,5 @@
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testFullScreenWaitsAndAStyleChangeRebuilds"
   }
-]
+ ]
 }
