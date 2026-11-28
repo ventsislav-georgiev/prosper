@@ -117,8 +117,8 @@
   {
    "name": "adopt_stamp_now",
    "file": "app/Sources/ProsperApp/Preferences.swift",
-   "old": "        agentIslandSessionGroups = list\n        agentIslandSessionGroupsUpdated = updated\n",
-   "new": "        agentIslandSessionGroups = list\n        agentIslandSessionGroupsUpdated = Int64(Date().timeIntervalSince1970 * 1000)\n",
+   "old": "        }\n        agentIslandSessionGroupsUpdated = updated\n        if agentIslandSidekickPattern != pattern",
+   "new": "        }\n        agentIslandSessionGroupsUpdated = Int64(Date().timeIntervalSince1970 * 1000)\n        if agentIslandSidekickPattern != pattern",
    "expect": "killed"
   },
   {
