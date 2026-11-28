@@ -161,6 +161,7 @@ final class AgentsWindow {
         win.model = model
         model.sidebarColumnChanged = { [weak win] in if let win { AgentsWindow.applyMinSize(win) } }
         model.firstShown = { [weak win] in win?.xrayShown() }   // #2068: the session the window opens on
+        model.xrayShownChanged = { [weak win] in win?.followXray($0, $1) }   // #2092: from the model, before the view update
         NotificationCenter.default.addObserver(win, selector: #selector(AgentsNSWindow.xrayGateOpened), name: XrayPanels.gateOpened, object: nil)   // #2068: removed when the window is freed
         // 4.2 Pick Another: the sidebar gets the keys (called on the main actor, from a button's action).
         model.focusSidebar = { [weak win] in   // the model set keyFocus = .sidebar already
@@ -742,8 +743,10 @@ final class AgentsNSWindow: NSWindow {
     /// #1476: a pane header's X-ray button: that pane takes the focus first, then the window's one drawer toggles for it.
     @MainActor static func xrayClicked(pane: UUID, in win: AgentsNSWindow?) {
         guard let win, let m = win.model else { return }
+        // #2092: an open drawer follows the focus move itself (followXray): it stays open, now on this pane
+        let follows = pane != m.layout.focused && XrayPanels.shared.open[m.layout.focused] != nil
         if pane != m.layout.focused { m.focusPane(pane) }
-        win.toggleXray()
+        if !follows || XrayPanels.shared.open[pane] == nil { win.toggleXray() }
     }
 
     /// #2066: a header count group (agents, shells, open PRs): that pane takes the focus, its drawer opens for the session it
@@ -765,6 +768,13 @@ final class AgentsNSWindow: NSWindow {
         guard let model, old != model.layout.focused, let open = XrayPanels.shared.open[old] else { return }
         XrayPanels.shared.close(old)
         toggleXray(on: open.tab)
+    }
+
+    /// #2092 (#2055): the model's change of the focused pane or of the session it shows (AgentWindowModel.xrayShownChanged,
+    /// told before the view update, so one click is one pass and the drawer's view stays): a focus move keeps #1476's
+    /// follow; the same pane showing another session takes that session's drawer state.
+    func followXray(_ old: AgentWindowModel.XrayShown, _ new: AgentWindowModel.XrayShown) {
+        if old.pane != new.pane { xrayFollow(from: old.pane) } else { xrayShown() }
     }
 
     /// #2055: the focused pane shows another session (or none): the drawer takes that session's own state (XrayPanels.wants),
@@ -3162,12 +3172,7 @@ struct AgentPaneArea: View {
                 }
             }
             .overlay(alignment: .topLeading) { confirmCard(frames, in: area) }   // #1930: over everything in the area
-            // #2055: one change of the focused pane or of the session it shows: a focus move keeps #1476's follow; the
-            // same pane showing another session takes that session's drawer state (xrayShown)
-            .onChange(of: XrayShown(pane: model.layout.focused, target: shownTarget)) { old, new in
-                let w = AgentsNSWindow.window(of: old.pane) ?? AgentsNSWindow.window(of: new.pane)
-                if old.pane != new.pane { w?.xrayFollow(from: old.pane) } else { w?.xrayShown() }
-            }
+            // #2092: the drawer follows a focus or session change from the model (AgentsNSWindow.followXray), not here
             .coordinateSpace(.named(agentPaneAreaSpace))
             .onAppear { feed(area) }
             .onChange(of: proxy.size) { _, size in feed(CGRect(origin: .zero, size: size)) }
@@ -3180,12 +3185,6 @@ struct AgentPaneArea: View {
 
     /// The focused pane's session, nil under the New session form (the drawer's target, toggleXray's rule).
     var shownTarget: XrayTarget? { model.newSession == nil ? XrayTarget.of(model.selectedRow) : nil }
-
-    /// #2055: what the area's onChange compares (the focused pane and the session it shows).
-    struct XrayShown: Equatable {
-        let pane: UUID
-        let target: XrayTarget?
-    }
 
     /// #900 B2 step 3 (7.4, R1.1): the frames this view draws (and the window hit-tests) in `area`: the model's tiling;
     /// zoomed (the model's shownPanes is the zoomed pane alone while the tiling holds more), that pane over the whole

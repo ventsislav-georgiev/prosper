@@ -1887,6 +1887,8 @@ struct XrayAnchoredScroll: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position, anchor: .top)
+            // #2092: the drawer's view stays when it follows to another pane's panel: that list starts at its top, as a new one did
+            .onChange(of: ObjectIdentifier(panel)) { position.scrollTo(edge: .top) }
             .onChange(of: shown) { old, new in
                 // #2090: hidden: only a tab switch's or filter's new gen moves it (to its top, as a new list would start)
                 guard panel.tab == tab else { if old.gen != new.gen { position.scrollTo(edge: .top) }; return }

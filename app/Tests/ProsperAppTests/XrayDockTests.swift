@@ -363,8 +363,8 @@ extension AgentWindowD1Tests {
     }
 
     /// #2068 n2 (QA R2055a): the session changed THROUGH THE MODEL (the sidebar's pick), never a direct xrayShown call: the
-    /// area's onChange applies the new session's state. Red with the onChange's `else { w?.xrayShown() }` gone (mutant
-    /// dock-onchange-unwired, AgentsWindow.swift:3077): api's panel stays open over web.
+    /// window's followXray (#2092: told by the model, wired here as makeWindow wires it) applies the new session's state.
+    /// Red with followXray's `else { xrayShown() }` gone (mutant dock-onchange-unwired): api's panel stays open over web.
     @MainActor
     func testXrayDockASessionChangeThroughTheModelTakesItsDrawerState() throws {
         try xrayDockWindow(openWithNew: false) { m, win, api, web in
@@ -373,7 +373,8 @@ extension AgentWindowD1Tests {
             let host = xrayDockArea(m, win, CGSize(width: 1200, height: 600))
             defer { win.contentView = nil }
             XrayRemoteChipTests.layOut(host, until: { AgentsNSWindow.window(of: pane) === win })
-            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "control: the area's onChange finds this window")
+            XCTAssertTrue(AgentsNSWindow.window(of: pane) === win, "control: the area's anchors find this window")
+            m.xrayShownChanged = { [weak win] in win?.followXray($0, $1) }   // #2092: makeWindow's wiring
             XCTAssertTrue(win.toggleXray())
             XCTAssertEqual(panels.open[pane]?.target.name, "api")
             m.select(.live(web.key))

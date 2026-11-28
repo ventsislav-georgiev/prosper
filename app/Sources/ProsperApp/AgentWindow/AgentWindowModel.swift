@@ -1325,6 +1325,24 @@ final class AgentWindowModel: ObservableObject {
     /// #2068: told once, when the focused pane's first session lands (settle); the window applies that session's X-ray
     /// drawer state then (the area's onChange sees only later changes).
     var firstShown: (() -> Void)?
+    /// #2092: the focused pane or the session it shows changed (`old`, `new`), told at the end of the change (follow()),
+    /// before the view update, so the window's X-ray drawer follows in the same pass (AgentsNSWindow.followXray). Only
+    /// while visible: a hidden window's changes are told once, when it shows again (setVisible's follow()).
+    var xrayShownChanged: ((_ old: XrayShown, _ new: XrayShown) -> Void)? { didSet { lastXrayShown = xrayShown } }
+    struct XrayShown: Equatable {
+        let pane: UUID
+        let target: XrayTarget?
+    }
+    /// The focused pane and its session, nil under the New session form (the drawer's target, toggleXray's rule).
+    var xrayShown: XrayShown { XrayShown(pane: layout.focused, target: newSession == nil ? XrayTarget.of(selectedRow) : nil) }
+    private var lastXrayShown: XrayShown?
+    private func noteXrayShown() {
+        guard visible, let tell = xrayShownChanged else { return }
+        let now = xrayShown, old = lastXrayShown
+        guard now != old else { return }
+        lastXrayShown = now
+        if let old { tell(old, now) }
+    }
     /// The age clock: while visible the rows are rebuilt at least this often, so a row's age is never more than
     /// this behind (#1114: whole minutes, so at most one minute low, for at most this long past the minute).
     var ageInterval: TimeInterval = 30
@@ -3597,6 +3615,7 @@ final class AgentWindowModel: ObservableObject {
 
     private func follow() {
         guard !closed else { return }
+        defer { noteXrayShown() }   // #2092: every change of focus, session or form ends here
         let shown = visible ? shownPanes : []
         let keep = visible && AgentPaneLayout.splitsEnabled   // hidden or the gate off: stopped as before
         for r in runtimes.values {
