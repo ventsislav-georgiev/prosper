@@ -342,6 +342,68 @@ final class GroupsSyncTests: XCTestCase {
         XCTAssertEqual(Preferences.agentIslandSessionGroups.first?.pattern, "", "the manual group stays manual")
     }
 
+    /// One 0x2d request through DchSidekickOps (adopt counted, not run); exactly one reply.
+    private func sidekick(_ pattern: String, _ updated: Int64, file: StaticString = #filePath, line: UInt = #line) -> (type: UInt8, json: NSDictionary) {
+        let box = Box(), replied = expectation(description: "reply")
+        var ops = DchSidekickOps()
+        ops.adopted = { box.lock.withLock { box.adopts += 1 } }
+        ops.handle(Self.body(["pattern": pattern, "updated": updated])) { f in box.lock.withLock { box.frames.append(f) }; replied.fulfill() }
+        wait(for: [replied], timeout: 5)
+        let frames = box.lock.withLock { box.frames }
+        XCTAssertEqual(frames.count, 1, "one reply", file: file, line: line)
+        return Self.decode(frames.first ?? Data())
+    }
+
+    /// #2069 round 2 (QA R2069a F1): an old phone clearing the group 0x2d points at, when another group has a pattern,
+    /// is refused with an error and nothing stored changes, so 0x2d does not hop to that group. Red without the refusal:
+    /// the reply is ok, Reviews turns manual and the read gives "-qa$".
+    func testALegacyClearThatWouldMoveToAnotherGroupIsRefused() {
+        let list = [Self.g("r1", "Reviews", "-rev$"), Self.g("q1", "QA", "-qa$")]
+        Preferences.agentIslandSessionGroups = list
+        Preferences.agentIslandSessionGroupsUpdated = 50
+        Preferences.agentIslandSidekickPatternUpdated = 50
+        let r = sidekick("", 99)
+        XCTAssertEqual(r.type, DchFrame.error)
+        XCTAssertEqual(r.json, ["message": Preferences.legacyClearRefused] as NSDictionary)
+        XCTAssertEqual(sidekick(" \n", 100).json, ["message": Preferences.legacyClearRefused] as NSDictionary, "whitespace is a clear")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups, list, "stored unchanged")
+        XCTAssertEqual(DchSidekickOps.current(), .init(pattern: "-rev$", updated: 50))
+        XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 50)
+        Preferences.agentIslandSidekickPattern = ""
+        XCTAssertEqual(Preferences.agentIslandSessionGroups, list, "a Mac-side write of the setter cannot hop it either")
+        XCTAssertEqual(sidekick("-r$", 101).type, DchFrame.ok, "a non-blank edit still lands")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["-r$", "-qa$"])
+    }
+
+    /// #2069 round 2: clearing Sidekicks is allowed (it turns isOff and 0x2d stays on it), and so is clearing the only
+    /// non-manual group (it turns manual, 0x2d reads ""). Red with the refusal widened to every clear.
+    func testALegacyClearOfSidekicksOrOfTheOnlyPatternedGroupIsAllowed() {
+        Preferences.agentIslandSessionGroups = [Self.g(SessionGroup.sidekicksID, "Sidekicks", "-s"), Self.g("q1", "QA", "-qa$")]
+        XCTAssertEqual(sidekick("", 99).type, DchFrame.ok)
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "")
+        XCTAssertEqual(sidekick("x", 100).type, DchFrame.ok)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["x", "-qa$"], "the next set lands on Sidekicks")
+        Preferences.agentIslandSessionGroups = [Self.g("r1", "Reviews", "-rev$"), Self.g("m1", "Manual", "")]
+        XCTAssertEqual(sidekick("", 200).type, DchFrame.ok)
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["", ""])
+    }
+
+    /// #2069 round 2 (QA n10a): with no patterned group and a manual group named Sidekicks, the appended Sidekicks would be
+    /// dropped by normalized (one name per section); the write is refused instead of lost silently. Red without it: ok.
+    func testALegacyWriteIsRefusedWhenAManualGroupHoldsTheNameSidekicks() {
+        let list = [Self.g("m1", "sidekicks ", "")]
+        Preferences.agentIslandSessionGroups = list
+        let r = sidekick("-p$", 99)
+        XCTAssertEqual(r.type, DchFrame.error)
+        XCTAssertEqual(r.json, ["message": Preferences.legacySidekicksNameTaken] as NSDictionary)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups, [Self.g("m1", "sidekicks", "")], "stored unchanged")
+        XCTAssertEqual(sidekick("", 100).type, DchFrame.ok, "a clear adds nothing, so it is no loss")
+        Preferences.agentIslandSessionGroups = [Self.g("m1", "Manual", "")]
+        XCTAssertEqual(sidekick("-p$", 101).type, DchFrame.ok, "another name: Sidekicks is appended")
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.id), ["m1", SessionGroup.sidekicksID])
+    }
+
     func testWatchFrameCarriesSidekickAndGroups() {
         Preferences.agentIslandSessionGroups = Self.macList
         Preferences.agentIslandSidekickPatternUpdated = 5

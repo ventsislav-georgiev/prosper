@@ -45,10 +45,10 @@ enum ControlSessionGroups {
     // MARK: - sessions.groups.set
 
     /// The whole list, replaced: [{name, pattern, id?}]. A row is stored only as the Settings editor would store it (a
-    /// valid 1-32 byte name, not dch's own tab name, a valid regex that is not empty and does not match everything, at most 8
-    /// rows, no duplicate name): else the whole call is refused with the row's reason and nothing is stored. Agent text
+    /// valid 1-32 byte name, not dch's own tab name, a valid regex that does not match everything or a blank pattern (a
+    /// manual-only group, #2062), at most 8 rows, no duplicate name): else the whole call is refused with the row's reason and nothing is stored. Agent text
     /// is outside text: a control or hidden scalar anywhere is refused. A row without an id keeps the id of the stored group
-    /// of the same name (its tab stays chosen), else gets a new one. [] clears the list. Undo stores the old list back.
+    /// of the same name (its tab stays chosen; a blank Sidekicks, isOff, is not matched: #2069), else gets a new one. [] clears the list. Undo stores the old list back.
     /// shortcut: an old list that was never stored (the migrated Sidekicks default) is stored by the undo, run it once.
     static func set(_ args: [String: ControlJSON]) throws -> ControlChange {
         guard case .array(let items)? = args["groups"] else { throw ControlError("argument 'groups' must be a list") }
@@ -68,7 +68,7 @@ enum ControlSessionGroups {
                 throw ControlError("group \(i + 1) has a control or hidden character")
             }
             if id.isEmpty {
-                id = old.first { SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id
+                id = old.first { !$0.isOff && SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id
                     ?? String(UUID().uuidString.prefix(8)).lowercased()
             }
             rows.append(SessionGroup(id: id, name: name, pattern: pattern))

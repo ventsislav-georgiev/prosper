@@ -49,6 +49,62 @@
    "new": "editSidekickPattern(list.first?.pattern ?? \"\", now: now)",
    "expect": "killed",
    "filter": "GroupsSyncTests/testLegacySidekickPatternIsTheFirstNonManualGroup"
+  },
+  {
+   "name": "legacy-clear-refusal-removed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "? legacyClearRefused : nil",
+   "new": "? nil : nil",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyClearThatWouldMoveToAnotherGroupIsRefused"
+  },
+  {
+   "name": "legacy-handler-refusal-removed",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if m.adopt, let why = Preferences.legacyRefusal(phone.pattern) { return reply(DchControlOps.error(why)) }",
+   "new": "",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyClearThatWouldMoveToAnotherGroupIsRefused"
+  },
+  {
+   "name": "legacy-setter-guard-removed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "            guard legacyRefusal(newValue) == nil else { return }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyClearThatWouldMoveToAnotherGroupIsRefused"
+  },
+  {
+   "name": "legacy-clear-sidekicks-refused",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "blank && list[i].id != SessionGroup.sidekicksID && ",
+   "new": "blank && ",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyClearOfSidekicksOrOfTheOnlyPatternedGroupIsAllowed"
+  },
+  {
+   "name": "legacy-clear-only-group-refused",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "list[(i + 1)...].contains { !$0.isManual } ? legacyClearRefused",
+   "new": "true ? legacyClearRefused",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyClearOfSidekicksOrOfTheOnlyPatternedGroupIsAllowed"
+  },
+  {
+   "name": "legacy-name-taken-removed",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "? legacySidekicksNameTaken : nil",
+   "new": "? nil : nil",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testALegacyWriteIsRefusedWhenAManualGroupHoldsTheNameSidekicks"
+  },
+  {
+   "name": "ctl-set-matches-isoff",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "old.first { !$0.isOff && SessionGroup",
+   "new": "old.first { SessionGroup",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testSetABlankSidekicksRowIsANewManualGroupNotTheHiddenOne"
   }
  ]
 }

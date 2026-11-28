@@ -87,6 +87,18 @@ final class ControlSessionGroupsTests: XCTestCase {
         }
     }
 
+    /// #2069 round 2 (QA n10b): a row named Sidekicks without an id does not take the id of a stored blank Sidekicks
+    /// (isOff), so a blank pattern is a new manual-only group, not "No pattern yet". Red without it: refused.
+    func testSetABlankSidekicksRowIsANewManualGroupNotTheHiddenOne() throws {
+        try withSeams { _ in
+            Preferences.agentIslandSessionGroups = [SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: "")]
+            _ = try ControlSessionGroups.set(groups(group("Sidekicks", "")))
+            let g = Preferences.agentIslandSessionGroups
+            XCTAssertEqual(g.count, 1)
+            XCTAssertTrue(g.first?.isManual == true && g.first?.id != SessionGroup.sidekicksID, "\(g)")
+        }
+    }
+
     /// set stores through Settings' path (stamps move), keeps the id of a same-named group, notices once, and undo stores
     /// the old list back.
     func testSetStoresReusesIdsAndUndoRestoresTheOldList() throws {

@@ -1384,18 +1384,39 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandDchGroupsAdoptChecked) }
     }
 
-    /// #2069: the group 0x2d and the one-pattern field stand for: the first that is not manual-only (as syncDchConfig).
+    /// #2069: the group 0x2d and the one-pattern field stand for: the first that is not manual-only. A blank Sidekicks
+    /// (isOff) counts here, so clearing it keeps the pointer; syncDchConfig picks from the isOff-filtered list instead.
     private static func legacyIndex(_ list: [SessionGroup]) -> Int? { list.firstIndex { !$0.isManual } }
+
+    /// #2069 round 2 (QA R2069a F1, n10a): the 0x2d writes that are refused, in the 0x2d error reply.
+    static let legacyClearRefused = "clear this group's pattern in Prosper's Settings: other groups have patterns"
+    static let legacySidekicksNameTaken = "a manual-only group is named Sidekicks: rename it in Prosper's Settings to sync this pattern"
+
+    /// #2069 round 2: why a legacy (0x2d) write of `pattern` may not land, nil when it may. F1: clearing the group
+    /// legacyIndex points at, when it is not Sidekicks (which turns isOff and keeps the pointer) and a later group has a
+    /// pattern, would move the pointer to that group, so the clearing phone's next read and edit land there. n10a: with no
+    /// non-manual group the setter appends Sidekicks, which normalized drops when a manual group already has that name.
+    static func legacyRefusal(_ pattern: String) -> String? {
+        guard agentIslandSessionGroupsStored else { return nil }
+        let list = agentIslandSessionGroups
+        guard let i = legacyIndex(list) else {
+            return !pattern.isEmpty && list.contains { SessionGroup.nameKey($0.name) == "sidekicks" } ? legacySidekicksNameTaken : nil
+        }
+        let blank = pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return blank && list[i].id != SessionGroup.sidekicksID && list[(i + 1)...].contains { !$0.isManual } ? legacyClearRefused : nil
+    }
 
     /// #571, #1757: the first non-manual group's pattern ("" with none; #2069): Settings' one field (until #1758) and the
     /// phone's 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits that group, and with none a
-    /// non-empty pattern (the phone's adopt) adds the Sidekicks group back.
+    /// non-empty pattern (the phone's adopt) adds the Sidekicks group back. A write legacyRefusal refuses stores nothing
+    /// (0x2d answers it with an error first; editSessionGroups stores its whole list right after).
     static var agentIslandSidekickPattern: String {
         get { let l = agentIslandSessionGroups; return legacyIndex(l).map { l[$0].pattern } ?? "" }
         set {
             guard defaults.object(forKey: Keys.agentIslandSessionGroups) != nil else {
                 return defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern)
             }
+            guard legacyRefusal(newValue) == nil else { return }
             var list = agentIslandSessionGroups
             if let i = legacyIndex(list) { list[i].pattern = newValue } else if !newValue.isEmpty {
                 list.append(SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: newValue))

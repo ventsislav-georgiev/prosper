@@ -1178,6 +1178,8 @@ struct DchSidekickOps: Sendable {
                 if m.adopt, phone.pattern.utf8.count > Self.maxBytes {
                     return reply(DchControlOps.error("sidekick pattern over \(Self.maxBytes) UTF-8 bytes"))
                 }
+                // #2069 round 2: a write that would move 0x2d to another group (or be dropped) is refused, never silent.
+                if m.adopt, let why = Preferences.legacyRefusal(phone.pattern) { return reply(DchControlOps.error(why)) }
                 if m.adopt {
                     Preferences.adoptSidekickPattern(m.winner.pattern, updated: m.winner.updated)
                     adopted()
