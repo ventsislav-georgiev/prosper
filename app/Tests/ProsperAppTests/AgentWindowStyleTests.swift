@@ -635,19 +635,17 @@ final class AgentWindowStyleTests: XCTestCase {
         XCTAssertEqual(AgentsWindow.rebuilds(styleMask: plain, old: .borderless, new: .borderless), false)
     }
 
-    /// #2076 (QA R2045 r7 n3): a style change made in full screen waits (nothing rebuilt), and the window's
-    /// didExitFullScreen applies it. The mask bit is set by hand on the never-shown window, never a real full screen.
+    /// #2076 (QA R2045 r7 n3): a style change that waited (made in full screen: restyle returned, pinned by the
+    /// rebuilds() row above) is applied by the window's didExitFullScreen. AppKit refuses a hand-set .fullScreen bit
+    /// outside a transition (CI 46134268512, an exception that skipped the row's restores), so the pending change is
+    /// the preference written with no restyle call, as restyle leaves it in full screen; never a real full screen.
     func testDidExitFullScreenAppliesAStyleChangeMadeInFullScreen() throws {
         try withStyleRow {
             Preferences.agentWindowStyle = .borderless
             Preferences.agentWindowRoundedCorners = false
             try opened { r, old in
-                old.styleMask.insert(.fullScreen)
-                XCTAssertTrue(old.styleMask.contains(.fullScreen), "marked full screen")
-                Preferences.agentWindowStyle = .standard
-                r.w.restyle()
-                XCTAssertTrue(r.w.window === old && old.style == .borderless, "full screen: pending, no rebuild")
-                old.styleMask.remove(.fullScreen)   // AppKit has cleared the bit when it posts the exit
+                Preferences.agentWindowStyle = .standard   // pending: nothing calls restyle until the exit
+                XCTAssertTrue(r.w.window === old && old.style == .borderless, "pending, no rebuild")
                 NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: old)
                 let win = try XCTUnwrap(r.w.window as? AgentsNSWindow)
                 XCTAssertFalse(win === old, "the exit rebuilt the window")
