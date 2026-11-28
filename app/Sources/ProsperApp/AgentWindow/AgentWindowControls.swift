@@ -157,6 +157,7 @@ extension AgentSidebarVerb {
         case .moveToGroup(let g): g == nil ? AgentMenuSymbol.autoGroup : AgentMenuSymbol.group
         case .newGroup: AgentMenuSymbol.newSession
         case .groupColor(let c): c == nil ? AgentMenuSymbol.autoGroup : AgentMenuSymbol.swatch
+        case .newSessionInGroup: AgentMenuSymbol.newSession
         }
     }
 }
@@ -523,6 +524,8 @@ enum AgentSidebarVerb: Equatable {
     case moveToGroup(String?), newGroup
     /// #2061: a group header's Colour item: the palette hex, nil for Automatic.
     case groupColor(String?)
+    /// #2063: a group header's New session here: the form with that group (its name) chosen.
+    case newSessionInGroup(String)
 }
 
 /// One sidebar "..." entry, a value (rows read the list; no menu is popped).
@@ -539,6 +542,7 @@ enum AgentStoreQuestion: Equatable { case restartAll, stopAll, killAll, clear }
 
 extension AgentWindowControls {
     static let islandSettingsLabel = "Agent Island Settings\u{2026}"
+    static let newSessionHereLabel = "New session here\u{2026}"   // #2063
     static let autoAllowLabel = "Always allow permission prompts"
     /// R897-q1: the question Always allow ON raises in the sidebar, and its confirming button.
     static let alwaysAllowQuestion = "Always allow: Claude Code's permission prompts will be answered Yes, so commands run without your review."
@@ -688,7 +692,10 @@ extension AgentWindowControls {
         ]
         guard let group = store.sessionGroups.first(where: { $0.name == name }) else { return actions }
         let shown = store.groupColors[group.id]
-        return actions + [.divider, .submenu(colourLabel, enabled: true, SessionGroup.palette.map {
+        // #2063: gated as the form's Group picker is (a group it offers), so the form opens with it chosen.
+        let here: [AgentSidebarMenuEntry] = AgentNewSession.groupChoices(store).contains { $0.id == group.id }
+            ? [.item(newSessionHereLabel, enabled: true, checked: nil, verb: .newSessionInGroup(group.name))] : []
+        return actions + [.divider] + here + [.submenu(colourLabel, enabled: true, SessionGroup.palette.map {
             .item($0.name, enabled: true, checked: shown == $0.hex, verb: .groupColor($0.hex))
         } + [.divider, .item(automaticColourLabel, enabled: true, checked: group.color == nil, verb: .groupColor(nil))])]
     }
@@ -726,7 +733,7 @@ extension AgentWindowControls {
         case .settings: openSettings()
         case .diagnostics: break   // the window's own pane (AgentSidebarTitleRow)
         case .moveToGroup, .newGroup: break   // #2062: a row's (AgentWindowModel.runMove) and the window's name field
-        case .groupColor: break   // #2061: a group header's (AgentWindowModel.runGroup)
+        case .groupColor, .newSessionInGroup: break   // #2061, #2063: a group header's (AgentWindowModel.runGroup)
         }
     }
 

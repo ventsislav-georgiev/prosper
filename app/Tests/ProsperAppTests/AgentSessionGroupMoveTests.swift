@@ -580,4 +580,88 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         c.rowDetailsChanged()
         XCTAssertEqual(st.storedGroupCount, 1, "the blank Sidekicks is not counted")
     }
+
+    // MARK: - #2063 New session's Group
+
+    /// A chosen group is `--group <group>` between the name and "--"; Automatic sends none.
+    func testNewSessionArgsCarryGroupOnlyWhenOneIsChosen() {
+        let auto = AgentIsland.newSessionArgs(folder: "/Users/example/api", command: ["claude"], taken: [], name: "api")
+        let work = AgentIsland.newSessionArgs(folder: "/Users/example/api", command: ["claude"], taken: [], name: "api", group: "Work")
+        XCTAssertFalse(auto.contains("--group"))
+        XCTAssertEqual(Array(auto.prefix(3)), ["--spawn", "api", "--"])
+        XCTAssertEqual(Array(work.prefix(5)), ["--spawn", "api", "--group", "Work", "--"])
+        XCTAssertEqual(Array(work.dropFirst(5)), Array(auto.dropFirst(3)), "the command as without a group")
+    }
+
+    /// Automatic's label names the group the typed name lands in by the island's own pattern rule; no match: Sessions.
+    func testAutomaticLabelNamesThePatternGroupOfTheTypedName() {
+        let manual = SessionGroup(id: "m1", name: "Hand", pattern: "")
+        XCTAssertEqual(AgentIsland.patternGroup("api-qa", groups: [work, qa])?.name, "Sidekicks")
+        XCTAssertEqual(AgentIsland.patternGroup("zzz-qa", groups: [work, qa])?.name, "Work", "the first group that matches")
+        XCTAssertTrue(AgentIsland.patternGroup("api", groups: [work, qa, manual]) == nil, "no match: Sessions")
+        XCTAssertTrue(AgentIsland.patternGroup("", groups: [work, qa]) == nil)
+        XCTAssertEqual(AgentNewSession.automaticLabel("Sidekicks"), "Automatic (Sidekicks)")
+        XCTAssertEqual(AgentNewSession.automaticLabel(nil), "Automatic (Sessions)")
+    }
+
+    /// dch's `--spawn --group` refusal (the group went meanwhile) reads as the group's reason; other failures as before.
+    func testSpawnTextSaysTheGroupNoLongerExists() {
+        let gone = DchActionResult(status: 1, text: ["dch: --group: no group Gone in the config (no_group)"])
+        XCTAssertEqual(AgentIsland.spawnText(gone, name: "api"), "New session failed: " + AgentIsland.noGroupText)
+        let other = DchActionResult(status: 1, text: ["dch: api: exists"])
+        XCTAssertEqual(AgentIsland.spawnText(other, name: "api"), "New session failed: dch: api: exists")
+    }
+
+    @MainActor
+    func groupModel(_ st: AgentIslandStore, _ c: AgentIslandController) -> AgentWindowModel {
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
+        m.runtimes.values.forEach(m.onNewRuntime)
+        m.openSession = { _ in }
+        m.onVisible = { _ in }
+        m.island = { c }
+        m.home = "/Users/example"
+        m.folderExists = { _ in true }
+        m.bind(st)
+        return m
+    }
+
+    /// The form's picker: the store's groups on this Mac with dch 1.196.0, Automatic's group following the typed name; a
+    /// chosen group reaches the island's --spawn as `--group`, and dch's no_group is the form's line. Another Mac or an
+    /// older dch: no picker and no --group. The window is never shown (no terminal client); the runner launches nothing.
+    @MainActor
+    func testTheFormsGroupPickerAndItsGroupReachTheSpawn() {
+        let st = store([]), rec = Launches(), c = controller(st, rec)
+        rec.status = 1
+        rec.output = "dch: --group: no group Work in the config (no_group)\n"
+        let m = groupModel(st, c)
+        defer { m.close() }
+        m.openNewSession(folder: "/Users/example/api")
+        XCTAssertEqual(m.newSessionGroups.map(\.name), ["Work", "Sidekicks"])
+        m.setNewSessionName("api-qa")
+        XCTAssertEqual(m.newSession?.autoGroup, "Sidekicks")
+        m.setNewSessionName("api")
+        XCTAssertTrue(m.newSession?.autoGroup == nil, "no match: Automatic (Sessions)")
+        XCTAssertTrue(m.newSessionGroupArg == nil, "Automatic: no --group")
+        m.setNewSessionGroup("Work")
+        XCTAssertEqual(m.newSessionGroupArg, "Work")
+        XCTAssertTrue(m.startNewSession(persist: false))
+        settle(c) { m.newSession?.status != nil }
+        XCTAssertEqual(rec.args.count, 1)
+        XCTAssertEqual(Array((rec.args.last ?? []).prefix(5)), ["--spawn", "api", "--group", "Work", "--"])
+        XCTAssertEqual(m.newSession?.status, "New session failed: " + AgentIsland.noGroupText)
+        XCTAssertTrue(m.newSession?.starting == nil, "the form is back, nothing started")
+        m.setNewSessionHost("example-host")
+        XCTAssertTrue(m.newSessionGroups.isEmpty, "another Mac: no picker")
+        XCTAssertTrue(m.newSessionGroupArg == nil, "another Mac: no --group")
+        m.setNewSessionHost(nil)
+        XCTAssertEqual(m.newSessionGroupArg, "Work")
+        st.controlDch = DchCommand.Binary(path: "/fake/dch", version: [1, 195, 9])
+        XCTAssertTrue(m.newSessionGroups.isEmpty, "an older dch: no picker")
+        XCTAssertTrue(m.newSessionGroupArg == nil, "an older dch: no --group")
+    }
 }

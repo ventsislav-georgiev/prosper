@@ -284,6 +284,14 @@ enum AgentIsland {
         return Split(primary: primary, groups: zip(groups, hits).map { (group: $0, sessions: $1) })
     }
 
+    /// #2063: the group a new session named `name` lands in by pattern (split's rule and its compiled-pattern cache; a new
+    /// session has no alias or harness title yet); nil: Sessions.
+    static func patternGroup(_ name: String, groups: [SessionGroup]) -> SessionGroup? {
+        guard !name.isEmpty else { return nil }
+        let s = AgentSession(key: AgentSessionKey(dir: "", name: name), alias: "", activity: 0, state: .idle, agents: 0)
+        return split([s], groups: groups).groups.first { !$0.sessions.isEmpty }?.group
+    }
+
     /// The one Sidekicks group with `pattern` ("" = no group).
     static func split(_ list: [AgentSession], pattern: String) -> Split { split(list, groups: SessionGroup.sidekicks(pattern)) }
 

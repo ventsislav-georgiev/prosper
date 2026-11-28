@@ -1564,9 +1564,11 @@ extension AgentIsland {
     /// sweep: "--" so a setting's command starting with "-" is never a dch flag.
     /// #847: `name` given (the window's form): used as is; the caller checked it (AgentNewSession.nameError).
     /// #847 D1.3: an interactive Claude gets `--name <name>` (naming), the island's New session too.
-    static func newSessionArgs(folder: String, command: [String], taken: Set<String>, name: String? = nil) -> [String] {
+    /// #2063: `group`, the form's chosen group: `--group <group>` (dch 1.196.0, local only); nil, placed by pattern.
+    static func newSessionArgs(folder: String, command: [String], taken: Set<String>, name: String? = nil,
+                               group: String? = nil) -> [String] {
         let n = name ?? freeName(sessionName(folder: folder), taken: taken)
-        return ["--spawn", n, "--"] + naming(command, name: n)
+        return ["--spawn", n] + (group.map { ["--group", $0] } ?? []) + ["--"] + naming(command, name: n)
     }
 
     /// #847: the names a new session in `dir` must not take: its live sessions' and its records'.
@@ -1585,6 +1587,8 @@ extension AgentIsland {
     /// the last "dch: <name>: " line says why; else the last line.
     static func spawnText(_ r: DchActionResult, name: String) -> String? {
         if r.status == 0 { return nil }
+        // #2063: `dch: --group: no group <g> in the config (no_group)`: the picked group went meanwhile; nothing spawned.
+        if r.text.contains(where: { $0.hasSuffix("(no_group)") }) { return "New session failed: " + noGroupText }
         let line = r.text.last { $0.hasPrefix("dch: \(name): ") } ?? r.line
         return line.isEmpty ? "New session failed (exit \(r.status))" : "New session failed: \(line)"
     }

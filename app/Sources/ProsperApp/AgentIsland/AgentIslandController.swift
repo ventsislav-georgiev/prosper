@@ -1424,7 +1424,7 @@ final class AgentIslandController {
     /// refuses, a bad name, the key busy); else the session's key, and `done` later gets the key on
     /// success or the failure text, which also goes to the dir-wide line.
     @discardableResult
-    func spawn(in folder: String, command: [String], name: String? = nil,
+    func spawn(in folder: String, command: [String], name: String? = nil, group: String? = nil,
                done: (@MainActor @Sendable (AgentSessionKey?, String?) -> Void)? = nil) -> AgentSessionKey? {
         guard let store, case .ok(let dch) = store.resumeGate else { return nil }
         let dir = spawnDir()
@@ -1434,13 +1434,13 @@ final class AgentIslandController {
         let taken = AgentIsland.spawnTaken(dir: dir, sessions: store.sessions, history: store.history)
         // QA #713 INFO-3: the island's automatic name fits dch's room in `dir` too.
         let args = AgentIsland.newSessionArgs(folder: folder, command: command, taken: taken,
-                                              name: name ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: dir))
+                                              name: name ?? AgentNewSession.autoName(folder: folder, taken: taken, dir: dir), group: group)
         let key = AgentSessionKey(dir: dir, name: args[1])
         // #2009: the argv contributors run on the runner's queue, under the job's hold; none: the args as built.
         let argvContributors = sessionArgvContributors()
         let prepare: (@Sendable () -> (args: [String]?, out: Data))? = argvContributors.isEmpty ? nil : { @Sendable () -> (args: [String]?, out: Data) in
             (AgentIsland.newSessionArgs(folder: folder, command: argvContributors.reduce(command) { $1($0) }, taken: taken,
-                                        name: key.name), Data())
+                                        name: key.name, group: group), Data())
         }
         let started = run(key, dch: dch, args: args, running: nil, cwd: folder, spawn: command, prepare: prepare) { [weak self] r in
             guard let store = self?.store else { return }

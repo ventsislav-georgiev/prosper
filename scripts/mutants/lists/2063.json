@@ -1,0 +1,118 @@
+{
+ "entry": "2063",
+ "filter": "AgentSessionGroupMoveTests|AgentWindowSidebarMenuTests",
+ "mutants": [
+  {
+   "name": "argv-no-group",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "return [\"--spawn\", n] + (group.map { [\"--group\", $0] } ?? []) + [\"--\"]",
+   "new": "return [\"--spawn\", n] + [\"--\"]",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testNewSessionArgsCarryGroupOnlyWhenOneIsChosen"
+  },
+  {
+   "name": "spawntext-no-nogroup",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "if r.text.contains(where: { $0.hasSuffix(\"(no_group)\") }) {",
+   "new": "if false, r.text.isEmpty {",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testSpawnTextSaysTheGroupNoLongerExists"
+  },
+  {
+   "name": "pattern-group-first",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "return split([s], groups: groups).groups.first { !$0.sessions.isEmpty }?.group",
+   "new": "return groups.first",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAutomaticLabelNamesThePatternGroupOfTheTypedName"
+  },
+  {
+   "name": "auto-not-recomputed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if newSession?.autoGroup != auto { newSession?.autoGroup = auto }",
+   "new": "_ = auto",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
+  },
+  {
+   "name": "glue-drops-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "name: $2, group: self?.newSessionGroupArg, done: $3)",
+   "new": "name: $2, group: nil, done: $3)",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
+  },
+  {
+   "name": "arg-ignores-host",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let g = newSession?.group, AgentIsland.passable(g), newSession?.host == nil, let store,",
+   "new": "guard let g = newSession?.group, AgentIsland.passable(g), let store,",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
+  },
+  {
+   "name": "arg-ignores-dch",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return nil }\n        return g",
+   "new": "store.controlDch != nil else { return nil }\n        return g",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
+  },
+  {
+   "name": "picker-ignores-host",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "guard let store, newSession != nil, newSession?.host == nil else { return [] }",
+   "new": "guard let store, newSession != nil else { return [] }",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
+  },
+  {
+   "name": "choices-ignore-dch",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "guard store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }\n        return store.sessionGroups",
+   "new": "guard store.controlDch != nil else { return [] }\n        return store.sessionGroups",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn|AgentWindowSidebarMenuTests/testGroupMenuNewSessionHereIsGatedAsTheFormsPicker"
+  },
+  {
+   "name": "choices-keep-off",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "filter { !$0.isOff && AgentIsland.passable($0.name) }",
+   "new": "filter { AgentIsland.passable($0.name) }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuNewSessionHereIsGatedAsTheFormsPicker"
+  },
+  {
+   "name": "choices-keep-dash",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
+   "old": "filter { !$0.isOff && AgentIsland.passable($0.name) }",
+   "new": "filter { !$0.isOff }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuNewSessionHereIsGatedAsTheFormsPicker"
+  },
+  {
+   "name": "here-always",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "AgentNewSession.groupChoices(store).contains { $0.id == group.id }\n            ?",
+   "new": "true\n            ?",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuNewSessionHereIsGatedAsTheFormsPicker"
+  },
+  {
+   "name": "here-opens-automatic",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if case .newSessionInGroup(let g) = v { return openNewSession(group: g) }",
+   "new": "if case .newSessionInGroup = v { return openNewSession() }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testNewSessionHereOpensTheFormWithTheGroupChosen"
+  },
+  {
+   "name": "open-form-ignores-group",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "            if let group { setNewSessionGroup(group) }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testNewSessionHereOpensTheFormWithTheGroupChosen"
+  }
+ ]
+}

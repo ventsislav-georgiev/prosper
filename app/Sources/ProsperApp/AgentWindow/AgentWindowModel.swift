@@ -1212,6 +1212,7 @@ final class AgentWindowModel: ObservableObject {
     /// #2060: a group header's "\u{22EF}" item: the island's ask scoped to the group's rows.
     func runGroup(_ v: AgentSidebarVerb, name: String, rows: [AgentSession]) {
         // #2061: Colour ▸ stores the pick (nil: Automatic) as Settings saves the list; the island regroups and rewrites dch's lines.
+        if case .newSessionInGroup(let g) = v { return openNewSession(group: g) }   // #2063
         if case .groupColor(let hex) = v {
             var list = storedGroups()
             guard let i = list.firstIndex(where: { $0.name == name }), list[i].color != hex else { return }
@@ -2725,7 +2726,7 @@ final class AgentWindowModel: ObservableObject {
     /// The island's one --spawn (its gate, runner key, env and failure line).
     lazy var spawnSession: (_ folder: String, _ command: [String], _ name: String?,
                             _ done: @escaping @MainActor @Sendable (AgentSessionKey?, String?) -> Void) -> AgentSessionKey? = {
-        [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, done: $3)
+        [weak self] in self?.island().spawn(in: $0, command: $1, name: $2, group: self?.newSessionGroupArg, done: $3)
     }
     /// #847 D3.7: a first message into a started session, then `then`: the island controller's sayFirst (#1369).
     /// #1370 (R1369 rider): a failure seeds the draft at once when that session is the selected one (follow() seeds
@@ -2748,9 +2749,13 @@ final class AgentWindowModel: ObservableObject {
 
     /// ⌘N, +, the empty state's pill: the form, prefilled (last folder > the selected session's cwd > ~,
     /// no name: #1731 it is typed, the island's command setting, else its inference). Open already: its Name field.
-    func openNewSession(folder: String? = nil) {
+    /// #2063: `group`, a group header's New session here: the form's Group picker opens on it (an open form takes it too).
+    func openNewSession(folder: String? = nil, group: String? = nil) {
         newSessionFocus += 1
-        guard newSession == nil || launchKey != nil else { return }   // #2058: over a started pane, a new form
+        guard newSession == nil || launchKey != nil else {   // #2058: over a started pane, a new form
+            if let group { setNewSessionGroup(group) }
+            return
+        }
         guard store?.resumeGate.isOK == true else {   // R2 F2: the one gate check for ⌘N, + and the pill
             store?.resumeGate.refusal.map { sayOnDirLine("Controls \($0)", until: .gate) }   // #887: Command-N says why too
             return
@@ -2763,6 +2768,7 @@ final class AgentWindowModel: ObservableObject {
         newSession = AgentNewSessionForm(folder: AgentNewSession.abbreviate(folder ?? newSessionDefaultFolder, home: home),
                                          command: typed.isEmpty ? "claude" : typed,
                                          prompt: lastPrompt)   // #847 D2.4
+        newSession?.group = group
         follow()   // P1b: the form covers the pane, so the terminal detaches (its view leaves the window)
         guard typed.isEmpty else { return }
         island().newSessionCommand { [weak self] argv in
@@ -2802,6 +2808,9 @@ final class AgentWindowModel: ObservableObject {
     func setNewSessionName(_ s: String) {
         newSession?.name = s
         newSession?.nameEdited = !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // #2063: Automatic's group, on a name change only (split's rule and its compiled-pattern cache).
+        let auto = AgentIsland.patternGroup(newSessionName, groups: store?.sessionGroups ?? [])?.name
+        if newSession?.autoGroup != auto { newSession?.autoGroup = auto }
     }
 
     func setNewSessionCommand(_ s: String) { newSession?.command = s }
@@ -2885,6 +2894,28 @@ final class AgentWindowModel: ObservableObject {
         // R2-1: the name the open form is starting is not taken for that form (its claim, or a poll listing it early).
         return AgentIsland.spawnTaken(dir: island().spawnDir(), sessions: store.sessions, history: store.history)
             .union(claimed.filter { t - $0.value <= Self.spawnSlack }.keys).filter { $0.lowercased() != own }
+    }
+
+    // MARK: #2063 Group picker
+
+    /// The picker's groups: AgentNewSession.groupChoices on this Mac only (dch takes no --group with --host). Empty: no picker.
+    var newSessionGroups: [SessionGroup] {
+        guard let store, newSession != nil, newSession?.host == nil else { return [] }
+        return AgentNewSession.groupChoices(store)
+    }
+
+    /// The picker: nil is Automatic. Off while a Start runs.
+    func setNewSessionGroup(_ g: String?) {
+        guard newSession != nil, newSession?.starting == nil, newSession?.group != g else { return }
+        newSession?.group = g
+    }
+
+    /// What a local Start sends as `--group`: the chosen group under the picker's gate (this Mac, dch 1.196.0), never a
+    /// name dch would read as a flag. A group deleted since it was chosen still goes: dch's no_group says so (spawnText).
+    var newSessionGroupArg: String? {
+        guard let g = newSession?.group, AgentIsland.passable(g), newSession?.host == nil, let store,
+              store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return nil }
+        return g
     }
 
     // MARK: #1323 New session on another Mac

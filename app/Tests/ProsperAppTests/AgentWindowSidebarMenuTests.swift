@@ -661,4 +661,48 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(saves, 2)
         XCTAssertEqual(rec.args.count, 0, "nothing ran")
     }
+
+    // MARK: #2063: a group's New session here
+
+    /// With dch 1.196.0 a stored group's menu has New session here… between the actions and Colour ▸, its verb naming the
+    /// group; not for a name that is no stored group (Sessions), a blank Sidekicks (isOff), a flag-like name or an older dch.
+    @MainActor
+    func testGroupMenuNewSessionHereIsGatedAsTheFormsPicker() throws {
+        let st = groupedStore()
+        st.controlDch = bin([1, 196, 0])
+        let rows = try groupRows(st, "qa")
+        let menu = AgentWindowControls.groupMenu(store: st, rows: rows, name: "QA")
+        XCTAssertEqual(titles(menu).suffix(3), ["-", AgentWindowControls.newSessionHereLabel, AgentWindowControls.colourLabel])
+        let here = menu.dropLast().last
+        XCTAssertEqual(here, .item(AgentWindowControls.newSessionHereLabel, enabled: true, checked: nil, verb: .newSessionInGroup("QA")))
+        XCTAssertEqual(here?.symbol, AgentMenuSymbol.newSession)
+        XCTAssertFalse(titles(AgentWindowControls.groupMenu(store: st, rows: rows, name: "Sessions")).contains(AgentWindowControls.newSessionHereLabel),
+                       "not a stored group")
+        st.sessionGroups[0] = SessionGroup(id: SessionGroup.sidekicksID, name: "QA", pattern: "")
+        XCTAssertFalse(titles(AgentWindowControls.groupMenu(store: st, rows: rows, name: "QA")).contains(AgentWindowControls.newSessionHereLabel),
+                       "a blank Sidekicks (isOff)")
+        st.sessionGroups[0] = SessionGroup(id: "qa", name: "-qa", pattern: "-qa$")
+        XCTAssertFalse(titles(AgentWindowControls.groupMenu(store: st, rows: rows, name: "-qa")).contains(AgentWindowControls.newSessionHereLabel),
+                       "a name dch would read as a flag")
+        st.sessionGroups[0] = SessionGroup(id: "qa", name: "QA", pattern: "-qa$")
+        st.controlDch = bin([1, 195, 9])
+        XCTAssertFalse(titles(AgentWindowControls.groupMenu(store: st, rows: rows, name: "QA")).contains(AgentWindowControls.newSessionHereLabel),
+                       "an older dch")
+    }
+
+    /// New session here opens the form with that group chosen (not Automatic); on an open form it chooses the group.
+    @MainActor
+    func testNewSessionHereOpensTheFormWithTheGroupChosen() throws {
+        let st = groupedStore()
+        st.controlDch = bin([1, 196, 0])
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        let rows = try groupRows(st, "qa")
+        m.runGroup(.newSessionInGroup("QA"), name: "QA", rows: rows)
+        XCTAssertEqual(m.newSession?.group, "QA")
+        XCTAssertEqual(m.newSessionGroups.map(\.name), ["QA", "Docs", "Empty"])
+        m.runGroup(.newSessionInGroup("Docs"), name: "Docs", rows: rows)
+        XCTAssertEqual(m.newSession?.group, "Docs")
+        XCTAssertEqual(rec.args.count, 0, "nothing ran")
+    }
 }

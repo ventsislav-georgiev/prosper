@@ -32,6 +32,10 @@ struct AgentNewSessionForm: Equatable {
     /// #1836: pastes still being encoded (Start waits for them), and the line a paste left (failed, skipped, refused).
     var pasting = 0
     var imageNote: String?
+    /// #2063: the Group picker's choice, a group's name; nil: Automatic (no --group, dch places it by pattern).
+    var group: String?
+    /// #2063: the group the typed name lands in by pattern (AgentIsland.patternGroup), set on a name change; nil: Sessions.
+    var autoGroup: String?
 }
 
 /// #1822: an image pasted into the New session prompt: written as a PNG to a Prosper-owned cache dir, its absolute
@@ -354,6 +358,20 @@ enum AgentNewSession {
             .prefix(AgentIsland.recentFoldersMax))
     }
 
+    // MARK: #2063 Group
+
+    static let groupLabel = "Group"
+    /// The picker's first item: where the typed name lands by pattern.
+    static func automaticLabel(_ group: String?) -> String { "Automatic (\(group ?? "Sessions"))" }
+
+    /// The groups a new session can be put in: the store's (stored order, not isOff, none while Group tabs is off), with a
+    /// name dch would not read as a flag. Empty below dch 1.196.0 (no `--spawn --group`): no picker, no New session here.
+    @MainActor
+    static func groupChoices(_ store: AgentIslandStore) -> [SessionGroup] {
+        guard store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }
+        return store.sessionGroups.filter { !$0.isOff && AgentIsland.passable($0.name) }
+    }
+
     // MARK: #1323 on another Mac
 
     /// dch #114 (de271c3, first in v1.41.0): `--spawn host:name` with `--cwd` on the host.
@@ -511,6 +529,27 @@ struct AgentNewSessionView: View {
                 TextField("Optional for a shell: the folder's name", text: Binding(get: { form.nameFieldText }, set: { model.setNewSessionName($0) }))
                     .focused($focus, equals: .name)
                     .accessibilityLabel("Name")
+            }
+            // #2063: hidden (as the On picker is) on another Mac, below dch 1.196.0, or with no group to pick.
+            let groups = model.newSessionGroups
+            if !groups.isEmpty {
+                field(AgentNewSession.groupLabel, error: nil) {
+                    Picker(AgentNewSession.groupLabel, selection: Binding(get: { form.group }, set: { model.setNewSessionGroup($0) })) {
+                        Text(verbatim: AgentNewSession.automaticLabel(form.autoGroup)).tag(String?.none)
+                        ForEach(groups) { g in
+                            Label {
+                                Text(verbatim: g.name)
+                            } icon: {
+                                if let c = model.groupColors[g.id].flatMap({ Color(hex: $0) }).flatMap({ NSColor($0).usingColorSpace(.sRGB) }) {
+                                    Image(nsImage: AgentSidebarMenuEntries.swatch(c))
+                                }
+                            }
+                            .tag(Optional(g.name))
+                        }
+                    }
+                    .labelsHidden().pickerStyle(.menu).fixedSize()
+                    .accessibilityLabel(AgentNewSession.groupLabel)
+                }
             }
             field("Command", error: nil) {
                 VStack(alignment: .leading, spacing: sz(4)) {

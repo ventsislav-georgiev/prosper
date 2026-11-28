@@ -138,6 +138,9 @@ tag from the now-released section and put it on the new top draft.
 - Session groups now each get their own colour, shown as a bolder bar and a line under the group's
   header in the Agent Sessions sidebar (and on dch's picker tab); pick a different one from the
   group's ••• menu under Colour, or go back to Automatic. (#2061)
+- The New session form has a Group picker: Automatic shows which group the name you type lands in,
+  or you pick a group yourself; a group's ••• menu has "New session here…", which opens the form
+  with that group already chosen (#2063)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session
