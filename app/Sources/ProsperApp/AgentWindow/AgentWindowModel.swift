@@ -1272,6 +1272,14 @@ final class AgentWindowModel: ObservableObject {
         }
     }
 
+    /// #2070 n7: the field lost the keys (a click in the terminal, Tab): it ends as Cancel, as the rename fields end on
+    /// the focus leaving (AgentLayoutNameField, AgentRenameField); the keys stay where they went.
+    func newGroupLeft() {
+        guard newGroup != nil else { return }
+        newGroupKeys = nil
+        endNewGroup()
+    }
+
     /// #2062 r3: the field goes; the keys go back where they were (the window itself: no view has them).
     private func endNewGroup() {
         newGroup = nil

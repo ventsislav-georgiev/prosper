@@ -623,7 +623,10 @@ extension AgentWindowControls {
               store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }
         let manual = SessionGroup.nameKey(s.groupManual ?? "")
         let groups: [AgentSidebarMenuEntry] = store.sessionGroups.map {
-            .item($0.name, enabled: true, checked: !manual.isEmpty && SessionGroup.nameKey($0.name) == manual, verb: .moveToGroup($0.name))
+            // #2070 n5: a name dch reads as a flag (stored through Settings before it refused one) is off with the reason.
+            let ok = AgentIsland.passable($0.name)
+            return .item(ok ? $0.name : "\($0.name) (\(AgentIsland.dashNameText))", enabled: ok,
+                         checked: !manual.isEmpty && SessionGroup.nameKey($0.name) == manual, verb: .moveToGroup($0.name))
         }
         return [.submenu(AgentIsland.moveToGroupLabel, enabled: true, groups + (groups.isEmpty ? [] : [.divider]) + [
             .item(AgentIsland.automaticGroupLabel, enabled: true, checked: manual.isEmpty, verb: .moveToGroup(nil)),
@@ -632,7 +635,9 @@ extension AgentWindowControls {
     }
 
     /// #2062: New group…'s name: nil when it can be added, else why not (Settings' words, the same rules).
-    static func newGroupRefusal(_ name: String, stored: [SessionGroup]) -> String? {
+    /// #2070 n8: a blank legacy Sidekicks (isOff: no tab, no line) is not counted and does not hold its name.
+    static func newGroupRefusal(_ name: String, stored all: [SessionGroup]) -> String? {
+        let stored = all.filter { !$0.isOff }
         if stored.count >= SessionGroup.maxCount { return AgentIsland.groupsFullText }
         if SessionGroup.isReserved(name) { return "dch uses this name for its own tab" }
         guard SessionGroup.validName(name) else { return "A name is 1-32 bytes, without \"=\"" }
@@ -647,6 +652,14 @@ extension AgentWindowControls {
     static func addingGroup(_ name: String, to stored: [SessionGroup]) -> Result<[SessionGroup], NewGroupRefused> {
         let name = name.trimmingCharacters(in: .whitespaces)
         if let why = newGroupRefusal(name, stored: stored) { return .failure(NewGroupRefused(reason: why)) }
+        // #2070 n8: normalized keeps the first of a name and the first maxCount, so a blank Sidekicks (isOff, "no split")
+        // left in would drop the new group; it goes when the new one takes its name or would be the 9th. Else it stays
+        // (it is 0x2d's pointer, Preferences.legacyIndex).
+        var stored = stored
+        if let i = stored.firstIndex(where: \.isOff),
+           SessionGroup.nameKey(stored[i].name) == SessionGroup.nameKey(name) || stored.count >= SessionGroup.maxCount {
+            stored.remove(at: i)
+        }
         return .success(stored + [SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: "")])
     }
     struct NewGroupRefused: Error, Equatable { let reason: String }
@@ -1086,7 +1099,8 @@ struct AgentNewGroupStrip: View {
                                 text: Binding(get: { model.newGroup?.name ?? "" },
                                               set: { model.newGroup?.name = $0; model.newGroup?.refused = nil }),
                                 onSubmit: { model.answerNewGroup(true) }, fontSize: 11.5, focusOnAppear: true,
-                                onCancel: { model.answerNewGroup(false) }, onFocus: { model.newGroupTookKeys($0) })
+                                onCancel: { model.answerNewGroup(false) }, onEndEditing: { model.newGroupLeft() },
+                                onFocus: { model.newGroupTookKeys($0) })
                     .accessibilityLabel("Group name")
                 if let why = ask.refused {
                     Text(verbatim: why).font(Neon.font(11)).foregroundStyle(Neon.textSecondary)

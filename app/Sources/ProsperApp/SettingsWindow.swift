@@ -1322,6 +1322,10 @@ struct SessionGroupsEditor: Equatable {
         return n.isEmpty ? "Group \((rows.firstIndex { $0.id == g.id } ?? rows.count) + 1)" : n
     }
 
+    /// #2070 n5: a name dch reads as a flag is not saved (New group…'s rule); not in validName, which filters the stored
+    /// list: a stored "-x" stays stored (and off in Move to group).
+    private static func passable(_ name: String) -> Bool { AgentIsland.passable(name.trimmingCharacters(in: .whitespaces)) }
+
     private func patternReason(_ g: SessionGroup) -> String? {
         let p = g.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         // #2062 (dch #721): a manual-only group, saved; a blank Sidekicks is off, not saved, as before #2062.
@@ -1343,7 +1347,7 @@ struct SessionGroupsEditor: Equatable {
     /// judged against that name, not the edited one (else a row normalized() drops would show no reason); each row
     /// that joins moves its own name to the stored one, so this repeats until none joins.
     private func unsavedIDs(stored st: [SessionGroup]) -> (own: Set<String>, all: Set<String>) {
-        let own = Set(rows.filter { !SessionGroup.validName($0.name) || patternReason($0) != nil }.map(\.id))
+        let own = Set(rows.filter { !SessionGroup.validName($0.name) || !Self.passable($0.name) || patternReason($0) != nil }.map(\.id))
         var all = own
         while true {
             let keys = rows.map { r in (r.id, all.contains(r.id) ? stored(r.id, in: st).map { SessionGroup.nameKey($0.name) } : SessionGroup.nameKey(r.name)) }
@@ -1360,6 +1364,7 @@ struct SessionGroupsEditor: Equatable {
     func reason(_ g: SessionGroup, stored st: [SessionGroup] = Preferences.agentIslandSessionGroups) -> String? {
         if SessionGroup.isReserved(g.name) { return "dch uses this name for its own tab: not saved" }
         guard SessionGroup.validName(g.name) else { return "A name is 1-32 bytes, without \"=\": not saved" }
+        guard Self.passable(g.name) else { return "\(AgentIsland.dashNameText): not saved" }
         let u = unsavedIDs(stored: st)
         if u.all.contains(g.id) && !u.own.contains(g.id) { return "Another group has this name: not saved" }
         return patternReason(g)

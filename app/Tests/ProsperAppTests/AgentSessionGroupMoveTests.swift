@@ -258,7 +258,8 @@ final class AgentSessionGroupMoveTests: XCTestCase {
     /// The groups list and the tabs in the XCTest store (never the operator's defaults), put back after the row.
     func useGroups(_ list: [SessionGroup]) {
         let keys = ["agentIslandSidekickTabs", "agentIslandSessionGroups", "agentIslandSessionGroupsUpdated",
-                    "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandDchGroupsAdoptChecked"]
+                    "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated", "agentIslandDchGroupsAdoptChecked",
+                    "agentIslandSessionGroupAutoColors"]   // #2070: a row's Automatic colours never reach the next row
         let saved = keys.map { Preferences.defaults.object(forKey: $0) }
         addTeardownBlock {
             for (k, v) in zip(keys, saved) {
@@ -485,5 +486,98 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         XCTAssertTrue(AgentIsland.isGroupSetFailure(AgentIsland.manualNoGroupText), "a move that works drops it")
         let gone = DchActionResult(status: 1, json: [DchJSONLine(name: "api", result: "failed", reason: "no_session")])
         XCTAssertEqual(AgentIsland.groupSetFailure(gone, manual: true), "That session is no longer running")
+    }
+
+    // MARK: - #2070: the field ends on focus loss, a stored "-x" group, a blank legacy Sidekicks
+
+    /// n7: a click elsewhere (the field loses the keys) ends New group… as Cancel does, as the rename fields end: nothing
+    /// stored, the chords back, and the keys stay where the click put them (not handed back to the terminal). Offscreen.
+    @MainActor
+    func testTheNewGroupFieldEndsAsCancelWhenItLosesTheKeys() throws {
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
+        m.runtimes.values.forEach(m.onNewRuntime)
+        var stored = [work]
+        m.storedGroups = { stored }
+        m.saveGroups = { stored = $0 }
+        m.setGroup = { _, _, _ in XCTFail("nothing moves") }
+        let win = AgentsNSWindow(contentRect: .init(x: 0, y: 0, width: 320, height: 200), styleMask: [.titled],
+                                 backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.model = m
+        defer { win.close() }
+        let root = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        let terminal = KeyRecorder(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
+        let other = KeyRecorder(frame: CGRect(x: 10, y: 0, width: 10, height: 10))
+        let host = NSHostingView(rootView: AgentNewGroupStrip(model: m))
+        host.frame = CGRect(x: 0, y: 20, width: 320, height: 180)
+        for v in [terminal, other, host] as [NSView] { root.addSubview(v) }
+        win.contentView = root
+        func spin() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        for (clicked, name) in [(terminal, "Ops"), (other, "")] {
+            XCTAssertTrue(win.makeFirstResponder(terminal), "premise: the terminal has the keys")
+            m.runMove(.newGroup, session("api", group: ""))
+            spin()
+            let f = try XCTUnwrap(fields(host).first { $0.placeholderString == "Group name" }, "the field is up")
+            XCTAssertTrue(win.firstResponder === f.currentEditor(), "the field has the keys")
+            m.newGroup?.name = name
+            XCTAssertTrue(win.makeFirstResponder(clicked), "the click")
+            XCTAssertTrue(m.newGroup == nil, "focus loss ends the field (\(name))")
+            XCTAssertFalse(m.typingName, "the chords are back")
+            XCTAssertTrue(win.firstResponder === clicked, "the keys stay where the click put them")
+            spin()
+            XCTAssertTrue(fields(host).isEmpty, "the field is gone")
+        }
+        XCTAssertEqual(stored, [work], "Cancel's rule: a typed name is not stored")
+        XCTAssertFalse(win.isVisible, "never shown")
+    }
+
+    /// n5: a "-x" group stored through Settings is listed in Move to group but off, its reason in the title (the
+    /// menu's form); the Settings editor refuses a leading "-" with the same words and keeps a stored "-x" as stored.
+    @MainActor
+    func testAFlagLikeStoredGroupIsOffInMoveToGroupAndTheEditorRefusesIt() {
+        let dash = SessionGroup(id: "d1", name: "-x", pattern: "")
+        let s = session("api", group: ""), st = store([s])
+        st.sessionGroups = [work, dash]
+        XCTAssertEqual(items(AgentWindowControls.moveToGroupMenu(s, store: st)).prefix(2), [
+            .item("Work", enabled: true, checked: false, verb: .moveToGroup("Work")),
+            .item("-x (\(AgentIsland.dashNameText))", enabled: false, checked: false, verb: .moveToGroup("-x")),
+        ])
+        let spaced = SessionGroup(id: "d2", name: " -y", pattern: "")
+        let e = SessionGroupsEditor([work, dash, spaced])
+        XCTAssertEqual(e.reason(dash, stored: []), "\(AgentIsland.dashNameText): not saved")
+        XCTAssertEqual(e.reason(spaced, stored: []), "\(AgentIsland.dashNameText): not saved", "trimmed first")
+        XCTAssertTrue(e.reason(work, stored: []) == nil)
+        XCTAssertEqual(e.saved(stored: []), [work], "a new \"-x\" is not saved")
+        XCTAssertEqual(e.saved(stored: [work, dash]), [work, dash], "a stored one stays stored (validName unchanged)")
+    }
+
+    /// n8: a blank legacy Sidekicks (isOff) is not counted and does not hold its name: 8 visible groups can be added
+    /// beside it and "Sidekicks" is a new manual group, which replaces it in the saved list; any other add keeps it.
+    @MainActor
+    func testABlankLegacySidekicksNeitherCountsNorHoldsItsName() {
+        let off = SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: " ")
+        XCTAssertTrue(AgentWindowControls.newGroupRefusal("sidekicks", stored: [off, work]) == nil, "not a duplicate")
+        guard case .success(let named) = AgentWindowControls.addingGroup("Sidekicks", to: [off, work]) else { return XCTFail("added") }
+        let kept = SessionGroup.normalized(named)
+        XCTAssertEqual(kept.map(\.name), ["Work", "Sidekicks"])
+        XCTAssertTrue(kept.last?.isManual == true && kept.last?.id != SessionGroup.sidekicksID, "the new manual group survives")
+        guard case .success(let other) = AgentWindowControls.addingGroup("Ops", to: [off, work]) else { return XCTFail("added") }
+        XCTAssertEqual(other.map(\.id).prefix(2), [SessionGroup.sidekicksID, "w1"], "another name: the blank one stays")
+        let seven = (1...7).map { SessionGroup(id: "g\($0)", name: "G\($0)", pattern: "p\($0)") }
+        guard case .success(let eight) = AgentWindowControls.addingGroup("Eighth", to: [off] + seven) else { return XCTFail("8th") }
+        XCTAssertEqual(SessionGroup.normalized(eight).map(\.name), seven.map(\.name) + ["Eighth"], "the blank one goes, never a visible one")
+        XCTAssertEqual(AgentWindowControls.newGroupRefusal("Ninth", stored: eight), AgentIsland.groupsFullText)
+        useGroups([off, work])
+        let s = session("api", group: ""), st = store([s]), c = controller(st, Launches())
+        c.rowDetailsChanged()
+        XCTAssertEqual(st.storedGroupCount, 1, "the blank Sidekicks is not counted")
     }
 }

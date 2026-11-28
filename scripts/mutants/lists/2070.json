@@ -1,0 +1,70 @@
+{
+ "entry": "2070",
+ "filter": "AgentSessionGroupMoveTests/testABlankLegacySidekicksNeitherCountsNorHoldsItsName|AgentSessionGroupMoveTests/testAFlagLikeStoredGroupIsOffInMoveToGroupAndTheEditorRefusesIt|AgentSessionGroupMoveTests/testTheNewGroupFieldEndsAsCancelWhenItLosesTheKeys|DchConfigWriterTests/testAdoptableKeepsWhatDchKeepsAndStopsAtEight",
+ "mutants": [
+  {
+   "name": "strip-no-end-editing",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "onCancel: { model.answerNewGroup(false) }, onEndEditing: { model.newGroupLeft() },",
+   "new": "onCancel: { model.answerNewGroup(false) },",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testTheNewGroupFieldEndsAsCancelWhenItLosesTheKeys"
+  },
+  {
+   "name": "dash-group-enabled",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "let ok = AgentIsland.passable($0.name)",
+   "new": "let ok = true",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAFlagLikeStoredGroupIsOffInMoveToGroupAndTheEditorRefusesIt"
+  },
+  {
+   "name": "editor-dash-no-reason",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "guard Self.passable(g.name) else",
+   "new": "guard true else",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAFlagLikeStoredGroupIsOffInMoveToGroupAndTheEditorRefusesIt"
+  },
+  {
+   "name": "editor-dash-saved",
+   "file": "app/Sources/ProsperApp/SettingsWindow.swift",
+   "old": "|| !Self.passable($0.name) ||",
+   "new": "||",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testAFlagLikeStoredGroupIsOffInMoveToGroupAndTheEditorRefusesIt"
+  },
+  {
+   "name": "adopt-bad-regex",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "guard !p.isEmpty || raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }",
+   "new": "guard !p.isEmpty || true else { return nil }",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testAdoptableKeepsWhatDchKeepsAndStopsAtEight"
+  },
+  {
+   "name": "isoff-counted",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "store.storedGroupCount = Preferences.agentIslandSessionGroups.filter { !$0.isOff }.count",
+   "new": "store.storedGroupCount = Preferences.agentIslandSessionGroups.count",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testABlankLegacySidekicksNeitherCountsNorHoldsItsName"
+  },
+  {
+   "name": "isoff-holds-name",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "let stored = all.filter { !$0.isOff }",
+   "new": "let stored = all",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testABlankLegacySidekicksNeitherCountsNorHoldsItsName"
+  },
+  {
+   "name": "isoff-kept-on-add",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "if let i = stored.firstIndex(where: \\.isOff),",
+   "new": "if let i = stored.firstIndex(where: { _ in false }),",
+   "expect": "killed",
+   "filter": "AgentSessionGroupMoveTests/testABlankLegacySidekicksNeitherCountsNorHoldsItsName"
+  }
+ ]
+}

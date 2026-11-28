@@ -339,7 +339,7 @@ final class AgentIslandController {
                                  sort: Preferences.agentIslandSort)
         store?.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
         store?.sessionGroups = Self.groups
-        store?.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
+        store?.storedGroupCount = Preferences.agentIslandSessionGroups.filter { !$0.isOff }.count   // #2062, #2070 n8
         store?.groupTabs = Preferences.agentIslandSidekickTabs
         onStoreChanged?()
         let poller = makePoller(), hidden = screen.hidden
@@ -449,7 +449,7 @@ final class AgentIslandController {
         store.sort = Preferences.agentIslandSort
         store.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
         store.sessionGroups = Self.groups
-        store.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
+        store.storedGroupCount = Preferences.agentIslandSessionGroups.filter { !$0.isOff }.count   // #2062, #2070 n8
         store.groupTabs = Preferences.agentIslandSidekickTabs
         refreshCards()
         layout()
