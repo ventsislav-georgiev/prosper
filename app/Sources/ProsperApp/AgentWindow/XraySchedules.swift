@@ -175,7 +175,7 @@ extension XrayPanelView {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(zip(XrayScrollAnchor.unique(rows.map { "s:" + $0.id }), rows).map { ($0, $1) }, id: \.0) { id, r in
-                        XrayScheduleRowView(row: r).modifier(XrayScrollRow(panel: panel, id: id))
+                        XrayScheduleRowView(row: r).modifier(XrayScrollRow(panel: panel, id: id, tab: .schedules))
                     }
                 }
                 .scrollTargetLayout()

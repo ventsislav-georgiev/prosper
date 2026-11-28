@@ -143,7 +143,7 @@ final class AgentPanePerfTests: XCTestCase {
         XrayPanels.chaptersRead = XrayPanels.fromDch
         XrayPanels.keepRows = { false }
         let win = AgentsWindow.makeWindow(m, autosave: nil)
-        defer { XrayPanels.shared.open = [:]; win.contentViewController = nil }
+        defer { XrayPanels.shared.open = [:]; win.contentViewController = nil; win.close() }   // QA R2077 n1: close it too
         XrayPanels.window = { [weak win] _ in win }
         win.setContentSize(NSSize(width: 1600, height: 900))
         let v = try XCTUnwrap(win.contentView)
@@ -255,7 +255,7 @@ final class AgentPanePerfTests: XCTestCase {
         let host = NSHostingView(rootView: Themed(keepsViews: true) { XrayPanelView(panel: p) })
         host.frame = CGRect(x: 0, y: 0, width: 440, height: 860)
         win.contentView = host
-        defer { win.contentView = nil; p.stop() }
+        defer { win.contentView = nil; win.close(); p.stop() }   // QA R2077 n1
         settle(host)
         let tabs = p.tabs
         measure("xray.tab alone (drawer view only)", host) { i in p.select(tabs[(i + 1) % tabs.count]) }

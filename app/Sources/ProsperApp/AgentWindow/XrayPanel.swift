@@ -280,7 +280,7 @@ final class XrayPanelModel: ObservableObject {
     var schedulesClock: Int?
     var schedulesRedraws = 0
     /// #1389: Prompts and Responses from dch's chapters (Terminal mode, remote); nil: none (not read, exit not 0, bad JSON).
-    @Published var dchChapters: [TranscriptOutline.Chapter]?
+    @Published var dchChapters: [TranscriptOutline.Chapter]? { didSet { promptMemo = nil } }   // #2090
     /// #1566: the corpus fields of the same read or snapshot (the header's second line); nil: none said.
     @Published var corpus: XrayChapters.Corpus?
     /// #1415: the refs of dch's `--json` read (gate A on only); nil: none read. "Show all kinds" (dch `a`).
@@ -312,14 +312,18 @@ final class XrayPanelModel: ObservableObject {
     @Published var searchGone: String?
     @Published private(set) var loaded = false
     @Published var tab: XrayTab {
-        didSet { if tab != oldValue { topRow = nil } }   // #1972: another tab's list starts at its top
+        // #1972: another tab's list starts at its top; #2090: a kept list (keptTabs) is told so by listGen
+        didSet { if tab != oldValue { topRow = nil; listGen &+= 1; visitedTabs.insert(tab) } }
     }
+    /// #2090: the tabs shown since this panel opened; their lists stay built (keptTabs), so a switch shows one.
+    private(set) var visitedTabs: Set<XrayTab> = []
     /// #1972 (operator 2026-11-26, "Keep scroll anchored"): the id of the top row the person sees in the shown tab's list
     /// (#1979: the row at the top edge writes it while they scroll, XrayScrollRow; not published: a scroll redraws nothing).
     var topRow: String?
     /// #1979: the points scrolled past topRow's top (its row's geometry writes it, XrayScrollRow; unpublished as topRow).
     var topOffset: CGFloat = 0
-    /// #1979 (QA n3): bumped by a filter keystroke or a chip toggle; XrayAnchoredScroll compares it to tell those
+    /// #1979 (QA n3): bumped by a filter keystroke or a chip toggle (#2090: and a tab switch, so a kept list shows from
+    /// its top as a new one did); XrayAnchoredScroll compares it to tell those
     /// (the list starts at its top) from a poll or follow update (the reader's row is kept).
     private(set) var listGen = 0
     /// #1979: the offset to add once the restored row lands flush at the top (XrayAnchoredScroll, settled(_:)).
@@ -337,7 +341,9 @@ final class XrayPanelModel: ObservableObject {
     /// #1472 b: that card's --chapter read (XrayChapterRead), cancelled when the card closes.
     private(set) var chapterRead: XrayChapterRead?
     /// #1472: dch's chapter anchors to their `i` (ordinal); #1475: from every chapters read and the follow's state.
-    var chapterAnchors: [String: Int] = [:]
+    var chapterAnchors: [String: Int] = [:] {   // #2090: promptLines' ids read them (a poll sets the same ones again)
+        didSet { if chapterAnchors != oldValue { promptMemo = nil } }
+    }
     /// #1475: the follow this panel's chapters and refs come from (XrayFollow.swift); nil: today's reads and polls.
     var follow: XrayFollow?
     var followSinks: Set<AnyCancellable> = []
@@ -399,6 +405,7 @@ final class XrayPanelModel: ObservableObject {
     init(target: XrayTarget, tab: XrayTab) {
         self.target = target
         self.tab = tab
+        visitedTabs = [tab]
         searchable = XrayPanels.searchTab()
         panels = XrayPanels.shared
     }
@@ -495,6 +502,7 @@ final class XrayPanelModel: ObservableObject {
             return
         }
         if !tabs.contains(tab), let first = tabs.first { tab = first }
+        visitedTabs = visitedTabs.filter(tabs.contains).union([tab])   // #2090: a tab that went is built again only when shown
     }
 
     /// #1976: the rows a closed panel for this target had; the fresh reads replace them through put (changes only).
@@ -594,6 +602,7 @@ final class XrayPanelModel: ObservableObject {
     /// #1979 (QA n3): a filter or chip change: the shown list starts at its top.
     func listChanged() {
         listGen &+= 1
+        promptMemo = nil   // #2090: the filter or a Prompts chip changed what Prompts shows
         (topRow, topOffset, settle) = (nil, 0, nil)
     }
 
@@ -878,12 +887,42 @@ final class XrayPanelModel: ObservableObject {
                 && (all || !c.auto) && (keepPeer || c.from != .peer)
         }
     }
-    var shownPrompts: [TranscriptOutline.Chapter] { shown(.prompts) }
+    var shownPrompts: [TranscriptOutline.Chapter] { prompts.rows }
 
     /// The automatic rows and the other sessions' messages on `tab` (filter applied, shown or not): the footer's counts.
-    func hidden(_ tab: XrayTab) -> (auto: Int, peer: Int) {
-        let all = shown(tab, auto: true, peer: true)
-        return (all.filter(\.auto).count, all.filter { $0.from == .peer }.count)
+    func hidden(_ tab: XrayTab) -> (auto: Int, peer: Int) { prompts.hidden }
+
+    /// #2090: the Prompts list as drawn, computed once per change of what it reads (as taskColsMemo): the shown rows,
+    /// their stable ids, the ordinal column's width and the footer's counts. Cleared by a new chapters read or anchors,
+    /// the filter and the chips (listChanged), never by a tab switch.
+    struct PromptMemo {
+        let rows: [TranscriptOutline.Chapter]
+        let lines: [(id: String, c: TranscriptOutline.Chapter)]
+        let ids: [String]
+        let ordinalWidest: String
+        let hidden: (auto: Int, peer: Int)
+    }
+    private var promptMemo: PromptMemo?
+    /// #2090: counts the Prompts computations (tests read it: N bodies or tab switches, one computation).
+    private(set) var promptsBuilt = 0
+
+    var prompts: PromptMemo {
+        if let m = promptMemo { return m }
+        promptsBuilt += 1
+        let rows = shown(.prompts), lines = promptLines(rows), all = shown(.prompts, auto: true, peer: true)
+        let m = PromptMemo(rows: rows, lines: lines, ids: lines.map(\.id), ordinalWidest: XrayCol.widest(rows.map { "\($0.ordinal)" }),
+                           hidden: (all.filter(\.auto).count, all.filter { $0.from == .peer }.count))
+        promptMemo = m
+        return m
+    }
+
+    /// #2090: the tabs whose lists the drawer keeps built: the shown one, then every visited tab still there with a
+    /// scroll anchor (Search and Schedules have none, so they are built when shown, each starting at its top as before).
+    var keptTabs: [XrayTab] {
+        let have = tabs
+        return XrayTab.allCases.filter {
+            $0 == tab || (visitedTabs.contains($0) && have.contains($0) && $0 != .search && $0 != .schedules)
+        }
     }
 
     /// #1950: the filter bar's chips (dch xview.c:3563-3575's toggles): "Automatic" and "Agent messages", each with the
@@ -1504,16 +1543,20 @@ struct XrayDockGeometry<Content: View>: View {
 struct XrayPanelView: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panel: XrayPanelModel
-    @FocusState private var filterFocus: Bool
+    @FocusState private var filterFocus: XrayTab?   // #2090: the shown tab's field (kept tabs each have one)
 
     var body: some View {
+        // #2090: the titles once per body (they were counted in each strip copy); a copy redraws only when they change
+        let strip = XrayTabStrip.items(panel)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: sz(6)) {
                 // Narrow: the counts go first, then the names scroll (design 3.1); capsule buttons ignore no UI scale.
                 ViewThatFits(in: .horizontal) {
-                    XrayTabStrip(panel: panel, counts: true)
-                    XrayTabStrip(panel: panel, counts: false)
-                    ScrollView(.horizontal, showsIndicators: false) { XrayTabStrip(panel: panel, counts: false) }
+                    XrayTabStrip(items: strip, tab: panel.tab, counts: true, select: panel.select).equatable()
+                    XrayTabStrip(items: strip, tab: panel.tab, counts: false, select: panel.select).equatable()
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        XrayTabStrip(items: strip, tab: panel.tab, counts: false, select: panel.select).equatable()
+                    }
                 }
                 Spacer(minLength: 0)
                 Button { panel.close() } label: {
@@ -1536,8 +1579,8 @@ struct XrayPanelView: View {
         .focusEffectDisabled()
         .onExitCommand { panel.escape() }
         .onKeyPress { k in panel.key(k.characters, command: k.modifiers.contains(.command)) ? .handled : .ignored }
-        .onChange(of: panel.filterFocused) { _, v in filterFocus = v }
-        .onChange(of: filterFocus) { _, v in panel.filterFocused = v }
+        .onChange(of: panel.filterFocused) { _, v in filterFocus = v ? panel.tab : nil }
+        .onChange(of: filterFocus) { _, v in panel.filterFocused = v != nil }
     }
 
     @ViewBuilder var content: some View {
@@ -1547,21 +1590,30 @@ struct XrayPanelView: View {
             VStack(alignment: .leading, spacing: sz(4)) {
                 ForEach(panel.emptyLines, id: \.self) { faint($0) }
             }.padding(sz(10))
-        } else if panel.tab == .memory {
-            memoryTab
-        } else if panel.tab == .search {
-            searchTab
-        } else if panel.tab == .refs {
-            refsTab
-        } else if panel.tab == .prompts {
-            promptsTab
-        } else if panel.tab == .schedules {
-            schedulesTab
-        } else if panel.tab == .questions {
+        } else {
+            // #2090 (#2077 hotspot 7): every kept tab's list stays built, so a switch shows one that is there; the hidden
+            // ones are invisible, take no click, no focus (disabled) and are not read by VoiceOver
+            ZStack(alignment: .topLeading) {
+                ForEach(panel.keptTabs, id: \.self) { t in
+                    let on = t == panel.tab
+                    XrayKeptList(on: on) { list(t) }.equatable()
+                        .opacity(on ? 1 : 0).allowsHitTesting(on).disabled(!on).accessibilityHidden(!on)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder func list(_ t: XrayTab) -> some View {
+        switch t {
+        case .memory: memoryTab
+        case .search: searchTab
+        case .refs: refsTab
+        case .prompts: promptsTab
+        case .schedules: schedulesTab
+        case .questions:
             taskList(panel.questionLines, cols: panel.questionCols, filterLabel: "Filter questions", title: nil, footer: panel.goneFooter,
                      questions: true)
-        } else {
-            tasksTab
+        case .tasks: tasksTab
         }
     }
 
@@ -1573,12 +1625,12 @@ struct XrayPanelView: View {
     /// #2024: the Questions list adds the Answer slot on every row (the button on Open rows) and the editor under the rows.
     func taskList(_ lines: [XrayTaskLine], cols: XrayTaskCols, filterLabel: String, title: String?, footer: [String],
                   questions: Bool = false) -> some View {
-        let answers = questions && panel.answerShown
+        let answers = questions && panel.answerShown, tab: XrayTab = questions ? .questions : .tasks
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
-                .focused($filterFocus)
+                .focused($filterFocus, equals: tab)
                 .accessibilityLabel(filterLabel)
             if let t = title { Text(verbatim: t).font(Neon.font(XrayText.row, weight: .semibold)).lineLimit(1) }
             ScrollView {
@@ -1593,14 +1645,14 @@ struct XrayPanelView: View {
                                                 answerSlot: answers) { panel.activate(t) }
                             }
                         }
-                        .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
+                        .modifier(XrayScrollRow(panel: panel, id: l.id, tab: tab))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
             // #2024: an inset, so opening the editor or a new status line moves no row (the list's bottom edge only)
             .safeAreaInset(edge: .bottom, spacing: 0) { if questions { XrayAnswerEditor(panel: panel) } }
-            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
+            .modifier(XrayAnchoredScroll(panel: panel, tab: tab, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             ForEach(footer, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1608,25 +1660,24 @@ struct XrayPanelView: View {
 
     /// #1354: Prompts, newest first; the footer's counts and toggles (design 1.3, 3.10).
     var promptsTab: some View {
-        let rows = panel.shownPrompts, lines = panel.promptLines(rows)   // #1972: stable ids
-        let ordinalW = XrayCol.widest(rows.map { "\($0.ordinal)" })   // #1945
+        let m = panel.prompts, lines = m.lines   // #1972: stable ids; #2090: memoised on the model
         return VStack(alignment: .leading, spacing: sz(4)) {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
-                .focused($filterFocus)
+                .focused($filterFocus, equals: .prompts)
                 .accessibilityLabel("Filter prompts")
-            if rows.isEmpty { faint("No prompts shown") }
+            if m.rows.isEmpty { faint("No prompts shown") }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: sz(2)) {
                     ForEach(lines, id: \.id) { l in
-                        XrayPromptRowView(row: XrayPromptRow(l.c), ordinalWidest: ordinalW) { panel.activate(l.c) }
-                            .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
+                        XrayPromptRowView(row: XrayPromptRow(l.c), ordinalWidest: m.ordinalWidest) { panel.activate(l.c) }
+                            .modifier(XrayScrollRow(panel: panel, id: l.id, tab: .prompts))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
+            .modifier(XrayAnchoredScroll(panel: panel, tab: .prompts, shown: .init(gen: panel.listGen, ids: m.ids)))   // #1972, #1979
             filterBar(panel.promptFooter(.prompts))
             ForEach(panel.goneFooter, id: \.self) { faint($0) }   // #1389: "host unreachable"
         }
@@ -1652,7 +1703,7 @@ struct XrayPanelView: View {
             TextField("Search", text: $panel.query)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
-                .focused($filterFocus)
+                .focused($filterFocus, equals: .search)
                 .onSubmit { panel.runSearch() }
                 .accessibilityLabel(panel.searchFieldLabel)
             if let n = panel.searchNote { faint(n) }
@@ -1699,18 +1750,18 @@ struct XrayPanelView: View {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
-                .focused($filterFocus)
+                .focused($filterFocus, equals: .refs)
                 .accessibilityLabel("Filter refs")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(lines, id: \.id) { l in
                         XrayRefRowView(row: XrayRefRow(l.e, complete: complete, home: panel.home, cwd: panel.cwd()), countWidest: countW) { panel.openRef(l.e) }
-                            .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
+                            .modifier(XrayScrollRow(panel: panel, id: l.id, tab: .refs))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
+            .modifier(XrayAnchoredScroll(panel: panel, tab: .refs, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             if let n = panel.refsEmpty { faint(n) }
             filterBar(panel.refsChips)
             ForEach(panel.refsFooter, id: \.self) { faint($0) }
@@ -1725,7 +1776,7 @@ struct XrayPanelView: View {
             TextField("Filter", text: $panel.filter)
                 .textFieldStyle(.roundedBorder)
                 .font(Neon.font(XrayText.row))
-                .focused($filterFocus)
+                .focused($filterFocus, equals: .memory)
                 .accessibilityLabel("Filter memory")
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -1740,12 +1791,12 @@ struct XrayPanelView: View {
                                 }
                             }
                         }
-                        .modifier(XrayScrollRow(panel: panel, id: l.id))   // #1979
+                        .modifier(XrayScrollRow(panel: panel, id: l.id, tab: .memory))   // #1979
                     }
                 }
                 .scrollTargetLayout()
             }
-            .modifier(XrayAnchoredScroll(panel: panel, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
+            .modifier(XrayAnchoredScroll(panel: panel, tab: .memory, shown: .init(gen: panel.listGen, ids: lines.map(\.id))))   // #1972, #1979
             ForEach(panel.goneFooter, id: \.self) { faint($0) }
         }
         .padding(sz(10))
@@ -1756,6 +1807,17 @@ struct XrayPanelView: View {
     }
 }
 
+/// #2090: a kept tab's list. Re-evaluated while it shows and when it shows or hides; a hidden one stays as drawn (a
+/// poll, an apply or a filter keystroke redraws only the shown list), and draws the data of the moment when shown again.
+struct XrayKeptList<Content: View>: View, Equatable {
+    let on: Bool
+    @ViewBuilder let content: () -> Content
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { !a.on && !b.on }
+
+    var body: some View { content() }
+}
+
 /// #1972 (operator 2026-11-26, "Keep scroll anchored"): a drawer list whose rows carry stable ids. The top row the person
 /// sees and (#1979) the points scrolled past its top are kept on the model as they scroll (XrayScrollRow); when a poll or
 /// follow update changes the rows above it (a new prompt, ref or task sorting first), that row goes back to the top and
@@ -1763,6 +1825,8 @@ struct XrayPanelView: View {
 /// #1979 (QA n3): a filter keystroke or a chip toggle (listGen) starts the list at its top.
 struct XrayAnchoredScroll: ViewModifier {
     let panel: XrayPanelModel
+    /// #2090: the list's tab: a kept list that is hidden leaves the model's anchor (the shown list's) alone.
+    let tab: XrayTab
     let shown: XrayScrollAnchor.Shown
     @State private var position = ScrollPosition(idType: String.self)
 
@@ -1770,6 +1834,8 @@ struct XrayAnchoredScroll: ViewModifier {
         content
             .scrollPosition($position, anchor: .top)
             .onChange(of: shown) { old, new in
+                // #2090: hidden: only a tab switch's or filter's new gen moves it (to its top, as a new list would start)
+                guard panel.tab == tab else { if old.gen != new.gen { position.scrollTo(edge: .top) }; return }
                 switch panel.shownChanged(old: old, new: new) {
                 case .top: position.scrollTo(edge: .top)
                 case .row(let t): position.scrollTo(id: t.id, anchor: .top)
@@ -1777,7 +1843,7 @@ struct XrayAnchoredScroll: ViewModifier {
                 }
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-                if let to = panel.settled(y) { position.scrollTo(y: to) }
+                if panel.tab == tab, let to = panel.settled(y) { position.scrollTo(y: to) }
             }
             .onScrollPhaseChange { _, p in if p == .tracking || p == .interacting { panel.settle = nil } }   // the person scrolls: no late nudge
     }
@@ -1788,10 +1854,11 @@ struct XrayAnchoredScroll: ViewModifier {
 struct XrayScrollRow: ViewModifier {
     let panel: XrayPanelModel
     let id: String
+    let tab: XrayTab   // #2090: a hidden kept list's rows never write the shown list's anchor
 
     func body(content: Content) -> some View {
         content.onGeometryChange(for: CGFloat?.self) { XrayScrollAnchor.past($0.frame(in: .scrollView)) } action: { _, off in
-            if let off { panel.scrolled(id, offset: off) }
+            if let off, panel.tab == tab { panel.scrolled(id, offset: off) }
         }
     }
 }
@@ -1879,26 +1946,47 @@ struct XrayFilterChipView: View {
 }
 
 /// The #821 capsule-button strip: only the tabs that exist, "Name N".
-struct XrayTabStrip: View {
+/// #2090: built from values (the panel's tabs, titles and shown tab, read once per body), so a copy redraws only when
+/// those change (Equatable; `select` is the same panel's).
+struct XrayTabStrip: View, Equatable {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
-    @ObservedObject var panel: XrayPanelModel
+    struct Item: Equatable { let tab: XrayTab, title: String, spoken: String }
+    let items: [Item]
+    let tab: XrayTab
     let counts: Bool
+    let select: @MainActor (XrayTab) -> Void
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.items == b.items && a.tab == b.tab && a.counts == b.counts }
+
+    static func items(_ panel: XrayPanelModel) -> [Item] {
+        panel.tabs.map { Item(tab: $0, title: panel.title($0), spoken: panel.spoken($0)) }
+    }
+
+    /// The strip as XrayPanelView draws it for `panel` (XrayDrawerWidthTests measures it).
+    init(panel: XrayPanelModel, counts: Bool) {
+        self.init(items: Self.items(panel), tab: panel.tab, counts: counts, select: panel.select)
+    }
+
+    init(items: [Item], tab: XrayTab, counts: Bool, select: @escaping @MainActor (XrayTab) -> Void) {
+        (self.items, self.tab, self.counts, self.select) = (items, tab, counts, select)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(panel.tabs, id: \.self) { t in
-                Button { panel.select(t) } label: {
-                    Text(verbatim: counts ? panel.title(t) : t.rawValue)
+            ForEach(items, id: \.tab) { item in
+                let t = item.tab
+                Button { select(t) } label: {
+                    Text(verbatim: counts ? item.title : t.rawValue)
                         .font(Neon.font(10.5, weight: .medium))
-                        .foregroundStyle(t == panel.tab ? XrayInk.textPrimary : XrayInk.textSecondary)
+                        .foregroundStyle(t == tab ? XrayInk.textPrimary : XrayInk.textSecondary)
                         .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
-                        .background(Capsule().fill(t == panel.tab ? XrayInk.accentRing.opacity(0.2) : .clear))
+                        .background(Capsule().fill(t == tab ? XrayInk.accentRing.opacity(0.2) : .clear))
                         .contentShape(Capsule())
                         .fixedSize()
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(panel.spoken(t))
-                .accessibilityAddTraits(t == panel.tab ? .isSelected : [])
+                .accessibilityLabel(item.spoken)
+                .accessibilityAddTraits(t == tab ? .isSelected : [])
             }
         }
         .padding(sz(2))

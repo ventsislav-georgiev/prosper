@@ -35,6 +35,7 @@ tag from the now-released section and put it on the new top draft.
 - Settings › Agent Island › Session list: each session group row now shows its colour as a small
   swatch; click it to pick another colour or Automatic, the same choice as the sidebar group menu's
   Colour, and a pick made in either place shows in the other.
+- The X-ray drawer switches tabs and shows long prompt lists faster. (#2090)
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory
