@@ -1,0 +1,41 @@
+{
+ "entry": "2091",
+ "filter": "XrayPanelParseTests",
+ "mutants": [
+  {
+   "name": "parse_on_main",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "        await Task.detached(priority: .userInitiated) { XrayPanelModel.parse(kind, r, refs: refs) }.value",
+   "new": "        await MainActor.run { XrayPanelModel.parse(kind, r, refs: refs) }",
+   "expect": "killed"
+  },
+  {
+   "name": "stale_taken",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "                    guard !Task.isCancelled, let self else { g.cancelAll(); return }\n                    guard let p else { continue }",
+   "new": "                    guard let self else { g.cancelAll(); return }\n                    guard let p else { continue }",
+   "expect": "killed"
+  },
+  {
+   "name": "skip_anchors",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "(p.chapters, p.anchors, p.corpus) = (XrayChapters.parse(o), anchors(o), XrayChapters.corpus(o))",
+   "new": "(p.chapters, p.anchors, p.corpus) = (XrayChapters.parse(o), [:], XrayChapters.corpus(o))",
+   "expect": "killed"
+  },
+  {
+   "name": "skip_memory",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "case .memory: p.memory = XrayMemory.parse(r.out); if p.memory?.count == 0 { p.memory = nil }",
+   "new": "case .memory: break",
+   "expect": "killed"
+  },
+  {
+   "name": "skip_tasks",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "case .tasks, .questions: p.tasks = tasksTab(XrayTasks.parse(r.out))",
+   "new": "case .tasks, .questions: break",
+   "expect": "killed"
+  }
+ ]
+}
