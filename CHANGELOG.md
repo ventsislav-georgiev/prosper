@@ -143,6 +143,9 @@ tag from the now-released section and put it on the new top draft.
   with that group already chosen (#2063)
 - Switching the Agent Sessions window's style in Settings now rebuilds the window, so Standard shows
   its title bar above the sidebar right away, without restarting Prosper. (#2045)
+- The X-ray drawer has a bottom pane with Agents, Shells and Pull requests tabs; click a session's
+  agents or shells count in its header to open the drawer there. Drag the divider to resize it, or
+  down to fold it away. (#2066)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

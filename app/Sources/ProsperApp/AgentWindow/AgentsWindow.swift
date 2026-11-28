@@ -727,6 +727,18 @@ final class AgentsNSWindow: NSWindow {
         win.toggleXray()
     }
 
+    /// #2066: a header count group (agents, shells, open PRs): that pane takes the focus, its drawer opens for the session it
+    /// shows through toggleXray (or stays open: no toggle), and the bottom pane shows `tab`, unfolded. Below the gate or
+    /// with no session: nothing (the header draws no button then).
+    @MainActor static func xrayCountClicked(_ tab: XrayBottomTab, pane: UUID, in win: AgentsNSWindow?) {
+        guard let win, let m = win.model else { return }
+        if pane != m.layout.focused { m.focusPane(pane) }
+        guard m.newSession == nil, let target = XrayTarget.of(m.selectedRow) else { return }
+        if XrayPanels.shared.open[pane]?.target != target { win.toggleXray() }
+        guard XrayPanels.shared.open[pane]?.target == target else { return }
+        XrayBottomPane.shared.show(tab)
+    }
+
     /// #1476 (operator: "One for the window"): focus moved from `old` while its drawer was open: the drawer follows to the
     /// focused pane on the same tab (closed when that pane shows no session X-ray can read).
     func xrayFollow(from old: UUID) {
@@ -2538,6 +2550,9 @@ struct AgentCountGroups: View {
     var selected = false
     /// #1558: a group's help in place of its words (the shells group's list); VoiceOver keeps the words.
     var help: [AgentSidebar.Count: String] = [:]
+    /// #2066: the pane header's: a click on the agents, shells or open PRs group (a button) opens the drawer at that tab;
+    /// nil (the sidebar rows, or the X-ray gate closed): no group is clickable.
+    var show: (@MainActor (XrayBottomTab) -> Void)? = nil
 
     /// #1739, #1776: the ink of a group's glyph and number (nil: the caller's), chosen against the surface the row draws on.
     static func tint(_ c: AgentSidebar.Count, ownCard: Bool) -> Color? {
@@ -2592,7 +2607,7 @@ struct AgentCountGroups: View {
                     let _ = Self.tintProbe?(g.0, tint)
                     let digits = g.0 == .open ? open : Self.cachedDigitInk(g.0, tint: tint, selected: selected, ownCard: ownCard) ?? quiet
                     let _ = Self.digitProbe?(g.0, digits)
-                    HStack(spacing: sz(2)) {
+                    let group = HStack(spacing: sz(2)) {
                         // #1453, #1546: the sub-agents count is the drawn robot, not .agents' people symbol; the words stay the label below.
                         if g.0 == .agents { RobotGlyph(size: size - 1) } else { Image(systemName: g.0.symbol).font(Neon.font(size - 1)) }
                         Text(AgentIsland.count(g.1)).font(Neon.font(size).monospacedDigit())
@@ -2601,12 +2616,41 @@ struct AgentCountGroups: View {
                     .modifier(AgentSidebarRowProbe(kind: "count.\(g.0)", title: g.0.words(g.1)))
                     .foregroundStyle(g.0 == .open ? open : tint ?? quiet)
                     .fixedSize()
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(g.0.words(g.1))
-                    .help(help[g.0] ?? g.0.words(g.1))   // after the element: a help set on an ignored child never reaches AX
+                    if let show, let tab = XrayBottomTab(g.0) {   // #2066: a button, its count words the value
+                        Button { show(tab) } label: { group.contentShape(Rectangle()) }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(tab.showLabel)
+                            .accessibilityValue(g.0.words(g.1))
+                            .help(help[g.0] ?? g.0.words(g.1))
+                    } else {
+                        group
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(g.0.words(g.1))
+                            .help(help[g.0] ?? g.0.words(g.1))   // after the element: a help set on an ignored child never reaches AX
+                    }
                 }
             }
         }
+    }
+}
+
+/// #2066: the pane header's count groups: with `pane`, the X-ray gate open and a session X-ray can read, the agents and
+/// shells groups (and an open PRs group, which the header does not draw today: AgentRowSymbolsTests) open the drawer at
+/// their tab (no popups, operator 2026-11-27); else plain counts. Observes XrayPanels so they turn into buttons when the
+/// gate opens.
+struct AgentHeaderCounts: View {
+    @ObservedObject var panels = XrayPanels.shared
+    let row: AgentSidebar.Row
+    let pane: UUID?
+
+    /// nil (plain counts): no pane, the gate closed (XrayPanels.dch nil) or no session X-ray can read: no dead button.
+    var show: (@MainActor (XrayBottomTab) -> Void)? {
+        guard let pane, XrayPanels.dch() != nil, XrayTarget.of(row) != nil else { return nil }
+        return { AgentsNSWindow.xrayCountClicked($0, pane: pane, in: AgentsNSWindow.window(of: pane)) }
+    }
+
+    var body: some View {
+        AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp, show: show)
     }
 }
 
@@ -4063,7 +4107,7 @@ struct AgentSessionHeader: View {
                         HStack(spacing: sz(6)) {
                             Text("\u{00B7}").accessibilityHidden(true)   // after the chip
                             // #1239: under the Rename field.
-                            AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp)
+                            AgentHeaderCounts(row: row, pane: xrayPane)
                                 .modifier(AgentHeaderRenameHidden(renaming: renaming))
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"

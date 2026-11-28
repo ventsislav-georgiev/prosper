@@ -1185,11 +1185,201 @@ final class XrayDrawerWidth: ObservableObject {
     }
 }
 
+/// #2066: the drawer's bottom pane tabs (#2051-#2053 fill their bodies). The raw value is the drawn name and the stored one.
+enum XrayBottomTab: String, CaseIterable {
+    case agents = "Agents", shells = "Shells", prs = "PRs"
+
+    /// The tab a header count group opens; nil: the group is not clickable.
+    init?(_ c: AgentSidebar.Count) {
+        switch c {
+        case .agents: self = .agents
+        case .shells: self = .shells
+        case .open: self = .prs
+        case .merged: return nil
+        }
+    }
+
+    /// The count group's VoiceOver label (its count words stay the value).
+    var showLabel: String {
+        switch self {
+        case .agents: "Show subagents"
+        case .shells: "Show shells"
+        case .prs: "Show pull requests"
+        }
+    }
+
+    var spoken: String { self == .prs ? "Pull requests" : rawValue }
+}
+
+/// #2066: the drawer's bottom pane, one for every pane and window: its height as a fraction of the drawer, remembered per
+/// Mac (Preferences.xrayBottomFraction; 0: folded to its strip), and its tab (Preferences.xrayBottomTab). As
+/// XrayDrawerWidth: a drag previews and is stored once at its end; the X-ray content above makes room for `settled` only.
+@MainActor
+final class XrayBottomPane: ObservableObject {
+    static let shared = XrayBottomPane()
+    static let standard: CGFloat = 0.4
+    /// The X-ray content above always keeps this; the strip (divider, tabs) is the folded pane; a drag that ends within
+    /// `snap` of the strip folds it.
+    static var floor: CGFloat { sz(120) }
+    static var strip: CGFloat { sz(32) }
+    static var snap: CGFloat { sz(24) }
+    @Published private(set) var fraction: CGFloat = Preferences.xrayBottomFraction.map { CGFloat($0) } ?? XrayBottomPane.standard
+    /// The drawn height and the fraction when the drag began; nil between drags.
+    @Published private var start: (drawn: CGFloat, fraction: CGFloat)?
+    @Published var tab = Preferences.xrayBottomTab {
+        didSet { if tab != oldValue { Preferences.xrayBottomTab = tab } }
+    }
+    var dragging: Bool { start != nil }
+    var collapsed: Bool { fraction == 0 }
+    /// The fraction the content above makes room for: the one before the drag, so the X-ray lists relayout once, at its end.
+    var settled: CGFloat { start?.fraction ?? fraction }
+
+    /// The drawn height in a drawer `total` tall: the fraction of it, at least the strip, never leaving the content above
+    /// under `floor` (the floor wins in a very short drawer).
+    static func height(_ fraction: CGFloat, in total: CGFloat) -> CGFloat {
+        max(0, min(total - floor, max(strip, total * fraction)))
+    }
+
+    /// The divider moved `dy` points since the drag began (down is positive: shorter). Near the strip: folded.
+    func dragged(by dy: CGFloat, in total: CGFloat) {
+        guard total > 0 else { return }
+        let from = start?.drawn ?? Self.height(fraction, in: total)
+        if start == nil { start = (from, fraction) }
+        let h = min(from - dy, total - Self.floor)
+        fraction = h < Self.strip + Self.snap ? 0 : min(1, h / total)
+    }
+
+    /// The drag is over: the fraction is written once.
+    func ended() {
+        start = nil
+        Preferences.xrayBottomFraction = Double(fraction)
+    }
+
+    func reset() {
+        start = nil
+        fraction = Self.standard
+        Preferences.xrayBottomFraction = nil
+    }
+
+    /// A header count group: its tab, unfolded.
+    func show(_ t: XrayBottomTab) {
+        tab = t
+        if collapsed { reset() }
+    }
+}
+
+/// #2066: the bottom pane: the divider (its handle), the tab strip, the chosen tab's body (folded: the strip only).
+struct XrayBottomView: View {
+    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
+    @ObservedObject var bottom = XrayBottomPane.shared
+    /// The drawer's height.
+    let total: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(XrayInk.stroke).frame(height: 1).overlay { handle }
+            strip.frame(height: XrayBottomPane.strip - 1)
+            if !bottom.collapsed {
+                Rectangle().fill(XrayInk.stroke).frame(height: 1)
+                Group {
+                    switch bottom.tab {
+                    case .agents: XrayBottomAgents()
+                    case .shells: XrayBottomShells()
+                    case .prs: XrayBottomPRs()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(height: XrayBottomPane.height(bottom.fraction, in: total), alignment: .top)
+        .clipped()
+        .background(XrayInk.surface)   // a drag's preview covers the content above it
+    }
+
+    /// The #821 capsule look of XrayTabStrip, for the bottom tabs.
+    var strip: some View {
+        HStack(spacing: 0) {
+            ForEach(XrayBottomTab.allCases, id: \.self) { t in
+                Button { bottom.show(t) } label: {
+                    Text(verbatim: t.rawValue)
+                        .font(Neon.font(10.5, weight: .medium))
+                        .foregroundStyle(t == bottom.tab ? XrayInk.textPrimary : XrayInk.textSecondary)
+                        .padding(.horizontal, sz(8)).padding(.vertical, sz(3))
+                        .background(Capsule().fill(t == bottom.tab ? XrayInk.accentRing.opacity(0.2) : .clear))
+                        .contentShape(Capsule())
+                        .fixedSize()
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(t.spoken)
+                .accessibilityAddTraits(t == bottom.tab ? .isSelected : [])
+            }
+        }
+        .padding(sz(2))
+        .overlay(Capsule().stroke(XrayInk.stroke, lineWidth: 1))
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("X-Ray bottom tabs")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, sz(10))
+    }
+
+    /// XrayDrawer's width handle, turned: a few points of hit area on the 1 pt divider.
+    var handle: some View {
+        Color.clear.frame(height: sz(5)).contentShape(Rectangle())
+            .onContinuousHover { phase in
+                if case .active = phase { NSCursor.resizeUpDown.set() } else if !bottom.dragging { NSCursor.arrow.set() }
+            }
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { bottom.dragged(by: $0.translation.height, in: total) }
+                .onEnded { _ in
+                    bottom.ended()
+                    NSCursor.arrow.set()   // a drag can end off the handle: no later hover end to restore it
+                })
+            .onTapGesture(count: 2) { bottom.reset() }
+            .accessibilityElement()
+            .accessibilityLabel("X-ray bottom pane height")
+            // the drawn height (bounded by the drawer), never the stored value
+            .accessibilityValue("\(Int(XrayBottomPane.height(bottom.fraction, in: total) / ThemeRuntime.scale)) points")
+            .accessibilityAdjustableAction { d in
+                bottom.dragged(by: d == .increment ? -sz(20) : sz(20), in: total)
+                bottom.ended()
+            }
+    }
+}
+
+/// #2066: one line, centred, in the secondary ink: a bottom tab's empty state.
+struct XrayBottomEmpty: View {
+    let text: String
+    var body: some View {
+        Text(verbatim: text).font(Neon.font(XrayText.row)).foregroundStyle(XrayInk.textSecondary)
+            .multilineTextAlignment(.center).padding(sz(10))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// #2066: the bottom tabs' bodies, each its own view (#2053 agents, #2052 shells, #2051 PRs replace them).
+struct XrayBottomAgents: View {
+    static let empty = "No subagents running in this session."
+    var body: some View { XrayBottomEmpty(text: Self.empty) }
+}
+
+struct XrayBottomShells: View {
+    static let empty = "No background shells in this session."
+    var body: some View { XrayBottomEmpty(text: Self.empty) }
+}
+
+/// Also the line for a session with no repo.
+struct XrayBottomPRs: View {
+    static let empty = "No pull requests for this session."
+    var body: some View { XrayBottomEmpty(text: Self.empty) }
+}
+
 /// The drawer over `pane`, drawn only while its panel is open for the session the pane shows.
 struct XrayDrawer: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
     @ObservedObject var panels = XrayPanels.shared
     @ObservedObject var width = XrayDrawerWidth.shared
+    @ObservedObject var bottom = XrayBottomPane.shared   // #2066
     let pane: UUID
     let target: XrayTarget?
 
@@ -1198,6 +1388,9 @@ struct XrayDrawer: View {
             let docked = panels.docked
             GeometryReader { g in
                 XrayPanelView(panel: p)
+                    // #2066: the content makes room for the settled pane; a drag's preview draws over it
+                    .padding(.bottom, XrayBottomPane.height(bottom.settled, in: g.size.height))
+                    .overlay(alignment: .bottom) { XrayBottomView(total: g.size.height) }
                     .modifier(XrayIslandScheme())   // #2041: off, the dark scheme for its native controls
                     .frame(width: XrayDrawerWidth.width(stored: width.points, offered: g.size.width))
                     .frame(maxHeight: .infinity)

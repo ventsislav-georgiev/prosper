@@ -494,6 +494,9 @@ enum Preferences {
         static let xrayLastTab = "xrayLastTab"
         // #1473: the X-ray drawer's width in points at UI scale 1.0, shared by every pane; per Mac, not in SyncedKeys.
         static let xrayDrawerWidth = "xrayDrawerWidth"
+        // #2066: the X-ray drawer's bottom pane height as a fraction of the drawer (0: folded to its strip), and its tab; per Mac, not in SyncedKeys.
+        static let xrayBottomFraction = "xrayBottomFraction"
+        static let xrayBottomTab = "xrayBottomTab"
         // #2055: whether the X-ray drawer docks beside the terminal (the terminal makes room); on unless set off; per Mac, not in SyncedKeys.
         static let xrayDocked = "xrayDocked"
         // #2055: whether a session newly shown in a pane opens with its X-ray drawer; off unless set on; per Mac, not in SyncedKeys.
@@ -1603,6 +1606,26 @@ enum Preferences {
             if let newValue { defaults.set(newValue, forKey: Keys.xrayDrawerWidth) }
             else { defaults.removeObject(forKey: Keys.xrayDrawerWidth) }
         }
+    }
+
+    /// #2066: the drawer's bottom pane height as a fraction of the drawer, nil when unset (the default 0.4). Outside data:
+    /// anything but a finite number reads as unset; a number is clamped to 0...1 (0: folded to its strip). nil removes the key.
+    static var xrayBottomFraction: Double? {
+        get {
+            guard let n = defaults.object(forKey: Keys.xrayBottomFraction) as? NSNumber,
+                  CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }
+            return min(max(n.doubleValue, 0), 1)
+        }
+        set {
+            if let newValue { defaults.set(newValue, forKey: Keys.xrayBottomFraction) }
+            else { defaults.removeObject(forKey: Keys.xrayBottomFraction) }
+        }
+    }
+
+    /// #2066: the bottom pane's chosen tab (Agents unless set, also for any other value).
+    static var xrayBottomTab: XrayBottomTab {
+        get { XrayBottomTab(rawValue: defaults.string(forKey: Keys.xrayBottomTab) ?? "") ?? .agents }
+        set { defaults.set(newValue.rawValue, forKey: Keys.xrayBottomTab) }
     }
 
     /// #1109: "builtin" (the default, also for any other value) or "terminal".
