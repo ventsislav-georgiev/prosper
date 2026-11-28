@@ -38,6 +38,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer switches tabs and shows long prompt lists faster. (#2090)
 - Agent Sessions: the subagent count stays right when Claude Code's agent panel is hidden or
   covered.
+- The X-ray drawer no longer stutters while a big session's tasks, memory and prompts load: their
+  answers are read in the background.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

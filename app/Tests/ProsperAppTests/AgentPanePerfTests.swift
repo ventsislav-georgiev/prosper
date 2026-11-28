@@ -278,6 +278,15 @@ final class AgentPanePerfTests: XCTestCase {
                     p = XrayPanels.shared.open[m.layout.focused]
                 }) { _ in p?.apply(tasks: Self.tasks, memory: Self.memory, chapters: Self.chapters) }
                 XCTAssertTrue(p?.loaded == true && p?.tab == tab)
+                // #2091: what the main thread does for a read's answer now: the parse ran off main (readBoth), the take here
+                let parsed = [XrayPanelModel.parse(.tasks, Self.tasks), XrayPanelModel.parse(.memory, Self.memory),
+                              XrayPanelModel.parse(.chapters, Self.chapters)]
+                measure("xray.apply main thread only, pre-parsed (\(tab.rawValue) shown)", v, before: { _ in
+                    if let p = XrayPanels.shared.open[m.layout.focused] { p.close() }
+                    XCTAssertTrue(win.toggleXray(on: tab))
+                    p = XrayPanels.shared.open[m.layout.focused]
+                }) { _ in p?.apply(parsed) }
+                XCTAssertTrue(p?.loaded == true && p?.tab == tab)
             }
             var parse = [Double]()
             for _ in 0..<Self.runs {
@@ -286,6 +295,14 @@ final class AgentPanePerfTests: XCTestCase {
                 })
             }
             print(String(format: "PERF xray.apply parse only p50 %.2f p95 %.2f ms", Samples.pct(parse, 0.5), Samples.pct(parse, 0.95)))
+            var one = [Double]()   // #2091: the parse the reads run off main (one JSON decode for the chapters' four reads)
+            for _ in 0..<Self.runs {
+                one.append(Self.ms {
+                    _ = XrayPanelModel.parse(.tasks, Self.tasks); _ = XrayPanelModel.parse(.memory, Self.memory)
+                    _ = XrayPanelModel.parse(.chapters, Self.chapters)
+                })
+            }
+            print(String(format: "PERF xray.apply off-main parse (XrayPanelModel.parse) p50 %.2f p95 %.2f ms", Samples.pct(one, 0.5), Samples.pct(one, 0.95)))
         }
     }
 }

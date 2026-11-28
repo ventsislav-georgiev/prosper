@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import os
 import SwiftUI
 
 // #1351 (#1346 P3a, design 3.1-3.9): the X-ray panel, a drawer over one pane (both modes; it overlays, so the terminal
@@ -246,6 +247,25 @@ final class XrayPanels: ObservableObject {
     }
 }
 
+/// #2091: one dch answer parsed (XrayPanelModel.parse), handed from the off-main parse to the main actor's take.
+struct XrayParsed: @unchecked Sendable {   // values only (the parsers' structs), as XrayStateBuilder.Taken
+    enum Kind: Sendable { case tasks, memory, questions, chapters, refs }
+    let kind: Kind
+    let status: Int32
+    /// .chapters: XrayPanels.refsTab() when the read started (takeChapters puts the refs only then).
+    var refsRead = false
+    var tasks: XrayTasks?   // .tasks and .questions, by tasksTab's rule
+    var memory: XrayMemory?   // nil for an empty list
+    var chapters: [TranscriptOutline.Chapter]?
+    var anchors: [String: Int] = [:]
+    var refs: XrayRefs?
+    var corpus: XrayChapters.Corpus?
+
+    /// Rows count the work: every parse, and the ones run on the main thread (the reads must add none there).
+    static let parses = OSAllocatedUnfairLock(initialState: (all: 0, main: 0))
+    static func counted(onMain: Bool) { parses.withLock { $0.all &+= 1; if onMain { $0.main &+= 1 } } }
+}
+
 /// One pane's panel: what the read found, the shown tab and the filter.
 @MainActor
 final class XrayPanelModel: ObservableObject {
@@ -430,6 +450,7 @@ final class XrayPanelModel: ObservableObject {
         // #1389: the third read only for a dch-chapters pane; #1415: or, gate A on, for a Transcript pane's refs alone
         // #1475: a follow carries the chapters and refs: no chapters read beside it
         let refsOnly = !fromDch(), c = follow == nil && (!refsOnly || XrayPanels.refsTab()) ? target.chaptersArgs : nil
+        let refsRead = XrayPanels.refsTab()   // #2091: takeChapters' gate, read here: the parse runs off main
         let chapters: @Sendable () async -> (status: Int32, out: Data)? = {
             guard let c else { return nil }
             return await run(dch, c, env)
@@ -439,25 +460,27 @@ final class XrayPanelModel: ObservableObject {
             return await run(dch, q, env)
         }
         // #1976: each read is taken as it answers (the chapters read, 1.5 s on a big session, gates no tab)
+        // #2091: each answer is parsed off main (XrayPanelModel.parsed); this actor takes the parsed values only
         reading = Task { [weak self] in
-            await withTaskGroup(of: (Int, (status: Int32, out: Data)?).self) { g in
-                g.addTask { (0, await run(dch, a, env)) }
-                g.addTask { (1, await run(dch, b, env)) }
-                g.addTask { (2, await chapters()) }
-                g.addTask { (3, await questions()) }
-                for await (k, r) in g {
+            await withTaskGroup(of: XrayParsed?.self) { g in
+                g.addTask { await XrayPanelModel.parsed(.tasks, await run(dch, a, env)) }
+                g.addTask { await XrayPanelModel.parsed(.memory, await run(dch, b, env)) }
+                g.addTask {
+                    guard let r = await chapters() else { return nil }
+                    return await XrayPanelModel.parsed(refsOnly ? .refs : .chapters, r, refs: refsRead)
+                }
+                g.addTask {
+                    guard let r = await questions() else { return nil }
+                    return await XrayPanelModel.parsed(.questions, r)
+                }
+                for await p in g {
                     // #1368: closed or switched away: the SIGTERMed answer is not news; #1974: the reads still out end too
                     guard !Task.isCancelled, let self else { g.cancelAll(); return }
-                    guard let r else { continue }
-                    let sp = Perf.signposter.beginInterval("xray.apply")   // #2077: the answer's parse and publish, on main
+                    guard let p else { continue }
+                    let sp = Perf.signposter.beginInterval("xray.apply")   // #2077, #2091: the publish, on main (no parse)
                     defer { Perf.signposter.endInterval("xray.apply", sp) }
-                    switch k {
-                    case 0: self.take(r)
-                    case 1: self.takeMemory(r)
-                    case 3: self.takeQuestions(r)
-                    default: self.takeChapters(r, refsOnly: refsOnly)
-                    }
-                    self.openStep(tasksIn: k == 0)
+                    self.take(p)
+                    self.openStep(tasksIn: p.kind == .tasks)
                 }
             }
             guard !Task.isCancelled else { return }
@@ -466,17 +489,47 @@ final class XrayPanelModel: ObservableObject {
         }
     }
 
+    /// The open's answers as bytes, parsed here on main (rows and the perf harness); the reads parse off main (readBoth).
     func apply(tasks tr: (status: Int32, out: Data), memory mr: (status: Int32, out: Data),
                chapters kr: (status: Int32, out: Data)? = nil, refsOnly: Bool = false) {
+        apply([Self.parse(.tasks, tr), Self.parse(.memory, mr)]
+              + (kr.map { [Self.parse(refsOnly ? .refs : .chapters, $0, refs: XrayPanels.refsTab())] } ?? []))
+    }
+
+    /// #2091: the open's answers already parsed: the main-thread part alone (put() and the published writes).
+    func apply(_ parsed: [XrayParsed]) {
         let sp = Perf.signposter.beginInterval("xray.apply")   // #2077
         defer { Perf.signposter.endInterval("xray.apply", sp) }
-        take(tr)
-        takeMemory(mr)
-        if let kr { takeChapters(kr, refsOnly: refsOnly) }
+        for p in parsed { take(p) }
         answeredAll()
     }
 
     func takeChapters(_ r: (status: Int32, out: Data), refsOnly: Bool) { if refsOnly { takeRefs(r) } else { takeChapters(r) } }
+
+    /// #2091: one answer parsed, by its kind's take* rules (XrayPoller.swift); nonisolated: the reads run it off main.
+    /// `refs`: the Refs tab's gate (XrayPanels.refsTab), read by the caller on main. A non-zero exit parses nothing.
+    nonisolated static func parse(_ kind: XrayParsed.Kind, _ r: (status: Int32, out: Data), refs: Bool = false) -> XrayParsed {
+        XrayParsed.counted(onMain: Thread.isMainThread)
+        var p = XrayParsed(kind: kind, status: r.status, refsRead: refs)
+        guard r.status == 0 else { return p }
+        switch kind {
+        case .tasks, .questions: p.tasks = tasksTab(XrayTasks.parse(r.out))
+        case .memory: p.memory = XrayMemory.parse(r.out); if p.memory?.count == 0 { p.memory = nil }
+        case .refs: p.refs = XrayRefs.parse(r.out)
+        case .chapters:
+            // one JSON decode for the four reads of the same bytes (each one's parse(Data) has this same guard)
+            guard r.out.count <= XrayChapters.maxBytes,
+                  let o = try? JSONSerialization.jsonObject(with: r.out) as? [String: Any] else { return p }
+            (p.chapters, p.anchors, p.corpus) = (XrayChapters.parse(o), anchors(o), XrayChapters.corpus(o))
+            if refs { p.refs = XrayRefs.parse(o) }
+        }
+        return p
+    }
+
+    /// #2091: parse, off the main actor (a detached task, as XrayRichBlock.parse); the caller takes the value on main.
+    nonisolated static func parsed(_ kind: XrayParsed.Kind, _ r: (status: Int32, out: Data), refs: Bool = false) async -> XrayParsed {
+        await Task.detached(priority: .userInitiated) { XrayPanelModel.parse(kind, r, refs: refs) }.value
+    }
 
     /// The open's reads all answered.
     func answeredAll() {
@@ -573,9 +626,10 @@ final class XrayPanelModel: ObservableObject {
         follow = nil
     }
 
-    func takeMemory(_ mr: (status: Int32, out: Data)) {
-        let m = mr.status == 0 ? XrayMemory.parse(mr.out) : nil
-        put(\.memory, m?.count == 0 ? nil : m)   // #1972: one publish at most (it was two for an empty list), none when unchanged
+    func takeMemory(_ mr: (status: Int32, out: Data)) { take(Self.parse(.memory, mr)) }
+    /// #2091: Memory's parsed rows (its setter is this file's): take(_ p:) in XrayPoller.swift.
+    func takeMemory(_ m: XrayMemory?) {
+        put(\.memory, m)   // #1972: one publish at most (it was two for an empty list), none when unchanged
     }
 
     /// #1972: sets a published value only when it changed (@Published sends on every set, an equal one too).
@@ -640,12 +694,12 @@ final class XrayPanelModel: ObservableObject {
     }
 
     /// Design 3.9 and QA R1349-i2: a Tasks tab only for exit 0, header schema 1 and at least one task.
-    static func tasksTab(_ r: (status: Int32, out: Data)) -> XrayTasks? {
+    nonisolated static func tasksTab(_ r: (status: Int32, out: Data)) -> XrayTasks? {
         r.status == 0 ? tasksTab(XrayTasks.parse(r.out)) : nil
     }
 
     /// #1475 c: the same rule for a parse in hand (a follow's tasks block).
-    static func tasksTab(_ t: XrayTasks) -> XrayTasks? { t.schema == 1 && !t.tasks.isEmpty ? t : nil }
+    nonisolated static func tasksTab(_ t: XrayTasks) -> XrayTasks? { t.schema == 1 && !t.tasks.isEmpty ? t : nil }
 
     /// #1354, #1389: Prompts while dch's chapters read answered.
     var tabs: [XrayTab] {
@@ -974,7 +1028,7 @@ final class XrayPanelModel: ObservableObject {
 
     /// #1472: dch's `anchor` -> `i` for each chapter, by XrayChapters.parse's rules (schema 1, the newest maxRows, `i`
     /// else the place in the list); empty for anything else.
-    static func anchors(_ data: Data) -> [String: Int] {
+    nonisolated static func anchors(_ data: Data) -> [String: Int] {
         guard data.count <= XrayChapters.maxBytes, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
         return anchors(o)
     }
