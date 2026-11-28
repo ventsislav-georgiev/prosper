@@ -95,4 +95,26 @@ final class AgentTerminalBackingTests: XCTestCase {
             v.tearDown()
         }
     }
+
+    /// #2071: a re-attach (show() of a new screen in a view already in its window) takes that window's backing itself:
+    /// no backing-change notification reaches the view, so viewDidChangeBackingProperties cannot do it. Red with show()'s
+    /// `AgentTerminalLook.backing = window.backingScaleFactor` line removed (mutant 2065-show_backing_not_set).
+    @MainActor
+    func testAReattachInAShownViewTakesItsWindowsBacking() {
+        let saved = AgentTerminalLook.backing
+        defer { AgentTerminalLook.backing = saved }
+        for from: CGFloat in [1, 2] {
+            let v = startedView(backing: from)
+            wait("a grid at \(from)x") { v.host.gridMetrics != nil }
+            let first = v.rig.c.screen
+            v.rig.c.attach(nil)   // a same-key attach is a no-op: leave the session, then attach again
+            AgentTerminalLook.backing = 3 - from   // another pane's handler moved the shared static
+            v.rig.c.attach(AgentTerminalTests.key)
+            wait("a new screen at \(from)x") { v.rig.c.screen != nil && v.rig.c.screen !== first }
+            v.host.show(v.rig.c.screen as? AgentGhosttyScreen)   // a new screen, the same view and window
+            XCTAssertEqual(AgentTerminalLook.backing, from, "re-attached at \(from)x")
+            XCTAssertEqual(v.app.renderedConfig.contains("font-thicken = true"), from < 2, "re-attached at \(from)x: thickening")
+            v.tearDown()
+        }
+    }
 }
