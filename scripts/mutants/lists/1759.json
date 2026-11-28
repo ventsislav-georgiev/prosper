@@ -5,8 +5,8 @@
   {
    "name": "fold_by_title",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "add(g.group.name, g.sessions.map(live), id: groupFold(g.group.id))",
-   "new": "add(g.group.name, g.sessions.map(live))",
+   "old": "rows: g.sessions.map(live), id: groupFold(g.group.id)))",
+   "new": "rows: g.sessions.map(live)))",
    "expect": "killed"
   },
   {
