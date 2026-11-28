@@ -1485,13 +1485,13 @@ enum Preferences {
     /// Invariant (#1777): after any edit or adopt, 0x2d's (pattern, stamp) and 0x2f's (groups, stamp) never disagree under
     /// one stamp: a change of group 0 moves the sidekick stamp to >= the groups stamp it came with, and a 0x2d adopt that
     /// rewrites group 0 moves the groups stamp (adoptSidekickPattern), so the phone re-reads.
-    static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64) {
+    static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64, automatic: Set<String> = []) {
         let pattern = agentIslandSidekickPattern, stored = agentIslandSessionGroups
         // #2061: a phone group without a colour (r2: or with one DchGroupsOps.phonePicks read as Automatic) keeps the
-        // colour picked here when it keeps its id.
+        // colour picked here when it keeps its id, unless the phone set it Automatic (#2061 r3: `automatic`, by id).
         agentIslandSessionGroups = list.map { g in
             var g = g
-            if g.color == nil { g.color = stored.first { $0.id == g.id }?.color }
+            if g.color == nil, !automatic.contains(g.id) { g.color = stored.first { $0.id == g.id }?.color }
             return g
         }
         agentIslandSessionGroupsUpdated = updated

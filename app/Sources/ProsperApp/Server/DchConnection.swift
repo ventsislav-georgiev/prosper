@@ -57,7 +57,7 @@ enum DchFrame {
     // DchWatchHub), only while "watch" is in ops.
     static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick, groups}, then listResp | ok {sidekick, groups} | ok {} … | error
     // #1756: the session groups of the Mac (DchGroupsOps), only while "groups" is in ops (always). One reply.
-    static let groupsSync: UInt8 = 0x2f  // {} | {groups: [{id, name, pattern, color?}], updated} → ok {groups, updated} (the winner) | error
+    static let groupsSync: UInt8 = 0x2f  // {} | {groups: [{id, name, pattern, color?}], updated} → ok {groups, updated} (the winner) | error; color: absent/null/other = keep the Mac's pick, "" = Automatic, "#rrggbb" = a pick
     // #838: dch's control verbs run by this Mac's dch (DchCtl), only while "ctl" is in ops (always).
     static let ctl: UInt8 = 0x30  // {argv: [verb, name, …]} → ctlStdout…/ctlStderr…, then ctlExit | error
     // both directions
@@ -1210,6 +1210,8 @@ struct DchGroupsOps: Sendable {
         var groups: [SessionGroup]
         /// Ms since epoch of the last save; 0 = never edited.
         var updated: Int64
+        /// #2061 r3: ids the phone sent with "color": "" (set to Automatic); decode only, so a pick for them is dropped.
+        var automatic: Set<String> = []
 
         /// #2061 r2: each group's "color" is the "#RRGGBB" the Mac shows (SessionGroup.colors over the stored Automatic
         /// colours, as Preferences.sessionGroupColors gives it, without its write: this runs off main too).
@@ -1227,7 +1229,8 @@ struct DchGroupsOps: Sendable {
     }
 
     /// {} (no "groups" key) reads; {"groups": [{id, name, pattern, color?}], "updated": integer} writes, unknown keys ignored.
-    /// #2061 r2: a "color" that is not a "#rrggbb" string is no colour (normalized drops it), so the Mac's pick stays.
+    /// #2061 r3: "color" absent, null or not a "#rrggbb" string keeps the Mac's pick (an old or buggy phone never wipes
+    /// picks; ctl refuses such a value, a sync write must not fail over a decoration); "" sets Automatic.
     /// .failure carries the malformed message, or tooMany as soon as a 9th item is reached (#1777 n99: nothing past it is
     /// walked). The write's groups are as sent: `limitFailure` checks them once the write wins, then they are normalized.
     static func parse(_ payload: Data) -> Result<Request, Failure> {
@@ -1237,13 +1240,16 @@ struct DchGroupsOps: Sendable {
               let n = o["updated"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
               let updated = n as? Int64 else { return .failure(Failure(malformed)) }
         var list: [SessionGroup] = []
+        var automatic = Set<String>()
         for item in items {
             if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }
             guard let g = item as? [String: Any], let id = g["id"] as? String, validID(id),
                   let name = g["name"] as? String, let pattern = g["pattern"] as? String else { return .failure(Failure(malformed)) }
-            list.append(SessionGroup(id: id, name: name, pattern: pattern, color: g["color"] as? String))
+            let color = g["color"] as? String
+            if color == "" { automatic.insert(id) }
+            list.append(SessionGroup(id: id, name: name, pattern: pattern, color: color))
         }
-        return .success(.write(Value(groups: list, updated: updated)))
+        return .success(.write(Value(groups: list, updated: updated, automatic: automatic)))
     }
 
     /// #2061 r2: a phone colour equal to the one the Mac shows for a group it keeps Automatic (`shown`, by id) is that
@@ -1305,7 +1311,7 @@ struct DchGroupsOps: Sendable {
                     if let message = Self.limitFailure(phone.groups) { return reply(DchControlOps.error(message)) }
                     let list = Self.phonePicks(SessionGroup.normalized(phone.groups), stored: winner.groups,
                                                shown: Preferences.sessionGroupColors())
-                    Preferences.adoptSessionGroups(list, updated: phone.updated)
+                    Preferences.adoptSessionGroups(list, updated: phone.updated, automatic: phone.automatic)
                     winner = Self.current()   // #2061 r2: the stored list, its kept picks merged in
                     adopted()
                 }

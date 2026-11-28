@@ -201,6 +201,24 @@ final class GroupsSyncTests: XCTestCase {
         XCTAssertEqual(stored().groups.map(\.color), ["#0F766E", "#DC2626", "#9333EA"])
     }
 
+    /// #2061 r3: "color": "" sets a Mac pick back to Automatic; absent, null or an invalid value keeps it; "#rrggbb" picks.
+    /// Red at base: "" kept the pick (stored by id again).
+    func testAPhoneColourOfEmptyStringSetsAutomaticAndAbsentOrNullKeepsThePick() {
+        let red = "#DC2626"
+        Preferences.agentIslandSessionGroups = ["a", "b", "c", "d", "e"].map { SessionGroup(id: $0, name: $0.uppercased(), pattern: "-\($0)", color: red) }
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        func row(_ id: String, _ color: Any?) -> [String: Any] {
+            var o: [String: Any] = ["id": id, "name": id.uppercased(), "pattern": "-\(id)"]
+            if let color { o["color"] = color }
+            return o
+        }
+        let r = call(Self.body(["groups": [row("a", ""), row("b", nil), row("c", NSNull()), row("d", "#9333EA"), row("e", "red")], "updated": 101]))
+        XCTAssertEqual(r.adopts, 1)
+        XCTAssertEqual(stored().groups.map(\.color), [nil, red, red, "#9333EA", red])
+        let shown = (r.json["groups"] as? [[String: Any]])?.first?["color"] as? String
+        XCTAssertTrue(shown != nil && shown != red, "a is shown an automatic colour")
+    }
+
     func testAnOlderOrTiedWriteIsAnsweredWithTheMacs() {
         Preferences.agentIslandSessionGroups = Self.macList
         Preferences.agentIslandSessionGroupsUpdated = 100

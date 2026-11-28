@@ -221,7 +221,7 @@
   {
    "name": "sync-phone-colour-dropped",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "color: g[\"color\"] as? String))",
+   "old": "color: color))",
    "new": "color: nil))",
    "expect": "killed",
    "filter": "GroupsSyncTests/testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne"
@@ -241,6 +241,22 @@
    "new": "winner = Value(groups: list, updated: phone.updated)   // #2061 r2",
    "expect": "killed",
    "filter": "GroupsSyncTests/testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne"
+  },
+  {
+   "name": "sync-empty-colour-not-automatic",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "if color == \"\" { automatic.insert(id) }",
+   "new": "if color == \"\", Bool(\"false\") == true { automatic.insert(id) }",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testAPhoneColourOfEmptyStringSetsAutomaticAndAbsentOrNullKeepsThePick"
+  },
+  {
+   "name": "sync-absent-colour-wipes-pick",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if g.color == nil, !automatic.contains(g.id) {",
+   "new": "if g.color == nil, !automatic.contains(g.id), Bool(\"false\") == true {",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testAPhoneColourOfEmptyStringSetsAutomaticAndAbsentOrNullKeepsThePick"
   }
  ]
 }
