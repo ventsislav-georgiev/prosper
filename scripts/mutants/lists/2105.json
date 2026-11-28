@@ -1,0 +1,62 @@
+{
+ "entry": "2105",
+ "filter": "AgentSessionGroupMoveTests|AgentIslandTests/testAForcedTickListsPastTheGateAndReturnsAnUnchangedList",
+ "mutants": [
+  {
+   "name": "no-local-placement",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "            store.sessions[i] = AgentIsland.placed(store.sessions[i], to.to)   // one publish, not one per field\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "no-revert",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "                    store.sessions[i] = AgentIsland.placed(store.sessions[i], to.was)\n",
+   "new": "                    _ = i\n",
+   "expect": "killed"
+  },
+  {
+   "name": "auto-keeps-group",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        auto.group = nil\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "refused-places",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "        else if let i = store.sessions.firstIndex(where: { $0.key == key }) {",
+   "new": "        if let i = store.sessions.firstIndex(where: { $0.key == key }) {",
+   "expect": "killed"
+  },
+  {
+   "name": "overlay-ignores-was",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "guard let m = moved[s.key], s.group == m.was.group, s.groupManual == m.was.manual else",
+   "new": "guard let m = moved[s.key] else",
+   "expect": "killed"
+  },
+  {
+   "name": "overlay-ignores-manual",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandActions.swift",
+   "old": "s.group == m.was.group, s.groupManual == m.was.manual else",
+   "new": "s.group == m.was.group else",
+   "expect": "killed"
+  },
+  {
+   "name": "force-keeps-gate",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "} else if force || gate.shouldFetch(",
+   "new": "} else if gate.shouldFetch(",
+   "expect": "killed"
+  },
+  {
+   "name": "force-drops-unchanged",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard force || current != published else { return nil }",
+   "new": "guard current != published else { return nil }",
+   "expect": "killed"
+  }
+ ]
+}
