@@ -1277,7 +1277,7 @@ struct XrayBottomView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle().fill(XrayInk.stroke).frame(height: 1).overlay { handle }
+            Rectangle().fill(XrayInk.stroke).frame(height: 1)
             strip.frame(height: XrayBottomPane.strip - 1)
             if !bottom.collapsed {
                 Rectangle().fill(XrayInk.stroke).frame(height: 1)
@@ -1292,6 +1292,7 @@ struct XrayBottomView: View {
             }
         }
         .frame(height: XrayBottomPane.height(bottom.fraction, in: total), alignment: .top)
+        .overlay(alignment: .top) { handle }   // QA R2066a n1: the handle's whole hit area inside the clip, the line at its top
         .clipped()
         .background(XrayInk.surface)   // a drag's preview covers the content above it
     }
@@ -1323,7 +1324,7 @@ struct XrayBottomView: View {
         .padding(.horizontal, sz(10))
     }
 
-    /// XrayDrawer's width handle, turned: a few points of hit area on the 1 pt divider.
+    /// XrayDrawer's width handle, turned: the top few points of the pane, the 1 pt divider at its top edge.
     var handle: some View {
         Color.clear.frame(height: sz(5)).contentShape(Rectangle())
             .onContinuousHover { phase in
@@ -1359,18 +1360,18 @@ struct XrayBottomEmpty: View {
 
 /// #2066: the bottom tabs' bodies, each its own view (#2053 agents, #2052 shells, #2051 PRs replace them).
 struct XrayBottomAgents: View {
-    static let empty = "No subagents running in this session."
+    static let empty = "Subagents show in the session's header count for now."
     var body: some View { XrayBottomEmpty(text: Self.empty) }
 }
 
 struct XrayBottomShells: View {
-    static let empty = "No background shells in this session."
+    static let empty = "Background shells show in the session's header count for now."
     var body: some View { XrayBottomEmpty(text: Self.empty) }
 }
 
 /// Also the line for a session with no repo.
 struct XrayBottomPRs: View {
-    static let empty = "No pull requests for this session."
+    static let empty = "Pull requests show in the session's sidebar row for now."
     var body: some View { XrayBottomEmpty(text: Self.empty) }
 }
 

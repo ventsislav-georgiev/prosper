@@ -1,6 +1,6 @@
 {
  "entry": "2066",
- "filter": "XrayBottomPaneTests|AgentWindowD1Tests/testXrayCount",
+ "filter": "XrayBottomPaneTests|AgentWindowD1Tests/testXrayCount|AgentWindowD1Tests/testHeaderCount",
  "mutants": [
   {
    "name": "bottom-clamp-removed",
@@ -35,20 +35,28 @@
    "filter": "AgentWindowD1Tests/testXrayCountGroupClickOpensTheDrawerAtItsTab"
   },
   {
-   "name": "count-gate-dropped",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "guard let pane, XrayPanels.dch() != nil, XrayTarget.of(row) != nil else { return nil }",
-   "new": "guard let pane else { return nil }",
-   "expect": "killed",
-   "filter": "AgentWindowD1Tests/testXrayCountGroupsAreButtonsOnlyWithTheGateOpen"
-  },
-  {
    "name": "bottom-floor-dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
    "old": "max(0, min(total - floor, max(strip, total * fraction)))",
    "new": "max(0, max(strip, total * fraction))",
    "expect": "killed",
    "filter": "XrayBottomPaneTests/testContentAboveKeepsItsFloorAtSmallDrawerHeights"
+  },
+  {
+   "name": "header-wired",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp)\n",
+   "new": "AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp, show: { _ in })\n",
+   "expect": "killed",
+   "filter": "AgentWindowD1Tests/testHeaderCountGroupsArePlainWithTheGateOpen"
+  },
+  {
+   "name": "handle-outside-clip",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": ".overlay(alignment: .top) { handle }",
+   "new": ".overlay(alignment: .top) { handle.offset(y: -sz(2)) }",
+   "expect": "killed",
+   "filter": "XrayBottomPaneTests/testDividerHandleLiesInsideThePaneClip"
   }
  ]
 }

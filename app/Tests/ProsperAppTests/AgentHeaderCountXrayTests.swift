@@ -63,12 +63,11 @@ extension AgentWindowD1Tests {
         }
     }
 
-    /// Red at TIP (plain counts). Mutant count-gate-dropped (the header's gate check dropped) fails the gate-closed lines.
-    /// Gate open: the agents and shells groups are buttons named "Show subagents" and "Show shells", their count words the
-    /// value; merged stays a plain count. Gate closed: no such button, the words are the label. The open PRs group's
-    /// button is the sidebar-free AgentCountGroups row below.
+    /// QA R2066a F1 (ruling b): the header's count groups stay plain counts, gate open or closed, until #2051-#2053 fill
+    /// the tabs. Red at fd8165c5 (AgentHeaderCounts drew "Show subagents"/"Show shells" buttons with the gate open);
+    /// mutant header-wired fails it.
     @MainActor
-    func testXrayCountGroupsAreButtonsOnlyWithTheGateOpen() throws {
+    func testHeaderCountGroupsArePlainWithTheGateOpen() throws {
         _ = ThemeStore.shared   // #1510
         let saved = ThemeRuntime.scale
         defer { ThemeRuntime.scale = saved }
@@ -99,10 +98,8 @@ extension AgentWindowD1Tests {
         try xrayButtonSeams([1, 78, 0]) { _ in
             let t = tree()
             for (label, words) in groups {
-                let n = t.filter { $0.label == label && !$0.ignored }
-                XCTAssertEqual(n.count, 1, "\(label): one button in \(t.map(\.names))")
-                XCTAssertEqual(n.first?.role, "AXButton", label)
-                XCTAssertEqual(n.first?.value, words, "\(label): the count words are the value")
+                XCTAssertFalse(t.contains { $0.label == label && !$0.ignored }, "gate open: no \(label) button in \(t.map(\.names))")
+                XCTAssertTrue(t.contains { $0.reads(words) && $0.role != "AXButton" }, "gate open: \(words) as a plain count")
             }
             XCTAssertTrue(t.contains { $0.reads("3 merged pull requests") && $0.role != "AXButton" }, "merged: a plain count")
             XCTAssertFalse(t.contains { $0.label == "Show pull requests" }, "the header draws no open PRs group (AgentRowSymbolsTests)")

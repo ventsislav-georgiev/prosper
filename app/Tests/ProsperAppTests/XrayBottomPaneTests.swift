@@ -131,9 +131,9 @@ final class XrayBottomPaneTests: XCTestCase {
         let restoreAX = AXTreeSupport.axOn()
         defer { restoreAX() }
         try withClearedKeys {
-            let lines: [(XrayBottomTab, String)] = [(.agents, "No subagents running in this session."),
-                                                     (.shells, "No background shells in this session."),
-                                                     (.prs, "No pull requests for this session.")]
+            let lines: [(XrayBottomTab, String)] = [(.agents, "Subagents show in the session's header count for now."),
+                                                     (.shells, "Background shells show in the session's header count for now."),
+                                                     (.prs, "Pull requests show in the session's sidebar row for now.")]
             let b = XrayBottomPane.shared
             let saved = b.tab
             defer { b.tab = saved; b.reset() }
@@ -154,6 +154,29 @@ final class XrayBottomPaneTests: XCTestCase {
             defer { win.contentView = nil; win.close() }
             let tree = AXTreeSupport.poll(host) { $0.contains { $0.reads("Agents") } }
             XCTAssertFalse(tree.contains { n in lines.contains { n.reads($0.1) } }, "folded: the strip only")
+        }
+    }
+
+    /// QA R2066a n1, red at fd8165c5 (the 5 pt handle centred on the 1 pt line stuck 2 pt out of the clipped view): the
+    /// divider handle's AX frame lies inside the bottom pane's bounds, so .clipped() takes none of its hit area.
+    @MainActor
+    func testDividerHandleLiesInsideThePaneClip() throws {
+        _ = ThemeStore.shared   // #1510
+        let restoreAX = AXTreeSupport.axOn()
+        defer { restoreAX() }
+        try withClearedKeys {
+            let b = XrayBottomPane.shared
+            b.reset()
+            defer { b.reset() }
+            let h = XrayBottomPane.height(b.fraction, in: 600)
+            let (win, host) = AXTreeSupport.hosted(XrayBottomView(bottom: b, total: 600), CGSize(width: 480, height: h))
+            defer { win.contentView = nil; win.close() }
+            let tree = AXTreeSupport.poll(host) { $0.contains { $0.label == "X-ray bottom pane height" } }
+            let handle = try XCTUnwrap(tree.first { $0.label == "X-ray bottom pane height" }, "\(tree.map(\.names))")
+            let bounds = win.convertToScreen(host.convert(host.bounds, to: nil))
+            XCTAssertGreaterThan(handle.frame.height, 0)
+            XCTAssertTrue(bounds.insetBy(dx: -0.5, dy: -0.5).contains(handle.frame), "\(handle.frame) inside \(bounds)")
+            XCTAssertFalse(win.isVisible, "never shown")
         }
     }
 }

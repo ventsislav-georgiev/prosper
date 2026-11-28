@@ -746,6 +746,7 @@ final class AgentsNSWindow: NSWindow {
     /// #2066: a header count group (agents, shells, open PRs): that pane takes the focus, its drawer opens for the session it
     /// shows through toggleXray (or stays open: no toggle), and the bottom pane shows `tab`, unfolded. Below the gate or
     /// with no session: nothing (the header draws no button then).
+    // shortcut: not wired to the header until #2051-#2053 fill the tabs (QA R2066a F1)
     @MainActor static func xrayCountClicked(_ tab: XrayBottomTab, pane: UUID, in win: AgentsNSWindow?) {
         guard let win, let m = win.model else { return }
         if pane != m.layout.focused { m.focusPane(pane) }
@@ -2650,25 +2651,6 @@ struct AgentCountGroups: View {
     }
 }
 
-/// #2066: the pane header's count groups: with `pane`, the X-ray gate open and a session X-ray can read, the agents and
-/// shells groups (and an open PRs group, which the header does not draw today: AgentRowSymbolsTests) open the drawer at
-/// their tab (no popups, operator 2026-11-27); else plain counts. Observes XrayPanels so they turn into buttons when the
-/// gate opens.
-struct AgentHeaderCounts: View {
-    @ObservedObject var panels = XrayPanels.shared
-    let row: AgentSidebar.Row
-    let pane: UUID?
-
-    /// nil (plain counts): no pane, the gate closed (XrayPanels.dch nil) or no session X-ray can read: no dead button.
-    var show: (@MainActor (XrayBottomTab) -> Void)? {
-        guard let pane, XrayPanels.dch() != nil, XrayTarget.of(row) != nil else { return nil }
-        return { AgentsNSWindow.xrayCountClicked($0, pane: pane, in: AgentsNSWindow.window(of: pane)) }
-    }
-
-    var body: some View {
-        AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp, show: show)
-    }
-}
 
 /// The sidebar with no session and no record. #887 (QA #747 INFO-7): + and ⌘N are named only while they work.
 struct AgentNoSessionsState: View {
@@ -4123,7 +4105,7 @@ struct AgentSessionHeader: View {
                         HStack(spacing: sz(6)) {
                             Text("\u{00B7}").accessibilityHidden(true)   // after the chip
                             // #1239: under the Rename field.
-                            AgentHeaderCounts(row: row, pane: xrayPane)
+                            AgentCountGroups(counts: row.counts, size: 11, help: row.countHelp)
                                 .modifier(AgentHeaderRenameHidden(renaming: renaming))
                             if let ago {
                                 if !row.counts.isEmpty { Text("·").accessibilityHidden(true) }   // a count never runs into "4m ago"
