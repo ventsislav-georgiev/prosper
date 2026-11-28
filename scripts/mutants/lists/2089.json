@@ -1,0 +1,27 @@
+{
+  "entry": "2089",
+  "filter": "DchShellsTests",
+  "mutants": [
+    {
+      "name": "null_id_dropped",
+      "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+      "old": "let id: String?? = o[\"id\"] is NSNull ? .some(nil) : text(o[\"id\"]).map { .some($0) }",
+      "new": "let id: String?? = text(o[\"id\"]).map { .some($0) }",
+      "expect": "killed"
+    },
+    {
+      "name": "monitor_flag_ignored",
+      "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+      "old": "        monitor = flag(o[\"monitor\"])\n",
+      "new": "\n",
+      "expect": "killed"
+    },
+    {
+      "name": "monitor_mark_missing",
+      "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+      "old": "(sh.monitor ? \"Monitor: \" : \"\")",
+      "new": "\"\"",
+      "expect": "killed"
+    }
+  ]
+}
