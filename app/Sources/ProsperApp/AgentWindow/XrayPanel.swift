@@ -63,7 +63,10 @@ final class XrayPanels: ObservableObject {
         p.requests.observe(.default)
         return p
     }()
-    @Published var open: [UUID: XrayPanelModel] = [:] {
+    /// #2093: not @Published: an open or close tells only the panes whose entry changed (their Slot), so the other panes'
+    /// buttons, drawers and docks keep their bodies. `docked` and `publish` (the gate) still tell every view of `shared`.
+    var open: [UUID: XrayPanelModel] = [:] {
+        willSet { for k in Set(open.keys).union(newValue.keys) where open[k] !== newValue[k] { slots[k]?.objectWillChange.send() } }
         didSet {   // #1368: a panel that leaves stops polling and SIGTERMs its read; one that comes reads its pane's state
             for (k, m) in oldValue where open[k] !== m { m.stop() }
             for (k, m) in open where oldValue[k] !== m { m.paneState = { Self.paneState(k) }; wire(m, k) }
@@ -71,6 +74,17 @@ final class XrayPanels: ObservableObject {
     }
 
     func close(_ pane: UUID) { open[pane] = nil }
+
+    /// #2093: what a pane's X-ray views observe for that pane's entry in `open`; sent before the entry changes.
+    final class Slot: ObservableObject {}
+    /// shortcut: one empty Slot per pane a view ever showed, never dropped (a view may still hold it); prune if panes churn by the thousand.
+    private var slots: [UUID: Slot] = [:]
+    func slot(_ pane: UUID) -> Slot {
+        if let s = slots[pane] { return s }
+        let s = Slot()
+        slots[pane] = s
+        return s
+    }
 
     /// #2055: the drawer docks beside the terminal, which makes room (Preferences.xrayDocked; the Settings toggle sets it).
     @Published var docked = Preferences.xrayDocked {
@@ -1479,13 +1493,20 @@ struct XrayBottomPRs: View {
 /// The drawer over `pane`, drawn only while its panel is open for the session the pane shows.
 struct XrayDrawer: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
-    @ObservedObject var panels = XrayPanels.shared
+    @ObservedObject var panels = XrayPanels.shared   // #2093: docked and the gate; the pane's open state comes by `slot`
     @ObservedObject var width = XrayDrawerWidth.shared
     @ObservedObject var bottom = XrayBottomPane.shared   // #2066
+    @ObservedObject private var slot: XrayPanels.Slot
     let pane: UUID
     let target: XrayTarget?
 
+    init(pane: UUID, target: XrayTarget?) {
+        (self.pane, self.target) = (pane, target)
+        _slot = ObservedObject(wrappedValue: XrayPanels.shared.slot(pane))
+    }
+
     var body: some View {
+        let _ = XrayPaneProbe.count("drawer", pane)
         if let p = panels.open[pane], p.target == target {
             let docked = panels.docked
             GeometryReader { g in
@@ -1543,8 +1564,9 @@ struct XrayDrawer: View {
 /// terminal resizes once, at the drag's end. `on` (from the content's size; compact panes: false): no drawer at all.
 /// `drawer` false: the content draws the drawer itself (the pane area, so its question card stays over it), in the room.
 struct XrayDock: ViewModifier {
-    @ObservedObject var panels = XrayPanels.shared
+    @ObservedObject var panels = XrayPanels.shared   // #2093: docked and the gate; the pane's open state comes by `slot`
     @ObservedObject var width = XrayDrawerWidth.shared
+    @ObservedObject private var slot: XrayPanels.Slot
     let pane: UUID
     let target: XrayTarget?
     let drawer: Bool
@@ -1553,6 +1575,7 @@ struct XrayDock: ViewModifier {
 
     init(pane: UUID, target: XrayTarget?, drawer: Bool = true, on: @escaping @MainActor (CGSize) -> Bool) {
         (self.pane, self.target, self.drawer, self.on) = (pane, target, drawer, on)
+        _slot = ObservedObject(wrappedValue: XrayPanels.shared.slot(pane))
     }
 
     /// The trailing room the content gives up: docked and open for the session shown, the drawer's settled width as drawn
@@ -1563,6 +1586,7 @@ struct XrayDock: ViewModifier {
     }
 
     func body(content: Content) -> some View {
+        let _ = XrayPaneProbe.count("dock", pane)
         let shown = on(size)
         let open = shown && target != nil && panels.open[pane]?.target == target
         let inset = Self.inset(open: open, docked: panels.docked, settled: width.settled, offered: size.width)
@@ -1574,6 +1598,13 @@ struct XrayDock: ViewModifier {
                 if shown && drawer { XrayDrawer(pane: pane, target: target) }
             }
     }
+}
+
+/// #2093 test seam: body passes of each pane's X-ray button, drawer and dock, keyed "<kind> <pane>"; nil (the product):
+/// nothing counted, no key built.
+enum XrayPaneProbe {
+    @MainActor static var bodies: [String: Int]?
+    @MainActor static func count(_ kind: String, _ pane: UUID) { bodies?["\(kind) \(pane)", default: 0] += 1 }
 }
 
 private struct XrayDockInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }

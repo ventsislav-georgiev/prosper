@@ -2467,9 +2467,15 @@ extension AgentSidebarRowView {
 /// selected; off (dimmed, the tooltip says why) where the "..." has no X-ray item. One slot in every state.
 struct AgentXrayButton: View {
     @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
-    @ObservedObject var panels = XrayPanels.shared
+    @ObservedObject var panels = XrayPanels.shared   // #2093: the gate (publish); the pane's open state comes by `slot`
+    @ObservedObject private var slot: XrayPanels.Slot
     let pane: UUID
     let target: XrayTarget?
+
+    init(pane: UUID, target: XrayTarget?) {
+        (self.pane, self.target) = (pane, target)
+        _slot = ObservedObject(wrappedValue: XrayPanels.shared.slot(pane))
+    }
 
     static let label = "X-ray"
     static let help = "X-ray (\u{21E7}\u{2318}X)"
@@ -2486,6 +2492,7 @@ struct AgentXrayButton: View {
     var open: Bool { target != nil && panels.open[pane]?.target == target }
 
     var body: some View {
+        let _ = XrayPaneProbe.count("button", pane)
         let on = open, off = Self.offReason(target)
         Button { AgentsNSWindow.xrayClicked(pane: pane, in: AgentsNSWindow.window(of: pane)) } label: {
             Image(systemName: "sidebar.right").font(Neon.font(11, weight: .medium))
