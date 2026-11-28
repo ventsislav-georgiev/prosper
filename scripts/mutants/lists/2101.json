@@ -1,0 +1,34 @@
+{
+ "entry": "2101",
+ "filter": "KitRuntimeTests/testRenamedPieceUpdateRemovesTheOldOneInTheConsentPlan|KitRuntimeTests/testRenamedPieceUpdateWithItsNodeRemovedByHandForgetsIt|KitRuntimeTests/testStayingPieceWithItsNodeRemovedByHandStillRefuses",
+ "mutants": [
+  {
+   "name": "consent-skips-gone",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "let mc = config.plan(p.pieces, owner: who, dropping: Self.gone(p, config, who))",
+   "new": "let mc = config.plan(p.pieces, owner: who)",
+   "expect": "killed"
+  },
+  {
+   "name": "planner-ignores-gone",
+   "file": "app/Sources/ProsperApp/ManagedConfig/ManagedConfig.swift",
+   "old": "for r in state.records where r.owner == owner.id && gone.contains(r.piece.id) { planner.remove(r) }",
+   "new": "for r in state.records where r.owner == owner.id && gone.contains(r.piece.id) { _ = r }",
+   "expect": "killed"
+  },
+  {
+   "name": "wiring-skips-gone",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "let r = await mc.apply(mc.plan(p.pieces, owner: who, dropping: Self.gone(p, config, who)))",
+   "new": "let r = await mc.apply(mc.plan(p.pieces, owner: who, dropping: []))",
+   "expect": "killed"
+  },
+  {
+   "name": "gone-unscoped",
+   "file": "app/Sources/ProsperApp/Kit/KitRuntime.swift",
+   "old": "return config.status(owner: who).map(\\.id).filter { !planned.contains($0) }",
+   "new": "return config.status(owner: who).map(\\.id).filter { _ in !planned.isEmpty }",
+   "expect": "killed"
+  }
+ ]
+}
