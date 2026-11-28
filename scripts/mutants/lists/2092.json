@@ -1,0 +1,57 @@
+{
+ "entry": "2092",
+ "filter": "XrayDrawerFollowTests",
+ "mutants": [
+  {
+   "name": "follow-on-onchange",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        model.xrayShownChanged = { [weak win] in win?.followXray($0, $1) }   // #2092: from the model, before the view update\n",
+   "new": "",
+   "expect": "killed",
+   "note": "single edit: the model hook unwired (no follow at all); the worker's two-edit form also put the onChange back"
+  },
+  {
+   "name": "drawer-keyed-by-pane",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "                    XrayDrawer(pane: model.layout.focused, target: shownTarget)\n",
+   "new": "                    XrayDrawer(pane: model.layout.focused, target: shownTarget).id(model.layout.focused)\n",
+   "expect": "killed"
+  },
+  {
+   "name": "follow-seed-skipped",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "XrayPanels.keepRows(), let k = panels?.kept[target] { seed(k) }",
+   "new": "XrayPanels.keepRows(), let k = panels?.kept[target] { _ = k }",
+   "expect": "killed"
+  },
+  {
+   "name": "xray-click-toggles-after-follow",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if !follows || XrayPanels.shared.open[pane] == nil { win.toggleXray() }\n",
+   "new": "        _ = follows; win.toggleXray()\n",
+   "expect": "killed"
+  },
+  {
+   "name": "shown-hook-unguarded",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        guard now != old else { return }\n",
+   "new": "",
+   "expect": "killed"
+  },
+  {
+   "name": "shown-hook-hidden",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "        guard visible, let tell = xrayShownChanged else { return }\n",
+   "new": "        guard let tell = xrayShownChanged else { return }\n",
+   "expect": "killed"
+  },
+  {
+   "name": "drawer-scroll-not-reset",
+   "file": "app/Sources/ProsperApp/AgentWindow/XrayPanel.swift",
+   "old": "            .onChange(of: ObjectIdentifier(panel)) { position.scrollTo(edge: .top) }\n",
+   "new": "",
+   "expect": "survives",
+   "note": "no row: a list's scroll offset across a panel swap is not observable offscreen (no laid-out scroll view)"
+  }
+ ]
+}

@@ -21,8 +21,8 @@
   {
    "name": "dock-onchange-unwired",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
-   "old": "w?.xrayFollow(from: old.pane) } else { w?.xrayShown() }",
-   "new": "w?.xrayFollow(from: old.pane) }",
+   "old": "        if old.pane != new.pane { xrayFollow(from: old.pane) } else { xrayShown() }\n",
+   "new": "        if old.pane != new.pane { xrayFollow(from: old.pane) }\n",
    "expect": "killed",
    "filter": "AgentWindowD1Tests/testXrayDockASessionChangeThroughTheModelTakesItsDrawerState"
   },
