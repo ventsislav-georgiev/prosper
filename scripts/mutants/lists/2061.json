@@ -1,0 +1,166 @@
+{
+ "entry": "2061",
+ "filter": "SessionGroupColorTests|AgentWindowSidebarMenuTests|DchConfigWriterTests/testTheControllerWritesGroupsOnlyForADchThatReadsThem",
+ "mutants": [
+  {
+   "name": "auto-reuses-taken",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "let c = palette.first { !taken.contains($0.hex) }?.hex",
+   "new": "let c = palette.first { _ in true }?.hex",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAutomaticHandsOutThePaletteInListOrderNeverTwice"
+  },
+  {
+   "name": "kept-auto-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "if let c = auto[g.id].flatMap(validColor), taken.insert(c).inserted { out[g.id] = c }",
+   "new": "if let c = auto[g.id].flatMap(validColor), taken.insert(c).inserted, Bool(\"false\") == true { out[g.id] = c }",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testADeleteOrAMoveRepaintsNoOtherGroup"
+  },
+  {
+   "name": "kept-auto-beats-pick",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "if let c = auto[g.id].flatMap(validColor), taken.insert(c).inserted { out[g.id] = c }",
+   "new": "if let c = auto[g.id].flatMap(validColor), taken.insert(c).inserted || true { out[g.id] = c }",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAPickWinsAndAnAutomaticGroupMovesOffIt"
+  },
+  {
+   "name": "pick-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "for g in list { if let c = g.color.flatMap(validColor) { out[g.id] = c; taken.insert(c) } }",
+   "new": "for g in list { if let c = g.color.flatMap(validColor), Bool(\"false\") == true { out[g.id] = c; taken.insert(c) } }",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAPickWinsAndAnAutomaticGroupMovesOffIt"
+  },
+  {
+   "name": "normalized-drops-colour",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "color: $0.color.flatMap(validColor))",
+   "new": "color: nil)",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAPickRoundTripsAndABadStoredColourReadsAsAutomatic"
+  },
+  {
+   "name": "normalized-unvalidated",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "color: $0.color.flatMap(validColor))",
+   "new": "color: $0.color)",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAPickRoundTripsAndABadStoredColourReadsAsAutomatic"
+  },
+  {
+   "name": "valid-colour-any-length",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "guard s.count == 7, s.first == \"#\"",
+   "new": "guard s.first == \"#\"",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testPaletteIsEightDistinctValidColours"
+  },
+  {
+   "name": "prefs-store-picks-too",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "let auto = all.filter { id, _ in list.contains { $0.id == id && $0.color == nil } }",
+   "new": "let auto = all",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAutoColoursAreStoredOnceAndSurviveADelete"
+  },
+  {
+   "name": "prefs-kept-ignored",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "let all = SessionGroup.colors(list, auto: kept)",
+   "new": "let all = SessionGroup.colors(list, auto: [:])",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testAutoColoursAreStoredOnceAndSurviveADelete"
+  },
+  {
+   "name": "phone-adopt-drops-pick",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if g.color == nil { g.color = stored.first { $0.id == g.id }?.color }",
+   "new": "if g.color == nil, Bool(\"false\") == true { g.color = stored.first { $0.id == g.id }?.color }",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testThePhonesAdoptKeepsAPickOnAGroupItKeeps"
+  },
+  {
+   "name": "colour-for-unwritten-group",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "guard !groupValues([g]).isEmpty, let c = colors[g.id]",
+   "new": "guard let c = colors[g.id]",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testColourLinesFollowTheGroupLinesForEveryWrittenGroup"
+  },
+  {
+   "name": "old-colour-lines-kept",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "if groups != nil, setsKey(line, \"group_color\") { continue }",
+   "new": "if groups != nil, setsKey(line, \"group_color_x\") { continue }",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testColourLinesFollowTheGroupLinesForEveryWrittenGroup"
+  },
+  {
+   "name": "colours-without-owned-groups",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "+ (groups == nil ? [] : colors).map",
+   "new": "+ colors.map",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testWithoutOwnedGroupLinesTheFilesColourLinesStay"
+  },
+  {
+   "name": "controller-drops-colours",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g, colors: colors)",
+   "new": "DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g)",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testTheControllerWritesGroupsOnlyForADchThatReadsThem"
+  },
+  {
+   "name": "menu-swatch-unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "checked: shown == $0.hex, verb: .groupColor($0.hex))",
+   "new": "checked: false, verb: .groupColor($0.hex))",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuColourSubmenuTitlesAndChecks"
+  },
+  {
+   "name": "menu-automatic-unchecked",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "checked: group.color == nil, verb: .groupColor(nil))",
+   "new": "checked: false, verb: .groupColor(nil))",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuColourSubmenuTitlesAndChecks"
+  },
+  {
+   "name": "menu-colour-for-any-name",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "guard let group = store.sessionGroups.first(where: { $0.name == name }) else { return actions }",
+   "new": "guard let group = store.sessionGroups.first else { return actions }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testGroupMenuColourSubmenuTitlesAndChecks"
+  },
+  {
+   "name": "same-pick-saves-again",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "list[i].color != hex else { return }",
+   "new": "true else { return }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testColourItemSavesThePickOnItsGroup"
+  },
+  {
+   "name": "model-colours-not-published",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
+   "old": "if let c = store?.groupColors, c != groupColors { groupColors = c }",
+   "new": "if let c = store?.groupColors, c != groupColors, Bool(\"false\") == true { groupColors = c }",
+   "expect": "killed",
+   "filter": "AgentWindowSidebarMenuTests/testTheStoresGroupColoursReachTheSidebarOnAGroupsPublish"
+  },
+  {
+   "name": "palette-low-contrast",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandModel.swift",
+   "old": "(\"Gold\", \"#A16207\")",
+   "new": "(\"Gold\", \"#CA8A04\")",
+   "expect": "killed",
+   "filter": "SessionGroupColorTests/testEveryPaletteColourClearsThreeToOneOnEveryThemesSidebar"
+  }
+ ]
+}

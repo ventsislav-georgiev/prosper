@@ -64,6 +64,15 @@ enum DchConfigWriter {
         }
     }
 
+    /// #2061 (dch 1.196.0): each written group's colour line value, `<name> = #RRGGBB`, in groupValues' order: a group
+    /// groupValues leaves out gets none (dch would colour a tab it does not draw). `colors`: Preferences.sessionGroupColors.
+    static func colorValues(_ groups: [SessionGroup], colors: [String: String]) -> [String] {
+        SessionGroup.normalized(groups).compactMap { g in
+            guard !groupValues([g]).isEmpty, let c = colors[g.id].flatMap(SessionGroup.validColor) else { return nil }
+            return "\(g.name) = \(c)"
+        }
+    }
+
     /// #1757: the group lines `render` owns for this dch: `values` at groupsMinimum, nil (the file's own group lines
     /// kept, none added) below it or with no dch found.
     static func groupLines(_ values: [String], dch: DchCommand.Binary?) -> [String]? {
@@ -249,7 +258,9 @@ enum DchConfigWriter {
     /// is left: kept whole, it made mayAllow read the file as unknown at every later `--config` timeout (the island stood down).
     /// #1757: `groups` non-nil owns the `group` key too: every group line goes, these values stand at the first one's
     /// place (else at the end), in order; [] leaves none, which with `sidekick_pattern =` empty is dch's empty list.
-    static func render(_ old: Data, autoAllow: Bool, pattern: String, groups: [String]? = nil) -> Data {
+    /// #2061: with `groups` non-nil the `group_color` key is owned too: its lines go, `colors` (colorValues) follow the
+    /// group lines as one block. With `groups` nil the file's colour lines are kept, as its group lines are.
+    static func render(_ old: Data, autoAllow: Bool, pattern: String, groups: [String]? = nil, colors: [String] = []) -> Data {
         let oneLine = pattern.utf8.count <= maxPatternBytes && pattern.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F }
         let owned = [("auto_allow", "auto_allow = \(autoAllow)"),
                      ("sidekick_pattern", "sidekick_pattern = \(oneLine ? pattern : "")")]
@@ -257,7 +268,9 @@ enum DchConfigWriter {
         if old.isEmpty || old.last == 0x0A { _ = lines.popLast() }   // the final newline ends a line, it opens none
         var out = Data(), done = Set<String>()
         let groupText = (groups ?? []).map { "group = \($0)\n" }.joined()
+            + (groups == nil ? [] : colors).map { "group_color = \($0)\n" }.joined()
         for line in lines {
+            if groups != nil, setsKey(line, "group_color") { continue }
             if groups != nil, setsKey(line, "group") {
                 if done.insert("group").inserted { out.append(contentsOf: Array(groupText.utf8)) }
                 continue
@@ -298,15 +311,15 @@ enum DchConfigWriter {
     /// shortcut: a write by dch or by hand between the read and the rename is lost, as with dch's own
     /// `--config`; add a compare-before-rename if both ever write at once.
     @discardableResult
-    static func write(path: String, autoAllow: Bool, pattern: String, groups: [String]? = nil) -> Outcome {
-        let r = replace(path, autoAllow, pattern, groups)
+    static func write(path: String, autoAllow: Bool, pattern: String, groups: [String]? = nil, colors: [String] = []) -> Outcome {
+        let r = replace(path, autoAllow, pattern, groups, colors)
         if case .refused(let why) = r {
             log.error("dch config not written (\(why, privacy: .public)): \(path, privacy: .private)")
         }
         return r
     }
 
-    private static func replace(_ path: String, _ autoAllow: Bool, _ pattern: String, _ groups: [String]?) -> Outcome {
+    private static func replace(_ path: String, _ autoAllow: Bool, _ pattern: String, _ groups: [String]?, _ colors: [String]) -> Outcome {
         var target = path, st = stat()
         if lstat(path, &st) == 0, st.st_mode & S_IFMT == S_IFLNK {
             guard let real = realpath(path, nil) else { return .refused("a symbolic link to nothing") }
@@ -334,7 +347,7 @@ enum DchConfigWriter {
         } else {
             return .refused("stat: \(String(cString: strerror(errno)))")
         }
-        let new = render(old, autoAllow: autoAllow, pattern: pattern, groups: groups)
+        let new = render(old, autoAllow: autoAllow, pattern: pattern, groups: groups, colors: colors)
         guard new != old else { return .unchanged }
         let tmp = target + ".prosper-\(UUID().uuidString.prefix(8)).tmp"
         let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)

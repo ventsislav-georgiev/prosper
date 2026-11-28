@@ -86,12 +86,14 @@ enum AgentMenuSymbol {
     static let xray = "rectangle.righthalf.inset.filled"
     /// #2062: Move to group and its groups; Automatic (by name).
     static let group = "rectangle.stack", autoGroup = "wand.and.stars"
+    /// #2061: a group's Colour submenu; a swatch item draws its colour instead (AgentSidebarMenuEntries).
+    static let colour = "paintpalette", swatch = "circle.fill"
 
     /// Every name above, for the test that resolves each one (a typo draws no image).
     static let all: Set<String> = [open, rename, restart, stop, exit, resume, resumeNoMessage, pin, unpin, remove, duplicate, side,
                                    chapters, splitRight, splitDown, zoom, equalize, closePane, swap, newSession, folder, chooseFolder,
                                    sort, sortActivity, sortName, rowDetails, rowDetail, autoAllow, settings, diagnostics, model, effort, xray,
-                                   group, autoGroup]
+                                   group, autoGroup, colour, swatch]
 }
 
 extension AgentWindowVerb {
@@ -154,6 +156,7 @@ extension AgentSidebarVerb {
         case .diagnostics: AgentMenuSymbol.diagnostics
         case .moveToGroup(let g): g == nil ? AgentMenuSymbol.autoGroup : AgentMenuSymbol.group
         case .newGroup: AgentMenuSymbol.newSession
+        case .groupColor(let c): c == nil ? AgentMenuSymbol.autoGroup : AgentMenuSymbol.swatch
         }
     }
 }
@@ -169,7 +172,8 @@ extension AgentSidebarMenuEntry {
             title == AgentIsland.newSessionLabel ? AgentMenuSymbol.newSession
                 : title == AgentWindowControls.sortLabel ? AgentMenuSymbol.sort
                 : title == AgentWindowControls.rowDetailsLabel ? AgentMenuSymbol.rowDetails
-                : title == AgentIsland.moveToGroupLabel ? AgentMenuSymbol.group : nil
+                : title == AgentIsland.moveToGroupLabel ? AgentMenuSymbol.group
+                : title == AgentWindowControls.colourLabel ? AgentMenuSymbol.colour : nil
         case .divider, .note: nil
         }
     }
@@ -517,6 +521,8 @@ enum AgentSidebarVerb: Equatable {
     case diagnostics
     /// #2062: a row's Move to group: the group's name, nil for Automatic (by name). New group…: the window asks for a name.
     case moveToGroup(String?), newGroup
+    /// #2061: a group header's Colour item: the palette hex, nil for Automatic.
+    case groupColor(String?)
 }
 
 /// One sidebar "..." entry, a value (rows read the list; no menu is popped).
@@ -539,6 +545,8 @@ extension AgentWindowControls {
     static let alwaysAllowAction = "Turn on"
     static let sortLabel = "Sort"
     static let rowDetailsLabel = "Row details"
+    /// #2061: a group header's Colour submenu and its last item.
+    static let colourLabel = "Colour", automaticColourLabel = "Automatic"
     /// The sidebar "\u{22EF}" button's help (a value, so a test pins it literally).
     static let sidebarMenuHelp = "New session, restart, stop or end all, History and Agent Island settings"
     /// Agent Island's Settings pane (Resources/extensions/agentisland/extension.toml: id and its sidebar section).
@@ -647,7 +655,9 @@ extension AgentWindowControls {
     /// as the sidebar draws it) only, with the same gates read over those rows. Clear unpinned is History's (records, not
     /// live sessions), so it is not here. No rows: no menu (the header of an empty group is not drawn either).
     @MainActor
-    static func groupMenu(store: AgentIslandStore, rows: [AgentSession]) -> [AgentSidebarMenuEntry] {
+    /// #2061: `name`, the group's: Colour ▸ with the palette (the colour it shows now checked) and Automatic (checked
+    /// while no colour is picked); no such group in the store, no Colour.
+    static func groupMenu(store: AgentIslandStore, rows: [AgentSession], name: String? = nil) -> [AgentSidebarMenuEntry] {
         guard !rows.isEmpty else { return [] }
         let g = AgentIslandController.controlGates(store), needs = g.needs
         let restart = g.on && needs == nil, stop = restart && !store.stopTargets(global: false, in: rows).stop.isEmpty
@@ -656,12 +666,17 @@ extension AgentWindowControls {
             .item(on ? (label.hasSuffix("\u{2026}") ? label : label + "\u{2026}") : AgentIsland.label(label, needs: needs),
                   enabled: on, checked: nil, verb: verb)
         }
-        return [
+        let actions: [AgentSidebarMenuEntry] = [
             ask(AgentIsland.restartAllLabel, restart, .restartAll(force: false)),
             ask(AgentIsland.restartAllForceLabel, restart, .restartAll(force: true)),
             ask(AgentIsland.stopAllGlobalLabel, stop, .stopAll),
             .item(AgentIsland.killAllGlobalLabel, enabled: kill, checked: nil, verb: .killAll),
         ]
+        guard let group = store.sessionGroups.first(where: { $0.name == name }) else { return actions }
+        let shown = store.groupColors[group.id]
+        return actions + [.divider, .submenu(colourLabel, enabled: true, SessionGroup.palette.map {
+            .item($0.name, enabled: true, checked: shown == $0.hex, verb: .groupColor($0.hex))
+        } + [.divider, .item(automaticColourLabel, enabled: true, checked: group.color == nil, verb: .groupColor(nil))])]
     }
 
     /// #2060: a group menu item's run: the island's ask with the group's name and rows (its answer reaches no other row).
@@ -697,6 +712,7 @@ extension AgentWindowControls {
         case .settings: openSettings()
         case .diagnostics: break   // the window's own pane (AgentSidebarTitleRow)
         case .moveToGroup, .newGroup: break   // #2062: a row's (AgentWindowModel.runMove) and the window's name field
+        case .groupColor: break   // #2061: a group header's (AgentWindowModel.runGroup)
         }
     }
 
@@ -1124,10 +1140,10 @@ struct AgentSidebarMenuEntries: View {
             switch e {
             case .item(let title, let enabled, let checked, let verb):
                 if let checked {
-                    Toggle(isOn: Binding(get: { checked }, set: { _ in run(verb) })) { Label(title, systemImage: verb.symbol) }
+                    Toggle(isOn: Binding(get: { checked }, set: { _ in run(verb) })) { label(title, verb) }
                         .disabled(!enabled)
                 } else {
-                    Button { run(verb) } label: { Label(title, systemImage: verb.symbol) }.disabled(!enabled)
+                    Button { run(verb) } label: { label(title, verb) }.disabled(!enabled)
                 }
             case .submenu(let title, let enabled, let items):
                 Menu { AgentSidebarMenuEntries(entries: items, run: run) } label: { Label(title, systemImage: e.symbol ?? "") }
@@ -1138,6 +1154,26 @@ struct AgentSidebarMenuEntries: View {
                 Text(verbatim: text)
             }
         }
+    }
+
+    /// #2061: a Colour item shows its colour: a menu draws an SF Symbol as a template (one tint), so the swatch is a
+    /// non-template image. Every other item: its symbol.
+    @ViewBuilder func label(_ title: String, _ verb: AgentSidebarVerb) -> some View {
+        if case .groupColor(let hex?) = verb, let c = NSColor(Color(hex: hex) ?? .clear).usingColorSpace(.sRGB) {
+            Label { Text(title) } icon: { Image(nsImage: Self.swatch(c)) }
+        } else {
+            Label(title, systemImage: verb.symbol)
+        }
+    }
+
+    static func swatch(_ c: NSColor) -> NSImage {
+        let img = NSImage(size: NSSize(width: 12, height: 12), flipped: false) { r in
+            c.setFill()
+            NSBezierPath(ovalIn: r.insetBy(dx: 1, dy: 1)).fill()
+            return true
+        }
+        img.isTemplate = false
+        return img
     }
 }
 

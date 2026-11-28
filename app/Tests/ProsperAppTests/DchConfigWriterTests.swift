@@ -1415,7 +1415,8 @@ extension DchConfigWriterTests {
         }
         Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$"), Self.group("Blank", ""), Self.group("QA", "-qa$")]
         for (v, want) in [([1, 123, 9], "auto_allow = false\nsidekick_pattern = -rev$\n"),
-                          ([1, 124, 0], "auto_allow = false\nsidekick_pattern = -rev$\ngroup = Rev = -rev$\ngroup = Blank =\ngroup = QA = -qa$\n")] {
+                          ([1, 124, 0], "auto_allow = false\nsidekick_pattern = -rev$\ngroup = Rev = -rev$\ngroup = Blank =\ngroup = QA = -qa$\n"
+                           + "group_color = Rev = #2563EB\ngroup_color = Blank = #15803D\ngroup_color = QA = #DC2626\n")] {
             let file = tempDir("groupsGate").appendingPathComponent("config").path
             let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
             c.syncDchConfig()
@@ -1450,7 +1451,7 @@ extension DchConfigWriterTests {
         let (c, _) = controller(FakeIO(), on: false, version: [1, 199, 0], build: "full", config: file)
         c.syncDchConfig()
         c.queue.sync {}
-        XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \ngroup = Ops =\n")
+        XCTAssertEqual(read(file), "auto_allow = false\nsidekick_pattern = \ngroup = Ops =\ngroup_color = Ops = #15803D\n")
         c.rowDetailsChanged()
         XCTAssertEqual(c.store?.sessionGroups.map(\.name), ["Ops"], "no Sidekicks tab, not in Move to group")
         let e = SessionGroupsEditor([sk, ops])
@@ -1470,7 +1471,7 @@ extension DchConfigWriterTests {
         }
         Preferences.agentIslandSessionGroups = [Self.group("Rev", "-rev$")]
         for (v, want) in [([1, 123, 9], "auto_allow = false\ngroup = Old = x\nsidekick_pattern = -rev$\n"),
-                          ([1, 124, 0], "auto_allow = false\ngroup = Rev = -rev$\nsidekick_pattern = -rev$\n")] {
+                          ([1, 124, 0], "auto_allow = false\ngroup = Rev = -rev$\ngroup_color = Rev = #2563EB\nsidekick_pattern = -rev$\n")] {
             let file = tempDir("offFirst").appendingPathComponent("config").path
             FileManager.default.createFile(atPath: file, contents: Data("auto_allow = true\ngroup = Old = x\n".utf8))
             let (c, _) = controller(FakeIO(), on: false, version: v, build: "full", config: file)
@@ -1557,7 +1558,8 @@ extension DchConfigWriterTests {
                        "this sync keeps the file's lines")
         c.syncDchConfig()   // the write rowDetailsChanged schedules
         drain(c)
-        XCTAssertEqual(read(file), "group = Rev = -rev$\ngroup = QA = -qa$\n# mine\nauto_allow = false\nsidekick_pattern = -rev$\n",
+        XCTAssertEqual(read(file), "group = Rev = -rev$\ngroup = QA = -qa$\ngroup_color = Rev = #2563EB\ngroup_color = QA = #15803D\n"
+                       + "# mine\nauto_allow = false\nsidekick_pattern = -rev$\n",
                        "the same lines, from the stored list")
         XCTAssertEqual(logged.withLock { $0 }, 0, "nothing replaced")
     }
@@ -1566,8 +1568,8 @@ extension DchConfigWriterTests {
     @MainActor func testAnUnstoredListWithNoValidLinesWritesSidekicksAsBefore() {
         unstoredGroups()
         usePattern(tabs: true, "-qa")
-        for (old, want) in [("picker_sort = name\n", "picker_sort = name\nauto_allow = false\nsidekick_pattern = -qa\ngroup = Sidekicks = -qa\n"),
-                            ("group = Dots = a.b\n", "group = Sidekicks = -qa\nauto_allow = false\nsidekick_pattern = -qa\n")] {
+        for (old, want) in [("picker_sort = name\n", "picker_sort = name\nauto_allow = false\nsidekick_pattern = -qa\ngroup = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\n"),
+                            ("group = Dots = a.b\n", "group = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\nauto_allow = false\nsidekick_pattern = -qa\n")] {
             unstoredGroups()
             let file = configFile("noLines", old)
             let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
@@ -1591,7 +1593,7 @@ extension DchConfigWriterTests {
             c.syncDchConfig()
             drain(c)
         }
-        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\n"))
+        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\n"))
         XCTAssertFalse(Preferences.agentIslandSessionGroupsStored)
         XCTAssertEqual(Preferences.agentIslandSessionGroupsUpdated, 7)
         XCTAssertEqual(logged.withLock { $0 }, 0)
@@ -1626,7 +1628,7 @@ extension DchConfigWriterTests {
         c.groupsReplaced = { had, lines in logged.withLock { $0.append(had + ["->"] + lines) } }
         c.syncDchConfig()
         drain(c)
-        XCTAssertEqual(read(file), "group = Rev = -rev$\nauto_allow = false\nsidekick_pattern = -rev$\n")
+        XCTAssertEqual(read(file), "group = Rev = -rev$\ngroup_color = Rev = #2563EB\nauto_allow = false\nsidekick_pattern = -rev$\n")
         XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Rev"], "the stored list is never adopted over")
         c.adoptDchGroups([Self.group("Late", "-late$")])   // an adopt hop landing after a save
         XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.name), ["Rev"], "a list stored meanwhile wins")
@@ -1666,9 +1668,9 @@ extension DchConfigWriterTests {
         c.syncDchConfig()
         drain(c)
         XCTAssertTrue(Preferences.agentIslandDchGroupsAdoptChecked, "flagged though nothing was adopted")
-        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\n"))
-        for (step, pattern, tabs, want) in [(1, "-new", true, "group = Sidekicks = -new\n"), (2, "", true, nil),
-                                            (3, "-qa", true, "group = Sidekicks = -qa\n"), (4, "-qa", false, nil)] as [(Int64, String, Bool, String?)] {
+        XCTAssertTrue((read(file) ?? "").hasSuffix("group = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\n"))
+        for (step, pattern, tabs, want) in [(1, "-new", true, "group = Sidekicks = -new\ngroup_color = Sidekicks = #2563EB\n"), (2, "", true, nil),
+                                            (3, "-qa", true, "group = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\n"), (4, "-qa", false, nil)] as [(Int64, String, Bool, String?)] {
             if tabs { Preferences.adoptSidekickPattern(pattern, updated: step) } else { Preferences.agentIslandSidekickTabs = false }
             c.syncDchConfig()
             drain(c)
@@ -1718,7 +1720,7 @@ extension DchConfigWriterTests {
         c.syncDchConfig()
         drain(c)
         XCTAssertFalse(Preferences.agentIslandSessionGroupsStored)
-        XCTAssertEqual(read(file), "group = Sidekicks = -qa\nauto_allow = false\nsidekick_pattern = -qa\n")
+        XCTAssertEqual(read(file), "group = Sidekicks = -qa\ngroup_color = Sidekicks = #2563EB\nauto_allow = false\nsidekick_pattern = -qa\n")
         XCTAssertEqual(logged.withLock { $0 }, [["Rev = -rev$", "->", "Sidekicks = -qa"]])
         c.adoptDchGroups([Self.group("Late", "-late$")])
         XCTAssertFalse(Preferences.agentIslandSessionGroupsStored, "a late hop adopts nothing")

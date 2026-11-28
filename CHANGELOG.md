@@ -135,6 +135,9 @@ tag from the now-released section and put it on the new top draft.
 - The Agents window now opens with the X-ray drawer as you left it for the session it shows (and
   opens it for a new session when "Open the X-ray drawer with new sessions" is on). (#2068)
 - The phone can now make a session group you fill only by hand (one with no name pattern). (#2069)
+- Session groups now each get their own colour, shown as a bolder bar and a line under the group's
+  header in the Agent Sessions sidebar (and on dch's picker tab); pick a different one from the
+  group's ••• menu under Colour, or go back to Automatic.
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

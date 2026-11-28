@@ -1100,14 +1100,16 @@ struct NeonSectionLabel: View {
     var accent: String? = nil
     var size: CGFloat = 11
     var tint: Color? = nil
+    /// #2061: a session group's colour: the tick alone takes it, wider (the title keeps its own colour).
+    var bar: Color? = nil
     @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         HStack(spacing: sz(8)) {
             RoundedRectangle(cornerRadius: sz(1))
-                .fill(tint ?? Neon.blue)
-                .frame(width: sz(3), height: sz(size + 1))
-                .shadow(color: (tint ?? Neon.blue).opacity(0.9), radius: sz(4))
+                .fill(bar ?? tint ?? Neon.blue)
+                .frame(width: sz(bar == nil ? 3 : 4), height: sz(size + 1))
+                .shadow(color: (bar ?? tint ?? Neon.blue).opacity(0.9), radius: sz(4))
             neonAccentedText(title, accent: accent)
                 .font(Neon.font(size, weight: .bold))
                 .textCase(.uppercase)

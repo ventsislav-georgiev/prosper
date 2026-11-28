@@ -1585,6 +1585,9 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     var id: String
     var name: String
     var pattern: String
+    /// #2061: the colour the user picked, "#RRGGBB"; nil is Automatic (`colors` gives it the next free palette colour).
+    /// A list stored before #2061 has no key and decodes as nil.
+    var color: String? = nil
 
     /// dch's caps (#1755 contract): lines after the 8th are ignored there, a name is 1-32 bytes.
     static let maxCount = 8
@@ -1623,7 +1626,39 @@ struct SessionGroup: Codable, Equatable, Sendable, Identifiable {
     static func normalized(_ list: [SessionGroup]) -> [SessionGroup] {
         var ids = Set<String>(), names = Set<String>()
         return Array(list.filter { validName($0.name) && ids.insert($0.id).inserted && names.insert(nameKey($0.name)).inserted }.prefix(maxCount)).map {
-            SessionGroup(id: $0.id, name: $0.name.trimmingCharacters(in: .whitespaces), pattern: $0.pattern)
+            SessionGroup(id: $0.id, name: $0.name.trimmingCharacters(in: .whitespaces), pattern: $0.pattern,
+                         color: $0.color.flatMap(validColor))
         }
+    }
+
+    /// #2061: the 8 group colours (maxCount), in the order Automatic hands them out. Each clears 3:1 (WCAG 1.4.11) on
+    /// every bundled theme's sidebar, light and dark (SessionGroupColorTests): one hex serves both, as dch takes one.
+    static let palette: [(name: String, hex: String)] = [
+        ("Blue", "#2563EB"), ("Green", "#15803D"), ("Red", "#DC2626"), ("Purple", "#9333EA"),
+        ("Gold", "#A16207"), ("Teal", "#0F766E"), ("Pink", "#DB2777"), ("Orange", "#C2410C"),
+    ]
+
+    /// #2061: "#RRGGBB" (upper case) for a "#" and 6 ASCII hex digits, else nil: a stored or synced value is outside text.
+    static func validColor(_ s: String) -> String? {
+        let hex = Set("0123456789abcdefABCDEF")
+        guard s.count == 7, s.first == "#", s.dropFirst().allSatisfy(hex.contains) else { return nil }
+        return s.uppercased()
+    }
+
+    /// #2061: each group's colour by id. A pick wins; an Automatic group keeps its colour from `auto` (the stored last
+    /// result, so a delete or a move never repaints it) unless a pick or an earlier group holds it; else it takes the
+    /// first palette colour nobody holds. So up to 8 groups never share a colour unless the user picked one twice.
+    static func colors(_ list: [SessionGroup], auto: [String: String]) -> [String: String] {
+        var out = [String: String](), taken = Set<String>()
+        for g in list { if let c = g.color.flatMap(validColor) { out[g.id] = c; taken.insert(c) } }
+        for g in list where out[g.id] == nil {
+            if let c = auto[g.id].flatMap(validColor), taken.insert(c).inserted { out[g.id] = c }
+        }
+        for (i, g) in list.enumerated() where out[g.id] == nil {
+            let c = palette.first { !taken.contains($0.hex) }?.hex ?? palette[i % palette.count].hex
+            out[g.id] = c
+            taken.insert(c)
+        }
+        return out
     }
 }

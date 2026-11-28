@@ -249,6 +249,11 @@ enum AgentSidebar {
     static func groupSessions(_ section: Section) -> [AgentSession]? {
         section.id.hasPrefix("group:") ? section.rows.compactMap(\.session) : nil
     }
+    /// #2061: a group section's colour (`colors`: AgentWindowModel.groupColors); nil for any other section.
+    static func groupColor(_ section: Section, _ colors: [String: String]) -> Color? {
+        guard section.id.hasPrefix("group:") else { return nil }
+        return colors[String(section.id.dropFirst("group:".count))].flatMap { Color(hex: $0) }
+    }
     /// #1759: what a header click folds: a fixed title above or any group's section.
     static func folds(_ id: String) -> Bool { collapsible.contains(id) || id.hasPrefix("group:") }
 
@@ -448,6 +453,8 @@ final class AgentPaneRuntime: ObservableObject {
 @MainActor
 final class AgentWindowModel: ObservableObject {
     @Published private(set) var sections: [AgentSidebar.Section] = [] { didSet { drawnMemo = nil } }
+    /// #2061: each group's colour by id, the store's (set on a list change); published only when it changes.
+    @Published private(set) var groupColors: [String: String] = [:]
     /// #831 B1 (spec 3.5): the focused pane's RESOLVED content as a row (`.live` -> .live(k), `.history` -> .history(id),
     /// anything else nil), written only by `settle()`. Stored so `$selection` publishes one change per change.
     @Published private(set) var selection: AgentSidebar.RowID?
@@ -1204,6 +1211,13 @@ final class AgentWindowModel: ObservableObject {
 
     /// #2060: a group header's "\u{22EF}" item: the island's ask scoped to the group's rows.
     func runGroup(_ v: AgentSidebarVerb, name: String, rows: [AgentSession]) {
+        // #2061: Colour ▸ stores the pick (nil: Automatic) as Settings saves the list; the island regroups and rewrites dch's lines.
+        if case .groupColor(let hex) = v {
+            var list = storedGroups()
+            guard let i = list.firstIndex(where: { $0.name == name }), list[i].color != hex else { return }
+            list[i].color = hex
+            return saveGroups(list)
+        }
         AgentWindowControls.runGroup(v, name: name, rows: rows, island: island())
     }
 
@@ -2132,6 +2146,7 @@ final class AgentWindowModel: ObservableObject {
         publishing = (sessions, history)
         defer { publishing = nil }
         if new != sections { sections = new }
+        if let c = store?.groupColors, c != groupColors { groupColors = c }   // #2061: a ≤8-entry compare
         // #831 B1 (4.3): the focused pane re-resolved on every publish. A session that ended stays Ended (4.4) and
         // swaps once to its own record (4.5: G2 subsumed). #1929: a removed record's panes close (the only pane goes
         // empty) before the resolve, so the selection is never another record.

@@ -1198,7 +1198,8 @@ struct AgentSidebarView: View {
                                                            ? { model.toggleCollapsed(section.id) } : nil,
                                                        group: AgentSidebar.groupSessions(section).flatMap { rows in
                                                            model.store.map { (store: $0, rows: rows) } },
-                                                       runGroup: { model.runGroup($0, name: section.title, rows: $1) })
+                                                       runGroup: { model.runGroup($0, name: section.title, rows: $1) },
+                                                       color: AgentSidebar.groupColor(section, model.groupColors))
                                 }
                                 if !folded {
                                     ForEach(items) { item in
@@ -1625,11 +1626,13 @@ struct AgentSectionHeader: View {
     /// #2060: a group section's rows (AgentSidebar.groupSessions): its "\u{22EF}" and right-click menu; nil, none.
     var group: (store: AgentIslandStore, rows: [AgentSession])? = nil
     var runGroup: (AgentSidebarVerb, [AgentSession]) -> Void = { _, _ in }
+    /// #2061: a group's colour: its tick and a rule under the header; nil, the accent tick as before.
+    var color: Color? = nil
     /// StableMenuProbe.bodies key.
     static let groupMenuID = "agent.sidebar.group"
 
     var body: some View {
-        let entries = group.map { AgentWindowControls.groupMenu(store: $0.store, rows: $0.rows) } ?? []
+        let entries = group.map { AgentWindowControls.groupMenu(store: $0.store, rows: $0.rows, name: title) } ?? []
         let rows = group?.rows ?? [], run = { (v: AgentSidebarVerb) in runGroup(v, rows) }
         Group {
             if let toggle {
@@ -1673,11 +1676,15 @@ struct AgentSectionHeader: View {
             // #860: Settings' section label (accent tick, caps, tracking) at the sidebar's 9.5 pt, so the
             // header keeps its height; Needs you tints tick and title in the blocked colour (was a dot).
             NeonSectionLabel(title: title, size: 9.5,
-                             tint: title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : nil)
+                             tint: title == AgentSidebar.needsYouTitle ? AgentState.blocked.color : nil, bar: color)
             Text("\(count)").font(Neon.font(9.5, weight: .medium).monospacedDigit()).foregroundStyle(Neon.faded(Neon.textSecondary, 0.8))
             Spacer(minLength: 0)
         }
         .padding(.horizontal, sz(8)).padding(.top, sz(12)).padding(.bottom, sz(4))
+        // #2061: the group's colour as a rule under the header, so a group reads without its name.
+        .overlay(alignment: .bottom) {
+            if let color { Capsule().fill(color).frame(height: sz(1.5)).padding(.horizontal, sz(6)) }   // full: 3:1 as the tick
+        }
         .contentShape(Rectangle())
     }
 }

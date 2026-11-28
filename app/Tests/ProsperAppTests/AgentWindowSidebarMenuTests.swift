@@ -594,4 +594,71 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(enabled(AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"))), [true, true, false, true],
                        "an old master cannot stop: Stop all is off, as in the window menu")
     }
+
+    // MARK: #2061: a group's Colour ▸
+
+    /// After the actions: Colour ▸ with the 8 palette names, the colour shown now checked, then Automatic, checked while no
+    /// colour is picked; a pick moves both checks. Each item's verb carries its hex (Automatic: nil).
+    @MainActor
+    func testGroupMenuColourSubmenuTitlesAndChecks() throws {
+        let st = groupedStore()
+        st.groupColors = ["qa": SessionGroup.palette[0].hex, "docs": SessionGroup.palette[1].hex]
+        let menu = AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"), name: "QA")
+        XCTAssertEqual(titles(menu).suffix(2), ["-", AgentWindowControls.colourLabel])
+        XCTAssertEqual(menu.last?.symbol, AgentMenuSymbol.colour)
+        guard case .submenu(_, true, let items)? = menu.last else { return XCTFail("no Colour submenu") }
+        XCTAssertEqual(titles(items), SessionGroup.palette.map(\.name) + ["-", "Automatic"])
+        func checks(_ es: [AgentSidebarMenuEntry]) -> [Bool?] {
+            es.compactMap { if case .item(_, _, let c, _) = $0 { return c } else { return nil } }
+        }
+        XCTAssertEqual(checks(items), [true] + Array(repeating: false, count: 7) + [true])
+        let verbs = items.compactMap { (e: AgentSidebarMenuEntry) -> AgentSidebarVerb? in
+            if case .item(_, _, _, let v) = e { return v }
+            return nil
+        }
+        XCTAssertEqual(verbs, SessionGroup.palette.map { .groupColor($0.hex) } + [.groupColor(nil)])
+        st.sessionGroups[0].color = SessionGroup.palette[4].hex
+        st.groupColors["qa"] = SessionGroup.palette[4].hex
+        guard case .submenu(_, _, let picked)? = AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"), name: "QA").last
+        else { return XCTFail("no Colour submenu") }
+        XCTAssertEqual(checks(picked), Array(repeating: false, count: 4) + [true] + Array(repeating: false, count: 3) + [false])
+        XCTAssertEqual(titles(AgentWindowControls.groupMenu(store: st, rows: try groupRows(st, "qa"), name: "Nope")).last,
+                       "End all" + Self.ellipsis, "no such group: no Colour")
+    }
+
+    /// The header's colour reaches the view: the store's colours (set before its groups) are the model's after the
+    /// groups' publish, and AgentSidebar.groupColor gives the QA section its colour from them.
+    @MainActor
+    func testTheStoresGroupColoursReachTheSidebarOnAGroupsPublish() throws {
+        let st = groupedStore()
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        m.setVisible(true)
+        st.groupColors = ["qa": SessionGroup.palette[3].hex]
+        st.sessionGroups = st.sessionGroups
+        XCTAssertEqual(m.groupColors, ["qa": SessionGroup.palette[3].hex])
+        let qa = try XCTUnwrap(m.sections.first { $0.id == AgentSidebar.groupFold("qa") })
+        XCTAssertEqual(AgentSidebar.groupColor(qa, m.groupColors), Color(hex: SessionGroup.palette[3].hex))
+    }
+
+    /// A Colour item stores the pick on that group only, through the Settings save; Automatic stores nil; the same pick
+    /// again saves nothing. Nothing runs.
+    @MainActor
+    func testColourItemSavesThePickOnItsGroup() throws {
+        let st = groupedStore()
+        let rec = Launches(), c = controller(st, rec), m = model(st, c)
+        defer { m.close() }
+        var stored = st.sessionGroups, saves = 0
+        m.storedGroups = { stored }
+        m.saveGroups = { stored = $0; saves += 1 }
+        let qa = try groupRows(st, "qa")
+        m.runGroup(.groupColor(SessionGroup.palette[2].hex), name: "QA", rows: qa)
+        XCTAssertEqual(stored.map(\.color), [SessionGroup.palette[2].hex, nil, nil])
+        m.runGroup(.groupColor(SessionGroup.palette[2].hex), name: "QA", rows: qa)
+        XCTAssertEqual(saves, 1, "the same pick again: no save")
+        m.runGroup(.groupColor(nil), name: "QA", rows: qa)
+        XCTAssertEqual(stored.map(\.color), [nil, nil, nil])
+        XCTAssertEqual(saves, 2)
+        XCTAssertEqual(rec.args.count, 0, "nothing ran")
+    }
 }

@@ -320,7 +320,8 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         settle(c) { rec.args.count == 2 && !c.runner.isBusy(s.key) }
         XCTAssertEqual(rec.args.last, ["--group-set", "api", "Ops", "--json"])
         XCTAssertEqual(rec.lock.withLock { rec.configs }.last,
-                       "auto_allow = false\nsidekick_pattern = zzz\ngroup = Work = zzz\ngroup = Ops =\n", "written before the launch")
+                       "auto_allow = false\nsidekick_pattern = zzz\ngroup = Work = zzz\ngroup = Ops =\ngroup_color = Work = #2563EB\ngroup_color = Ops = #15803D\n",
+                       "written before the launch")
     }
 
     /// The New group… field stands the window's key chords down as a rename field does, and only while it is up.

@@ -337,6 +337,7 @@ final class AgentIslandController {
         guard timer == nil, let geometry = currentGeometry() else { return }
         store = AgentIslandStore(geometry: geometry, details: Preferences.agentIslandRowDetails,
                                  sort: Preferences.agentIslandSort)
+        store?.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
         store?.sessionGroups = Self.groups
         store?.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
         store?.groupTabs = Preferences.agentIslandSidekickTabs
@@ -446,6 +447,7 @@ final class AgentIslandController {
         guard let store else { return }
         store.details = Preferences.agentIslandRowDetails
         store.sort = Preferences.agentIslandSort
+        store.groupColors = Preferences.sessionGroupColors()   // #2061: before the groups, whose publish the window reads it on
         store.sessionGroups = Self.groups
         store.storedGroupCount = Preferences.agentIslandSessionGroups.count   // #2062
         store.groupTabs = Preferences.agentIslandSidekickTabs
@@ -2083,6 +2085,7 @@ final class AgentIslandController {
         guard let path = dchConfigPath() else { return }
         let toggle = autoAllowOn(), groups = Self.groups, pattern = DchConfigWriter.sidekickValue(groups.first { !$0.isManual }?.pattern ?? "")   // #2062: an older dch's one pattern
         let lines = DchConfigWriter.groupValues(groups)
+        let colors = DchConfigWriter.colorValues(groups, colors: Preferences.sessionGroupColors())   // #2061
         let probe = controlDch, run = runDch, builds = dchBuilds, t = now(), retry = Self.dchBuildRetry, dirs = seedDirs
         // #1788: adopt only on the first check; after it the file's lines are Prosper's last write, not the user's.
         let adopt = !Preferences.agentIslandSessionGroupsStored && !Preferences.agentIslandDchGroupsAdoptChecked
@@ -2115,7 +2118,7 @@ final class AgentIslandController {
             guard toggle else {
                 DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: nil)
                 if let g = owned(probe()) {
-                    DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g)
+                    DchConfigWriter.write(path: path, autoAllow: false, pattern: pattern, groups: g, colors: colors)
                 }
                 return
             }
@@ -2127,7 +2130,7 @@ final class AgentIslandController {
             if allow, DchConfigWriter.holdsTrue(DchConfigWriter.masters(dirs().map {
                 run(bin.path, ["--ls-json"], AgentIsland.listEnv(dir: $0))
             })) { allow = false }
-            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern, groups: owned(bin))
+            DchConfigWriter.write(path: path, autoAllow: allow, pattern: pattern, groups: owned(bin), colors: colors)
         }
     }
 

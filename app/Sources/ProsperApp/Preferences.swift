@@ -454,6 +454,7 @@ enum Preferences {
         static let agentIslandSessionGroups = "agentIslandSessionGroups"   // #1757: JSON [SessionGroup], per Mac
         static let agentIslandSessionGroupsUpdated = "agentIslandSessionGroupsUpdated"   // #1756: ms, per Mac
         static let agentIslandDchGroupsAdoptChecked = "agentIslandDchGroupsAdoptChecked"   // #1788: Bool, per Mac
+        static let agentIslandSessionGroupAutoColors = "agentIslandSessionGroupAutoColors"   // #2061: [id: "#RRGGBB"], per Mac
         static let agentIslandNewSessionCommand = "agentIslandNewSessionCommand"   // #606
         static let agentIslandCodexCommand = "agentIslandCodexCommand"   // #1997
         static let agentIslandDefaultModel = "agentIslandDefaultModel"   // #1228, per Mac
@@ -1361,6 +1362,18 @@ enum Preferences {
         set { defaults.set(try? JSONEncoder().encode(SessionGroup.normalized(newValue)), forKey: Keys.agentIslandSessionGroups) }
     }
 
+    /// #2061: each stored group's colour by id (SessionGroup.colors). The Automatic groups' colours are stored the first
+    /// time they are handed out, so a later delete or move never repaints them; a removed group's entry goes. Called on a
+    /// list change only (the island's regroup and its dch config write), never per draw.
+    static func sessionGroupColors() -> [String: String] {
+        let list = agentIslandSessionGroups
+        let kept = defaults.dictionary(forKey: Keys.agentIslandSessionGroupAutoColors) as? [String: String] ?? [:]
+        let all = SessionGroup.colors(list, auto: kept)
+        let auto = all.filter { id, _ in list.contains { $0.id == id && $0.color == nil } }
+        if auto != kept { defaults.set(auto, forKey: Keys.agentIslandSessionGroupAutoColors) }
+        return all
+    }
+
     /// #1766: whether a list is stored; until then the getter reads the migrated Sidekicks group.
     static var agentIslandSessionGroupsStored: Bool { defaults.object(forKey: Keys.agentIslandSessionGroups) != nil }
 
@@ -1448,8 +1461,13 @@ enum Preferences {
     /// one stamp: a change of group 0 moves the sidekick stamp to >= the groups stamp it came with, and a 0x2d adopt that
     /// rewrites group 0 moves the groups stamp (adoptSidekickPattern), so the phone re-reads.
     static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64) {
-        let pattern = agentIslandSidekickPattern
-        agentIslandSessionGroups = list
+        let pattern = agentIslandSidekickPattern, stored = agentIslandSessionGroups
+        // #2061: the phone sends no colour; a group it keeps (same id) keeps the colour picked here.
+        agentIslandSessionGroups = list.map { g in
+            var g = g
+            if g.color == nil { g.color = stored.first { $0.id == g.id }?.color }
+            return g
+        }
         agentIslandSessionGroupsUpdated = updated
         if agentIslandSidekickPattern != pattern { agentIslandSidekickPatternUpdated = max(agentIslandSidekickPatternUpdated, updated) }
     }
