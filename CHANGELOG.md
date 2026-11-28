@@ -21,7 +21,7 @@ tag from the now-released section and put it on the new top draft.
 ## v2.182.0 *(unreleased)*
 - Updating a kit whose new version renames a piece (like the Agent Kit's status line) no longer
   fails at the approval step; the approval sheet now lists the old piece's removal. (#2101)
-- Ships dch 1.208.0: the iPhone app can start a session on this Mac in one of its groups
+- Ships dch 1.209.0: the iPhone app can start a session on this Mac in one of its groups
   (dch serve --allow-create), and its shell counts include Claude Code monitors.
 - Moving a session to a group now shows it under the new group at once, instead of after a few
   seconds; if the move fails, it goes back and says why.
