@@ -107,6 +107,10 @@ final class AgentsWindow {
             nc.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: win, queue: .main) { [weak model, weak win] _ in
                 MainActor.assumeIsolated { if let win { model?.setVisible(win.occlusionState.contains(.visible)) } }
             },
+            // #2045 QA n2: a style switch made in full screen waits for its exit (restyle returns there)
+            nc.addObserver(forName: NSWindow.didExitFullScreenNotification, object: win, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.restyle() }
+            },
         ]
     }
 
@@ -184,7 +188,8 @@ final class AgentsWindow {
     /// willClose never runs hide; a hidden window (#1784 grace) stays hidden under the same timer.
     func restyle() {
         guard let old = window as? AgentsNSWindow else { return }
-        guard let model, old.style != Preferences.agentWindowStyle else { return Self.applyStyle(old) }
+        guard let rebuild = Self.rebuilds(styleMask: old.styleMask, old: old.style, new: Preferences.agentWindowStyle) else { return }
+        guard let model, rebuild else { return Self.applyStyle(old) }
         let nc = NotificationCenter.default
         observers.forEach(nc.removeObserver)
         nc.removeObserver(old, name: XrayPanels.gateOpened, object: nil)
@@ -197,6 +202,10 @@ final class AgentsWindow {
         old.identifier = nil
         window = win
         observe(win, model)
+        // #2045 QA n1: the X-ray ref cache moves to the new window (the old is never closed, so willClose never forgets it)
+        XrayRefResults.set(XrayRefResults.windows[ObjectIdentifier(old)], for: win)
+        XrayRefResults.set(nil, for: old)
+        XrayPanels.shared.follows.focus(nil, window: ObjectIdentifier(old), dch: nil)   // #2045 QA n1: the old window's pane follow lets go
         win.level = old.level
         win.collectionBehavior = old.collectionBehavior
         if let responder, responder.window === win { win.makeFirstResponder(responder) }   // the terminal keeps the keys
@@ -209,6 +218,13 @@ final class AgentsWindow {
         }
         if shown || mini { DockPolicy.windowDidShow(win); dismissed(old) }   // registered before the old lets go: no demotion
         old.orderOut(nil)
+    }
+
+    /// #2045 QA n2: nil (wait: full screen; a rebuild there leaves an empty Space, didExitFullScreen restyles), true (a
+    /// style change rebuilds), false (corners only: in place).
+    static func rebuilds(styleMask: NSWindow.StyleMask, old: AgentWindowStyle, new: AgentWindowStyle) -> Bool? {
+        if styleMask.contains(.fullScreen) { return nil }
+        return old != new
     }
 
     /// #1379: Settings' sidebar mode: saved, and the open window's sidebar redrawn at once (no window: the next build reads it).

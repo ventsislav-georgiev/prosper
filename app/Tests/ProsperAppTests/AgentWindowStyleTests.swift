@@ -605,6 +605,34 @@ final class AgentWindowStyleTests: XCTestCase {
         }
     }
 
+    /// #2045 QA n1: the old window's X-ray ref cache moves to the rebuilt window, and the old key goes.
+    func testAStyleSwitchMovesTheXrayRefCacheToTheNewWindow() throws {
+        try withStyleRow {
+            Preferences.agentWindowStyle = .borderless
+            Preferences.agentWindowRoundedCorners = false
+            try opened { r, old in
+                let c = XrayRefResults()
+                XrayRefResults.set(c, for: old)
+                defer { XrayRefResults.set(nil, for: nil) }
+                Preferences.agentWindowStyle = .standard
+                r.w.restyle()
+                let win = try XCTUnwrap(r.w.window as? AgentsNSWindow)
+                XCTAssertFalse(win === old)
+                XCTAssertTrue(XrayRefResults.windows[ObjectIdentifier(win)] === c, "the same cache under the new window")
+                XCTAssertTrue(XrayRefResults.windows[ObjectIdentifier(old)] == nil, "no key for the old window")
+            }
+        }
+    }
+
+    /// #2045 QA n2: full screen never rebuilds nor restyles (it waits for didExitFullScreen); else a style change rebuilds.
+    func testFullScreenWaitsAndAStyleChangeRebuilds() {
+        let fs: NSWindow.StyleMask = [.titled, .resizable, .fullScreen], plain: NSWindow.StyleMask = [.borderless, .resizable]
+        XCTAssertTrue(AgentsWindow.rebuilds(styleMask: fs, old: .borderless, new: .standard) == nil, "full screen: wait")
+        XCTAssertTrue(AgentsWindow.rebuilds(styleMask: fs, old: .borderless, new: .borderless) == nil, "full screen: wait")
+        XCTAssertEqual(AgentsWindow.rebuilds(styleMask: plain, old: .borderless, new: .standard), true)
+        XCTAssertEqual(AgentsWindow.rebuilds(styleMask: plain, old: .borderless, new: .borderless), false)
+    }
+
     /// #2068's gate note reaches the rebuilt window alone: the old window's observer went with it.
     func testTheXrayGateNoteReachesOnlyTheRebuiltWindow() throws {
         try withStyleRow {

@@ -55,6 +55,22 @@
    "new": "",
    "expect": "killed",
    "filter": "AgentWindowStyleTests/testTheXrayGateNoteReachesOnlyTheRebuiltWindow"
+  },
+  {
+   "name": "refresults_not_rekeyed",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        XrayRefResults.set(XrayRefResults.windows[ObjectIdentifier(old)], for: win)\n        XrayRefResults.set(nil, for: old)\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentWindowStyleTests/testAStyleSwitchMovesTheXrayRefCacheToTheNewWindow"
+  },
+  {
+   "name": "fullscreen_rebuilds",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "        if styleMask.contains(.fullScreen) { return nil }\n",
+   "new": "",
+   "expect": "killed",
+   "filter": "AgentWindowStyleTests/testFullScreenWaitsAndAStyleChangeRebuilds"
   }
- ]
+]
 }
