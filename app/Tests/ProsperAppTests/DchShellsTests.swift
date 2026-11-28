@@ -94,9 +94,87 @@ final class DchShellsTests: XCTestCase {
         let shells = rows(json).first?.shells ?? []
         XCTAssertEqual(shells.count, 3)
         for s in shells {
-            XCTAssertTrue(s.agent == nil && s.agentDescription == nil && s.description == nil, s.id)
-            XCTAssertFalse(s.background, s.id)
+            XCTAssertTrue(s.agent == nil && s.agentDescription == nil && s.description == nil, s.id ?? "nil")
+            XCTAssertFalse(s.background, s.id ?? "nil")
         }
+    }
+
+    // MARK: Monitors (#2089)
+
+    /// A dch 1.203 row: a Bash shell, a Monitor task with its id, a Monitor dch could not pair (`"id":null`, no
+    /// description), newest first across both kinds.
+    static let monitorRow = """
+    [{"name":"api","alias":"","harness":"api","activity_epoch":1784995163,"state":"working","agents":1,
+      "shells":[
+        {"id":"m2","pid":5002,"started":1784995200,"command":"tail -f build.log","output":"/Users/example/m2.output",
+         "pgid":5002,"description":"Watch the build","monitor":true},
+        {"id":null,"pid":5001,"started":1784995150,"command":"tail -f build.log","pgid":5001,"monitor":true},
+        {"id":"b7x1","pid":4242,"started":1784995100,"command":"swift test","agent":null,"background":true}],
+      "cwd":"/Users/example/src/api"}]
+    """
+
+    func testMonitorsDecodeWithANullIdKept() throws {
+        let shells = try XCTUnwrap(rows(Self.monitorRow).first?.shells)
+        XCTAssertEqual(shells.count, 3, "the null-id monitor is kept, so the count is right")
+        XCTAssertEqual(shells.map(\.monitor), [true, true, false])
+        XCTAssertEqual(shells.first, DchShell(id: "m2", pid: 5002, started: 1784995200, command: "tail -f build.log",
+                                              description: "Watch the build", monitor: true))
+        XCTAssertTrue(shells.dropFirst().first?.id == .some(nil), "id null: kept with no id")
+        XCTAssertEqual(shells.dropFirst().first?.pid, 5001)
+        XCTAssertTrue(shells.last?.id == "b7x1" && shells.last?.monitor == false, "a Bash shell is never a monitor")
+    }
+
+    /// Only a JSON null id stands for "no id"; any other non-text id still drops the element, and only a JSON true
+    /// marks a monitor.
+    func testJunkIdsDropAndOnlyTrueMarksAMonitor() {
+        let json = """
+        [{"name":"a","shells":[
+          {"id":7,"pid":1,"started":0,"command":"x","monitor":true},
+          {"id":true,"pid":1,"started":0,"command":"x","monitor":true},
+          {"id":["m"],"pid":1,"started":0,"command":"x","monitor":true},
+          {"id":{},"pid":1,"started":0,"command":"x","monitor":true},
+          {"pid":1,"started":0,"command":"x","monitor":true},
+          {"id":null,"pid":0,"started":0,"command":"x","monitor":true},
+          {"id":"s1","pid":1,"started":0,"command":"x","monitor":1},
+          {"id":"s2","pid":1,"started":0,"command":"x","monitor":"true"},
+          {"id":"s3","pid":1,"started":0,"command":"x","monitor":false},
+          {"id":null,"pid":1,"started":0,"command":"x","monitor":true}]}]
+        """
+        let shells = rows(json).first?.shells ?? []
+        XCTAssertEqual(shells.map(\.id), ["s1", "s2", "s3", nil])
+        XCTAssertEqual(shells.map(\.monitor), [false, false, false, true])
+    }
+
+    func testCountsIncludeMonitorsWithAndWithoutAnId() throws {
+        let shells = try XCTUnwrap(rows(Self.monitorRow).first?.shells)
+        let r = AgentSidebar.row(session(shells: shells), details: .all, now: 0)
+        XCTAssertEqual(r.counts.map { $0.0 }, [.agents, .shells, .merged])
+        XCTAssertEqual(r.counts.map { $0.1 }, [1, 3, 2])
+        XCTAssertTrue(r.countWords.contains("3 running shells"), "\(r.countWords)")
+    }
+
+    @MainActor
+    func testIslandCountIncludesMonitorsWithAndWithoutAnId() throws {
+        let s = session(shells: try XCTUnwrap(rows(Self.monitorRow).first?.shells))
+        XCTAssertEqual(AgentIslandRow.sidebarRow(s, show: .all, now: 0, notice: nil).counts.map { $0.1 }, [1, 3, 2])
+        let label = AgentIslandRow.accessibilityLabel(s, now: 0, show: .all)
+        XCTAssertTrue(label.contains("1 agent, 3 running shells, 2 merged pull requests"), label)
+    }
+
+    /// A monitor's line reads "Monitor: " before its (cleaned) command, a Bash shell's does not.
+    func testListMarksMonitors() throws {
+        let shells = try XCTUnwrap(rows(Self.monitorRow).first?.shells)
+        XCTAssertEqual(AgentSidebar.shellList(shells), """
+        3 running shells
+        Main conversation
+          swift test
+        Owner unknown
+          Monitor: tail -f build.log
+            Watch the build
+          Monitor: tail -f build.log
+        """)
+        let m = DchShell(id: nil, pid: 1, started: 0, command: "tail \u{202E}x", monitor: true)
+        XCTAssertEqual(AgentSidebar.shellList([m]), "1 running shell\n  Monitor: tail x")
     }
 
     func testListIsCappedAtMaxShells() {

@@ -40,6 +40,7 @@ tag from the now-released section and put it on the new top draft.
   covered.
 - The X-ray drawer no longer stutters while a big session's tasks, memory and prompts load: their
   answers are read in the background.
+- Agent Sessions: the shells count and its list include Claude Code monitors, marked as such.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

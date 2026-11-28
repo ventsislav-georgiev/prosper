@@ -2241,8 +2241,11 @@ struct DchListRow: Equatable, Sendable {
 
 /// #1558: one of dch 1.101's `--ls-json` `shells` (README.md:473@v1.101.0): a live Bash tool shell of the session's
 /// Claude. Outside text: shown only through OutsideText.shown. pid and started together name one shell.
+/// #2089: dch 1.203's Claude Code Monitor tasks are listed in the same array, marked `"monitor":true`.
 struct DchShell: Equatable, Sendable {
-    let id: String
+    /// #2089: nil for a monitor dch could not pair with its Monitor call (`"id":null`): counted and listed, never named
+    /// to `dch --stop-shell`.
+    let id: String?
     let pid: Int
     /// The process start, epoch seconds, from the kernel.
     let started: Int
@@ -2256,6 +2259,8 @@ struct DchShell: Equatable, Sendable {
     var description: String? = nil
     /// `"background":true`; false when dch left it out (unknown).
     var background = false
+    /// #2089: `"monitor":true` (a Claude Code Monitor task); a Bash shell never has the key.
+    var monitor = false
 
     /// dch cuts every text to 200 bytes between UTF-8 characters; three bytes each covers a U+FFFD per byte, as
     /// maxHarnessBytes does. A longer text is not dch's.
@@ -2270,13 +2275,14 @@ struct DchShell: Equatable, Sendable {
         return Array(a.lazy.compactMap { DchShell(json: $0) }.prefix(maxShells))
     }
 
-    init(id: String, pid: Int, started: Int, command: String, agent: String?? = nil, agentDescription: String? = nil,
-         description: String? = nil, background: Bool = false) {
+    init(id: String?, pid: Int, started: Int, command: String, agent: String?? = nil, agentDescription: String? = nil,
+         description: String? = nil, background: Bool = false, monitor: Bool = false) {
         self.id = id; self.pid = pid; self.started = started; self.command = command
         self.agent = agent; self.agentDescription = agentDescription; self.description = description; self.background = background
+        self.monitor = monitor
     }
 
-    /// nil unless an object with a non-empty `id` and `command` (each within maxTextBytes), a `pid` of 1...Int32.max and
+    /// nil unless an object with a non-empty `id` (#2089: or a JSON null, read as nil) and `command` (each within maxTextBytes), a `pid` of 1...Int32.max and
     /// a `started` from 0 (plain JSON integers, never a bool). The optional keys each drop alone when malformed.
     init?(json: Any?) {
         func text(_ v: Any?) -> String? {
@@ -2286,14 +2292,19 @@ struct DchShell: Equatable, Sendable {
             guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
             return n as? Int   // nil for a fraction or a value outside Int
         }
-        guard let o = json as? [String: Any], let id = text(o["id"]), let command = text(o["command"]),
+        func flag(_ v: Any?) -> Bool { (v as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false }
+        guard let o = json as? [String: Any] else { return nil }
+        // #2089: .some(nil) for a JSON null id, nil (drop) for any other non-text id
+        let id: String?? = o["id"] is NSNull ? .some(nil) : text(o["id"]).map { .some($0) }
+        guard let id, let command = text(o["command"]),
               let pid = int(o["pid"]), (1...Int(Int32.max)).contains(pid), let started = int(o["started"]), started >= 0
         else { return nil }
         self.init(id: id, pid: pid, started: started, command: command)
         if o["agent"] is NSNull { agent = .some(nil) } else if let a = text(o["agent"]) { agent = .some(a) }
         agentDescription = text(o["agent_description"])
         description = text(o["description"])
-        background = (o["background"] as? NSNumber).map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
+        background = flag(o["background"])
+        monitor = flag(o["monitor"])
     }
 }
 

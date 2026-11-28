@@ -208,6 +208,7 @@ enum AgentSidebar {
     /// #1558: the shells chip's list, every text through OutsideText.shown: "2 running shells", then by owner (main first,
     /// then each subagent in dch's order under its description, else its id, then the shells dch could not place), each
     /// shell's command with its description as the line below, newest first as dch gives them. One group: no group headers.
+    /// #2089: a Claude Code Monitor task's line reads "Monitor: " before its command.
     static func shellList(_ shells: [DchShell], max: Int = 20) -> String {
         var order: [String??] = [], groups: [String??: [DchShell]] = [:], names: [String: String] = [:]
         for sh in shells.prefix(max) {
@@ -230,7 +231,7 @@ enum AgentSidebar {
                 }
             }
             for sh in groups[owner] ?? [] {
-                lines.append("  " + OutsideText.shown(sh.command))
+                lines.append("  " + (sh.monitor ? "Monitor: " : "") + OutsideText.shown(sh.command))
                 if let d = sh.description { lines.append("    " + OutsideText.shown(d, max: 80)) }
             }
         }
