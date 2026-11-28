@@ -1,0 +1,48 @@
+{
+ "entry": "2104",
+ "filter": "StableMenuGuardTests|AgentWindowSidebarMenuTests/testSidebarRowMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange|AgentSessionGroupMoveTests",
+ "mutants": [
+  {
+   "name": "new-unguarded-contextmenu",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentsWindow.swift",
+   "old": "            button.modifier(AgentRowMenu(store: store, row: row, model: model, open: { open($0) }))",
+   "new": "            button.modifier(AgentRowMenu(store: store, row: row, model: model, open: { open($0) })).contextMenu { EmptyView() }",
+   "expect": "killed"
+  },
+  {
+   "name": "allowlist-drops-layout-editor",
+   "file": "app/Tests/ProsperAppTests/StableMenuGuardTests.swift",
+   "old": "            (2, \"the layout editor sheet's layout and group menus",
+   "new": "            (1, \"the layout editor sheet's layout and group menus",
+   "expect": "killed"
+  },
+  {
+   "name": "context-identity-per-tick",
+   "file": "app/Sources/ProsperApp/StableMenu.swift",
+   "old": "        content.modifier(StableContextMenuBody(model: model))\n",
+   "new": "        content.modifier(StableContextMenuBody(model: model)).id(UUID())\n",
+   "expect": "killed"
+  },
+  {
+   "name": "context-bypasses-model",
+   "file": "app/Sources/ProsperApp/StableMenu.swift",
+   "old": "        content.contextMenu { m.content(m.entries, { m.send($0) }) }",
+   "new": "        content.contextMenu { m.content(m.entries, { m.send($0) }) }.onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in m.objectWillChange.send() }",
+   "expect": "killed"
+  },
+  {
+   "name": "row-snapshot-unstable",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "            return Snapshot(entries: AgentWindowControls.rowMenu(s, store: store, in: model),",
+   "new": "            return Snapshot(entries: AgentWindowControls.rowMenu(s, store: store, in: model) + [.note(UUID().uuidString)],",
+   "expect": "killed"
+  },
+  {
+   "name": "checked-group-stays",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowControls.swift",
+   "old": "checked: checked, verb: .moveToGroup(checked ? nil : $0.name))",
+   "new": "checked: checked, verb: .moveToGroup($0.name))",
+   "expect": "killed"
+  }
+ ]
+}
