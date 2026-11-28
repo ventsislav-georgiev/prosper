@@ -33,8 +33,8 @@
   {
    "name": "no_own_lines_skip",
    "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
-   "old": "let found = had == g ? [] : DchConfigWriter.adoptable(had)",
-   "new": "let found = DchConfigWriter.adoptable(had)",
+   "old": "let found = had == g ? [] : DchConfigWriter.adoptable(had, colors: DchConfigWriter.fileGroupValues(path: path, key: \"group_color\"))",
+   "new": "let found = DchConfigWriter.adoptable(had, colors: DchConfigWriter.fileGroupValues(path: path, key: \"group_color\"))",
    "expect": "killed"
   }
  ]

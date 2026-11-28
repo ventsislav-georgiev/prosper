@@ -19,8 +19,8 @@
   {
    "name": "no_adopt_store",
    "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
-   "old": "Preferences.adoptSessionGroups(winner.groups, updated: winner.updated)",
-   "new": "_ = phone",
+   "old": "Preferences.adoptSessionGroups(list, updated: phone.updated)",
+   "new": "_ = list",
    "expect": "killed"
   },
   {
