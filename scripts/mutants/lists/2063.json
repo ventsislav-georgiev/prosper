@@ -45,32 +45,32 @@
   {
    "name": "arg-ignores-host",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "guard let g = newSession?.group, AgentIsland.passable(g), newSession?.host == nil, let store,",
-   "new": "guard let g = newSession?.group, AgentIsland.passable(g), let store,",
+   "old": "newSession?.host == nil ? AgentIsland.groupSetMinimum : AgentIsland.groupRemoteMinimum",
+   "new": "AgentIsland.groupSetMinimum",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
   },
   {
    "name": "arg-ignores-dch",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return nil }\n        return g",
-   "new": "store.controlDch != nil else { return nil }\n        return g",
+   "old": "store.controlDch.map({ DchCommand.isAtLeast($0.version, newSession?.host == nil ? AgentIsland.groupSetMinimum : AgentIsland.groupRemoteMinimum) }) == true",
+   "new": "store.controlDch != nil",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
   },
   {
    "name": "picker-ignores-host",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentWindowModel.swift",
-   "old": "guard let store, newSession != nil, newSession?.host == nil else { return [] }",
-   "new": "guard let store, newSession != nil else { return [] }",
+   "old": "return AgentNewSession.groupChoices(store, remote: f.host != nil)",
+   "new": "return AgentNewSession.groupChoices(store, remote: false)",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn"
   },
   {
    "name": "choices-ignore-dch",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentNewSession.swift",
-   "old": "guard store.controlDch.map({ DchCommand.isAtLeast($0.version, AgentIsland.groupSetMinimum) }) == true else { return [] }\n        return store.sessionGroups",
-   "new": "guard store.controlDch != nil else { return [] }\n        return store.sessionGroups",
+   "old": "guard store.controlDch.map({ DchCommand.isAtLeast($0.version, least) }) == true else { return [] }",
+   "new": "guard store.controlDch != nil else { return [] }",
    "expect": "killed",
    "filter": "AgentSessionGroupMoveTests/testTheFormsGroupPickerAndItsGroupReachTheSpawn|AgentWindowSidebarMenuTests/testGroupMenuNewSessionHereIsGatedAsTheFormsPicker"
   },
