@@ -32,11 +32,14 @@ final class AgentWindowStyleTests: XCTestCase {
         let d = Preferences.defaults
         let saved = Self.keys.map { d.object(forKey: $0) }
         let theme = (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost), gate = AgentPaneLayout.splitsEnabled
-        defer {
+        let restore: @MainActor () -> Void = {
             for (k, v) in zip(Self.keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
             (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost) = theme
             AgentPaneLayout.splitsEnabled = gate
         }
+        defer { restore() }
+        // An ObjC exception (AppKit) skips the Swift defer; XCTest still runs teardown blocks. Idempotent: it sets saved values.
+        addTeardownBlock { @MainActor in restore() }
         XCTAssertFalse(d === UserDefaults.standard, "a private defaults store")
         for k in Self.keys { d.removeObject(forKey: k) }
         (ThemeRuntime.scale, ThemeRuntime.opacity, ThemeRuntime.frost) = (1, 1, false)
