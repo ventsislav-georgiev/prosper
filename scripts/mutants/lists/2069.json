@@ -1,0 +1,54 @@
+{
+ "entry": "2069",
+ "filter": "GroupsSyncTests|ControlSessionGroupsTests",
+ "mutants": [
+  {
+   "name": "blank-pattern-refused",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "        if Set(list.map(\\.id)).count != list.count ||",
+   "new": "        if list.contains(where: { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return \"blank\" }\n        if Set(list.map(\\.id)).count != list.count ||",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testABlankPatternIsAcceptedAsAManualOnlyGroup"
+  },
+  {
+   "name": "reply-unfiltered",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "groups.filter { !$0.isOff }.map { [\"id\"",
+   "new": "groups.map { [\"id\"",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testABlankSidekicksIsKeptStoredAndNeverSent"
+  },
+  {
+   "name": "list-unfiltered",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "Preferences.agentIslandSessionGroups.filter { !$0.isOff }.map {",
+   "new": "Preferences.agentIslandSessionGroups.map {",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testListSkipsABlankSidekicksButKeepsAManualGroup"
+  },
+  {
+   "name": "legacy-read-group0",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "get { let l = agentIslandSessionGroups; return legacyIndex(l).map { l[$0].pattern } ?? \"\" }",
+   "new": "get { agentIslandSessionGroups.first?.pattern ?? \"\" }",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testLegacySidekickPatternIsTheFirstNonManualGroup"
+  },
+  {
+   "name": "legacy-write-group0",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "if let i = legacyIndex(list) { list[i].pattern = newValue }",
+   "new": "if !list.isEmpty { list[0].pattern = newValue }",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testLegacySidekickPatternIsTheFirstNonManualGroup"
+  },
+  {
+   "name": "editor-save-group0",
+   "file": "app/Sources/ProsperApp/Preferences.swift",
+   "old": "editSidekickPattern(legacyIndex(list).map { list[$0].pattern } ?? \"\", now: now)",
+   "new": "editSidekickPattern(list.first?.pattern ?? \"\", now: now)",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testLegacySidekickPatternIsTheFirstNonManualGroup"
+  }
+ ]
+}

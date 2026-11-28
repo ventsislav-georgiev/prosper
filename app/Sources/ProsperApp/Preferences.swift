@@ -1371,18 +1371,21 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Keys.agentIslandDchGroupsAdoptChecked) }
     }
 
-    /// #571, #1757: the first group's pattern ("" with no groups): Settings' one field (until #1758) and the phone's
-    /// 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits the first group, and with no
-    /// group a non-empty pattern (the phone's adopt) adds the Sidekicks group back.
+    /// #2069: the group 0x2d and the one-pattern field stand for: the first that is not manual-only (as syncDchConfig).
+    private static func legacyIndex(_ list: [SessionGroup]) -> Int? { list.firstIndex { !$0.isManual } }
+
+    /// #571, #1757: the first non-manual group's pattern ("" with none; #2069): Settings' one field (until #1758) and the
+    /// phone's 0x2d. Set before a list is stored, it is the #571 key itself; after, it edits that group, and with none a
+    /// non-empty pattern (the phone's adopt) adds the Sidekicks group back.
     static var agentIslandSidekickPattern: String {
-        get { agentIslandSessionGroups.first?.pattern ?? "" }
+        get { let l = agentIslandSessionGroups; return legacyIndex(l).map { l[$0].pattern } ?? "" }
         set {
             guard defaults.object(forKey: Keys.agentIslandSessionGroups) != nil else {
                 return defaults.set(newValue, forKey: Keys.agentIslandSidekickPattern)
             }
             var list = agentIslandSessionGroups
-            if !list.isEmpty { list[0].pattern = newValue } else if !newValue.isEmpty {
-                list = [SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: newValue)]
+            if let i = legacyIndex(list) { list[i].pattern = newValue } else if !newValue.isEmpty {
+                list.append(SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: newValue))
             }
             agentIslandSessionGroups = list
         }
@@ -1432,7 +1435,7 @@ enum Preferences {
     /// #1756: a Settings save of the list: group 0's pattern through editSidekickPattern (0x2d's stamp moves only when
     /// it changed), then the list, stamped as an edit.
     static func editSessionGroups(_ list: [SessionGroup], now: Date = Date()) {
-        editSidekickPattern(list.first?.pattern ?? "", now: now)
+        editSidekickPattern(legacyIndex(list).map { list[$0].pattern } ?? "", now: now)
         let stamp = editStamp(now: now, after: agentIslandSessionGroupsUpdated)
         agentIslandSessionGroups = list
         agentIslandSessionGroupsUpdated = stamp

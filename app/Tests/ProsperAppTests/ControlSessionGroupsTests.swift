@@ -77,6 +77,16 @@ final class ControlSessionGroupsTests: XCTestCase {
         }
     }
 
+    /// #2069 (QA n9): a blank legacy Sidekicks (isOff) is not listed; a manual-only group is. Red at base: both are.
+    func testListSkipsABlankSidekicksButKeepsAManualGroup() throws {
+        try withSeams { _ in
+            Preferences.agentIslandSessionGroups = [SessionGroup(id: SessionGroup.sidekicksID, name: "Sidekicks", pattern: " "),
+                                                    SessionGroup(id: "m1", name: "Manual", pattern: "")]
+            XCTAssertEqual(names(ControlSessionGroups.list()), ["Manual"])
+            XCTAssertEqual(Preferences.agentIslandSessionGroups.count, 2, "stored unchanged")
+        }
+    }
+
     /// set stores through Settings' path (stamps move), keeps the id of a same-named group, notices once, and undo stores
     /// the old list back.
     func testSetStoresReusesIdsAndUndoRestoresTheOldList() throws {

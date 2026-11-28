@@ -35,7 +35,7 @@ enum ControlSessionGroups {
     /// shows no group tabs (Settings' toggle). Names and patterns are outside text (a phone or dch's file may have set them).
     static func list() -> ControlJSON {
         .object(["tabs": .bool(Preferences.agentIslandSidekickTabs),
-                 "groups": .array(Preferences.agentIslandSessionGroups.map {
+                 "groups": .array(Preferences.agentIslandSessionGroups.filter { !$0.isOff }.map {   // #2069
                      .object(["id": .string(OutsideText.shown($0.id, max: 64)),
                               "name": .string(OutsideText.shown($0.name, max: ControlSessionsTalk.maxLine)),
                               "pattern": .string(OutsideText.shown($0.pattern, max: ControlSessionsTalk.maxLine))])

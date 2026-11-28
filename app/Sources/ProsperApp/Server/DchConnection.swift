@@ -1202,7 +1202,6 @@ struct DchGroupsOps: Sendable {
     static let badName = "group name must be 1-32 UTF-8 bytes without = or control characters"
     static let duplicate = "duplicate group id or name"
     static let longPattern = "group pattern over \(DchSidekickOps.maxBytes) UTF-8 bytes"
-    static let blankPattern = "group pattern must not be blank"
 
     struct Value: Equatable, Sendable {
         /// In match order; [] = no split.
@@ -1211,7 +1210,8 @@ struct DchGroupsOps: Sendable {
         var updated: Int64
 
         var json: [String: Any] {
-            ["groups": groups.map { ["id": $0.id, "name": $0.name, "pattern": $0.pattern] }, "updated": updated]
+            // #2069: a blank Sidekicks (isOff, "no split") is never sent; the stored list keeps it.
+            ["groups": groups.filter { !$0.isOff }.map { ["id": $0.id, "name": $0.name, "pattern": $0.pattern] }, "updated": updated]
         }
     }
 
@@ -1239,12 +1239,11 @@ struct DchGroupsOps: Sendable {
         return .success(.write(Value(groups: list, updated: updated)))
     }
 
-    /// The first limit a winning list breaks, nil when it keeps them all. #1777 (QA n97): a blank pattern is refused, as
-    /// the Settings editor would drop it on the next save and push the deletion back.
+    /// The first limit a winning list breaks, nil when it keeps them all. #2069: a blank pattern is no limit: it is a
+    /// manual-only group (#2062), which the editor keeps; a blank Sidekicks (isOff) is kept in the store too.
     static func limitFailure(_ list: [SessionGroup]) -> String? {
         if !list.allSatisfy({ SessionGroup.validName($0.name) }) { return badName }
         if !list.allSatisfy({ $0.pattern.utf8.count <= DchSidekickOps.maxBytes }) { return longPattern }
-        if list.contains(where: { $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return blankPattern }
         if Set(list.map(\.id)).count != list.count || Set(list.map { SessionGroup.nameKey($0.name) }).count != list.count {
             return duplicate
         }

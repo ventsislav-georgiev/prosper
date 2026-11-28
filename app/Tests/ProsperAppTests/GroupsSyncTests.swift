@@ -228,8 +228,6 @@ final class GroupsSyncTests: XCTestCase {
             (Self.body(["groups": [grp("a", "A"), grp("a", "B")], "updated": 200]), "duplicate group id or name"),
             (Self.body(["groups": [grp("a", "QA"), grp("b", " qa ")], "updated": 200]), "duplicate group id or name"),
             (Self.body(["groups": [grp("a", "A", long)], "updated": 200]), "group pattern over 512 UTF-8 bytes"),
-            (Self.body(["groups": [grp("a", "A", "")], "updated": 200]), "group pattern must not be blank"),
-            (Self.body(["groups": [grp("a", "A", "-a"), grp("b", "B", " \n ")], "updated": 200]), "group pattern must not be blank"),
             // #1777 n99: the 9th item ends the walk: the malformed ones after it are never read.
             (Self.body(["groups": (1...8).map { grp("g\($0)", "G\($0)") as Any } + Array(repeating: "x" as Any, count: 10_000), "updated": 200]),
              "more than 8 groups"),
@@ -295,6 +293,55 @@ final class GroupsSyncTests: XCTestCase {
     // MARK: - The watch frame
 
     /// The contract's watch example: "sidekick" mirrors group 0 beside "groups", what 0x2f answers.
+    /// #2069: a blank pattern is a manual-only group (#2062): the push is adopted with it, a phone echoing the Mac's list
+    /// works, and the other checks (a bad name, a duplicate) still refuse. Red at base: "group pattern must not be blank".
+    func testABlankPatternIsAcceptedAsAManualOnlyGroup() {
+        Preferences.agentIslandSessionGroups = Self.macList
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        let list = [["id": "sidekicks", "name": "Sidekicks", "pattern": "-qa"], ["id": "m1", "name": "Manual", "pattern": ""],
+                    ["id": "m2", "name": "Spaces", "pattern": " \n "]]
+        let r = call(Self.body(["groups": list, "updated": 200]))
+        XCTAssertEqual(r.type, DchFrame.ok)
+        XCTAssertEqual(r.adopts, 1)
+        XCTAssertEqual(stored().groups.map(\.pattern), ["-qa", "", " \n "])
+        XCTAssertTrue(stored().groups.dropFirst().allSatisfy(\.isManual))
+        let bad = call(Self.body(["groups": [["id": "m1", "name": "a=b", "pattern": ""]], "updated": 300]))
+        XCTAssertEqual(bad.json, ["message": DchGroupsOps.badName] as NSDictionary)
+        let dup = call(Self.body(["groups": [["id": "m1", "name": "A", "pattern": ""], ["id": "m2", "name": "a", "pattern": ""]], "updated": 300]))
+        XCTAssertEqual(dup.json, ["message": DchGroupsOps.duplicate] as NSDictionary)
+        XCTAssertEqual(stored().updated, 200, "refused: nothing changed")
+    }
+
+    /// #2069 (QA n9): a blank legacy Sidekicks (isOff) is kept in the stored list, as an old phone sent it, but neither the
+    /// reply nor the watch frame shows it. Red at base: it is listed.
+    func testABlankSidekicksIsKeptStoredAndNeverSent() {
+        Preferences.agentIslandSessionGroups = Self.macList
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        let r = call(Self.body(["groups": [["id": "sidekicks", "name": "Sidekicks", "pattern": ""], ["id": "m1", "name": "Manual", "pattern": ""]],
+                                "updated": 200]))
+        XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"m1","name":"Manual","pattern":""}],"updated":200}"#), "the reply")
+        XCTAssertEqual(stored().groups.map(\.id), ["sidekicks", "m1"], "stored unchanged")
+        let f = Self.decode(DchSidekickOps.watchFrame(DchSidekickOps.current(), groups: DchGroupsOps.current())).json
+        XCTAssertEqual((f["groups"] as? NSDictionary)?["groups"] as? NSArray, [["id": "m1", "name": "Manual", "pattern": ""]] as NSArray, "the watch frame")
+        XCTAssertEqual(call(Self.body("{}")).json, Self.object(#"{"groups":[{"id":"m1","name":"Manual","pattern":""}],"updated":200}"#), "a read")
+    }
+
+    /// #2069 (QA n1): 0x2d reads and writes the first non-manual group, not group 0. Red at base: it reads "" and the adopt
+    /// patterns the manual group.
+    func testLegacySidekickPatternIsTheFirstNonManualGroup() {
+        Preferences.agentIslandSessionGroups = [Self.g("m1", "Manual", ""), Self.g("r1", "Reviews", "-rev$")]
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "-rev$")
+        Preferences.adoptSidekickPattern("-phone$", updated: 99)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["", "-phone$"])
+        Preferences.editSessionGroups([Self.g("m1", "Manual", ""), Self.g("r1", "Reviews", "-x$")], now: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.pattern), ["", "-x$"], "an editor save does not write the pattern into the manual group")
+        Preferences.agentIslandSessionGroups = [Self.g("m1", "Manual", "")]
+        XCTAssertEqual(Preferences.agentIslandSidekickPattern, "")
+        Preferences.adoptSidekickPattern("-p$", updated: 120)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.id), ["m1", SessionGroup.sidekicksID])
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.first?.pattern, "", "the manual group stays manual")
+    }
+
     func testWatchFrameCarriesSidekickAndGroups() {
         Preferences.agentIslandSessionGroups = Self.macList
         Preferences.agentIslandSidekickPatternUpdated = 5
