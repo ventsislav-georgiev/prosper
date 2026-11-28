@@ -161,6 +161,86 @@
    "new": "(\"Gold\", \"#CA8A04\")",
    "expect": "killed",
    "filter": "SessionGroupColorTests/testEveryPaletteColourClearsThreeToOneOnEveryThemesSidebar"
+  },
+  {
+   "name": "adopt-colours-ignored",
+   "file": "app/Sources/ProsperApp/AgentIsland/DchConfigWriter.swift",
+   "old": "color: picks[SessionGroup.nameKey(name)])",
+   "new": "color: nil)",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testTheAdoptKeepsTheFilesGroupColours"
+  },
+  {
+   "name": "adopt-colour-lines-not-read",
+   "file": "app/Sources/ProsperApp/AgentIsland/AgentIslandController.swift",
+   "old": "colors: DchConfigWriter.fileGroupValues(path: path, key: \"group_color\"))",
+   "new": "colors: [])",
+   "expect": "killed",
+   "filter": "DchConfigWriterTests/testTheAdoptKeepsTheFilesGroupColours"
+  },
+  {
+   "name": "ctl-set-drops-kept-pick",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "var color = old.first { $0.id == id }?.color",
+   "new": "var color: String? = nil",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testSetKeepsPicksByIdAndTakesARowsColour"
+  },
+  {
+   "name": "ctl-set-invalid-colour-accepted",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "guard let v = SessionGroup.validColor(c) else {",
+   "new": "guard let v = Optional(c) else {",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testSetKeepsPicksByIdAndTakesARowsColour"
+  },
+  {
+   "name": "ctl-empty-not-automatic",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "case .string(\"\")?: color = nil",
+   "new": "case .string(\"\")?: break",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testSetKeepsPicksByIdAndTakesARowsColour"
+  },
+  {
+   "name": "ctl-list-picked-always",
+   "file": "app/Sources/ProsperApp/Control/ControlSessionGroups.swift",
+   "old": "\"colorPicked\": .bool($0.color != nil)",
+   "new": "\"colorPicked\": .bool(true)",
+   "expect": "killed",
+   "filter": "ControlSessionGroupsTests/testListGivesEachGroupsShownColourAndWhetherItIsPicked"
+  },
+  {
+   "name": "sync-auto-echo-stored",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "stored.first(where: { $0.id == g.id })?.color == nil { g.color = nil }",
+   "new": "stored.first(where: { $0.id == g.id })?.color == nil, Bool(\"false\") == true { g.color = nil }",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne"
+  },
+  {
+   "name": "sync-phone-colour-dropped",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "color: g[\"color\"] as? String))",
+   "new": "color: nil))",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne"
+  },
+  {
+   "name": "sync-json-no-colour",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": ", \"color\": shown[$0.id] ?? \"\"]",
+   "new": "]",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testContractOkExampleForTheDefaultList"
+  },
+  {
+   "name": "sync-reply-not-merged",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "winner = Self.current()   // #2061 r2",
+   "new": "winner = Value(groups: list, updated: phone.updated)   // #2061 r2",
+   "expect": "killed",
+   "filter": "GroupsSyncTests/testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne"
   }
  ]
 }

@@ -1366,12 +1366,16 @@ enum Preferences {
     /// time they are handed out, so a later delete or move never repaints them; a removed group's entry goes. Called on a
     /// list change only (the island's regroup and its dch config write), never per draw.
     static func sessionGroupColors() -> [String: String] {
-        let list = agentIslandSessionGroups
-        let kept = defaults.dictionary(forKey: Keys.agentIslandSessionGroupAutoColors) as? [String: String] ?? [:]
+        let list = agentIslandSessionGroups, kept = sessionGroupAutoColors
         let all = SessionGroup.colors(list, auto: kept)
         let auto = all.filter { id, _ in list.contains { $0.id == id && $0.color == nil } }
         if auto != kept { defaults.set(auto, forKey: Keys.agentIslandSessionGroupAutoColors) }
         return all
+    }
+
+    /// #2061 r2: the stored Automatic colours, read only (any thread): groupsSync's JSON reads them off main.
+    static var sessionGroupAutoColors: [String: String] {
+        defaults.dictionary(forKey: Keys.agentIslandSessionGroupAutoColors) as? [String: String] ?? [:]
     }
 
     /// #1766: whether a list is stored; until then the getter reads the migrated Sidekicks group.
@@ -1483,7 +1487,8 @@ enum Preferences {
     /// rewrites group 0 moves the groups stamp (adoptSidekickPattern), so the phone re-reads.
     static func adoptSessionGroups(_ list: [SessionGroup], updated: Int64) {
         let pattern = agentIslandSidekickPattern, stored = agentIslandSessionGroups
-        // #2061: the phone sends no colour; a group it keeps (same id) keeps the colour picked here.
+        // #2061: a phone group without a colour (r2: or with one DchGroupsOps.phonePicks read as Automatic) keeps the
+        // colour picked here when it keeps its id.
         agentIslandSessionGroups = list.map { g in
             var g = g
             if g.color == nil { g.color = stored.first { $0.id == g.id }?.color }

@@ -83,27 +83,36 @@ enum DchConfigWriter {
     /// #1766: the values of the file's group lines in order, found as `render` finds the lines it owns (setsKey), each
     /// read up to its first NUL as dch reads it, after its first "=", spaces, tabs and CR trimmed; a non-UTF-8 value is
     /// skipped. Empty when the file is missing or not one `write` would read (not regular, over maxFileBytes, unreadable).
-    static func fileGroupValues(path: String) -> [String] {
+    /// #2061 r2 (QA n12): `key` "group_color" reads the colour lines the same way.
+    static func fileGroupValues(path: String, key: String = "group") -> [String] {
         var st = stat()
         guard stat(path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxFileBytes,
               let d = FileManager.default.contents(atPath: path) else { return [] }
         return d.split(separator: 0x0A).compactMap { whole in
             let line = whole.prefix { $0 != 0 }
-            guard setsKey(line, "group"), let v = String(data: Data(line.drop { $0 != 0x3D }.dropFirst()), encoding: .utf8) else { return nil }
+            guard setsKey(line, key), let v = String(data: Data(line.drop { $0 != 0x3D }.dropFirst()), encoding: .utf8) else { return nil }
             return v.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r"))
         }
     }
 
     /// #1766: the groups in those values that Prosper writes back as one line each: `<name> = <regex>` split at the
     /// first "=", a regex sidekickValue keeps; then normalized (a name dch keeps, first of a name, at most 8). Ids as
-    /// the Settings editor makes a new row's.
-    static func adoptable(_ values: [String]) -> [SessionGroup] {
-        SessionGroup.normalized(values.compactMap { v in
+    /// the Settings editor makes a new row's. #2061 r2 (QA n12): `colors`, the file's group_color values
+    /// (`<name> = #rrggbb`), become the picks of the groups they name (nameKey, the last line of a name winning as in
+    /// dch); a value validColor refuses leaves its group Automatic, so the next owned write keeps the file's colours.
+    static func adoptable(_ values: [String], colors: [String] = []) -> [SessionGroup] {
+        var picks = [String: String]()
+        for v in colors {
+            guard let eq = v.firstIndex(of: "=") else { continue }
+            picks[SessionGroup.nameKey(String(v[..<eq]))] = SessionGroup.validColor(v[v.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+        }
+        return SessionGroup.normalized(values.compactMap { v in
             guard let eq = v.firstIndex(of: "=") else { return nil }
             let name = String(v[..<eq]), raw = String(v[v.index(after: eq)...]), p = sidekickValue(raw)
             // #2062 (dch #721): a blank regex is a manual-only group, adopted with no pattern.
             guard !p.isEmpty || raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: p)
+            return SessionGroup(id: String(UUID().uuidString.prefix(8)).lowercased(), name: name, pattern: p,
+                                color: picks[SessionGroup.nameKey(name)])
         })
     }
 

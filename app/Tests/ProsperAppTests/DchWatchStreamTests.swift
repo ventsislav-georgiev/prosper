@@ -198,6 +198,9 @@ final class DchWatchStreamTests: XCTestCase {
     /// #1756: a groups save that leaves group 0's pattern alone still sends the frame, carrying both keys.
     func testGroupsChangeSendsTheFrameWithBothKeys() {
         let timers = Timers(), value = Value(), h = hub(timers, value), sink = Sink()
+        let auto = Preferences.defaults.object(forKey: "agentIslandSessionGroupAutoColors")   // #2061 r2: none of another test's
+        Preferences.defaults.removeObject(forKey: "agentIslandSessionGroupAutoColors")
+        addTeardownBlock { Preferences.defaults.set(auto, forKey: "agentIslandSessionGroupAutoColors") }
         h.island(Self.cache([]))
         _ = open(h, sink)
         timers.advance(to: 1)
@@ -207,7 +210,7 @@ final class DchWatchStreamTests: XCTestCase {
         XCTAssertEqual(Self.type(sink[2]), DchFrame.ok)
         XCTAssertEqual(Self.json(sink[2]) as? NSDictionary,
                        ["sidekick": ["pattern": "-qa", "updated": 0],
-                        "groups": ["groups": [["id": "r1", "name": "Reviews", "pattern": "-rev$"]], "updated": 9]] as NSDictionary)
+                        "groups": ["groups": [["id": "r1", "name": "Reviews", "pattern": "-rev$", "color": "#2563EB"]], "updated": 9]] as NSDictionary)
         h.sidekickChanged()
         XCTAssertEqual(sink.frames.count, 3, "unchanged: nothing")
     }

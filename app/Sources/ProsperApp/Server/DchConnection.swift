@@ -57,7 +57,7 @@ enum DchFrame {
     // DchWatchHub), only while "watch" is in ops.
     static let watch: UInt8 = 0x2e  // {} → listResp, ok {sidekick, groups}, then listResp | ok {sidekick, groups} | ok {} … | error
     // #1756: the session groups of the Mac (DchGroupsOps), only while "groups" is in ops (always). One reply.
-    static let groupsSync: UInt8 = 0x2f  // {} | {groups: [{id, name, pattern}], updated} → ok {groups, updated} (the winner) | error
+    static let groupsSync: UInt8 = 0x2f  // {} | {groups: [{id, name, pattern, color?}], updated} → ok {groups, updated} (the winner) | error
     // #838: dch's control verbs run by this Mac's dch (DchCtl), only while "ctl" is in ops (always).
     static let ctl: UInt8 = 0x30  // {argv: [verb, name, …]} → ctlStdout…/ctlStderr…, then ctlExit | error
     // both directions
@@ -1211,9 +1211,13 @@ struct DchGroupsOps: Sendable {
         /// Ms since epoch of the last save; 0 = never edited.
         var updated: Int64
 
+        /// #2061 r2: each group's "color" is the "#RRGGBB" the Mac shows (SessionGroup.colors over the stored Automatic
+        /// colours, as Preferences.sessionGroupColors gives it, without its write: this runs off main too).
         var json: [String: Any] {
+            let shown = SessionGroup.colors(groups, auto: Preferences.sessionGroupAutoColors)
             // #2069: a blank Sidekicks (isOff, "no split") is never sent; the stored list keeps it.
-            ["groups": groups.filter { !$0.isOff }.map { ["id": $0.id, "name": $0.name, "pattern": $0.pattern] }, "updated": updated]
+            return ["groups": groups.filter { !$0.isOff }.map { ["id": $0.id, "name": $0.name, "pattern": $0.pattern, "color": shown[$0.id] ?? ""] },
+                    "updated": updated]
         }
     }
 
@@ -1222,7 +1226,8 @@ struct DchGroupsOps: Sendable {
         case write(Value)
     }
 
-    /// {} (no "groups" key) reads; {"groups": [{id, name, pattern}], "updated": integer} writes, unknown keys ignored.
+    /// {} (no "groups" key) reads; {"groups": [{id, name, pattern, color?}], "updated": integer} writes, unknown keys ignored.
+    /// #2061 r2: a "color" that is not a "#rrggbb" string is no colour (normalized drops it), so the Mac's pick stays.
     /// .failure carries the malformed message, or tooMany as soon as a 9th item is reached (#1777 n99: nothing past it is
     /// walked). The write's groups are as sent: `limitFailure` checks them once the write wins, then they are normalized.
     static func parse(_ payload: Data) -> Result<Request, Failure> {
@@ -1236,9 +1241,20 @@ struct DchGroupsOps: Sendable {
             if list.count == SessionGroup.maxCount { return .failure(Failure(tooMany)) }
             guard let g = item as? [String: Any], let id = g["id"] as? String, validID(id),
                   let name = g["name"] as? String, let pattern = g["pattern"] as? String else { return .failure(Failure(malformed)) }
-            list.append(SessionGroup(id: id, name: name, pattern: pattern))
+            list.append(SessionGroup(id: id, name: name, pattern: pattern, color: g["color"] as? String))
         }
         return .success(.write(Value(groups: list, updated: updated)))
+    }
+
+    /// #2061 r2: a phone colour equal to the one the Mac shows for a group it keeps Automatic (`shown`, by id) is that
+    /// Automatic colour sent back, not a pick: it stays nil, so the group keeps following the palette. A phone cannot
+    /// tell a deliberate pick of that same colour apart; it looks the same until the palette moves.
+    static func phonePicks(_ list: [SessionGroup], stored: [SessionGroup], shown: [String: String]) -> [SessionGroup] {
+        list.map { g in
+            var g = g
+            if let c = g.color, c == shown[g.id], stored.first(where: { $0.id == g.id })?.color == nil { g.color = nil }
+            return g
+        }
     }
 
     /// The first limit a winning list breaks, nil when it keeps them all. #2069: a blank pattern is no limit: it is a
@@ -1287,8 +1303,10 @@ struct DchGroupsOps: Sendable {
                 var winner = Self.current()
                 if case .write(let phone) = request, phone.updated > winner.updated {
                     if let message = Self.limitFailure(phone.groups) { return reply(DchControlOps.error(message)) }
-                    winner = Value(groups: SessionGroup.normalized(phone.groups), updated: phone.updated)
-                    Preferences.adoptSessionGroups(winner.groups, updated: winner.updated)
+                    let list = Self.phonePicks(SessionGroup.normalized(phone.groups), stored: winner.groups,
+                                               shown: Preferences.sessionGroupColors())
+                    Preferences.adoptSessionGroups(list, updated: phone.updated)
+                    winner = Self.current()   // #2061 r2: the stored list, its kept picks merged in
                     adopted()
                 }
                 reply(DchFrame.encode(DchFrame.ok, json: winner.json))

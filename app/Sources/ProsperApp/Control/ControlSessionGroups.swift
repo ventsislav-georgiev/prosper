@@ -31,24 +31,30 @@ enum ControlSessionGroups {
 
     // MARK: - sessions.groups.list
 
-    /// {"tabs": Bool, "groups": [{id, name, pattern}]} in the stored order. `tabs` false: the list is kept but the island
+    /// {"tabs": Bool, "groups": [{id, name, pattern, color, colorPicked}]} in the stored order. #2061 r2: `color` is the
+    /// "#RRGGBB" the island shows (Preferences.sessionGroupColors), `colorPicked` false when it is Automatic. `tabs` false: the list is kept but the island
     /// shows no group tabs (Settings' toggle). Names and patterns are outside text (a phone or dch's file may have set them).
     static func list() -> ControlJSON {
-        .object(["tabs": .bool(Preferences.agentIslandSidekickTabs),
+        let colors = Preferences.sessionGroupColors()
+        return .object(["tabs": .bool(Preferences.agentIslandSidekickTabs),
                  "groups": .array(Preferences.agentIslandSessionGroups.filter { !$0.isOff }.map {   // #2069
                      .object(["id": .string(OutsideText.shown($0.id, max: 64)),
                               "name": .string(OutsideText.shown($0.name, max: ControlSessionsTalk.maxLine)),
-                              "pattern": .string(OutsideText.shown($0.pattern, max: ControlSessionsTalk.maxLine))])
+                              "pattern": .string(OutsideText.shown($0.pattern, max: ControlSessionsTalk.maxLine)),
+                              "color": colors[$0.id].map(ControlJSON.string) ?? .null,
+                              "colorPicked": .bool($0.color != nil)])
                  })])
     }
 
     // MARK: - sessions.groups.set
 
-    /// The whole list, replaced: [{name, pattern, id?}]. A row is stored only as the Settings editor would store it (a
+    /// The whole list, replaced: [{name, pattern, id?, color?}]. A row is stored only as the Settings editor would store it (a
     /// valid 1-32 byte name, not dch's own tab name, a valid regex that does not match everything or a blank pattern (a
     /// manual-only group, #2062), at most 8 rows, no duplicate name): else the whole call is refused with the row's reason and nothing is stored. Agent text
     /// is outside text: a control or hidden scalar anywhere is refused. A row without an id keeps the id of the stored group
     /// of the same name (its tab stays chosen; a blank Sidekicks, isOff, is not matched: #2069), else gets a new one. [] clears the list. Undo stores the old list back.
+    /// #2061 r2: `color` "#rrggbb" is the group's pick, "" sets it back to Automatic, absent or null keeps the stored
+    /// group's pick for a kept id (Automatic for a new one); anything else refuses the call.
     /// shortcut: an old list that was never stored (the migrated Sidekicks default) is stored by the undo, run it once.
     static func set(_ args: [String: ControlJSON]) throws -> ControlChange {
         guard case .array(let items)? = args["groups"] else { throw ControlError("argument 'groups' must be a list") }
@@ -71,7 +77,16 @@ enum ControlSessionGroups {
                 id = old.first { !$0.isOff && SessionGroup.nameKey($0.name) == SessionGroup.nameKey(name) }?.id
                     ?? String(UUID().uuidString.prefix(8)).lowercased()
             }
-            rows.append(SessionGroup(id: id, name: name, pattern: pattern))
+            var color = old.first { $0.id == id }?.color
+            switch o["color"] {
+            case nil, .null?: break
+            case .string("")?: color = nil
+            case .string(let c)?:
+                guard let v = SessionGroup.validColor(c) else { throw ControlError("group \(i + 1): color must be \"#rrggbb\" or \"\" for Automatic") }
+                color = v
+            default: throw ControlError("group \(i + 1): color must be \"#rrggbb\" or \"\" for Automatic")
+            }
+            rows.append(SessionGroup(id: id, name: name, pattern: pattern, color: color))
         }
         let editor = SessionGroupsEditor(rows)
         for (i, g) in rows.enumerated() {
@@ -145,10 +160,10 @@ enum ControlSessionGroups {
 extension ControlRegistry {
     /// #1856: wired in ControlRegistry.standard().
     static func registerSessionGroups(_ r: inout ControlRegistry) {
-        r.register(ControlCommand(name: "sessions.groups.list", summary: "The session groups (id, name, pattern) and whether the island shows their tabs.",
+        r.register(ControlCommand(name: "sessions.groups.list", summary: "The session groups (id, name, pattern, color, colorPicked) and whether the island shows their tabs.",
                                   args: [:], mutates: false) { _, _ in ControlSessionGroups.list() })
-        r.register(.change(name: "sessions.groups.set", summary: "Replace the session groups with [{name, pattern, id?}] (8 at most; [] clears). Refused whole if a row is not one Settings would save.", args: [
-            "groups": ControlArg(type: "array", required: true, summary: "[{name, pattern, id?}]: name 1-32 bytes, pattern a regex that does not match everything"),
+        r.register(.change(name: "sessions.groups.set", summary: "Replace the session groups with [{name, pattern, id?, color?}] (8 at most; [] clears). Refused whole if a row is not one Settings would save.", args: [
+            "groups": ControlArg(type: "array", required: true, summary: "[{name, pattern, id?, color?}]: name 1-32 bytes, pattern a regex that does not match everything; color \"#rrggbb\", \"\" for Automatic, absent keeps the group's colour"),
         ]) { _, a in try ControlSessionGroups.set(a) })
         r.register(.change(name: "island.showGroup", summary: "Show a group tab of the island (by id or name; \"sessions\" for the Sessions tab).", args: [
             "group": ControlArg(type: "string", required: true, summary: "the group's id or name, or sessions"),

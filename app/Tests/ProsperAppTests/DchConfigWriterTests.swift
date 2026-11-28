@@ -1564,6 +1564,25 @@ extension DchConfigWriterTests {
         XCTAssertEqual(logged.withLock { $0 }, 0, "nothing replaced")
     }
 
+    /// #2061 r2 (QA n12): the file's group_color lines are adopted as picks (by name, any case, the last line of a name
+    /// winning), so the owned write that follows keeps QA's colour; an invalid value leaves Rev Automatic.
+    @MainActor func testTheAdoptKeepsTheFilesGroupColours() {
+        unstoredGroups()
+        usePattern(tabs: true, "-qa")
+        Preferences.agentIslandSessionGroupsUpdated = 0
+        XCTAssertEqual(DchConfigWriter.adoptable(["A = -a$", "B = -b$"], colors: ["a = #000000", "a = #9333ea", "B = #xyz", "C = #111111", "nope"])
+                        .map(\.color), ["#9333EA", nil])
+        let file = configFile("adoptColours", "group = Rev = -rev$\ngroup = QA = -qa$\ngroup_color = QA = #9333ea\ngroup_color = Rev = #xyz\n")
+        let (c, _) = controller(FakeIO(), on: false, version: [1, 124, 0], build: "full", config: file)
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.color), [nil, "#9333EA"])
+        c.syncDchConfig()
+        drain(c)
+        XCTAssertEqual(read(file), "group = Rev = -rev$\ngroup = QA = -qa$\ngroup_color = Rev = #2563EB\ngroup_color = QA = #9333EA\n"
+                       + "auto_allow = false\nsidekick_pattern = -rev$\n")
+    }
+
     /// No valid group line: the Sidekicks group is written as before and the list stays unstored (lazy migration).
     @MainActor func testAnUnstoredListWithNoValidLinesWritesSidekicksAsBefore() {
         unstoredGroups()

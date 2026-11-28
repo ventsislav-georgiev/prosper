@@ -14,7 +14,8 @@ final class GroupsSyncTests: XCTestCase {
     }
 
     private static let keys = ["agentIslandSessionGroups", "agentIslandSidekickPattern", "agentIslandSidekickPatternUpdated",
-                               "agentIslandSessionGroupsUpdated", "agentIslandSidekickTabs"]
+                               "agentIslandSessionGroupsUpdated", "agentIslandSidekickTabs",
+                               "agentIslandSessionGroupAutoColors"]
 
     override func setUp() {
         super.setUp()
@@ -72,7 +73,7 @@ final class GroupsSyncTests: XCTestCase {
     func testContractOkExampleForTheDefaultList() {
         let r = call(Self.body("{}"))
         XCTAssertEqual(r.type, 0x14)
-        XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa"}],"updated":0}"#))
+        XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa","color":"#2563EB"}],"updated":0}"##))
         XCTAssertEqual(r.adopts, 0)
         XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandSessionGroups") == nil, "a read writes nothing")
         XCTAssertTrue(Preferences.defaults.object(forKey: "agentIslandSessionGroupsUpdated") == nil)
@@ -84,8 +85,8 @@ final class GroupsSyncTests: XCTestCase {
         for read in [Self.body("{}"), Self.body(["updated": 9]), Self.body(["other": "x"])] {
             let r = call(read)
             XCTAssertEqual(r.type, DchFrame.ok)
-            XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa"},"#
-                + #"{"id":"r1","name":"Reviews","pattern":"-rev$"}],"updated":1784995200000}"#))
+            XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa","color":"#2563EB"},"##
+                + ##"{"id":"r1","name":"Reviews","pattern":"-rev$","color":"#15803D"}],"updated":1784995200000}"##))
             XCTAssertEqual(r.adopts, 0)
         }
         Preferences.agentIslandSessionGroups = []
@@ -172,7 +173,7 @@ final class GroupsSyncTests: XCTestCase {
         Preferences.agentIslandSidekickPatternUpdated = 50
         let r = call(Self.body(#"{"groups":[{"id":"q","name":" QA ","pattern":"-qa$","color":"red"}],"updated":101,"device_id":"x"}"#))
         XCTAssertEqual(r.type, DchFrame.ok)
-        XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"q","name":"QA","pattern":"-qa$"}],"updated":101}"#),
+        XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"q","name":"QA","pattern":"-qa$","color":"#2563EB"}],"updated":101}"##),
                        "the winner, name trimmed, unknown keys ignored")
         XCTAssertEqual(r.adopts, 1)
         XCTAssertEqual(stored(), .init(groups: [Self.g("q", "QA", "-qa$")], updated: 101), "the phone's list and stamp, never now")
@@ -181,6 +182,23 @@ final class GroupsSyncTests: XCTestCase {
         XCTAssertEqual(empty.json, Self.object(#"{"groups":[],"updated":102}"#))
         XCTAssertEqual(stored(), .init(groups: [], updated: 102))
         XCTAssertEqual(Preferences.agentIslandSidekickPattern, "", "no groups: an empty sidekick pattern")
+    }
+
+    /// #2061 r2: a phone "color" is stored as the pick, except the Automatic colour the Mac shows for a group it keeps
+    /// Automatic (an echo of what it was sent), which stays Automatic; no colour or an invalid one keeps the Mac's pick.
+    /// The reply carries the shown colours. Red at base: no "color" in the reply and every phone colour dropped.
+    func testAPhoneColourIsAPickUnlessItIsTheShownAutomaticOne() {
+        Preferences.agentIslandSessionGroups = [Self.g("a", "A", "-a"), SessionGroup(id: "b", name: "B", pattern: "-b", color: "#DC2626")]
+        Preferences.agentIslandSessionGroupsUpdated = 100
+        let r = call(Self.body(["groups": [["id": "a", "name": "A", "pattern": "-a", "color": "#2563eb"], ["id": "b", "name": "B", "pattern": "-b"],
+                                           ["id": "c", "name": "C", "pattern": "-c", "color": "#9333EA"]], "updated": 101]))
+        XCTAssertEqual(r.adopts, 1)
+        XCTAssertEqual(stored().groups.map(\.color), [nil, "#DC2626", "#9333EA"])
+        XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"a","name":"A","pattern":"-a","color":"#2563EB"},"##
+            + ##"{"id":"b","name":"B","pattern":"-b","color":"#DC2626"},{"id":"c","name":"C","pattern":"-c","color":"#9333EA"}],"updated":101}"##))
+        _ = call(Self.body(["groups": [["id": "a", "name": "A", "pattern": "-a", "color": "#0F766E"], ["id": "b", "name": "B", "pattern": "-b", "color": "#xyz"],
+                                       ["id": "c", "name": "C", "pattern": "-c", "color": 5]], "updated": 102]))
+        XCTAssertEqual(stored().groups.map(\.color), ["#0F766E", "#DC2626", "#9333EA"])
     }
 
     func testAnOlderOrTiedWriteIsAnsweredWithTheMacs() {
@@ -319,11 +337,11 @@ final class GroupsSyncTests: XCTestCase {
         Preferences.agentIslandSessionGroupsUpdated = 100
         let r = call(Self.body(["groups": [["id": "sidekicks", "name": "Sidekicks", "pattern": ""], ["id": "m1", "name": "Manual", "pattern": ""]],
                                 "updated": 200]))
-        XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"m1","name":"Manual","pattern":""}],"updated":200}"#), "the reply")
+        XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"m1","name":"Manual","pattern":"","color":"#15803D"}],"updated":200}"##), "the reply")
         XCTAssertEqual(stored().groups.map(\.id), ["sidekicks", "m1"], "stored unchanged")
         let f = Self.decode(DchSidekickOps.watchFrame(DchSidekickOps.current(), groups: DchGroupsOps.current())).json
-        XCTAssertEqual((f["groups"] as? NSDictionary)?["groups"] as? NSArray, [["id": "m1", "name": "Manual", "pattern": ""]] as NSArray, "the watch frame")
-        XCTAssertEqual(call(Self.body("{}")).json, Self.object(#"{"groups":[{"id":"m1","name":"Manual","pattern":""}],"updated":200}"#), "a read")
+        XCTAssertEqual((f["groups"] as? NSDictionary)?["groups"] as? NSArray, [["id": "m1", "name": "Manual", "pattern": "", "color": "#15803D"]] as NSArray, "the watch frame")
+        XCTAssertEqual(call(Self.body("{}")).json, Self.object(##"{"groups":[{"id":"m1","name":"Manual","pattern":"","color":"#15803D"}],"updated":200}"##), "a read")
     }
 
     /// #2069 (QA n1): 0x2d reads and writes the first non-manual group, not group 0. Red at base: it reads "" and the adopt
@@ -410,8 +428,8 @@ final class GroupsSyncTests: XCTestCase {
         Preferences.agentIslandSessionGroupsUpdated = 6
         let f = DchSidekickOps.watchFrame(DchSidekickOps.current(), groups: DchGroupsOps.current())
         XCTAssertEqual(f.first, DchFrame.ok)
-        XCTAssertEqual(Self.decode(f).json, Self.object(#"{"sidekick":{"pattern":"-qa","updated":5},"#
-            + #""groups":{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa"},{"id":"r1","name":"Reviews","pattern":"-rev$"}],"updated":6}}"#))
+        XCTAssertEqual(Self.decode(f).json, Self.object(##"{"sidekick":{"pattern":"-qa","updated":5},"##
+            + ##""groups":{"groups":[{"id":"sidekicks","name":"Sidekicks","pattern":"-qa","color":"#2563EB"},{"id":"r1","name":"Reviews","pattern":"-rev$","color":"#15803D"}],"updated":6}}"##))
         Preferences.agentIslandSessionGroups = []
         let none = Self.decode(DchSidekickOps.watchFrame(DchSidekickOps.current(), groups: DchGroupsOps.current())).json
         XCTAssertEqual(none, Self.object(#"{"sidekick":{"pattern":"","updated":5},"groups":{"groups":[],"updated":6}}"#),
@@ -433,7 +451,7 @@ final class GroupsSyncTests: XCTestCase {
         wait(for: [replied], timeout: 5)
         let r = Self.decode(box.lock.withLock { box.frames.first ?? Data() })
         XCTAssertEqual(r.type, DchFrame.ok)
-        XCTAssertEqual(r.json, Self.object(#"{"groups":[{"id":"p","name":"P","pattern":"-p"}],"updated":11}"#))
+        XCTAssertEqual(r.json, Self.object(##"{"groups":[{"id":"p","name":"P","pattern":"-p","color":"#2563EB"}],"updated":11}"##))
         XCTAssertEqual(box.lock.withLock { box.adopts }, 1)
         XCTAssertEqual(stored(), .init(groups: [Self.g("p", "P", "-p")], updated: 11))
         XCTAssertFalse(queue.sync { conn.inFlight }, "the one reply cleared inFlight")

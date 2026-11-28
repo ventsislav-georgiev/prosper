@@ -2100,7 +2100,8 @@ final class AgentIslandController {
                 let had = DchConfigWriter.fileGroupValues(path: path)
                 if adopt {
                     // #1780: exactly Prosper's own lines (the migrated Sidekicks line): adopt and log nothing.
-                    let found = had == g ? [] : DchConfigWriter.adoptable(had)
+                    // #2061 r2 (QA n12): the file's group_color lines come in as the adopted groups' picks.
+                    let found = had == g ? [] : DchConfigWriter.adoptable(had, colors: DchConfigWriter.fileGroupValues(path: path, key: "group_color"))
                     // #1779: lines dropped as refused (or all of them, for Sidekicks) log once, like a replaced list.
                     if had != g, found.count < had.count { replaced(had, found.isEmpty ? g : DchConfigWriter.groupValues(found)) }
                     // #1788: the hop flags this one check whatever it found (none found included).

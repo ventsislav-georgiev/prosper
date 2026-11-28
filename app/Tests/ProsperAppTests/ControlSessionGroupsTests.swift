@@ -16,7 +16,7 @@ final class ControlSessionGroupsTests: XCTestCase {
 
     func withSeams(store st: AgentIslandStore? = nil, _ body: (ControlChanges) throws -> Void) rethrows {
         let keys = ["agentIslandSessionGroups", "agentIslandSessionGroupsUpdated", "agentIslandSidekickPattern",
-                    "agentIslandSidekickPatternUpdated", "agentIslandSidekickTabs"]
+                    "agentIslandSidekickPatternUpdated", "agentIslandSidekickTabs", "agentIslandSessionGroupAutoColors"]
         let savedKeys = keys.map { Preferences.defaults.object(forKey: $0) }
         let saved = (ControlSessions.model, ControlSessions.islandStore, ControlSessionGroups.store, ControlSessionGroups.showGroup,
                      ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord, ControlSessionGroups.now)
@@ -28,6 +28,7 @@ final class ControlSessionGroupsTests: XCTestCase {
              ControlSessionGroups.showHistory, ControlSessionGroups.pinRecord, ControlSessionGroups.now) = saved
         }
         shown = []; historyShown = 0; stored = []; pinned = []; notices = []
+        Preferences.defaults.removeObject(forKey: "agentIslandSessionGroupAutoColors")   // #2061 r2: no other test's auto colours
         ControlSessions.model = { nil }
         ControlSessions.islandStore = { st }
         // The store seam keeps Settings' write and drops only the controller's regroup (the shared controller).
@@ -41,9 +42,10 @@ final class ControlSessionGroupsTests: XCTestCase {
         try body(changes)
     }
 
-    func group(_ name: String, _ pattern: String, id: String? = nil) -> ControlJSON {
+    func group(_ name: String, _ pattern: String, id: String? = nil, color: ControlJSON? = nil) -> ControlJSON {
         var o: [String: ControlJSON] = ["name": .string(name), "pattern": .string(pattern)]
         if let id { o["id"] = .string(id) }
+        if let color { o["color"] = color }
         return .object(o)
     }
 
@@ -74,6 +76,40 @@ final class ControlSessionGroupsTests: XCTestCase {
             Preferences.agentIslandSidekickTabs = false
             guard case .object(let off) = ControlSessionGroups.list() else { return XCTFail("object") }
             XCTAssertEqual(off["tabs"], .bool(false))
+        }
+    }
+
+    /// #2061 r2: each listed group carries the colour the island shows and whether it is the user's pick; the other keys
+    /// are as before. Red at base: no "color" or "colorPicked" key.
+    func testListGivesEachGroupsShownColourAndWhetherItIsPicked() throws {
+        try withSeams { _ in
+            Preferences.agentIslandSessionGroups = [SessionGroup(id: "a", name: "Qa", pattern: "qa", color: "#9333EA"),
+                                                    SessionGroup(id: "b", name: "Docs", pattern: "")]
+            guard case .object(let o) = ControlSessionGroups.list() else { return XCTFail("object") }
+            XCTAssertEqual(o["groups"], .array([
+                .object(["id": .string("a"), "name": .string("Qa"), "pattern": .string("qa"), "color": .string("#9333EA"), "colorPicked": .bool(true)]),
+                .object(["id": .string("b"), "name": .string("Docs"), "pattern": .string(""), "color": .string("#2563EB"), "colorPicked": .bool(false)]),
+            ]))
+        }
+    }
+
+    /// #2061 r2: set keeps a kept id's pick when the row has no colour (absent or null), "" sets Automatic, "#rrggbb" is
+    /// the pick (upper-cased), a new row without one is Automatic; any other value refuses the whole call. Red at base:
+    /// the rebuilt rows dropped every pick.
+    func testSetKeepsPicksByIdAndTakesARowsColour() throws {
+        try withSeams { _ in
+            let before = [SessionGroup(id: "k", name: "Qa", pattern: "qa", color: "#DC2626"),
+                          SessionGroup(id: "n", name: "Docs", pattern: "doc", color: "#15803D"),
+                          SessionGroup(id: "d", name: "Ops", pattern: "ops", color: "#C2410C")]
+            Preferences.agentIslandSessionGroups = before
+            for bad in [ControlJSON.string("red"), .string("#12345"), .number(1)] {
+                refused(try ControlSessionGroups.set(groups(group("Qa", "qa", color: bad))), "group 1: color must be \"#rrggbb\" or \"\" for Automatic")
+            }
+            XCTAssertEqual(Preferences.agentIslandSessionGroups, before, "a refused call stores nothing")
+            _ = try ControlSessionGroups.set(groups(group("qa", "api-qa"), group("Docs", "doc", id: "n", color: .null),
+                                                    group("Ops", "ops", color: .string("")), group("New", "new"),
+                                                    group("Teal", "t", color: .string("#0f766e"))))
+            XCTAssertEqual(Preferences.agentIslandSessionGroups.map(\.color), ["#DC2626", "#15803D", nil, nil, "#0F766E"])
         }
     }
 
