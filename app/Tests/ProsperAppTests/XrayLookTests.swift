@@ -321,7 +321,8 @@ final class XrayLookTests: XCTestCase {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/ProsperApp/AgentWindow")
         let want: [(String, String, Int)] = [("XrayPanel.swift", ".foregroundStyle(XrayInk.accentInk)", 2),
-                                             ("XrayPanel.swift", "XrayInk.accentRing.opacity", 3),
+                                             // #2066: the bottom pane's tab capsule is the 4th
+                                             ("XrayPanel.swift", "XrayInk.accentRing.opacity", 4),
                                              ("XrayAnswer.swift", "XrayInk.accentRing.opacity", 2),
                                              // #2049: the cards' rich text, the ref card's tabs and sentence, the chapter
                                              // card's ref underline, all in the card panel on XrayInk.surface
