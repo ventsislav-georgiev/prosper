@@ -240,12 +240,12 @@ jobs:
         # grep reads strings' whole output (no -q): -q closed the pipe early, and strings
         # then printed "failed to flush output" into every release log (QA #827).
         env:
-          DCH_TAG: v1.199.0
+          DCH_TAG: v1.202.0
           # sha256 of dch-<version>-darwin-arm64.tar.gz, pinned here (#875): the
           # release's own .sha256 asset is as replaceable as the tarball, so it only
           # proves an uncorrupted download. A DCH_TAG bump waits for dch's
           # release-assets workflow to attach the tarball, then updates both lines.
-          DCH_SHA256: bd851b8378e5fd9d73bd7c0673898892763474a55a48e8540e80154a909bb620
+          DCH_SHA256: 3c85a7f0d1d409c8b601d85e056df1934db22082b3c2c290dca6a9a75f0b81ce
           # dch's release assets are built for minos 14.0, at or below LSMinimumSystemVersion (15.0).
           # Every dch from v2.156.0-beta.5 to v2.158.0 was minos 27.0 inside a 14.0
           # app and dyld refused it on macOS 14-26 (#447); the Bundle step's minos

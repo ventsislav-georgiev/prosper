@@ -21,6 +21,9 @@ tag from the now-released section and put it on the new top draft.
 ## v2.182.0 *(unreleased)*
 - Updating a kit whose new version renames a piece (like the Agent Kit's status line) no longer
   fails at the approval step; the approval sheet now lists the old piece's removal. (#2101)
+- Ships dch 1.202.0: a new session on another Mac can be created in one of its configured groups
+  (dch serve --allow-create), and switching Claude Code's view to a subagent matches its current
+  agent list.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory
