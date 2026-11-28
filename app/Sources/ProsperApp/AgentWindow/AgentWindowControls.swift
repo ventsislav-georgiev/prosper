@@ -654,7 +654,8 @@ extension AgentWindowControls {
         if let why = newGroupRefusal(name, stored: stored) { return .failure(NewGroupRefused(reason: why)) }
         // #2070 n8: normalized keeps the first of a name and the first maxCount, so a blank Sidekicks (isOff, "no split")
         // left in would drop the new group; it goes when the new one takes its name or would be the 9th. Else it stays
-        // (it is 0x2d's pointer, Preferences.legacyIndex).
+        // (it is 0x2d's pointer, Preferences.legacyIndex). When it goes, legacyIndex moves to the first non-manual group
+        // left, so an old 0x2d phone that read "" now reads (and edits) that group: accepted for an explicit Mac add (QA n16).
         var stored = stored
         if let i = stored.firstIndex(where: \.isOff),
            SessionGroup.nameKey(stored[i].name) == SessionGroup.nameKey(name) || stored.count >= SessionGroup.maxCount {
