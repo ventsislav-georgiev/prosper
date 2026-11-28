@@ -1190,10 +1190,10 @@ struct AgentSidebarMenuEntries: View {
             switch e {
             case .item(let title, let enabled, let checked, let verb):
                 if let checked {
-                    Toggle(isOn: Binding(get: { checked }, set: { _ in run(verb) })) { label(title, verb) }
+                    Toggle(isOn: Binding(get: { checked }, set: { _ in run(verb) })) { label(title, verb, e.symbol) }
                         .disabled(!enabled)
                 } else {
-                    Button { run(verb) } label: { label(title, verb) }.disabled(!enabled)
+                    Button { run(verb) } label: { label(title, verb, e.symbol) }.disabled(!enabled)
                 }
             case .submenu(let title, let enabled, let items):
                 Menu { AgentSidebarMenuEntries(entries: items, run: run) } label: { Label(title, systemImage: e.symbol ?? "") }
@@ -1208,11 +1208,11 @@ struct AgentSidebarMenuEntries: View {
 
     /// #2061: a Colour item shows its colour: a menu draws an SF Symbol as a template (one tint), so the swatch is a
     /// non-template image. Every other item: its symbol.
-    @ViewBuilder func label(_ title: String, _ verb: AgentSidebarVerb) -> some View {
+    @ViewBuilder func label(_ title: String, _ verb: AgentSidebarVerb, _ symbol: String?) -> some View {
         if case .groupColor(let hex?) = verb, let c = NSColor(Color(hex: hex) ?? .clear).usingColorSpace(.sRGB) {
             Label { Text(title) } icon: { Image(nsImage: Self.swatch(c)) }
         } else {
-            Label(title, systemImage: verb.symbol)
+            Label(title, systemImage: symbol ?? verb.symbol)   // #2104 QA n1: the entry's (a checked group keeps its)
         }
     }
 
