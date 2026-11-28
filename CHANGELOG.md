@@ -146,6 +146,8 @@ tag from the now-released section and put it on the new top draft.
 - The X-ray drawer has a bottom pane with Agents, Shells and Pull requests tabs; click a session's
   agents or shells count in its header to open the drawer there. Drag the divider to resize it, or
   down to fold it away. (#2066)
+- On 1x displays, Claude Code's dim grey text in Agent Sessions is drawn with enough contrast to
+  read. (#2075)
 
 ## v2.180.0
 - Ships dch 1.170.0: X-ray link titles never run two GitHub lookups at once; resuming a shell session

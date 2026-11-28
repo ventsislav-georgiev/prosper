@@ -1683,7 +1683,9 @@ enum AgentTerminalLook {
     static func refresh(_ c: TerminalController, colours: [(key: String, value: String)]? = nil) {
         let colours = colours ?? userColours()
         let base = colours.isEmpty ? TerminalConfiguration() : configuration(colours: colours)
-        let overlay = thicken(backing) ? base.fontThicken(true) : base   // #2065: 1x only
+        // #2065: 1x only. #2075: 1x draws no font smoothing, so grey and faint (SGR 2) text loses contrast; a 3:1 floor.
+        // #2075: faint is applied before the contrast check, but half-alpha thin strokes on 1x read fainter than the ratio says.
+        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3).custom("faint-opacity", "0.75") : base
         if c.setTerminalConfiguration(overlay) { dropConfigFile(c) }
         if c.setTheme(theme(colours: c.terminalConfiguration == overlay ? colours : [])) { dropConfigFile(c) }
     }
