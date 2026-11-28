@@ -25,6 +25,10 @@ tag from the now-released section and put it on the new top draft.
   (dch serve --allow-create).
 - Moving a session to a group now shows it under the new group at once, instead of after a few
   seconds; if the move fails, it goes back and says why.
+- Agent Sessions: right-click menus on session rows (and their Model, Effort and Move to group
+  submenus), group headers, Layouts rows, Agent Island rows and Mixer rows no longer flicker closed
+  and reopen every second, and choosing a session's checked group in Move to group now puts it back
+  to Automatic.
 
 ## v2.181.0
 - Ships dch 1.171.0: dch passes a session's Claude session name and alias to its X-ray task and memory

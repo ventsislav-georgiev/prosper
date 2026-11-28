@@ -729,14 +729,20 @@ struct AgentIslandView: View {
                                           action: r.resume, pin: r.pin, remove: r.remove,
                                           resumeNoMessage: r.resumeNoMessage, older: r.older,
                                           olderUnpinned: r.olderUnpinned)
-                    .contextMenu { ForEach(r.menu, id: \.title) { Button($0.title, action: $0.action) } }   // #742
+                    // #742; #2104: the 1 s TimelineView redraw rebuilds the menu only when its lines change.
+                    .stableContextMenu(Self.historyMenuID, entries: r.menu.map { MenuLine(title: $0.title) },
+                                       run: { (i: Int) in let m = r.menu; if m.indices.contains(i) { m[i].action() } },
+                                       items: { Self.menuLines($0, $1) })
                 }
                 ForEach(drawn) { r in
                     AgentIslandRow(session: r.session, now: ctx.date.timeIntervalSince1970,
                                    notice: store.notices[r.session.key] ?? store.actions[r.session.key],
                                    show: store.details, focused: store.focusKey == r.session.key, action: r.open)
                     .id(r.session.key)
-                    .contextMenu { restartItem(r) }
+                    .stableContextMenu(Self.rowMenuID, entries: Self.rowMenu(r), run: { (i: Int) in
+                        let actions = [r.message, r.restart, r.stop, r.kill]   // rowMenu's order
+                        if actions.indices.contains(i) { actions[i]() }
+                    }, items: { Self.menuLines($0, $1) })
                     if let card = r.card {
                         AgentPromptCardView(card: card, onOption: r.answer, onJump: r.open)
                     }
@@ -787,20 +793,38 @@ struct AgentIslandView: View {
         }
     }
 
+    /// #2104: one right-click line as a value (a note is a disabled text), so an equal redraw keeps the open menu.
+    struct MenuLine: Equatable {
+        let title: String
+        var enabled = true
+        var note = false
+    }
+    /// StableMenuProbe.bodies keys.
+    static let rowMenuID = "agentIsland.row"
+    static let historyMenuID = "agentIsland.history"
+
     /// #579: a row's right-click menu. Shown even where dch will skip it (a
     /// claude typed into a shell, a pending respawn): the row shows the skip line.
     /// #580: Stop next to Restart agent; off, saying why, on a master under 1.24.0.
     /// Under a 1.24.0 control dch both read "(needs dch 1.24.1)", and that hint
     /// wins over Stop's "restart this session first".
-    @ViewBuilder
-    private func restartItem(_ r: Drawn) -> some View {
+    /// #2104: Message, Restart, Stop, End (in that order: the row's run indexes them), then the gate's note.
+    static func rowMenu(_ r: Drawn) -> [MenuLine] {
+        var out: [MenuLine] = []
         if r.controls {
-            Button(AgentIsland.messageLabel, action: r.message).disabled(!r.messageEnabled)   // #584
-            Button(r.restartTitle, action: r.restart).disabled(!r.restartEnabled)
-            Button(r.stopTitle, action: r.stop).disabled(!r.stopEnabled)
-            Button(AgentIsland.killLabel, action: r.kill).disabled(!r.killEnabled)   // #744
+            out = [MenuLine(title: AgentIsland.messageLabel, enabled: r.messageEnabled),   // #584
+                   MenuLine(title: r.restartTitle, enabled: r.restartEnabled),
+                   MenuLine(title: r.stopTitle, enabled: r.stopEnabled),
+                   MenuLine(title: AgentIsland.killLabel, enabled: r.killEnabled)]   // #744
         }
-        if let why = r.refused { Text(verbatim: "Controls \(why)") }
+        if let why = r.refused { out.append(MenuLine(title: "Controls \(why)", enabled: false, note: true)) }
+        return out
+    }
+
+    @ViewBuilder static func menuLines(_ lines: [MenuLine], _ run: @escaping (Int) -> Void) -> some View {
+        ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
+            if l.note { Text(verbatim: l.title) } else { Button(l.title) { run(i) }.disabled(!l.enabled) }
+        }
     }
 
     /// #579: the header "⋯": a plain button; the controller pops its menu

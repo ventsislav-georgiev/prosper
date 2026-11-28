@@ -436,6 +436,69 @@ final class AgentWindowSidebarMenuTests: XCTestCase {
         XCTAssertEqual(menuBodies, menu0 + 2, "a changed gate rebuilds the menu once")
     }
 
+    // MARK: #2104: a row's right-click menu (Model, Effort, Move to group) is not rebuilt by an equal publish
+
+    /// The row's parent: observes the store (as the window does) and draws the store's first session's row with its menu.
+    struct RowMenuProbe: View {
+        @ObservedObject var store: AgentIslandStore
+        let model: AgentWindowModel
+        @MainActor static var bodies = 0
+        var body: some View {
+            let _ = Self.bodies += 1
+            if let s = store.sessions.first {
+                Text(s.name).modifier(AgentRowMenu(store: store, row: AgentSidebar.row(s, details: store.details, now: 0),
+                                                   model: model, open: { _ in }))
+            }
+        }
+    }
+
+    @MainActor var rowMenuBodies: Int { StableMenuProbe.bodies[AgentRowMenu.menuID, default: 0] }
+
+    /// The operator's 3rd report (#2104): a live row's right-click menu and its Move to group submenu hid and showed
+    /// again about every second: the items observed the store inside the `.contextMenu`, so each poll publish re-declared
+    /// them. Equal publishes must leave the menu alone; a changed effort (the Effort check) or a changed group (the Move
+    /// to group check) rebuilds it once. Offscreen: a hosted tree, no window, no menu popped.
+    @MainActor
+    func testSidebarRowMenuIsNotRebuiltOnAnEqualPublishButIsOnAChange() throws {
+        var s0 = session("api")
+        s0.group = ""   // dch 1.196's group key: Move to group is listed
+        let st = store([s0, session("api-qa")], dch: bin([1, 196, 0]))
+        st.sessionGroups = [SessionGroup(id: "w1", name: "Work", pattern: "zzz")]
+        let m = model(st, controller(st, Launches()))
+        let host = NSHostingView(rootView: RowMenuProbe(store: st, model: m).frame(width: 40, height: 40))
+        func pump(_ moved: () -> Bool) {
+            settle { host.layoutSubtreeIfNeeded(); _ = host.fittingSize; return moved() }
+        }
+        func snap() -> AgentRowMenu.Snapshot? {
+            st.sessions.first.map { AgentRowMenu.snapshot(AgentSidebar.row($0, details: st.details, now: 0), store: st, model: m) }
+        }
+        pump { rowMenuBodies > 0 }
+        let menu0 = rowMenuBodies
+        XCTAssertGreaterThan(menu0, 0, "precondition: the menu is drawn")
+        XCTAssertEqual(snap()?.switches.map(\.title), [AgentModelSwitch.modelLabel, AgentModelSwitch.effortLabel],
+                       "precondition: the menu holds Model and Effort")
+        XCTAssertEqual(snap()?.move.count, 1, "precondition: the menu holds Move to group")
+        let before = snap()
+        for _ in 0..<3 {   // three poll ticks whose menu content is equal
+            let probe = RowMenuProbe.bodies
+            st.sessions = st.sessions
+            st.notices = st.notices
+            pump { RowMenuProbe.bodies > probe }
+            XCTAssertGreaterThan(RowMenuProbe.bodies, probe, "precondition: the publish reached the hosted tree")
+        }
+        XCTAssertTrue(snap() == before, "precondition: the snapshot is equal")
+        XCTAssertEqual(rowMenuBodies, menu0, "equal publishes: the row menu is not rebuilt")
+        var s1 = try XCTUnwrap(st.sessions.first)
+        s1.effort = s1.effort == "high" ? "low" : "high"   // the Effort submenu's checked item moves
+        st.sessions = [s1] + st.sessions.dropFirst()
+        pump { rowMenuBodies > menu0 }
+        XCTAssertEqual(rowMenuBodies, menu0 + 1, "a changed effort rebuilds the menu once")
+        s1.groupManual = "Work"   // Move to group's checked item moves
+        st.sessions = [s1] + st.sessions.dropFirst()
+        pump { rowMenuBodies > menu0 + 1 }
+        XCTAssertEqual(rowMenuBodies, menu0 + 2, "a changed group rebuilds the menu once")
+    }
+
     // MARK: #1540: the pane header "..." (Model and Effort submenus) is not rebuilt by an equal publish
 
     /// The header's parent: observes the store (as the window does) and hands the "⋯" the store's first session.

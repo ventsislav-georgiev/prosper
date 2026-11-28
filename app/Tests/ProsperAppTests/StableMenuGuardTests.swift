@@ -25,20 +25,25 @@ final class StableMenuGuardTests: XCTestCase {
             (2, "Copy and Open With: the viewer model publishes on a load, a file change or a notice, no timer"),
     ]
 
+    /// #2104: every right-click menu left outside stableContextMenu, by file: how many, and why it is safe.
+    static let allowedContext: [String: (count: Int, why: String)] = [
+        "ProsperApp/StableMenu.swift": (1, "the shared piece's own contextMenu (stableContextMenu)"),
+        "ProsperApp/LayoutEditorView.swift":
+            (2, "the layout editor sheet's layout and group menus: its LayoutStore binding changes only on an edit, no timer"),
+    ]
+
     /// A SwiftUI Menu: `Menu {`, `Menu(title) {`, `SwiftUI.Menu {`; never StableMenu, NSMenu or a lower-case `menu(`.
     static let pattern = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_])Menu\s*[{(]"#)
+    /// #2104: a right-click menu: `.contextMenu {`, `.contextMenu(forSelectionType:`; never `.stableContextMenu(`.
+    static let contextPattern = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9_])\.contextMenu\s*[{(]"#)
 
-    static func menus(in line: Substring) -> Int {
+    static func menus(in line: Substring, _ p: NSRegularExpression = pattern) -> Int {
         let code = String(line.components(separatedBy: "//").first ?? "")   // a comment that names a Menu is not one
-        return pattern.numberOfMatches(in: code, range: NSRange(code.startIndex..., in: code))
+        return p.numberOfMatches(in: code, range: NSRange(code.startIndex..., in: code))
     }
 
-    func testEverySwiftUIMenuIsAStableMenuOrOnTheAllowList() throws {
-        for (text, n) in [("Menu {", 1), ("SwiftUI.Menu {", 1), ("Menu(title) {", 1), ("Menu (c.title) {", 1),
-                          ("StableMenu(id, entries: e", 0), ("NSMenu(title: \"x\")", 0), ("menu(snap)", 0),
-                          ("let x = 1 // a Menu { here", 0)] {
-            XCTAssertEqual(Self.menus(in: Substring(text)), n, "the pattern on \(text)")
-        }
+    /// Every match of `p` in app/Sources, by file under it.
+    func found(_ p: NSRegularExpression) throws -> [String: Int] {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources")
@@ -47,10 +52,20 @@ final class StableMenuGuardTests: XCTestCase {
         for url in urls where url.pathExtension == "swift" {
             scanned += 1
             let text = try String(contentsOf: url, encoding: .utf8)
-            let n = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { $0 + Self.menus(in: $1) }
+            let n = text.split(separator: "\n", omittingEmptySubsequences: false).reduce(0) { $0 + Self.menus(in: $1, p) }
             if n > 0 { found[url.path.components(separatedBy: "/Sources/").last ?? url.path, default: 0] += n }
         }
         XCTAssertGreaterThan(scanned, 100, "precondition: the walk reached app/Sources")
+        return found
+    }
+
+    func testEverySwiftUIMenuIsAStableMenuOrOnTheAllowList() throws {
+        for (text, n) in [("Menu {", 1), ("SwiftUI.Menu {", 1), ("Menu(title) {", 1), ("Menu (c.title) {", 1),
+                          ("StableMenu(id, entries: e", 0), ("NSMenu(title: \"x\")", 0), ("menu(snap)", 0),
+                          ("let x = 1 // a Menu { here", 0)] {
+            XCTAssertEqual(Self.menus(in: Substring(text)), n, "the pattern on \(text)")
+        }
+        let found = try found(Self.pattern)
         let allowed = Self.allowed.mapValues(\.count)
         for (file, n) in found.sorted(by: { $0.key < $1.key }) where allowed[file] != n {
             XCTFail("\(file): \(n) SwiftUI Menu(s), allowed \(allowed[file] ?? 0). A Menu under a parent that redraws "
@@ -63,7 +78,51 @@ final class StableMenuGuardTests: XCTestCase {
         XCTAssertTrue(Self.allowed.values.allSatisfy { !$0.why.isEmpty }, "every allowed Menu says why")
     }
 
+    /// #2104 (the 3rd report): a right-click menu under a ticking parent hid and showed again on each tick. Every
+    /// `.contextMenu` in app/Sources is a stableContextMenu or on allowedContext with its reason.
+    func testEveryContextMenuIsAStableContextMenuOrOnTheAllowList() throws {
+        for (text, n) in [(".contextMenu {", 1), ("Text(x).contextMenu {", 1), (".contextMenu(forSelectionType: Int.self) {", 1),
+                          (".stableContextMenu(id, entries: e", 0), ("x.contextMenu = menu", 0),
+                          ("let x = 1 // a .contextMenu { here", 0)] {
+            XCTAssertEqual(Self.menus(in: Substring(text), Self.contextPattern), n, "the pattern on \(text)")
+        }
+        let found = try found(Self.contextPattern)
+        let allowed = Self.allowedContext.mapValues(\.count)
+        for (file, n) in found.sorted(by: { $0.key < $1.key }) where allowed[file] != n {
+            XCTFail("\(file): \(n) .contextMenu(s), allowed \(allowed[file] ?? 0). A right-click menu under a parent that "
+                    + "redraws on a timer or a periodic publish hides and shows again while open (#2104): build it with "
+                    + "stableContextMenu, or add it to StableMenuGuardTests.allowedContext with the reason its parent never ticks")
+        }
+        for (file, n) in allowed where found[file] == nil {
+            XCTFail("\(file): allowed \(n) .contextMenu(s), found none: drop it from the allow-list")
+        }
+        XCTAssertTrue(Self.allowedContext.values.allSatisfy { !$0.why.isEmpty }, "every allowed contextMenu says why")
+    }
+
     // MARK: per fixed menu: its parent ticks with equal content, the menu body runs once
+
+    /// #2104: the shared piece: a right-click menu's items are re-declared only when its entries change.
+    @MainActor
+    func testAStableContextMenuIsNotRebuiltByAnEqualTick() {
+        assertStable("test.context") { v in
+            Text("api").stableContextMenu("test.context", entries: v, run: { (_: Int) in }) { v, run in
+                Button("\(v)") { run(v) }
+            }
+        }
+    }
+
+    /// #2104: the Agent Island row's right-click menu under its 1 s TimelineView: equal lines, no rebuild.
+    @MainActor
+    func testIslandRowMenuIsNotRebuiltByAnEqualTick() {
+        let s = AgentSession(key: AgentSessionKey(dir: "/tmp/dch-test", name: "api"), alias: "", activity: 0, state: .idle,
+                             agents: 0)
+        assertStable(AgentIslandView.rowMenuID) { v in
+            let d = AgentIslandView.Drawn(session: s, card: nil, open: {}, answer: { _, _ in },
+                                          refused: v == 0 ? nil : "need dch 1.38", canStop: true, needs: nil)
+            return Text("api").stableContextMenu(AgentIslandView.rowMenuID, entries: AgentIslandView.rowMenu(d),
+                                                 run: { (_: Int) in }, items: { AgentIslandView.menuLines($0, $1) })
+        }
+    }
 
     @MainActor
     final class Ticker: ObservableObject {

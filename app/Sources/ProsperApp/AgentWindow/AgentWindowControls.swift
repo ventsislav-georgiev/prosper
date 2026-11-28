@@ -618,7 +618,8 @@ extension AgentWindowControls {
             : .item(AgentIsland.groupsFullText, enabled: false, checked: nil, verb: .newGroup)
     }
 
-    /// #2062: a live row's "Move to group": the groups dch is given (the store's), the manual one checked, a divider,
+    /// #2062: a live row's "Move to group": the groups dch is given (the store's), the manual one checked (#2104: chosen
+    /// again, it unchecks to Automatic), a divider,
     /// Automatic (by name) checked while none is set, New group…. Empty (no item): a row from a dch before 1.196 (no
     /// `group` key), a control dch before it, or a name dch would read as a flag. A remote row has no session menu.
     @MainActor
@@ -628,9 +629,10 @@ extension AgentWindowControls {
         let manual = SessionGroup.nameKey(s.groupManual ?? "")
         let groups: [AgentSidebarMenuEntry] = store.sessionGroups.map {
             // #2070 n5: a name dch reads as a flag (stored through Settings before it refused one) is off with the reason.
-            let ok = AgentIsland.passable($0.name)
+            let ok = AgentIsland.passable($0.name), checked = !manual.isEmpty && SessionGroup.nameKey($0.name) == manual
+            // #2104 (operator): choosing the checked group unchecks it: back to Automatic (--auto).
             return .item(ok ? $0.name : "\($0.name) (\(AgentIsland.dashNameText))", enabled: ok,
-                         checked: !manual.isEmpty && SessionGroup.nameKey($0.name) == manual, verb: .moveToGroup($0.name))
+                         checked: checked, verb: .moveToGroup(checked ? nil : $0.name))
         }
         return [.submenu(AgentIsland.moveToGroupLabel, enabled: true, groups + (groups.isEmpty ? [] : [.divider]) + [
             .item(AgentIsland.automaticGroupLabel, enabled: true, checked: manual.isEmpty, verb: .moveToGroup(nil)),
@@ -763,32 +765,68 @@ extension AgentWindowControls {
 
 // MARK: - Menus
 
-/// The menu's items, for a SwiftUI Menu or a context menu. Observes the store, so a gate
-/// that changes while the menu's row is drawn is read afresh.
-struct AgentSessionMenuItems: View {
-    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
+/// #2104 (the 3rd report of a blinking menu, after #1466 and #1540): a sidebar row's right-click menu. The old items
+/// observed the store inside the `.contextMenu`, so each poll publish (about every second) rebuilt the open menu and it
+/// hid and showed again, its Model, Effort and Move to group submenus too. The store is read here, outside the menu, and
+/// a stableContextMenu rebuilds the menu only when what it shows changes. A live row: rowMenu (#1103, #900), Model and
+/// Effort (#1469, #627: none for a name dch would read as a flag), Move to group (#2062). A local History row: its
+/// historyMenu (#829). A remote row: nothing.
+struct AgentRowMenu: ViewModifier {
     @ObservedObject var store: AgentIslandStore
-    let session: AgentSession
-    let ask: (AgentWindowVerb) -> Void
-    /// #1103: Open in terminal's action and the session's end (the item is off).
-    var open: () -> Void = {}
-    var ended = false
-    /// #900 B2 step 6a: the header's pane items (AgentWindowControls.paneMenu; empty with the gate off) and their run.
-    var panes: [AgentWindowMenuEntry] = []
-    var pane: (AgentPaneVerb) -> Void = { _ in }
-    /// #900 B2 step 6b1: a sidebar row's model (its list is rowMenu: Open to the Side with the gate on) and the item's run.
-    var row: AgentWindowModel? = nil
-    var side: () -> Void = {}
+    let row: AgentSidebar.Row
+    let model: AgentWindowModel
+    /// #1103: Open in terminal (the sidebar selects the row first).
+    let open: (AgentSession) -> Void
 
-    var body: some View {
-        let base = row.map { AgentWindowControls.rowMenu(session, store: store, in: $0) }
-            ?? AgentWindowControls.sessionMenu(session, store: store, ended: ended)
-        AgentMenuEntries(entries: base + panes, act: ask, open: open, pane: pane, side: side)
-        // #1469: Model and Effort for a live session (#627: never for a name dch would read as a flag).
-        if !ended, AgentIsland.passable(session.name) {
-            Divider()
-            AgentSwitchMenus(menus: AgentModelSwitch.menus(session, requested: row?.interaction.requested[session.key]?.level),
-                             act: ask)
+    /// StableMenuProbe.bodies key.
+    static let menuID = "agent.sidebar.row"
+
+    struct Snapshot: Equatable {
+        var entries: [AgentWindowMenuEntry] = []
+        var switches: [AgentModelSwitch.Submenu] = []
+        var move: [AgentSidebarMenuEntry] = []
+    }
+
+    /// A menu item's verb, run through the newest row and closures of the sidebar's draw.
+    enum Verb { case ask(AgentWindowVerb), open, side, move(AgentSidebarVerb) }
+
+    @MainActor
+    static func snapshot(_ row: AgentSidebar.Row, store: AgentIslandStore, model: AgentWindowModel) -> Snapshot {
+        if let s = row.session {
+            return Snapshot(entries: AgentWindowControls.rowMenu(s, store: store, in: model),
+                            switches: AgentIsland.passable(s.name)
+                                ? AgentModelSwitch.menus(s, requested: model.interaction.requested[s.key]?.level) : [],
+                            move: AgentWindowControls.moveToGroupMenu(s, store: store))
+        }
+        if let r = row.record, row.host == nil {   // #1324: a remote record has none
+            return Snapshot(entries: AgentWindowControls.historyMenu(r, store: store))
+        }
+        return Snapshot()
+    }
+
+    func body(content: Content) -> some View {
+        let row = row, model = model, open = open
+        content.stableContextMenu(Self.menuID, entries: Self.snapshot(row, store: store, model: model), run: { (v: Verb) in
+            if let s = row.session {
+                switch v {
+                case .ask(let a): model.ask(a, s)
+                case .open: open(s)
+                case .side: model.openToTheSide(row.id)
+                case .move(let m): model.runMove(m, s)
+                }
+            } else if let r = row.record, case .ask(let a) = v {
+                model.act(a, r)
+            }
+        }) { snap, run in
+            AgentMenuEntries(entries: snap.entries, act: { run(.ask($0)) }, open: { run(.open) }, side: { run(.side) })
+            if !snap.switches.isEmpty {
+                Divider()
+                AgentSwitchMenus(menus: snap.switches, act: { run(.ask($0)) })
+            }
+            if !snap.move.isEmpty {
+                Divider()
+                AgentSidebarMenuEntries(entries: snap.move) { run(.move($0)) }
+            }
         }
     }
 }
@@ -812,18 +850,6 @@ struct AgentSwitchMenus: View {
                 Label(m.title, systemImage: m.title == AgentModelSwitch.modelLabel ? AgentMenuSymbol.model : AgentMenuSymbol.effort)
             }
         }
-    }
-}
-
-/// #829 Phase 2: a History row's context menu.
-struct AgentHistoryMenuItems: View {
-    @ObservedObject var liveTheme = ThemeStore.shared   // #891: re-themes in place (Themed keepsViews)
-    @ObservedObject var store: AgentIslandStore
-    let record: DchHistoryRecord
-    let act: (AgentWindowVerb) -> Void
-
-    var body: some View {
-        AgentMenuEntries(entries: AgentWindowControls.historyMenu(record, store: store), act: act)
     }
 }
 

@@ -122,7 +122,7 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         let st = store([manual, auto])
         let newGroup = AgentSidebarMenuEntry.item(AgentIsland.newGroupLabel, enabled: true, checked: nil, verb: .newGroup)
         XCTAssertEqual(items(AgentWindowControls.moveToGroupMenu(manual, store: st)), [
-            .item("Work", enabled: true, checked: true, verb: .moveToGroup("Work")),
+            .item("Work", enabled: true, checked: true, verb: .moveToGroup(nil)),   // #2104: chosen again, Automatic
             .item("Sidekicks", enabled: true, checked: false, verb: .moveToGroup("Sidekicks")),
             .divider,
             .item(AgentIsland.automaticGroupLabel, enabled: true, checked: false, verb: .moveToGroup(nil)),
@@ -144,6 +144,34 @@ final class AgentSessionGroupMoveTests: XCTestCase {
                        .item(AgentIsland.groupsFullText, enabled: false, checked: nil, verb: .newGroup))
         XCTAssertEqual(AgentWindowControls.sidebarMenu(store: st, autoAllow: false).dropFirst().first,
                        .item(AgentIsland.groupsFullText, enabled: false, checked: nil, verb: .newGroup), "the sidebar's too")
+    }
+
+    /// #2104 (operator: "clicking on the same group, i expect to unclick it so it goes back to automatic"): the checked
+    /// group's item runs runMove's setGroup with no group, which dch gets as --auto; another group's runs that group.
+    @MainActor
+    func testChoosingTheCheckedGroupAgainGoesBackToAutomatic() throws {
+        let s = session("api", group: "Work", manual: "work"), st = store([s])
+        let m = AgentWindowModel(lastLive: AgentLastLiveHome(), layouts: nil)
+        m.onNewRuntime = { r in
+            r.transcript.offMain = { $0() }
+            r.transcript.makeWatch = { _, _ in NSObject() }
+            r.transcript.tickInterval = 3600
+        }
+        m.runtimes.values.forEach(m.onNewRuntime)
+        var moves: [(String, String?)] = []
+        m.setGroup = { s, g, _ in moves.append((s.name, g)) }
+        func verb(_ title: String) -> AgentSidebarVerb? {
+            for case let .item(t, _, _, v) in items(AgentWindowControls.moveToGroupMenu(s, store: st)) where t == title { return v }
+            return nil
+        }
+        m.runMove(try XCTUnwrap(verb("Work")), s)
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertTrue(moves.last.map { $0.0 == "api" && $0.1 == nil } == true, "the checked group: Automatic")
+        XCTAssertEqual(AgentIsland.groupSetArgs("api", moves.last?.1 ?? nil), ["--group-set", "api", "--auto", "--json"],
+                       "which dch gets as --auto")
+        m.runMove(try XCTUnwrap(verb("Sidekicks")), s)
+        XCTAssertEqual(moves.count, 2)
+        XCTAssertEqual(moves.last?.1, "Sidekicks", "another group: that group")
     }
 
     // MARK: - --group-set

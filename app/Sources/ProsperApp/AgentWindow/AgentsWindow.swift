@@ -1315,8 +1315,9 @@ struct AgentSidebarView: View {
     }
 
     /// One session's row: its click, its number and its context menu, as before.
+    @ViewBuilder
     func line(_ row: AgentSidebar.Row, number: Int?, mini: Bool, inView: Set<AgentSidebar.RowID>) -> some View {
-        Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
+        let button = Button { model.click(row.id, flags: AgentWindowModel.clickFlags(NSApp.currentEvent)) } label: {   // #900 B2 step 6b1: read with the gate on only
             AgentSidebarRowView(row: row, selected: model.selection == row.id,
                                 number: number, inView: inView.contains(row.id),
                                 model: model, mini: mini, show: details,   // #1455
@@ -1325,21 +1326,11 @@ struct AgentSidebarView: View {
         }
         .buttonStyle(.plain)
         .modifier(AgentRowDrag(token: AgentWindowModel.dragToken(row.id)))   // #1492: onto a pane
-        .contextMenu {   // #829: a live row's Restart / Stop / Kill (asks); a History row's (G6-G8)
-            if let s = row.session, let store = model.store {
-                // #1103: the header's list, Open in terminal first (selects the row, as ask does).
-                AgentSessionMenuItems(store: store, session: s, ask: { model.ask($0, s) },
-                                      open: { open(s) }, row: model,
-                                      side: { model.openToTheSide(row.id) })
-                // #2062: Move to group (none for a remote row, which has no session here, or a dch before 1.196).
-                let move = AgentWindowControls.moveToGroupMenu(s, store: store)
-                if !move.isEmpty {
-                    Divider()
-                    AgentSidebarMenuEntries(entries: move) { model.runMove($0, s) }
-                }
-            } else if let r = row.record, row.host == nil, let store = model.store {   // #1324: a remote record has none
-                AgentHistoryMenuItems(store: store, record: r) { model.act($0, r) }
-            }
+        // #829, #1103, #2062: a live row's or a History row's right-click menu; #2104: rebuilt only on a change.
+        if let store = model.store {
+            button.modifier(AgentRowMenu(store: store, row: row, model: model, open: { open($0) }))
+        } else {
+            button
         }
     }
 
@@ -1516,6 +1507,8 @@ struct AgentLayoutsSection: View {
     /// #1657: the store's Row details, as the session rows get them; Shortcut off: no ⌃N chip and no chip column.
     var show = AgentIslandRowDetails.all
     static let title = "Layouts"
+    /// #2104: a row's right-click menu's StableMenuProbe.bodies key.
+    static let layoutMenuID = "agent.sidebar.layout"
     /// The attention slot's fixed width (section 10, step 5 fills it).
     static var attentionWidth: CGFloat { sz(14) }
 
@@ -1557,9 +1550,11 @@ struct AgentLayoutsSection: View {
                     .accessibilityLabel(Self.label(r))
                     .accessibilityValue(Self.value(r))
                     .accessibilityAddTraits(r.active ? .isSelected : [])
-                    .contextMenu {
-                        ForEach(AgentWindowControls.layoutMenu(model, r.id)) { e in
-                            Button { AgentWindowControls.runLayout(e, model, r.id) } label: {
+                    // #2104: rebuilt only when its entries change, not on each redraw of the section.
+                    .stableContextMenu(Self.layoutMenuID, entries: AgentWindowControls.layoutMenu(model, r.id),
+                                       run: { (e: AgentLayoutMenuEntry) in AgentWindowControls.runLayout(e, model, r.id) }) { es, run in
+                        ForEach(es) { e in
+                            Button { run(e) } label: {
                                 Label(e.title, systemImage: e.symbol)   // #1358
                             }.disabled(!e.enabled)
                         }
@@ -1701,6 +1696,8 @@ struct AgentSectionHeader: View {
     var color: Color? = nil
     /// StableMenuProbe.bodies key.
     static let groupMenuID = "agent.sidebar.group"
+    /// The right-click menu's StableMenuProbe.bodies key.
+    static let groupContextMenuID = "agent.sidebar.group.context"
 
     var body: some View {
         let entries = group.map { AgentWindowControls.groupMenu(store: $0.store, rows: $0.rows, name: title) } ?? []
@@ -1733,7 +1730,10 @@ struct AgentSectionHeader: View {
                 .accessibilityLabel("\(title) actions")
             }
         }
-        .contextMenu { if !entries.isEmpty { AgentSidebarMenuEntries(entries: entries, run: run) } }
+        // #2104: the right-click menu on the same snapshot rules as the "\u{22EF}".
+        .stableContextMenu(Self.groupContextMenuID, entries: entries, run: run) { e, r in
+            if !e.isEmpty { AgentSidebarMenuEntries(entries: e, run: r) }
+        }
     }
 
     var content: some View {

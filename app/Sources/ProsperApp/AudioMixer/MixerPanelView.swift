@@ -370,6 +370,8 @@ private struct MixerAppRow: View {
     @ObservedObject private var mixer = AppVolumeMixer.shared
     let app: MixerApp
     @Binding var editingVolumeID: String?
+    /// #2104: the right-click menu's StableMenuProbe.bodies key.
+    static let menuID = "mixer.app"
 
     /// Icon spans the row's two lines; the bitmap must be requested at this
     /// size or the upscale looks blurry.
@@ -421,12 +423,10 @@ private struct MixerAppRow: View {
             }
         }
         .padding(.vertical, sz(2))
-        .contextMenu {
-            // Same action as unchecking the app in the footer chooser, one
-            // right-click closer.
-            if app.persistenceID != nil {
-                Button("Hide from list") { mixer.hideFromList(app) }
-            }
+        // Same action as unchecking the app in the footer chooser, one
+        // right-click closer. #2104: rebuilt only when it changes, not on each mixer publish.
+        .stableContextMenu(Self.menuID, entries: app.persistenceID != nil, run: { (_: Bool) in mixer.hideFromList(app) }) { hide, run in
+            if hide { Button("Hide from list") { run(true) } }
         }
     }
 
