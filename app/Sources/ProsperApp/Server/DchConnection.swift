@@ -2630,7 +2630,8 @@ enum DchCommand {
     }
 
     /// `[{"name","alias","harness","activity_epoch","state","agents"}]` — dch 1.4+
-    /// `--ls-json`; `agents` (live subagent count) only from newer dch, else 0.
+    /// `--ls-json`; the live subagent count is the running entries of `subagents` (dch 1.195+, #2087), else
+    /// `agents` (the panel-scraped count, only from newer dch), else 0.
     ///
     /// `harness` is the Claude Code session name running inside the session (dch
     /// 1.9+). `dch -l` shows it whenever no explicit alias exists, so the phone

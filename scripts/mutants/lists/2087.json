@@ -1,0 +1,34 @@
+{
+ "entry": "2087",
+ "filter": "DchListParseTests",
+ "mutants": [
+  {
+   "name": "count-every-entry",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "$0.lazy.filter { ($0 as? [String: Any])?[\"state\"] as? String == \"running\" }.count",
+   "new": "$0.lazy.filter { _ in true }.count",
+   "expect": "killed"
+  },
+  {
+   "name": "ignore-subagents",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "agents: min(DchListRow.runningSubagents(o[\"subagents\"]) ?? DchSessionMeta.count(o[\"agents\"]) ?? 0,",
+   "new": "agents: min(DchSessionMeta.count(o[\"agents\"]) ?? 0,",
+   "expect": "killed"
+  },
+  {
+   "name": "empty-falls-back",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "(v as? [Any]).map {",
+   "new": "(v as? [Any]).flatMap { $0.isEmpty ? nil : $0 }.map {",
+   "expect": "killed"
+  },
+  {
+   "name": "no-cap",
+   "file": "app/Sources/ProsperApp/Server/DchConnection.swift",
+   "old": "                                          DchListRow.maxAgents),\n",
+   "new": "                                          Int.max),\n",
+   "expect": "killed"
+  }
+ ]
+}
