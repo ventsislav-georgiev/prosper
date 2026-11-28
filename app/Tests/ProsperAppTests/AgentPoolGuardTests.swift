@@ -80,6 +80,7 @@ final class AgentPoolGuardTests: XCTestCase {
     // SettingsWindow mounts the pane. P2b-2: the island's --spawn asks the runtime for its routing
     // contributor, and the New session form for its hint (AgentPool.Routing). Nothing outside calls sessionEnv.
     // #1843: the agent-control reads register through AgentPoolControl, which builds every reply inside AgentPool/.
+    // #2012: AppDelegate runs AgentPoolMigration once at launch (seen by this guard since the #2013 rename).
     func testAgentPoolNoCallSiteOutsideItsDirectory() throws {
         let symbol = try NSRegularExpression(pattern: #"\bAgentPool\w*|\bsessionEnv\b"#)
         var hits: Set<String> = []
@@ -90,7 +91,7 @@ final class AgentPoolGuardTests: XCTestCase {
             }
         }
         XCTAssertFalse(swiftFiles(under: sourcesDir.appendingPathComponent("AgentPool")).isEmpty, "the guard found the sources")
-        XCTAssertEqual(hits, ["AppDelegate.swift: AgentPoolRuntime", "SettingsWindow.swift: AgentPoolRuntime", "SettingsWindow.swift: AgentPoolPane",
+        XCTAssertEqual(hits, ["AppDelegate.swift: AgentPoolRuntime", "AppDelegate.swift: AgentPoolMigration", "SettingsWindow.swift: AgentPoolRuntime", "SettingsWindow.swift: AgentPoolPane",
                               "AgentIslandController.swift: AgentPoolRuntime", "AgentNewSession.swift: AgentPool",
                               "AgentNewSession.swift: AgentPoolRuntime", "ControlAgentPool.swift: AgentPoolControl"])
     }
