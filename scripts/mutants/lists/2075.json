@@ -3,24 +3,17 @@
  "filter": "AgentTerminalBackingTests",
  "mutants": [
   {
-   "name": "contrast_dropped",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3).custom(\"faint-opacity\", \"0.75\") : base",
-   "new": "        let overlay = thicken(backing) ? base.fontThicken(true).custom(\"faint-opacity\", \"0.75\") : base",
-   "expect": "killed"
-  },
-  {
-   "name": "contrast_on_retina",
-   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3).custom(\"faint-opacity\", \"0.75\") : base",
-   "new": "        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3).custom(\"faint-opacity\", \"0.75\") : base.minimumContrast(3)",
-   "expect": "killed"
-  },
-  {
    "name": "faint_dropped",
    "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
-   "old": "        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3).custom(\"faint-opacity\", \"0.75\") : base",
-   "new": "        let overlay = thicken(backing) ? base.fontThicken(true).minimumContrast(3) : base",
+   "old": "        let overlay = thicken(backing) ? base.fontThicken(true).custom(\"faint-opacity\", \"0.75\") : base",
+   "new": "        let overlay = thicken(backing) ? base.fontThicken(true) : base",
+   "expect": "killed"
+  },
+  {
+   "name": "faint_on_retina",
+   "file": "app/Sources/ProsperApp/AgentWindow/AgentTerminal.swift",
+   "old": "        let overlay = thicken(backing) ? base.fontThicken(true).custom(\"faint-opacity\", \"0.75\") : base",
+   "new": "        let overlay = thicken(backing) ? base.fontThicken(true).custom(\"faint-opacity\", \"0.75\") : base.custom(\"faint-opacity\", \"0.75\")",
    "expect": "killed"
   }
  ]

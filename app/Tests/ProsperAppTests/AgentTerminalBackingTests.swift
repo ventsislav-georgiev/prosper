@@ -27,7 +27,7 @@ final class AgentTerminalBackingTests: XCTestCase {
     }
 
     /// The rule and the config lines. Red on the parent: no thicken(_:) and no font-thicken line in the overlay.
-    /// #2075: the 1x overlay also carries a 3:1 contrast floor and faint-opacity 0.75; red on its parent: no such lines.
+    /// #2075: the 1x overlay also carries faint-opacity 0.75 and never a contrast floor; red on its parent: no such line.
     @MainActor
     func testThickeningIsOnAt1xAndOffAt2x() {
         let saved = AgentTerminalLook.backing
@@ -39,15 +39,13 @@ final class AgentTerminalBackingTests: XCTestCase {
             AgentTerminalLook.refresh(c, colours: [])
             XCTAssertTrue(c.lastConfigurationIssue == nil, "libghostty accepted the overlay at \(backing)x")
             XCTAssertEqual(c.renderedConfig.contains("font-thicken = true"), on, "at \(backing)x")
-            XCTAssertEqual(c.renderedConfig.contains("minimum-contrast = 3"), on, "#2075 at \(backing)x")
-            XCTAssertEqual(c.renderedConfig.contains("minimum-contrast"), on, "#2075: no contrast line at all at \(backing)x")
+            XCTAssertEqual(c.renderedConfig.contains("minimum-contrast"), false, "#2075: no contrast line at \(backing)x")
             XCTAssertEqual(c.renderedConfig.contains("faint-opacity = 0.75"), on, "#2075 faint at \(backing)x")
             XCTAssertEqual(c.renderedConfig.contains("faint-opacity"), on, "#2075: no faint line at all at \(backing)x")
         }
         // Under "My Ghostty theme" too: the user's colour lines and the thickening ride on the one overlay.
         AgentTerminalLook.refresh(c, colours: [("background", "#101010")])
         XCTAssertTrue(c.renderedConfig.contains("font-thicken = true"), "1x with the user's colours")
-        XCTAssertTrue(c.renderedConfig.contains("minimum-contrast = 3"), "#2075: 1x with the user's colours")
         XCTAssertTrue(c.renderedConfig.contains("faint-opacity = 0.75"), "#2075: faint, 1x with the user's colours")
         XCTAssertTrue(c.renderedConfig.contains("background = #101010"))
         // #1873: and Prosper's theme (its palette, display-p3) is dropped at 1x as at 2x: refresh's overlay comparison holds.
@@ -81,12 +79,10 @@ final class AgentTerminalBackingTests: XCTestCase {
             let v = startedView(backing: from)
             wait("a grid at \(from)x") { v.host.gridMetrics != nil }
             XCTAssertEqual(v.app.renderedConfig.contains("font-thicken = true"), from < 2, "created at \(from)x")
-            XCTAssertEqual(v.app.renderedConfig.contains("minimum-contrast = 3"), from < 2, "#2075 created at \(from)x")
             XCTAssertEqual(v.app.renderedConfig.contains("faint-opacity = 0.75"), from < 2, "#2075 faint, created at \(from)x")
             v.window.fixedBacking = to
             v.host.viewDidChangeBackingProperties()
             XCTAssertEqual(v.app.renderedConfig.contains("font-thicken = true"), to < 2, "\(from)x -> \(to)x: thickening")
-            XCTAssertEqual(v.app.renderedConfig.contains("minimum-contrast = 3"), to < 2, "#2075 \(from)x -> \(to)x: contrast floor")
             XCTAssertEqual(v.app.renderedConfig.contains("faint-opacity = 0.75"), to < 2, "#2075 \(from)x -> \(to)x: faint opacity")
             XCTAssertTrue(v.app.lastConfigurationIssue == nil, "\(from)x -> \(to)x: libghostty accepted the overlay")
             // The wrapper keeps the old scale while the window has no screen (a display going away); an offscreen
