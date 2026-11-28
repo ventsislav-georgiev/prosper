@@ -166,6 +166,8 @@ extension AgentSidebarMenuEntry {
     /// nil for a divider or a note, else the item's or submenu's leading symbol.
     var symbol: String? {
         switch self {
+        // #2104 QA n1: the checked group runs Automatic (its re-click unchecks) but keeps its group symbol.
+        case .item(let t, _, _, .moveToGroup(nil)) where t != AgentIsland.automaticGroupLabel: AgentMenuSymbol.group
         case .item(_, _, _, let verb): verb.symbol
         case .submenu(let title, _, _):
             // shortcut: submenus are told apart by title (no kind field); an unknown title has no symbol, a test row

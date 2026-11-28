@@ -172,6 +172,11 @@ final class AgentSessionGroupMoveTests: XCTestCase {
         m.runMove(try XCTUnwrap(verb("Sidekicks")), s)
         XCTAssertEqual(moves.count, 2)
         XCTAssertEqual(moves.last?.1, "Sidekicks", "another group: that group")
+        let symbols = Dictionary(uniqueKeysWithValues: items(AgentWindowControls.moveToGroupMenu(s, store: st)).compactMap { e in
+            if case let .item(t, _, _, _) = e { return (t, e.symbol) } else { return nil }
+        })
+        XCTAssertEqual(symbols["Work"], AgentMenuSymbol.group, "QA n1: the checked group keeps the group symbol")
+        XCTAssertEqual(symbols[AgentIsland.automaticGroupLabel], AgentMenuSymbol.autoGroup)
     }
 
     // MARK: - --group-set
