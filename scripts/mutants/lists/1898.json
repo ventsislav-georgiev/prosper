@@ -32,7 +32,7 @@
   },
   {
    "name": "pool-no-resets",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "reset: acct.reset, spent: acct.cooldown, at:",
    "new": "reset: [:], spent: acct.cooldown, at:",
    "expect": "killed",

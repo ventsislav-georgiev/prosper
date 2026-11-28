@@ -1,59 +1,59 @@
 {
  "entry": "1843",
- "filter": "ControlCCPoolTests",
+ "filter": "ControlAgentPoolTests",
  "mutants": [
   {
    "name": "no_session_validation",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "        guard validSession(session) else { throw ControlError(badSession) }\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "id_field",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "            o[\"label\"] = .string(row.label)\n",
    "new": "            o[\"label\"] = .string(row.label)\n            o[\"id\"] = .string(st.accounts[row.label]?.id ?? \"\")\n",
    "expect": "killed"
   },
   {
    "name": "unsorted_accounts",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
-   "old": "let accounts = byLabel.keys.sorted(by: CCPoolCore.labelFirst).map",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
+   "old": "let accounts = byLabel.keys.sorted(by: AgentPoolCore.labelFirst).map",
    "new": "let accounts = byLabel.keys.map",
    "expect": "killed"
   },
   {
    "name": "codepoint_sort",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
-   "old": "let accounts = byLabel.keys.sorted(by: CCPoolCore.labelFirst).map",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
+   "old": "let accounts = byLabel.keys.sorted(by: AgentPoolCore.labelFirst).map",
    "new": "let accounts = byLabel.keys.sorted().map",
    "expect": "killed"
   },
   {
    "name": "no_since_filter",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "let rows = r.rows.filter { $0.t >= since }",
    "new": "let rows = r.rows",
    "expect": "killed"
   },
   {
    "name": "no_main_first",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "let label = mine[prefix]?.account\n            ?? mine.max",
    "new": "let label = mine.max",
    "expect": "killed"
   },
   {
    "name": "no_pin_expiry",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "        live.expirePins(now: now)   // a copy: a lookup never changes the file\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "no_session_cap",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControl.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControl.swift",
    "old": "top.prefix(sessionsMax).map",
    "new": "top.map",
    "expect": "killed"

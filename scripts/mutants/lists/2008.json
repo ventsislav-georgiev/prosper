@@ -4,49 +4,49 @@
  "mutants": [
   {
    "name": "scratch_0755",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "mkdir(dir.path, 0o700) == 0",
    "new": "mkdir(dir.path, 0o755) == 0",
    "expect": "killed"
   },
   {
    "name": "no_cleanup_on_failure",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "defer { Live.end(); try? FileManager.default.removeItem(at: scratch) }",
    "new": "defer { Live.end() }",
    "expect": "killed"
   },
   {
    "name": "flat_item_skipped",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "        guard let item = CodexCredential.flatItem(fromAuthJSON: authJSON) else {",
    "new": "        guard let item = Optional(String(decoding: authJSON, as: UTF8.self)), CodexCredential.flatItem(fromAuthJSON: authJSON) != nil else {",
    "expect": "killed"
   },
   {
    "name": "downgrade_guard_off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "        if accounts.values.contains(where: { $0.harness != ClaudeHarness.id }) {",
    "new": "        if Bool(\"false\") == true {",
    "expect": "killed"
   },
   {
    "name": "r1_warning_skipped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "        codexImportedFolder = nil\n        codexImportWarning = true\n",
    "new": "        codexImportedFolder = nil\n        codexImportWarning = true\n        continueCodexImport()\n",
    "expect": "killed"
   },
   {
    "name": "read_back_off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "        guard (try? secrets.token(id: id)) == token else {",
    "new": "        guard Bool(\"true\") == true || (try? secrets.token(id: id)) == token else {",
    "expect": "killed"
   },
   {
    "name": "delete_whole_folder",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "        unlink(folder.appendingPathComponent(\"auth.json\").path) == 0",
    "new": "        (try? FileManager.default.removeItem(at: folder.appendingPathComponent(\"auth.json\"))) != nil",
    "filter": "CodexLoginTests/testDeleteAuthNeverRemovesAFolderNamedAuthJSON",

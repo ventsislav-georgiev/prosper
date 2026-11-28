@@ -1,17 +1,17 @@
 {
  "entry": "2036",
- "filter": "CCPoolCodexRotationTests",
+ "filter": "AgentPoolCodexRotationTests",
  "mutants": [
   {
    "name": "drop-held-flush",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if !held.isEmpty { onData(ex, held) }",
    "new": "_ = held",
    "expect": "killed"
   },
   {
    "name": "read-unbounded",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "guard let err = ((try? JSONSerialization.jsonObject(with: body.prefix(bodyCap))) as? [String: Any])?[\"error\"] as? [String: Any]\n        else { return false }",
    "new": "guard let err = ((try? JSONSerialization.jsonObject(with: body)) as? [String: Any])?[\"error\"] as? [String: Any]\n        else { return false }",
    "expect": "killed"

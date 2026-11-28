@@ -1,24 +1,24 @@
 {
  "entry": "2033",
- "filter": "CCPoolCoreTests|CCPoolCodexRotationTests",
+ "filter": "AgentPoolCoreTests|AgentPoolCodexRotationTests",
  "mutants": [
   {
    "name": "flat-min",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": ".compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.max() }.min()",
    "new": ".flatMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values }.min()",
    "expect": "killed"
   },
   {
    "name": "per-account-min",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": ".compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.max() }.min()",
    "new": ".compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.min() }.min()",
    "expect": "killed"
   },
   {
    "name": "max-over-accounts",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": ".compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.max() }.min()",
    "new": ".compactMap { $0.cooldown.filter { wanted.contains($0.key) && Double($0.value) > now }.values.max() }.max()",
    "expect": "killed"

@@ -425,7 +425,7 @@ final class DchControlFramesTests: XCTestCase {
             let f = Fake()
             f.ls["/d"] = Self.lsAgents(argvs.keys.sorted().map { ($0, "codex") })
             var o = ops(f, binary: DchCommand.Binary(path: "/fake/dch", version: [1, 189, 0]))
-            o.codexFlags = { CCPool.codexReviveFlags($0, words: ["-c", "w1", "-c", "w2"]) }
+            o.codexFlags = { AgentPool.codexReviveFlags($0, words: ["-c", "w1", "-c", "w2"]) }
             o.liveRecords = { rows in rows.compactMap { s in argvs[s.name].map { var r = DchHistoryRecord(key: s.key); r.argv = $0; return r } } }
             _ = call(o, DchFrame.restart, ["all": true])
             return f.launchedArgs

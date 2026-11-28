@@ -1,10 +1,10 @@
 {
  "entry": 1594,
- "filter": "CCPoolProxyTests/testCCPoolUpstreamCutAfterFirstByteIsNotReplayed",
+ "filter": "AgentPoolProxyTests/testAgentPoolUpstreamCutAfterFirstByteIsNotReplayed",
  "mutants": [
   {
    "name": "row-never-releases",
-   "file": "app/Tests/ProsperAppTests/CCPoolProxyTests.swift",
+   "file": "app/Tests/ProsperAppTests/AgentPoolProxyTests.swift",
    "old": "            if got.range(of: Data(#\"{\"type\":\"message\"\"#.utf8)) != nil { up.releaseCut() }",
    "new": "            _ = (got, up)",
    "expect": "killed"

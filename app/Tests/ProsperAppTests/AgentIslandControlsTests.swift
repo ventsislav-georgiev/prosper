@@ -2498,7 +2498,7 @@ final class AgentIslandControlsTests: XCTestCase {
             let f = FakeProc()
             let v = DchCommand.Binary(path: "/fake/dch", version: [1, 189, 0])
             let c = controller(f, Reads(), dch: v)
-            c.reviveCodexFlags = { { CCPool.codexReviveFlags($0, words: ["-c", "w1"]) } }
+            c.reviveCodexFlags = { { AgentPool.codexReviveFlags($0, words: ["-c", "w1"]) } }
             c.store?.controlDch = v
             c.store?.sessions = agents.enumerated().map { i, a in var s = session("s\(i)", version: "1.189.0"); s.agent = a; return s }
             let live = argvs.map { name, argv in var r = record(name); r.argv = argv; return r }

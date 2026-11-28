@@ -4,63 +4,63 @@
  "mutants": [
   {
    "name": "harness-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "Self.planHarnesses.first(where: { $0.id == acct.harness })",
    "new": "Self.planHarnesses.first",
    "expect": "killed"
   },
   {
    "name": "codex-current-from-claude",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "isCurrent: st.currents[h.id] == label",
    "new": "isCurrent: st.current == label",
    "expect": "killed"
   },
   {
    "name": "claim-name-claude",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
-   "old": "harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.displayName(claim) : harness.display[claim] ?? claim",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
+   "old": "harness.id == AgentPoolCodexHarness.id ? AgentPoolCodexHarness.displayName(claim) : harness.display[claim] ?? claim",
    "new": "harness.display[claim] ?? claim",
    "expect": "killed"
   },
   {
    "name": "pool-cells-raw",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": ".map { var c = $0; c.claim = Self.claimName(c.claim, harness: h); return c }",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "live-shared",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "live[h.id, default: []].append",
    "new": "live[ClaudeHarness.id, default: []].append",
    "expect": "killed"
   },
   {
    "name": "empty-group-kept",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "guard let list = accounts[h.id] else { return nil }",
    "new": "let list = accounts[h.id] ?? []",
    "expect": "killed"
   },
   {
    "name": "usage-harness-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "guard let label = st.currents[harness],",
    "new": "guard let label = st.current,",
    "expect": "killed"
   },
   {
    "name": "usage-harness-check",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "account.harness == harness,\n",
    "new": "\n",
    "expect": "killed"
   },
   {
    "name": "plan-title",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "u?.plan = Self.planTitles[harness] ?? harness",
    "new": "_ = harness",
    "expect": "killed"

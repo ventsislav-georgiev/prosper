@@ -4,21 +4,21 @@
  "mutants": [
   {
    "name": "marker_check_removed",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "        guard defaults.object(forKey: markerKey) == nil else { return }\n",
    "new": "\n",
    "expect": "killed"
   },
   {
    "name": "dir_move_skipped",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "renamex_np(from.path, to.path, UInt32(RENAME_EXCL)) == 0 ? 0 : errno",
    "new": "ENOENT",
    "expect": "killed"
   },
   {
    "name": "target_guard_removed",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "renamex_np(from.path, to.path, UInt32(RENAME_EXCL))",
    "new": "rename(from.path, to.path)",
    "expect": "killed"
@@ -32,17 +32,17 @@
   },
   {
    "name": "exhausted_key_not_carried",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
-   "old": "        (\"ccpoolExhaustedThreshold\", CCPoolPaneModel.exhaustedKey),\n",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
+   "old": "        (\"ccpoolExhaustedThreshold\", AgentPoolPaneModel.exhaustedKey),\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "ccpool_alias_dropped",
-   "file": "app/Sources/ProsperApp/Control/ControlCCPool.swift",
+   "file": "app/Sources/ProsperApp/Control/ControlAgentPool.swift",
    "old": "static let poolAliasPrefixes = [\"pool\", \"ccpool\"]",
    "new": "static let poolAliasPrefixes = [\"pool\"]",
-   "filter": "ControlCCPoolTests|ControlCCPoolHoldTests",
+   "filter": "ControlAgentPoolTests|ControlAgentPoolHoldTests",
    "expect": "killed"
   },
   {
@@ -54,28 +54,28 @@
   },
   {
    "name": "set_aside_skipped",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "        if moved == EEXIST, !hasState(to), hasState(from) {",
    "new": "        if false, moved == EEXIST, !hasState(to), hasState(from) {",
    "expect": "killed"
   },
   {
    "name": "state_check_inverted",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "        if moved == EEXIST, !hasState(to), hasState(from) {",
    "new": "        if moved == EEXIST, hasState(to), hasState(from) {",
    "expect": "killed"
   },
   {
    "name": "source_state_check_dropped",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "if moved == EEXIST, !hasState(to), hasState(from) {",
    "new": "if moved == EEXIST, !hasState(to) {",
    "expect": "killed"
   },
   {
    "name": "set_aside_failure_sets_marker",
-   "file": "app/Sources/ProsperApp/CCPool/AgentPoolMigration.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolMigration.swift",
    "old": "(errno \\(errno)); trying again next launch\")\n                return\n",
    "new": "(errno \\(errno)); trying again next launch\")\n                defaults.set(1, forKey: markerKey); return\n",
    "expect": "killed"

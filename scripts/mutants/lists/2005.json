@@ -1,108 +1,108 @@
 {
  "entry": "2005",
- "filter": "CCPoolCodexProxyTests",
+ "filter": "AgentPoolCodexProxyTests",
  "mutants": [
   {
    "name": "codex-no-dispatch",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "let codexRest = CCPoolCodexHarness.rest(of: h.path)",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "let codexRest = AgentPoolCodexHarness.rest(of: h.path)",
    "new": "let codexRest: String? = nil",
    "expect": "killed"
   },
   {
    "name": "rest-keeps-prefix",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "rest.hasPrefix(\"?\") ? rest : nil",
    "new": "rest.hasPrefix(\"?\") ? path : nil",
    "expect": "killed"
   },
   {
    "name": "strip-no-cookie",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "\"openai-project\", \"cookie\"]",
    "new": "\"openai-project\"]",
    "expect": "killed"
   },
   {
    "name": "strip-no-account-id",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "union([\"chatgpt-account-id\", ",
    "new": "union([",
    "expect": "killed"
   },
   {
    "name": "authorize-no-account-id",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "        req.setValue(item.accountID, forHTTPHeaderField: \"chatgpt-account-id\")\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "authorize-empty-ok",
-   "file": "app/Sources/ProsperApp/CCPool/CodexCredential.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexCredential.swift",
    "old": "!access.isEmpty,\n              let account = obj[\"account_id\"] as? String, !account.isEmpty else",
    "new": "true,\n              let account = obj[\"account_id\"] as? String, true else",
    "expect": "killed"
   },
   {
    "name": "send-ignores-authorize",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "guard harness.authorize(&req, token: token) else { return skip(\"token unavailable; skipping this account\") }",
    "new": "harness.authorize(&req, token: token)",
    "expect": "killed"
   },
   {
    "name": "kind-filter-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "$0.value.harness == h.id && !h.accepts(kind: $0.value.kind)",
    "new": "false",
    "expect": "killed"
   },
   {
    "name": "no-503",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "if h.id == CCPoolCodexHarness.id,",
-   "new": "if false, h.id == CCPoolCodexHarness.id,",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "if h.id == AgentPoolCodexHarness.id,",
+   "new": "if false, h.id == AgentPoolCodexHarness.id,",
    "expect": "killed"
   },
   {
    "name": "ws-relayed",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if h.header(\"upgrade\")?.lowercased().contains(\"websocket\") == true {",
    "new": "if false {",
    "expect": "killed"
   },
   {
    "name": "codex-upstream-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "(codexRest == nil ? config.upstream : config.codexUpstream)",
    "new": "config.upstream",
    "expect": "killed"
   },
   {
    "name": "openai-hosts-allowed",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "return host == productionUpstream.host || openAIHosts.contains(host)",
    "new": "return host == productionUpstream.host",
    "expect": "killed"
   },
   {
    "name": "codex-anthropic-tap",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "-> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType, codex: true) }",
-   "new": "-> CCPoolUsageTap { CCPoolUsageTap(contentType: contentType) }",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
+   "old": "-> AgentPoolUsageTap { AgentPoolUsageTap(contentType: contentType, codex: true) }",
+   "new": "-> AgentPoolUsageTap { AgentPoolUsageTap(contentType: contentType) }",
    "expect": "killed"
   },
   {
    "name": "claude-kind-filter",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness.swift",
    "old": "func accepts(kind: String?) -> Bool { true }",
    "new": "func accepts(kind: String?) -> Bool { kind != nil }",
    "expect": "killed"
   },
   {
    "name": "log-account-id",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "        if streamed {\n            req.httpBodyStream = bodyIn",
    "new": "        log.note(label, req.value(forHTTPHeaderField: \"chatgpt-account-id\") ?? \"\")\n        if streamed {\n            req.httpBodyStream = bodyIn",
    "expect": "killed"

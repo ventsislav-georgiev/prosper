@@ -1,0 +1,340 @@
+import XCTest
+@testable import ProsperApp
+
+// #1262: after the three same-account retries of a throughput 429 a keyed conversation moves ONCE to the account
+// route()/place() gives with the refusing account excluded; refused there too, it is pinned back and one 429 goes out.
+// Ported from ccpool v1.9.0 test_ccpool_proxy.py 386-427 ("A throttled conversation moves once, and back if that did
+// not help"). Fakes only; the stub upstream on an ephemeral loopback port; the wait recorder is installed FIRST.
+
+final class AgentPoolThrottleMoveTests: XCTestCase {
+    let orgA = "Example Org A", orgB = "Example Org B", orgC = "Example Org C"
+    let sid = "sess-example-1", key = "sess-example-1/"
+
+    struct Rig {
+        let up: PinUpstream
+        let store: AgentPoolStore
+        let secrets: AgentPoolMemorySecrets
+        let log: ThrottleLog
+        let rec: ThrottleWaitRecorder
+        let seams: PinSeams
+        let port: UInt16
+        func post(_ sid: String?, body: Data = throttleWork) -> AgentPoolClientResponse? {
+            var h = [("content-type", "application/json")]
+            if let sid { h.append(("X-Claude-Code-Session-Id", sid)) }
+            return AgentPoolTestClient.request(port: port, headers: h, body: body)
+        }
+        var pins: [String: String] { store.snapshot.pins.mapValues(\.account) }
+        /// Upstream calls per token from the `from`-th call on.
+        func calls(from: Int) -> [String: Int] { up.tokens.dropFirst(from).reduce(into: [:]) { $0[$1, default: 0] += 1 } }
+    }
+
+    /// `dropping`: that token's requests are read and the connection closed unanswered; every other reply then says
+    /// "Connection: close", so no request rides a pooled connection and none is resent (one call, literal).
+    private func rig(_ count: Int = 2, replayCap: Int = 32 << 20, dropping: String? = nil) throws -> Rig {
+        let rec = ThrottleWaitRecorder()
+        let saved = AgentPoolConnection.throttleWait
+        AgentPoolConnection.throttleWait = { s, q, go in rec.wait(s, q, go) }
+        addTeardownBlock { AgentPoolConnection.throttleWait = saved }
+        let up = PinUpstream()
+        let server = try AgentPoolFakeServer { h, b in
+            let reply = up.reply(h, b)
+            guard let dropping else { return reply }
+            if h.header("authorization") == "Bearer \(dropping)" { return .drop }
+            guard case .respond(let status, let headers, let body) = reply else { return reply }
+            return .respond(status, headers + [("Connection", "close")], body)
+        }
+        XCTAssertNotEqual(server.port, 0)
+        let seams = PinSeams(now: Date().timeIntervalSince1970)
+        let log = ThrottleLog()
+        let store = AgentPoolStore(directory: tempDir().appendingPathComponent("ccpool"), clock: { seams.now }, logger: log,
+                                writer: { d, u in seams.write(d, u) })
+        let secrets = AgentPoolMemorySecrets()
+        for l in throttleLabels.prefix(count) { _ = try store.addAccount(label: l, token: throttleTokens[l] ?? "", secrets: secrets) }
+        store.mutate { $0.current = orgA }
+        var cfg = AgentPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:\(server.port)")!
+        cfg.replayCap = replayCap
+        cfg.timeout = 10
+        let service = AgentPoolService(config: cfg, store: store, secrets: secrets, logger: log)
+        guard case .running(let p) = service.start(), p != 0 else {
+            XCTFail("proxy did not start: \(service.status)")
+            throw XCTSkip("no listener")
+        }
+        addTeardownBlock { service.stop(); server.stop() }
+        return Rig(up: up, store: store, secrets: secrets, log: log, rec: rec, seams: seams, port: p)
+    }
+
+    /// The session pinned to Example Org A by a first request (place ties by label, #1838), before anything is scripted.
+    private func pinnedOnA(_ r: Rig) {
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.pins, [key: orgA])
+    }
+
+    private let fourThrottles: [ThrottleUpstream.Step] = [.throttle(nil), .throttle(nil), .throttle(nil), .throttle("6")]
+
+    // PT 395-405: served by another account after the retries; the pin moves there (one write), `current` stays.
+    func testMoveAndServe() throws {
+        let r = try rig()
+        pinnedOnA(r)
+        r.up.set("tok-a", fourThrottles)
+        let n = r.up.tokens.count, w = r.seams.writes
+        let resp = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 4, "tok-b": 1])
+        XCTAssertEqual(r.up.tokens.last, "tok-b")
+        XCTAssertEqual(r.pins, [key: orgB])
+        XCTAssertEqual(r.seams.writes, w + 1, "the move is the one write")
+        XCTAssertEqual(r.store.snapshot.current, orgA, "the move does not move current")
+        XCTAssertEqual(r.rec.waits, [1, 2, 4])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("moving the conversation once") },
+                       ["Example Org A: throttled after 3 same-account retries; moving the conversation once"])
+        // Once moved it goes straight there: its cache lives there.
+        let m = r.up.tokens.count
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.calls(from: m), ["tok-b": 1])
+    }
+
+    // PT 406-416: refused at the destination too: 4 + 1 calls, never a third account, the pin back on A (written
+    // once), ONE 429 with the destination's Retry-After, nothing waited at the destination.
+    func testMoveAndRefusePinsBackAndNeverWalks() throws {
+        let r = try rig(3)
+        pinnedOnA(r)
+        r.up.set("tok-a", fourThrottles)
+        r.up.set("tok-b", [.throttle("7")])
+        let n = r.up.tokens.count, w = r.seams.writes
+        let resp = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertTrue(resp.text.contains("upstream rate limit (not account quota)"), resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "7")
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 4, "tok-b": 1], "no third account")
+        XCTAssertEqual(r.pins, [key: orgA])
+        XCTAssertEqual(r.seams.writes, w + 2, "the move, then the pin back")
+        XCTAssertEqual(r.rec.waits, [1, 2, 4], "no wait at the destination")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("pinned back") }.count, 1)
+        for l in [orgA, orgB] { XCTAssertEqual(r.store.snapshot.accounts[l]?.cooldown, [:], "a throttle benches nobody") }
+    }
+
+    // Nowhere to go (one account; the other benched): 4 and 0, the pin unchanged and not rewritten, one 429.
+    func testNowhereToMoveReturnsTheLast429() throws {
+        for benched in [false, true] {
+            let r = try rig(benched ? 2 : 1)
+            pinnedOnA(r)
+            if benched {
+                let now = r.seams.now
+                r.store.mutate { $0.bench(orgB, claim: AgentPoolCore.fiveHour, until: Int(now) + 3600, now: now) }
+            }
+            r.up.set("tok-a", fourThrottles)
+            let n = r.up.tokens.count, w = r.seams.writes
+            let resp = try XCTUnwrap(r.post(sid), "\(benched)")
+            XCTAssertEqual(resp.status, 429, "\(benched)")
+            XCTAssertTrue(resp.text.contains("not account quota"), resp.text)
+            XCTAssertEqual(resp.header("retry-after"), "6", "\(benched)")
+            XCTAssertEqual(r.calls(from: n), ["tok-a": 4], "\(benched)")
+            XCTAssertEqual(r.pins, [key: orgA], "\(benched)")
+            XCTAssertEqual(r.seams.writes, w, "\(benched)")
+            XCTAssertEqual(r.rec.waits, [1, 2, 4], "\(benched)")
+        }
+    }
+
+    // PY 486: a request with no session id never moves and makes no pin.
+    func testNoSessionIdNeverMoves() throws {
+        let r = try rig()
+        r.up.set("tok-a", fourThrottles)
+        let resp = try XCTUnwrap(r.post(nil))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 4])
+        XCTAssertEqual(r.pins, [:])
+        XCTAssertEqual(r.rec.waits, [1, 2, 4])
+    }
+
+    // PT 417-421, changed by #1855: a quota check is never retried or moved (one call to A, no wait, the pin where it
+    // was), but a 429 that spent nothing is re-placed ONCE on another account, which answers.
+    func testQuotaCheckNeverMovesButIsReplacedOnce() throws {
+        let r = try rig()
+        pinnedOnA(r)
+        r.up.set("tok-a", [.throttle("2"), .throttle(nil)])
+        let n = r.up.tokens.count, w = r.seams.writes
+        let resp = try XCTUnwrap(r.post(sid, body: throttleQuotaCheck))
+        XCTAssertEqual(resp.status, 200, resp.text)
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 1, "tok-b": 1])
+        XCTAssertEqual(r.pins, [key: orgA], "a quota check never moves a pin")
+        XCTAssertEqual(r.rec.waits, [])
+        XCTAssertEqual(r.seams.writes, w, "nothing written")
+        XCTAssertEqual(r.store.snapshot.current, orgA, "the re-placement does not move current")
+        XCTAssertTrue(r.store.snapshot.shunned.isEmpty, "A followed a pin: no placement was refused")
+    }
+
+    // MARK: #1855: a quota check's 429 that spent nothing
+
+    private func outcomes(_ r: Rig) -> [String] {
+        r.log.lines.filter { $0.contains(": 429 quota=") }.map { line in
+            let label = line.prefix { $0 != ":" }
+            let word = line.components(separatedBy: "outcome=").last?.prefix { $0 != ";" } ?? ""
+            return "\(label) \(word)"
+        }
+    }
+
+    /// A placed quota check refused twice: A, then B, never C; B's 429 (its Retry-After) goes out; each refusing
+    /// account is shunned by its own Retry-After; nothing written, no pin, no wait. The 429 lines say the outcome.
+    func testPlacedQuotaCheckIsReplacedOnceAndASecondRefusalPassesThrough() throws {
+        let r = try rig(3)
+        r.up.set("tok-a", [.throttle("2")])
+        r.up.set("tok-b", [.throttle("7")])
+        let w = r.seams.writes, now = r.seams.now
+        let resp = try XCTUnwrap(r.post(sid, body: throttleQuotaCheck))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertTrue(resp.text.contains("not account quota"), resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "7")
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 1, "tok-b": 1], "no third account, no same-account retry")
+        XCTAssertEqual(outcomes(r), ["Example Org A re-placed", "Example Org B returned"])
+        XCTAssertEqual(r.log.lines.filter { $0.contains("re-placing it once") },
+                       ["Example Org A: quota check refused with nothing spent; re-placing it once on another account"])
+        XCTAssertEqual(r.store.snapshot.shunned, [orgA: now + 2, orgB: now + 7])
+        XCTAssertEqual(r.pins, [:])
+        XCTAssertEqual(r.seams.writes, w, "the shun is memory only")
+        XCTAssertEqual(r.rec.waits, [])
+        for l in [orgA, orgB] { XCTAssertEqual(r.store.snapshot.accounts[l]?.cooldown, [:], "nothing spent: nobody benched") }
+    }
+
+    /// Nowhere else to go (one account; the other benched; the other's token refused, #1278: no last resort for a
+    /// re-placement): A's own 429 goes out, never "every account is benched", never the refused token.
+    func testReplacedQuotaCheckWithNowhereToGoReturnsTheFirst429() throws {
+        for benched in ["alone", "benched", "refused"] {
+            let r = try rig(benched == "alone" ? 1 : 2)
+            let now = r.seams.now
+            if benched == "benched" {
+                r.store.mutate { $0.bench(orgB, claim: AgentPoolCore.fiveHour, until: Int(now) + 3600, now: now) }
+            }
+            if benched == "refused" { r.store.mutate { $0.accounts[orgB]?.refused = Int(now) } }
+            r.up.set("tok-a", [.throttle("2")])
+            let resp = try XCTUnwrap(r.post(sid, body: throttleQuotaCheck), "\(benched)")
+            XCTAssertEqual(resp.status, 429, "\(benched)")
+            XCTAssertTrue(resp.text.contains("not account quota"), resp.text)
+            XCTAssertEqual(resp.header("retry-after"), "2", "\(benched)")
+            XCTAssertEqual(r.calls(from: 0), ["tok-a": 1], "\(benched)")
+            XCTAssertEqual(outcomes(r), ["Example Org A re-placed"], "\(benched)")
+            XCTAssertTrue(r.log.lines.filter { $0.contains("every account is benched") }.isEmpty, "\(benched)")
+        }
+    }
+
+    /// The burst: once A refused a placement, the next new sessions (quota checks and real work) are placed off A for
+    /// 30 s (no Retry-After), with no call to A; after the window A takes new work again.
+    func testBurstAfterOneRefusalSpreadsOffTheRefusingAccount() throws {
+        let r = try rig()
+        r.up.set("tok-a", [.throttle(nil)])
+        XCTAssertEqual(r.post("sess-example-1", body: throttleQuotaCheck)?.status, 200)
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 1, "tok-b": 1])
+        for i in 2...4 { XCTAssertEqual(r.post("sess-example-\(i)", body: throttleQuotaCheck)?.status, 200, "\(i)") }
+        XCTAssertEqual(r.post("sess-example-5")?.status, 200)
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 1, "tok-b": 5], "every placement inside the window went to B")
+        XCTAssertEqual(r.pins, ["sess-example-5/": orgB])
+        r.seams.now += 30
+        XCTAssertEqual(r.post("sess-example-6")?.status, 200)
+        XCTAssertEqual(r.pins, ["sess-example-5/": orgB, "sess-example-6/": orgA], "the window ended: A again")
+    }
+
+    /// A real request placed on A that is throttled: A is shunned too (the move goes to B as before).
+    func testThrottledPlacementShunsItsAccount() throws {
+        let r = try rig()
+        r.up.set("tok-a", fourThrottles)
+        let now = r.seams.now
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.pins, [key: orgB])
+        XCTAssertEqual(r.store.snapshot.shunned, [orgA: now + 30], "three 429s without Retry-After (30 s), then 6 s: the longer kept")
+    }
+
+    // MARK: #1878: a 429 with no unified rate-limit headers is upstream refusing the request, not the account
+
+    /// The shape of the real refusal (session-tokens 2026-11-22): no unified headers, x-should-retry, a rate_limit_error.
+    static let bareBody = #"{"type":"error","error":{"type":"rate_limit_error","message":"Example refusal text"},"request_id":"req_example"}"#
+
+    /// A placed quota check refused WITHOUT the unified headers: its 429 goes out at once (one call, no second account,
+    /// no shun, no pin, nothing written). A later quota check refused WITH them on the same, unshunned account is still
+    /// re-placed once (#1855) and that account shunned.
+    func testQuotaCheckRefusedWithoutUnifiedHeadersIsReturnedAndShunsNothing() throws {
+        let r = try rig(3)
+        r.up.set("tok-a", [.bare("2", Self.bareBody), .throttle("3")])
+        let w = r.seams.writes, now = r.seams.now
+        let resp = try XCTUnwrap(r.post(sid, body: throttleQuotaCheck))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "2")
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 1], "no re-place: the refusal is not the account's")
+        XCTAssertEqual(outcomes(r), ["Example Org A returned"])
+        XCTAssertTrue(r.log.lines.filter { $0.contains("re-placing it once") }.isEmpty)
+        XCTAssertTrue(r.store.snapshot.shunned.isEmpty, "no shun on a 429 without the unified headers")
+        XCTAssertEqual(r.pins, [:])
+        XCTAssertEqual(r.seams.writes, w, "nothing written")
+        XCTAssertEqual(r.rec.waits, [])
+        XCTAssertEqual(r.log.lines.filter { $0.contains(": 429 quota=") }.map { $0.contains("; error=rate_limit_error; ") }, [true])
+        // With the unified headers: still #1855's account-level refusal. A is placed again (no shun), refuses, B answers.
+        XCTAssertEqual(r.post("sess-example-2", body: throttleQuotaCheck)?.status, 200)
+        XCTAssertEqual(r.calls(from: 1), ["tok-a": 1, "tok-b": 1])
+        XCTAssertEqual(outcomes(r), ["Example Org A returned", "Example Org A re-placed"])
+        XCTAssertEqual(r.store.snapshot.shunned, [orgA: now + 3])
+    }
+
+    /// Decision (#1878): a real request placed on A and throttled WITHOUT the unified headers does not shun A either; the
+    /// same-account retries and the one move run as before (they do not depend on the headers).
+    func testThrottledPlacementWithoutUnifiedHeadersShunsNothing() throws {
+        let r = try rig()
+        r.up.set("tok-a", Array(repeating: .bare(nil, Self.bareBody), count: 4))
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.calls(from: 0), ["tok-a": 4, "tok-b": 1])
+        XCTAssertEqual(r.pins, [key: orgB])
+        XCTAssertEqual(r.rec.waits, [1, 2, 4])
+        XCTAssertTrue(r.store.snapshot.shunned.isEmpty, "no shun on a 429 without the unified headers")
+    }
+
+    // A body above the replay cap went upstream as a stream: no retry, no move (AgentPoolConnection finishSnippet).
+    func testBodyAboveTheReplayCapNeverMoves() throws {
+        let r = try rig(replayCap: 64 << 10)
+        pinnedOnA(r)
+        r.up.set("tok-a", [.throttle(nil), .throttle(nil)])
+        let head = #"{"model":"claude-opus-5","max_tokens":4096,"pad":""#
+        let tail = #""}"#
+        let body = Data(head.utf8) + Data(repeating: 97, count: (100 << 10) - head.utf8.count - tail.utf8.count) + Data(tail.utf8)
+        let n = r.up.tokens.count
+        let resp = try XCTUnwrap(r.post(sid, body: body))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 1])
+        XCTAssertEqual(r.pins, [key: orgA])
+        XCTAssertEqual(r.rec.waits, [])
+    }
+
+    // The destination's token is gone: nothing walks on to a third account; back on A, A's last 429 goes out.
+    func testTokenMissingAtTheDestinationPinsBack() throws {
+        let r = try rig(3)
+        pinnedOnA(r)
+        r.up.set("tok-a", fourThrottles)
+        let id = try XCTUnwrap(r.store.snapshot.accounts[orgB]?.id)
+        try r.secrets.remove(id: id)
+        let n = r.up.tokens.count
+        let resp = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(resp.status, 429, resp.text)
+        XCTAssertEqual(resp.header("retry-after"), "6")
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 4])
+        XCTAssertEqual(r.pins, [key: orgA])
+    }
+
+    // R1262-a: after the one move the destination closes the connection unanswered (a transport failure): the pool's
+    // own 502 goes out and the conversation is pinned back on A first (one write), no second move, no retry.
+    func testTransportFailureAtTheDestinationPinsBack() throws {
+        let r = try rig(3, dropping: "tok-b")
+        pinnedOnA(r)
+        r.up.set("tok-a", fourThrottles)
+        let n = r.up.tokens.count, w = r.seams.writes
+        let resp = try XCTUnwrap(r.post(sid))
+        XCTAssertEqual(resp.status, 502, resp.text)
+        XCTAssertTrue(resp.text.contains("upstream unreachable"), resp.text)
+        XCTAssertEqual(r.calls(from: n), ["tok-a": 4, "tok-b": 1], "no third account, no resend")
+        XCTAssertEqual(r.pins, [key: orgA])
+        XCTAssertEqual(r.seams.writes, w + 2, "the move, then the pin back")
+        XCTAssertEqual(r.rec.waits, [1, 2, 4], "no wait at the destination")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("pinned back") }, ["Example Org A: conversation pinned back after its one move"])
+        // The next turn goes where the cache is.
+        let m = r.up.tokens.count
+        XCTAssertEqual(r.post(sid)?.status, 200)
+        XCTAssertEqual(r.calls(from: m), ["tok-a": 1])
+    }
+}

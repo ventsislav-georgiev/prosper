@@ -1,33 +1,33 @@
 {
  "entry": "1896",
- "filter": "CCPoolUsageStatsTests/testLegend|CCPoolUsageStatsTests/testOneVeryLong",
+ "filter": "AgentPoolUsageStatsTests/testLegend|AgentPoolUsageStatsTests/testOneVeryLong",
  "mutants": [
   {
    "name": "nowrap",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageStatsView.swift",
    "old": "if x > 0, x + s.width > width {",
    "new": "if false, x + s.width > width {",
    "expect": "killed"
   },
   {
    "name": "noclamp",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageStatsView.swift",
    "old": "let s = v.sizeThatFits(ProposedViewSize(width: width, height: nil))",
    "new": "let s = v.sizeThatFits(.unspecified)",
    "expect": "killed"
   },
   {
    "name": "nomiddle",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageStatsView.swift",
    "old": ".lineLimit(1).truncationMode(.middle)",
    "new": ".fixedSize()",
    "expect": "killed"
   },
   {
    "name": "key-drift",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageStatsView.swift",
-   "old": "case 1: return CCPoolLegendKey(CCPoolUsageStatsModel.kinds)",
-   "new": "case 1: return CCPoolLegendKey(CCPoolUsageStatsModel.kinds.reversed())",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageStatsView.swift",
+   "old": "case 1: return AgentPoolLegendKey(AgentPoolUsageStatsModel.kinds)",
+   "new": "case 1: return AgentPoolLegendKey(AgentPoolUsageStatsModel.kinds.reversed())",
    "expect": "killed"
   }
  ]

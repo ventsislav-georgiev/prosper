@@ -1,0 +1,557 @@
+import Charts
+import Foundation
+import SwiftUI
+
+/// #1484 (#1183 R3, spec 3.6): the "Usage history" card of the account pool pane: five charts over the usage record.
+/// Reads only when the card first appears, when the range changes and on Refresh (no live polling). The read and the
+/// five aggregations run off main; the model publishes the shaped result on main. Every outside string drawn (labels,
+/// models, sessions, agents) goes through OutsideText.shown; a session id is never shown whole; no price anywhere.
+@MainActor
+final class AgentPoolUsageStatsModel: ObservableObject {
+    typealias Read = @Sendable (_ directory: URL, _ range: AgentPoolUsageRange, _ now: Double) -> AgentPoolUsageReadResult
+
+    enum Span: String, CaseIterable, Identifiable, Sendable {
+        case day = "24 h", week = "7 d", fortnight = "14 d"
+        var id: String { rawValue }
+        var range: AgentPoolUsageRange {
+            switch self {
+            case .day: return .day
+            case .week: return .week
+            case .fortnight: return .fortnight
+            }
+        }
+    }
+
+    enum Grouping: String, CaseIterable, Identifiable, Sendable {
+        case account = "Account", model = "Model", session = "Session", harness = "Harness"
+        var id: String { rawValue }
+    }
+
+    /// The five token kinds, in the order of every `kinds` array below.
+    /// Marks per chart stay bounded (Swift Charts draws every mark on main): a line is thinned to `pointsMax` buckets (fewer
+    /// when there are many lines, so a chart stays near `marksMax` points), hit rate keeps `sessionsMax` sessions, bars
+    /// `barsMax` plus "other", utilisation `seriesMax` lines plus "other", time to finish `finishModelsMax` models plus
+    /// "other" (two series each; one point per UTC day of the range).
+    nonisolated static let pointsMax = 300, marksMax = 900, sessionsMax = 10, barsMax = 20, seriesMax = 24, finishModelsMax = 11
+    /// The model key the left-out models are folded under (never a real model id; sorts after them).
+    nonisolated static let otherModel = "\u{10FFFF}other"
+
+    nonisolated static let kinds = ["Input", "Cache write 5 min", "Cache write 1 h", "Cache read", "Output (incl. thinking)"]
+
+    struct Line: Equatable, Sendable {
+        var name: String
+        var points: [AgentPoolUsageStats.Point]
+        /// Resets (utilisation) or moves to another account (cache hit rate).
+        var markers: [Double]
+    }
+
+    struct Bar: Equatable, Sendable {
+        var name: String
+        var kinds: [Int]
+        var total: Int
+    }
+
+    struct SessionRow: Equatable, Sendable {
+        var name: String
+        var kinds: [Int]
+        var total: Int
+        var requests: Int
+        var accounts: String
+        var agents: [SessionRow]
+    }
+
+    struct Finish: Equatable, Sendable {
+        var model: String
+        var day: String
+        var median: Double
+        var p90: Double
+        var count: Int
+    }
+
+    struct Shown: Equatable, Sendable {
+        var rows = 0
+        var skipped = 0
+        /// The read's own marks: the row cap was reached, and day files that could not be read.
+        var truncated = false
+        var filesNotRead = 0
+        /// Sessions left out of the hit-rate chart (only the busiest few are drawn).
+        var moreSessions = 0
+        /// Percent.
+        var utilization: [Line] = []
+        var tokens: [Grouping: [Bar]] = [:]
+        /// Percent.
+        var cache: [Line] = []
+        var top: [SessionRow] = []
+        var finish: [Finish] = []
+
+        static let titles = ["Utilisation per account", "Tokens by kind", "Cache hit rate per session", "Top sessions and subagents",
+                             "Time to finish per model"]
+
+        /// VoiceOver: each chart's label (its title) and a value that says what it shows.
+        /// #2042: the Harness grouping is offered only when the rows hold more than one harness.
+        var hasHarnessSplit: Bool { tokens[.harness] != nil }
+
+        func charts(_ grouping: Grouping) -> [(title: String, summary: String)] {
+            let pct = { (v: Double) in String(format: "%.0f%%", v) }
+            let util = utilization.map { l in
+                "\(l.name): latest \(pct(l.points.last?.value ?? 0)), peak \(pct(l.points.map(\.value).max() ?? 0)), "
+                    + Self.count(l.markers.count, "reset")
+            }
+            let bars = (tokens[grouping] ?? []).map { "\($0.name): \(Self.count($0.total, "token"))" }
+            var cacheText = cache.map { "\($0.name): latest \(pct($0.points.last?.value ?? 0)), \(Self.count($0.markers.count, "move"))" }
+            if moreSessions > 0 && !cacheText.isEmpty { cacheText.append("and \(moreSessions) more") }
+            let topText = top.first.map { "\(Self.count(top.count, "session")); most tokens: \($0.name), \(Self.count($0.total, "token"))" }
+            let finishText = finish.map {
+                "\($0.model) on \($0.day): median \(Self.seconds($0.median)), 90th percentile \(Self.seconds($0.p90)), "
+                    + Self.count($0.count, "request")
+            }
+            let parts = [util, bars, cacheText, topText.map { [$0] } ?? [], finishText]
+            return zip(Self.titles, parts).map { (title: $0, summary: $1.isEmpty ? "Nothing in this range." : $1.joined(separator: "; ")) }
+        }
+
+        static func count(_ n: Int, _ word: String) -> String { n == 1 ? "1 \(word)" : "\(n) \(word)s" }
+        static func seconds(_ ms: Double) -> String { String(format: "%.1f s", ms / 1000) }
+    }
+
+    let directory: URL
+    let clock: @Sendable () -> Double
+    /// Keychain id -> today's label, asked at each read (spec 3.3: the record holds the id, never the label).
+    let labels: @MainActor () -> [String: String]
+    let read: Read
+
+    @Published private(set) var span: Span = .day
+    @Published var grouping: Grouping = .account
+    /// nil until the first read lands.
+    @Published private(set) var shown: Shown?
+    @Published private(set) var loading = false
+    private var generation = 0
+
+    nonisolated static let liveRead: Read = { AgentPoolUsageReader.readNow(directory: $0, range: $1, now: $2) }
+
+    init(directory: URL, clock: @escaping @Sendable () -> Double, labels: @escaping @MainActor () -> [String: String],
+         read: @escaping Read = AgentPoolUsageStatsModel.liveRead) {
+        self.directory = directory
+        self.clock = clock
+        self.labels = labels
+        self.read = read
+    }
+
+    /// Keychain id -> label from the pool's state.
+    nonisolated static func labels(_ state: AgentPoolState) -> [String: String] {
+        Dictionary(state.accounts.map { ($0.value.id, $0.key) }, uniquingKeysWith: { min($0, $1) })
+    }
+
+    func appeared() {
+        if shown == nil && !loading { reload() }
+    }
+
+    @discardableResult
+    func select(_ span: Span) -> Task<Void, Never>? {
+        guard span != self.span else { return nil }
+        self.span = span
+        return reload()
+    }
+
+    /// A later read wins: an earlier one that lands after it is dropped.
+    @discardableResult
+    func reload() -> Task<Void, Never> {
+        generation += 1
+        let g = generation, dir = directory, range = span.range, now = clock(), names = labels(), read = read
+        loading = true
+        return Task { [weak self] in
+            // Spec 3.5: the read and the aggregations off main; only the shaped result is published here.
+            let s = await Task.detached { AgentPoolUsageStatsModel.shape(read(dir, range, now), labels: names) }.value
+            guard let self, g == self.generation else { return }
+            self.shown = s
+            if grouping == .harness && !s.hasHarnessSplit { grouping = .account }   // the split went away
+            self.loading = false
+        }
+    }
+
+    // MARK: shaping (pure, off main)
+
+    nonisolated static func shape(_ r: AgentPoolUsageReadResult, labels: [String: String]) -> Shown {
+        let rows = r.rows
+        let accts = names(Set(rows.map(\.acct))) { id in labels[id].map { OutsideText.shown($0, max: 40) } ?? "removed account" }
+        let sessions = names(Set(rows.compactMap(\.sess)), shortSession)
+        let models = names(Set(rows.map(\.model))) { OutsideText.shown($0, max: 64) }
+        // #2042: "claude" and "codex" by name; an unknown id is shown as itself.
+        let harnesses = names(Set(rows.map(\.harness))) { id in
+            id == ClaudeHarness.id ? "Claude" : id == AgentPoolCodexHarness.id ? "Codex" : OutsideText.shown(id, max: 64)
+        }
+        func kinds(_ t: AgentPoolUsageTotals) -> [Int] { [t.input, t.cacheWrite5m, t.cacheWrite1h, t.cacheRead, t.output] }
+        func percent(_ p: [AgentPoolUsageStats.Point]) -> [AgentPoolUsageStats.Point] { p.map { .init(t: $0.t, value: $0.value * 100) } }
+
+        var s = Shown(rows: rows.count, skipped: r.skippedTotal, truncated: r.truncated, filesNotRead: r.filesNotRead)
+        // The busiest `seriesMax` lines (most points), kept in the reader's order; the rest are one "other" line of their peaks.
+        let util = AgentPoolUsageStats.utilization(rows)
+        let lineKeep = Set(util.indices.sorted { (util[$1].points.count, $0) < (util[$0].points.count, $1) }.prefix(seriesMax))
+        let cap = lineCap(min(util.count, seriesMax + 1))
+        s.utilization = util.indices.filter(lineKeep.contains).map { i in
+            let u = util[i]
+            let (p, m) = thin(percent(u.points), u.resets.map(\.t), cap: cap, mean: false)
+            return Line(name: "\(accts[u.acct] ?? "") \u{00B7} \(u.window == "five_hour" ? "5 h" : "7 d")", points: p, markers: m)
+        }
+        let rest = util.indices.filter { !lineKeep.contains($0) }.map { util[$0] }
+        if !rest.isEmpty {
+            let (p, m) = thin(percent(rest.flatMap(\.points).sorted { $0.t < $1.t }), rest.flatMap { $0.resets.map(\.t) }.sorted(),
+                              cap: cap, mean: false)
+            s.utilization.append(Line(name: "other (\(rest.count))", points: p, markers: m))
+        }
+        for (g, group, map) in [(Grouping.account, AgentPoolUsageGroup.account, accts), (Grouping.model, AgentPoolUsageGroup.model, models),
+                                    (Grouping.session, AgentPoolUsageGroup.session, sessions),
+                                    (Grouping.harness, AgentPoolUsageGroup.harness, harnesses)] {
+            // #2042: the Harness bars exist only when the rows hold more than one harness.
+            if g == .harness && Set(rows.lazy.map(\.harness)).count < 2 { continue }
+            s.tokens[g] = capBars(AgentPoolUsageStats.tokens(rows, by: group).map { Bar(name: map[$0.key] ?? "", kinds: kinds($0.totals), total: $0.totals.total) })
+        }
+        let hits = AgentPoolUsageStats.cacheHitRate(rows)
+        let busiest = Set(hits.sorted { ($1.points.count, $0.sess) < ($0.points.count, $1.sess) }.prefix(sessionsMax).map(\.sess))
+        let kept = hits.filter { busiest.contains($0.sess) }
+        s.moreSessions = hits.count - kept.count
+        s.cache = kept.map { c in
+            let (p, m) = thin(c.points.map { .init(t: $0.t, value: $0.rate * 100) }, c.points.filter(\.moved).map(\.t),
+                              cap: lineCap(kept.count), mean: true)
+            return Line(name: sessions[c.sess] ?? "", points: p, markers: m)
+        }
+        s.top = AgentPoolUsageStats.topSessions(rows).map { t in
+            SessionRow(name: sessions[t.sess] ?? "", kinds: kinds(t.totals), total: t.totals.total, requests: t.totals.requests,
+                       accounts: t.accounts.map { accts[$0] ?? "" }.joined(separator: ", "),
+                       agents: t.agents.map { a in
+                           SessionRow(name: a.agent.isEmpty ? "main" : "subagent " + OutsideText.shown(a.agent, max: 16), kinds: kinds(a.totals),
+                                      total: a.totals.total, requests: a.totals.requests, accounts: "", agents: [])
+                       })
+        }
+        // The `finishModelsMax` models with most finished requests; the others' rows are timed together as "other".
+        var fin = AgentPoolUsageStats.finishTimes(rows)
+        let use = Dictionary(fin.map { ($0.model, $0.count) }, uniquingKeysWith: +)
+        if use.count > finishModelsMax {
+            let keep = Set(use.sorted { ($1.value, $0.key) < ($0.value, $1.key) }.prefix(finishModelsMax).map(\.key))
+            var folded = rows
+            for i in folded.indices where !keep.contains(folded[i].model) { folded[i].model = otherModel }
+            fin = AgentPoolUsageStats.finishTimes(folded)
+        }
+        s.finish = fin.map {
+            Finish(model: $0.model == otherModel ? "other (\(use.count - finishModelsMax))" : models[$0.model] ?? "", day: $0.day,
+                   median: $0.median, p90: $0.p90, count: $0.count)
+        }
+        return s
+    }
+
+    nonisolated static func lineCap(_ lines: Int) -> Int { max(10, min(pointsMax, marksMax / max(1, lines))) }
+
+    /// A line of oldest-first points cut to at most `cap` time buckets (the largest value, or the mean, in each), and its
+    /// markers to one per bucket. Fewer points than `cap`: unchanged.
+    nonisolated static func thin(_ p: [AgentPoolUsageStats.Point], _ markers: [Double], cap: Int, mean: Bool) -> ([AgentPoolUsageStats.Point], [Double]) {
+        guard p.count > cap, let lo = p.first?.t, let hi = p.last?.t else { return (p, markers) }
+        let width = (hi - lo) / Double(cap)
+        func slot(_ t: Double) -> Int {
+            let x = width > 0 ? (t - lo) / width : 0
+            return x.isFinite ? Int(min(Double(cap - 1), max(0, x))) : 0
+        }
+        var groups: [Int: (t: Double, sum: Double, n: Double, top: Double)] = [:]
+        for q in p {
+            let k = slot(q.t)
+            let g = groups[k] ?? (q.t, 0, 0, -Double.infinity)
+            groups[k] = (g.t, g.sum + q.value, g.n + 1, max(g.top, q.value))
+        }
+        var seen = Set<Int>()
+        return (groups.keys.sorted().compactMap { k in groups[k].map { AgentPoolUsageStats.Point(t: $0.t, value: mean ? $0.sum / $0.n : $0.top) } },
+                markers.filter { seen.insert(slot($0)).inserted })
+    }
+
+    /// At most `barsMax` bars (the biggest, kept in their order) and one "other" with the rest summed.
+    nonisolated static func capBars(_ bars: [Bar]) -> [Bar] {
+        guard bars.count > barsMax else { return bars }
+        let top = Set(bars.sorted { ($1.total, $0.name) < ($0.total, $1.name) }.prefix(barsMax).map(\.name))
+        var kinds = [0, 0, 0, 0, 0]
+        let rest = bars.filter { !top.contains($0.name) }
+        for b in rest { for (i, k) in b.kinds.enumerated() where i < kinds.count { kinds[i] += k } }
+        return bars.filter { top.contains($0.name) } + [Bar(name: "other (\(rest.count))", kinds: kinds, total: kinds.reduce(0, +))]
+    }
+
+    /// Spec 3.6: never the whole id, anywhere: at most its first 8 characters and always fewer than it has, then an ellipsis.
+    nonisolated static func shortSession(_ id: String) -> String {
+        let s = OutsideText.shown(id, max: Int.max)
+        return String(s.prefix(min(8, max(0, s.count - 1)))) + "\u{2026}"
+    }
+
+    /// One display name per key, never two alike (two removed accounts, two sessions cut to the same start): a repeat
+    /// gets " (2)", " (3)", in key order.
+    nonisolated static func names(_ keys: Set<String>, _ shown: (String) -> String) -> [String: String] {
+        var out: [String: String] = [:], used: Set<String> = []
+        for k in keys.sorted() {
+            let base = shown(k)
+            var name = base, n = 1
+            while used.contains(name) { n += 1; name = "\(base) (\(n))" }
+            used.insert(name)
+            out[k] = name
+        }
+        return out
+    }
+}
+
+struct AgentPoolUsageStatsSection: View {
+    @ObservedObject var model: AgentPoolUsageStatsModel
+
+    static let footer = "Read from this Mac's usage record when the pane opens, when the range changes and on Refresh. "
+        + "Session ids are cut to their first characters. Quota checks count for utilisation only."
+
+    var body: some View {
+        content.onAppear { model.appeared() }
+    }
+
+    /// The card without its appear hook (the tests read its strings from here).
+    var content: some View {
+        NeonSection("Usage history", footer: Self.footer) {
+            VStack(alignment: .leading, spacing: sz(12)) {
+                fitting {
+                    Picker("Range", selection: Binding(get: { model.span }, set: { model.select($0) })) {
+                        ForEach(AgentPoolUsageStatsModel.Span.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .accessibilityLabel("Range")
+                    Button(model.loading ? "Reading\u{2026}" : "Refresh") { model.reload() }
+                        .buttonStyle(.neon).fixedSize().disabled(model.loading)
+                }
+                if let s = model.shown {
+                    shownView(s)
+                } else {
+                    caption("Not read yet.")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func shownView(_ s: AgentPoolUsageStatsModel.Shown) -> some View {
+        if s.skipped > 0 {
+            caption("\(AgentPoolUsageStatsModel.Shown.count(s.skipped, "unreadable row")) skipped.", color: Neon.magenta)
+        }
+        if s.truncated {
+            caption("Only the first \(AgentPoolUsageReader.rowsMax.formatted()) rows of this range were read; later ones are not drawn.", color: Neon.magenta)
+        }
+        if s.filesNotRead > 0 {
+            caption("\(AgentPoolUsageStatsModel.Shown.count(s.filesNotRead, "usage file")) could not be read.", color: Neon.magenta)
+        }
+        if s.rows == 0 {
+            caption("No usage recorded in this range.")
+        } else {
+            let charts = s.charts(model.grouping)
+            ForEach(Array(charts.enumerated()), id: \.offset) { i, c in
+                VStack(alignment: .leading, spacing: sz(6)) {
+                    Text(c.title).font(Neon.font(.caption)).foregroundStyle(Neon.textPrimary)
+                    // The picker sits above the chart: the chart is one ignored element, which would hide it from VoiceOver.
+                    if i == 1 {
+                        Picker("Group by", selection: $model.grouping) {
+                            ForEach(AgentPoolUsageStatsModel.Grouping.allCases.filter { $0 != .harness || s.hasHarnessSplit }) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                        .accessibilityLabel("Group by")
+                    }
+                    // An element with no role (AXUnknown, a plain shape's too) is served with its label but no AXValue; as an
+                    // image it keeps both (testAnElementOnAChartKeepsItsValueProbe).
+                    chart(i, s)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(c.title)
+                        .accessibilityValue(c.summary)
+                        .accessibilityAddTraits(.isImage)
+                    // Outside the chart's ignored element: the legend is drawn here (wrapping), not by Swift Charts.
+                    if let key = Self.legendKey(i, s) { AgentPoolChartLegend(key: key) }
+                }
+            }
+        }
+    }
+
+    /// The names and colours of chart `i`'s series (nil for the table): the chart's scale and its legend both read this.
+    static func legendKey(_ i: Int, _ s: AgentPoolUsageStatsModel.Shown) -> AgentPoolLegendKey? {
+        switch i {
+        case 0: return AgentPoolLegendKey(s.utilization.filter { !$0.points.isEmpty }.map(\.name))
+        case 1: return AgentPoolLegendKey(AgentPoolUsageStatsModel.kinds)
+        case 2: return AgentPoolLegendKey(s.cache.filter { !$0.points.isEmpty }.map(\.name))
+        case 3: return nil
+        default: return AgentPoolLegendKey(s.finish.flatMap { ["\($0.model) median", "\($0.model) 90th"] })
+        }
+    }
+
+    @ViewBuilder
+    private func chart(_ i: Int, _ s: AgentPoolUsageStatsModel.Shown) -> some View {
+        switch i {
+        case 0: lines(s.utilization, y: "Percent", key: Self.legendKey(i, s)).frame(height: sz(160))
+        case 1: bars(s.tokens[model.grouping] ?? [], key: Self.legendKey(i, s)).frame(height: sz(160))
+        case 2: lines(s.cache, y: "Percent", key: Self.legendKey(i, s)).chartYScale(domain: 0...100).frame(height: sz(160))
+        case 3: table(s.top)
+        default: finish(s.finish, key: Self.legendKey(i, s)).frame(height: sz(160))
+        }
+    }
+
+    private func lines(_ lines: [AgentPoolUsageStatsModel.Line], y: String, key: AgentPoolLegendKey?) -> some View {
+        Chart {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                ForEach(Array(l.points.enumerated()), id: \.offset) { _, p in
+                    LineMark(x: .value("Time", Date(timeIntervalSince1970: p.t)), y: .value(y, p.value), series: .value("Line", l.name))
+                        .foregroundStyle(by: .value("Line", l.name))
+                }
+                ForEach(Array(l.markers.enumerated()), id: \.offset) { _, t in
+                    RuleMark(x: .value("Marker", Date(timeIntervalSince1970: t)))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .foregroundStyle(Neon.textSecondary)
+                }
+            }
+        }
+        .legendScale(key)
+    }
+
+    private func bars(_ bars: [AgentPoolUsageStatsModel.Bar], key: AgentPoolLegendKey?) -> some View {
+        Chart {
+            ForEach(Array(bars.enumerated()), id: \.offset) { _, b in
+                ForEach(Array(zip(AgentPoolUsageStatsModel.kinds, b.kinds).enumerated()), id: \.offset) { _, k in
+                    BarMark(x: .value("Group", b.name), y: .value("Tokens", k.1))
+                        .foregroundStyle(by: .value("Kind", k.0))
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks { v in
+                AxisGridLine()
+                AxisTick()
+                AxisValueLabel {
+                    if let d = v.as(Int.self).map(Double.init) ?? v.as(Double.self) { Text(Self.axisTokens(d)) }
+                }
+            }
+        }
+        .legendScale(key)
+    }
+
+    /// Compact English token count for the axis, the same in every locale (built by hand, no Locale).
+    static func axisTokens(_ v: Double) -> String {
+        guard v.isFinite, v >= 1 else { return "0" }
+        let (div, unit): (Double, String) = v >= 1e9 ? (1e9, "B") : v >= 1e6 ? (1e6, "M") : v >= 1e3 ? (1e3, "K") : (1, "")
+        let r = (v / div * 10).rounded() / 10
+        return (r == r.rounded() ? String(Int(r)) : String(r)) + unit
+    }
+
+    private func finish(_ rows: [AgentPoolUsageStatsModel.Finish], key: AgentPoolLegendKey?) -> some View {
+        Chart {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, f in
+                LineMark(x: .value("Day", f.day), y: .value("Seconds", f.median / 1000), series: .value("Series", "\(f.model) median"))
+                    .foregroundStyle(by: .value("Series", "\(f.model) median")).symbol(.circle)
+                LineMark(x: .value("Day", f.day), y: .value("Seconds", f.p90 / 1000), series: .value("Series", "\(f.model) 90th"))
+                    .foregroundStyle(by: .value("Series", "\(f.model) 90th")).symbol(.circle)
+            }
+        }
+        .legendScale(key)
+    }
+
+    private func table(_ rows: [AgentPoolUsageStatsModel.SessionRow]) -> some View {
+        ScrollView(.horizontal) {
+            Grid(alignment: .leading, horizontalSpacing: sz(10), verticalSpacing: sz(4)) {
+                GridRow {
+                    ForEach(["Session"] + AgentPoolUsageStatsModel.kinds + ["Requests", "Accounts"], id: \.self) { cell($0, color: Neon.textSecondary) }
+                }
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
+                    row(r)
+                    ForEach(Array(r.agents.enumerated()), id: \.offset) { _, a in row(a, indent: true) }
+                }
+            }
+        }
+    }
+
+    private func row(_ r: AgentPoolUsageStatsModel.SessionRow, indent: Bool = false) -> some View {
+        GridRow {
+            cell(r.name).padding(.leading, indent ? sz(12) : 0)
+            ForEach(Array(r.kinds.enumerated()), id: \.offset) { _, n in cell("\(n)") }
+            cell("\(r.requests)")
+            cell(r.accounts)
+        }
+    }
+
+    private func cell(_ text: String, color: Color = Neon.textPrimary) -> some View {
+        Text(text).font(Neon.font(.caption)).foregroundStyle(color).lineLimit(1)
+    }
+
+    private func caption(_ text: String, color: Color = Neon.textSecondary) -> some View {
+        Text(text).font(Neon.font(.caption)).foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// One row when it fits, stacked when it does not (as AgentPoolPane.fitting).
+    private func fitting<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        let c = content()
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: sz(8)) { c }
+            VStack(alignment: .leading, spacing: sz(6)) { c }
+        }
+    }
+}
+
+/// A chart's series names and their colours, in the order of the marks' first appearance (what Swift Charts' own scale
+/// would use).
+/// shortcut: the palette repeats after 10 names (utilisation can reach seriesMax 24), so a colour then repeats; upgrade with a longer palette.
+struct AgentPoolLegendKey: Equatable {
+    static let palette: [Color] = [.blue, .green, .orange, .purple, .red, .cyan, .yellow, .pink, .teal, .indigo]
+    let names: [String]
+    var colours: [Color] { names.indices.map { Self.palette[$0 % Self.palette.count] } }
+
+    init(_ names: [String]) {
+        var seen = Set<String>()
+        self.names = names.filter { seen.insert($0).inserted }
+    }
+}
+
+private extension View {
+    /// Swift Charts' own legend off; the colours fixed to the key's, which the card's legend draws too.
+    func legendScale(_ key: AgentPoolLegendKey?) -> some View {
+        chartLegend(.hidden).chartForegroundStyleScale(domain: key?.names ?? [], range: key?.colours ?? [])
+    }
+}
+
+/// The legend under a chart: swatch and name, wrapping onto more lines at the card width.
+struct AgentPoolChartLegend: View {
+    let key: AgentPoolLegendKey
+
+    var body: some View {
+        AgentPoolWrapLayout(spacing: sz(12), lineSpacing: sz(4)) {
+            ForEach(Array(zip(key.names, key.colours).enumerated()), id: \.offset) { _, nc in
+                HStack(spacing: sz(4)) {
+                    Circle().fill(nc.1).frame(width: sz(8), height: sz(8))
+                    Text(nc.0).font(Neon.font(.caption)).foregroundStyle(Neon.textSecondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(nc.0)
+            }
+        }
+    }
+}
+
+/// Left to right; an item that would pass the proposed width starts a new line; an item wider than the width is proposed
+/// the width itself (its text truncates), so nothing is placed past it.
+struct AgentPoolWrapLayout: Layout {
+    var spacing: CGFloat
+    var lineSpacing: CGFloat
+
+    private func place(_ subviews: Subviews, _ width: CGFloat) -> (frames: [CGRect], size: CGSize) {
+        var frames: [CGRect] = [], x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0, x + s.width > width { y += lineH + lineSpacing; x = 0; lineH = 0 }
+            frames.append(CGRect(x: x, y: y, width: s.width, height: s.height))
+            x += s.width + spacing
+            lineH = max(lineH, s.height)
+            widest = max(widest, x - spacing)
+        }
+        return (frames, CGSize(width: widest, height: frames.isEmpty ? 0 : y + lineH))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        place(subviews, proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let f = place(subviews, bounds.width).frames
+        for (v, r) in zip(subviews, f) {
+            v.place(at: CGPoint(x: bounds.minX + r.minX, y: bounds.minY + r.minY), proposal: ProposedViewSize(width: r.width, height: r.height))
+        }
+    }
+}

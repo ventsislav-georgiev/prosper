@@ -100,10 +100,10 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
 
     /// The parts from the pane's own words: a change to poolText's format turns this row red, not just the popover.
     func testPoolPartsReadThePanesPoolText() throws {
-        let cells = [CCPoolCore.PoolCell(claim: "five_hour", free: 2.92, growsAt: Int(now) + 3600),
-                     CCPoolCore.PoolCell(claim: "seven_day", free: 2.48, growsAt: Int(now) + 3 * 86400),
-                     CCPoolCore.PoolCell(claim: "seven_day_opus", free: 0.4, growsAt: nil)]
-        let pool = try XCTUnwrap(CCPoolPaneModel.poolText(cells, timeZone: utc))
+        let cells = [AgentPoolCore.PoolCell(claim: "five_hour", free: 2.92, growsAt: Int(now) + 3600),
+                     AgentPoolCore.PoolCell(claim: "seven_day", free: 2.48, growsAt: Int(now) + 3 * 86400),
+                     AgentPoolCore.PoolCell(claim: "seven_day_opus", free: 0.4, growsAt: nil)]
+        let pool = try XCTUnwrap(AgentPoolPaneModel.poolText(cells, timeZone: utc))
         XCTAssertEqual(AgentPlanLimits.poolParts(pool),
                        [.init(name: "5h", free: "292%", more: "more at Fri 09:00"), .init(name: "week", free: "248%", more: "more at Mon 08:00"),
                         .init(name: "opus", free: "40%", more: nil)])
@@ -260,11 +260,11 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
     }
 
     func testPaceSamplesMapIdsToLabelsAndNeedUseAndReset() {
-        func row(_ acct: String, _ lim: [String: CCPoolUsageEntry.Claim]) -> CCPoolUsageEntry {
-            CCPoolUsageEntry(t: now, acct: acct, model: "m", sess: nil, agent: nil, path: "messages", st: 200, ms: 1, done: true, qc: false,
+        func row(_ acct: String, _ lim: [String: AgentPoolUsageEntry.Claim]) -> AgentPoolUsageEntry {
+            AgentPoolUsageEntry(t: now, acct: acct, model: "m", sess: nil, agent: nil, path: "messages", st: 200, ms: 1, done: true, qc: false,
                              att: 1, thr: 0, mv: false, routed: "r", tokens: nil, lim: lim)
         }
-        let s = CCPoolRuntime.paceSamples([row("id-a", ["five_hour": .init(u: 0.4, r: now + 60), "seven_day": .init(u: 0.2, r: nil)]),
+        let s = AgentPoolRuntime.paceSamples([row("id-a", ["five_hour": .init(u: 0.4, r: now + 60), "seven_day": .init(u: 0.2, r: nil)]),
                                            row("id-gone", ["five_hour": .init(u: 0.9, r: now + 60)])],
                                           labels: ["id-a": "alpha"])
         XCTAssertEqual(s, ["alpha": ["five_hour": [.init(t: now, u: 0.4, r: now + 60)]]],
@@ -275,14 +275,14 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
 
     @MainActor func testRuntimeReadsEveryAccountWithTheCurrentMarked() throws {
         let dir = tempDir()
-        var cfg = CCPoolServiceConfig()
+        var cfg = AgentPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:9")!
         let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-limits-\(UUID().uuidString)")!
         XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
-        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+        let rt = AgentPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: AgentPoolMemorySecrets(), config: cfg,
                                vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
-                               logger: CCPoolCapturingLogger())
+                               logger: AgentPoolCapturingLogger())
         let t = Date().timeIntervalSince1970
         XCTAssertTrue(rt.planLimits(now: t).accounts.isEmpty, "no account")
         let idA = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
@@ -290,13 +290,13 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         _ = try rt.store.addAccount(label: "gamma", token: "example-token-c", secrets: rt.secrets)
         rt.store.mutate {
             $0.current = "beta"
-            // #1898 CI: each sample's claims carry a reset, as a relayed reply records them (CCPoolConnection recordResets).
+            // #1898 CI: each sample's claims carry a reset, as a relayed reply records them (AgentPoolConnection recordResets).
             $0.accounts["alpha"]?.reset = ["five_hour": Int(t) + 7200]
             $0.accounts["beta"]?.reset = ["five_hour": Int(t) + 3600, "seven_day": Int(t) + 3 * 86400]
             $0.accounts["gamma"]?.cooldown = ["five_hour": Int(t) + 600]
         }
-        rt.store.recordUsage(id: idA, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.9"]).limits)
-        rt.store.recordUsage(id: idB, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.25",
+        rt.store.recordUsage(id: idA, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.9"]).limits)
+        rt.store.recordUsage(id: idB, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.25",
                                                                       "anthropic-ratelimit-unified-7d-utilization": "0.5"]).limits)
         let l = rt.planLimits(now: t)
         XCTAssertEqual(l.accounts.map(\.label), ["alpha", "beta", "gamma"], "most urgent first, no data last")
@@ -309,7 +309,7 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
         XCTAssertEqual(gamma.benchedUntil, Int(t) + 600)
         // The pane's words for the pane's cells: 5h alpha 10% + beta 75% free, more when beta's 5h resets; week beta 50%
         // free, more when its week resets; gamma (no sample, benched) adds nothing.
-        let at = { CCPoolPaneModel.timeText($0, timeZone: rt.model.timeZone) }
+        let at = { AgentPoolPaneModel.timeText($0, timeZone: rt.model.timeZone) }
         XCTAssertEqual(l.pool, "5h 85% (more at \(at(Int(t) + 3600))) \u{00B7} week 50% (more at \(at(Int(t) + 3 * 86400)))")
     }
 
@@ -317,16 +317,16 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
     // its window after the sample, then rolled over (free), the rows' own stale rule.
     @MainActor func testRuntimePoolCountsANoResetSampleUsedWithinItsWindow() throws {
         let dir = tempDir()
-        var cfg = CCPoolServiceConfig()
+        var cfg = AgentPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:9")!
         let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-limits-\(UUID().uuidString)")!
         XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
-        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+        let rt = AgentPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: AgentPoolMemorySecrets(), config: cfg,
                                vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
-                               logger: CCPoolCapturingLogger())
+                               logger: AgentPoolCapturingLogger())
         let id = try rt.store.addAccount(label: "api", token: "example-token-a", secrets: rt.secrets)
-        rt.store.recordUsage(id: id, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.4"]).limits)
+        rt.store.recordUsage(id: id, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.4"]).limits)
         let at = try XCTUnwrap(rt.store.usageSample("api")?.at)
         XCTAssertEqual(rt.planLimits(now: at + 60).pool, "5h 60%", "fresh: the share is used")
         let stale = rt.planLimits(now: at + AgentPlanUsage.sessionWindow + 1)
@@ -499,38 +499,38 @@ final class AgentIslandPlanLimitsTests: XCTestCase {
 // MARK: - #2011: groups by harness (design #2003 section 6); #1999's Codex card reads group("codex")
 
 extension AgentIslandPlanLimitsTests {
-    @MainActor private func runtime() -> CCPoolRuntime {
+    @MainActor private func runtime() -> AgentPoolRuntime {
         let dir = tempDir()
-        var cfg = CCPoolServiceConfig()
+        var cfg = AgentPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:9")!
         let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-limits-\(UUID().uuidString)")!
         XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
-        return CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+        return AgentPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: AgentPoolMemorySecrets(), config: cfg,
                              vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
-                             logger: CCPoolCapturingLogger())
+                             logger: AgentPoolCapturingLogger())
     }
 
     /// A Codex ChatGPT account (the pool's own add path makes a Claude one; the harness and kind are what #2005 sets).
-    @MainActor private func addCodex(_ rt: CCPoolRuntime, _ label: String, headers: [String: String], t: Double) throws {
+    @MainActor private func addCodex(_ rt: AgentPoolRuntime, _ label: String, headers: [String: String], t: Double) throws {
         let id = try rt.store.addAccount(label: label, token: "example-token-\(label)", secrets: rt.secrets)
         rt.store.mutate {
-            $0.accounts[label]?.harness = CCPoolCodexHarness.id
-            $0.accounts[label]?.kind = CCPoolCodexHarness.chatgptKind
+            $0.accounts[label]?.harness = AgentPoolCodexHarness.id
+            $0.accounts[label]?.kind = AgentPoolCodexHarness.chatgptKind
         }
-        rt.store.recordUsage(id: id, limits: CCPoolCodexHarness.parseLimits(headers, now: t).limits)
+        rt.store.recordUsage(id: id, limits: AgentPoolCodexHarness.parseLimits(headers, now: t).limits)
     }
 
     @MainActor func testTwoHarnessesGiveTwoGroupsWithTheirOwnDisplayAndCurrent() throws {
         let rt = runtime()
         let t = Date().timeIntervalSince1970
         let idA = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
-        rt.store.recordUsage(id: idA, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
+        rt.store.recordUsage(id: idA, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
         try addCodex(rt, "cx1", headers: ["x-codex-primary-used-percent": "40", "x-codex-primary-window-minutes": "300",
                                           "x-codex-secondary-used-percent": "20", "x-codex-secondary-window-minutes": "10080"], t: t)
         try addCodex(rt, "cx2", headers: ["x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "20160"], t: t)
         rt.store.mutate {
-            $0.currents = [ClaudeHarness.id: "alpha", CCPoolCodexHarness.id: "cx1"]
+            $0.currents = [ClaudeHarness.id: "alpha", AgentPoolCodexHarness.id: "cx1"]
             $0.accounts["alpha"]?.reset = ["five_hour": Int(t) + 7200]
             $0.accounts["cx1"]?.reset = ["five_hour": Int(t) + 3600, "seven_day": Int(t) + 3 * 86400]
             $0.accounts["cx2"]?.reset = ["window_20160m": Int(t) + 86400]
@@ -558,7 +558,7 @@ extension AgentIslandPlanLimitsTests {
         let rt = runtime()
         let t = Date().timeIntervalSince1970
         try addCodex(rt, "cx", headers: ["x-codex-primary-used-percent": "40", "x-codex-primary-window-minutes": "300"], t: t)
-        rt.store.mutate { $0.currents[CCPoolCodexHarness.id] = "cx" }
+        rt.store.mutate { $0.currents[AgentPoolCodexHarness.id] = "cx" }
         let l = rt.planLimits(now: t)
         XCTAssertEqual(l.groups.map(\.harness), ["codex"])
         XCTAssertTrue(l.group("claude") == nil)
@@ -575,7 +575,7 @@ extension AgentIslandPlanLimitsTests {
         let rt = runtime()
         let t = Date().timeIntervalSince1970
         let id = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
-        rt.store.recordUsage(id: id, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
+        rt.store.recordUsage(id: id, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.3"]).limits)
         rt.store.mutate { $0.current = "alpha" }
         let l = rt.planLimits(now: t)
         XCTAssertEqual(l.groups.map(\.harness), ["claude"])
@@ -598,7 +598,7 @@ extension AgentIslandPlanLimitsTests {
 
     func testLegacyCurrentDecodesAsClaudes() throws {
         let json = #"{"current":"alpha","order":["alpha","cx"],"accounts":{"alpha":{"id":"a1"},"cx":{"id":"c1","harness":"codex"}}}"#
-        var st = try JSONDecoder().decode(CCPoolState.self, from: Data(json.utf8))
+        var st = try JSONDecoder().decode(AgentPoolState.self, from: Data(json.utf8))
         XCTAssertEqual(st.currents, ["claude": "alpha"], "the single legacy value is Claude's")
         st.remember("cx")
         XCTAssertEqual(st.currents, ["claude": "alpha", "codex": "cx"], "Codex's current is its own")

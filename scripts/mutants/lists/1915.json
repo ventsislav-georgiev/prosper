@@ -39,7 +39,7 @@
     },
     {
       "name": "pane_more_by",
-      "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+      "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
       "old": "\" (more at \\(timeText(",
       "new": "\" (more by \\(timeText(",
       "expect": "killed"

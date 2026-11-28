@@ -1,101 +1,101 @@
 {
  "entry": "2006",
- "filter": "CCPoolCodexProxyTests|CCPoolCodexRotationTests|CCPoolCodexLimitsTests",
+ "filter": "AgentPoolCodexProxyTests|AgentPoolCodexRotationTests|AgentPoolCodexLimitsTests",
  "mutants": [
   {
    "name": "codex-body-spent-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "        if harness.id == CCPoolCodexHarness.id, rotateSpentCodex(ex) { return }\n",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "        if harness.id == AgentPoolCodexHarness.id, rotateSpentCodex(ex) { return }\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "codex-body-cap-200",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "let cap = harness.id == CCPoolCodexHarness.id ? CCPoolCodexHarness.bodyCap : Self.snippetCap",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "let cap = harness.id == AgentPoolCodexHarness.id ? AgentPoolCodexHarness.bodyCap : Self.snippetCap",
    "new": "let cap = Self.snippetCap",
    "expect": "killed"
   },
   {
    "name": "codex-body-reset-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "let until = found.reset.flatMap { Double($0) > now ? $0 : nil }",
    "new": "let until = Optional<Int>.none",
    "expect": "killed"
   },
   {
    "name": "codex-rejected-threshold",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "row.status = pct >= 100 ? \"rejected\" : \"allowed\"",
    "new": "row.status = pct > 100 ? \"rejected\" : \"allowed\"",
    "expect": "killed"
   },
   {
    "name": "codex-claims-five-hour-only",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "func claims(for model: String?) -> [String] { Self.claimsAll }",
-   "new": "func claims(for model: String?) -> [String] { [CCPoolCore.fiveHour] }",
+   "new": "func claims(for model: String?) -> [String] { [AgentPoolCore.fiveHour] }",
    "expect": "killed"
   },
   {
    "name": "codex-benchable-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "let benchable = codex ? CCPoolCodexHarness.benchable(limits) : limits",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "let benchable = codex ? AgentPoolCodexHarness.benchable(limits) : limits",
    "new": "let benchable = limits",
    "expect": "killed"
   },
   {
    "name": "codex-pin-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "let key = \"codex/\" + sid\n        return CCPoolState.validPinKey(key) ? key : nil",
-   "new": "let key = \"codex/\" + sid\n        return CCPoolState.validPinKey(key) ? nil : nil",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
+   "old": "let key = \"codex/\" + sid\n        return AgentPoolState.validPinKey(key) ? key : nil",
+   "new": "let key = \"codex/\" + sid\n        return AgentPoolState.validPinKey(key) ? nil : nil",
    "expect": "killed"
   },
   {
    "name": "codex-tap-any-event",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageTap.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageTap.swift",
    "old": "guard obj[\"type\"] as? String == \"response.completed\" else { return }",
    "new": "guard obj[\"type\"] as? String != nil else { return }",
    "expect": "killed"
   },
   {
    "name": "codex-tap-no-cache-split",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageTap.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageTap.swift",
    "old": "\"input_tokens\": input - cached,",
    "new": "\"input_tokens\": input,",
    "expect": "killed"
   },
   {
    "name": "codex-rows-skipped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "        guard let record else { return }\n        let end = store.now",
    "new": "        guard let record, harness.id == ClaudeHarness.id else { return }\n        let end = store.now",
    "expect": "killed"
   },
   {
    "name": "lastresort-harness-filter",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "!st.accounts.contains { $0.value.harness == harness.id && !tried.contains($0.key) && $0.value.refused == nil }",
    "new": "!st.accounts.contains { !tried.contains($0.key) && $0.value.refused == nil }",
    "expect": "killed"
   },
   {
    "name": "nextreset-harness-filter",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "return state.accounts.values.filter { $0.harness == harness.id }.compactMap",
    "new": "return state.accounts.values.compactMap",
    "expect": "killed"
   },
   {
    "name": "refresh-harness-filter",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsage.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsage.swift",
    "old": "st.order.filter { (st.accounts[$0]?.harness ?? harness.id) == harness.id }",
    "new": "st.order.filter { _ in true }",
    "expect": "killed"
   },
   {
    "name": "codex-price-fallback-first",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCapacity.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCapacity.swift",
    "old": "?? table.first(where: { $0.family == \"opus\" }) ?? table.last else { return nil }",
    "new": "?? table.first(where: { $0.family == \"opus\" }) ?? table.first else { return nil }",
    "expect": "killed"

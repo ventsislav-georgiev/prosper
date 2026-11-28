@@ -3,7 +3,7 @@ import XCTest
 
 extension XCTestCase {
     /// Sets one process environment variable for the rest of this test; its teardown puts back what was there.
-    /// The replaced value never reaches the caller (#1588: CCPoolGuardTests keeps the real environment out of CCPool tests).
+    /// The replaced value never reaches the caller (#1588: AgentPoolGuardTests keeps the real environment out of AgentPool tests).
     func overrideProcessEnv(_ name: String, _ value: String) {
         let saved = ProcessInfo.processInfo.environment[name]
         setenv(name, value, 1)

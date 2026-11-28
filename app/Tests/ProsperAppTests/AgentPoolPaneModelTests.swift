@@ -1,0 +1,1094 @@
+import Darwin
+import XCTest
+@testable import ProsperApp
+
+final class AgentPoolTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var t: Double
+    init(_ t: Double) { self.t = t }
+    var now: Double { lock.withLock { t } }
+    func advance(_ s: Double) { lock.withLock { t += s } }
+}
+
+/// A pane model over a temp store, memory secrets, a fake upstream on an ephemeral loopback port
+/// and a scratch defaults suite. The service is not started unless a test starts it.
+struct AgentPoolPaneRig {
+    let anthropic: AgentPoolFakeAnthropic
+    let up: AgentPoolFakeServer
+    let clock: AgentPoolTestClock
+    let store: AgentPoolStore
+    let secrets: AgentPoolMemorySecrets
+    let service: AgentPoolService
+    let log: AgentPoolCapturingLogger
+    let defaults: UserDefaults
+    let vault: URL
+    let model: AgentPoolPaneModel
+    let trashed: AgentPoolTrashRecorder
+
+    var base: URL { URL(string: "http://127.0.0.1:\(up.port)")! }
+
+    @MainActor
+    func add(_ labels: [String]) throws {
+        for l in labels { try store.addAccount(label: l, token: "tok-\(l)", secrets: secrets) }
+        model.objectWillChange.send()
+    }
+}
+
+final class AgentPoolTrashRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _urls: [URL] = []
+    var urls: [URL] { lock.withLock { _urls } }
+    func record(_ u: URL) { lock.withLock { _urls.append(u) } }
+}
+
+extension XCTestCase {
+    /// 1_800_000_000 is Fri 08:00 UTC.
+    @MainActor
+    func ccpoolPaneRig(probeBase: URL? = nil, t0: Double = 1_800_000_000, codexUpstream: URL? = nil) throws -> AgentPoolPaneRig {
+        let anthropic = AgentPoolFakeAnthropic()
+        let up = try AgentPoolFakeServer { h, b in anthropic.reply(h, b) }
+        XCTAssertNotEqual(up.port, 0)
+        let clock = AgentPoolTestClock(t0)
+        let log = AgentPoolCapturingLogger()
+        let dir = tempDir()
+        let store = AgentPoolStore(directory: dir.appendingPathComponent("ccpool"), clock: { clock.now }, logger: log)
+        let secrets = AgentPoolMemorySecrets()
+        var cfg = AgentPoolServiceConfig()
+        cfg.port = 0
+        cfg.upstream = URL(string: "http://127.0.0.1:\(up.port)")!
+        if let codexUpstream { cfg.codexUpstream = codexUpstream }   // #2010: the Codex usage fake
+        let service = AgentPoolService(config: cfg, store: store, secrets: secrets, logger: log)
+        addTeardownBlock { service.stop(); up.stop() }
+        let defaults = scratchDefaults("ccpool-pane")
+        let trashed = AgentPoolTrashRecorder()
+        let vault = dir.appendingPathComponent("old").appendingPathComponent(AgentPoolVaultImport.vaultFileName)
+        let model = AgentPoolPaneModel(store: store, secrets: secrets, service: service, logger: log, defaults: defaults,
+                                    clock: { clock.now }, timeZone: TimeZone(identifier: "UTC")!,
+                                    probeBase: probeBase ?? cfg.upstream, vaultURL: vault,
+                                    trash: { trashed.record($0) })
+        return AgentPoolPaneRig(anthropic: anthropic, up: up, clock: clock, store: store, secrets: secrets, service: service,
+                             log: log, defaults: defaults, vault: vault, model: model, trashed: trashed)
+    }
+}
+
+final class AgentPoolDecoyHits: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func bump() { lock.withLock { n += 1 } }
+    var count: Int { lock.withLock { n } }
+}
+
+/// #871 P2a: the pane model. Real queues, a fake upstream; never the production port or upstream.
+@MainActor
+final class AgentPoolPaneModelTests: XCTestCase {
+    private let t0 = 1_800_000_000
+
+    private func row(_ m: AgentPoolPaneModel, _ label: String) -> AgentPoolPaneModel.Row? { m.rows.first { $0.label == label } }
+
+    func testAgentPoolPaneEveryRowState() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b", "c", "d", "e", "f", "g"])
+        r.store.mutate { st in
+            st.current = "a"
+            st.bench("c", claim: "five_hour", until: t0 + 3600, now: Double(t0))
+            st.bench("c", claim: "seven_day", until: t0 + 18000, now: Double(t0))
+            st.hold("d", hours: 5, now: Double(t0))
+        }
+        r.anthropic.set { $0.reject = ["tok-e": 401, "tok-g": 403] }
+        try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["f"]?.id))   // f's probe cannot answer
+        await r.model.refreshUsage()?.value
+
+        let want: [(String, AgentPoolPaneModel.RowState, String)] = [
+            ("a", .active, "active"),
+            ("b", .ready, "ready"),
+            ("c", .limited(until: t0 + 3600, claims: ["five_hour", "seven_day"]), "limited until Fri 09:00 (5h, week)"),
+            ("d", .held(until: t0 + 18000), "held until Fri 13:00"),
+            ("e", .refused(since: t0), "token rejected since Fri 08:00, not routed"),   // #1278: a Refresh 401 takes it out of routing
+            ("f", .unverified, "not verified"),
+            ("g", .rejected, "token rejected"),
+        ]
+        XCTAssertEqual(r.model.rows.map(\.label), want.map(\.0))
+        for (label, state, text) in want {
+            XCTAssertEqual(row(r.model, label)?.state, state, label)
+            XCTAssertEqual(row(r.model, label)?.stateText, text, label)
+        }
+        XCTAssertEqual(r.model.report?.rows.first { $0.label == "e" }?.status, 401)
+        XCTAssertEqual(r.model.report?.rows.first { $0.label == "g" }?.status, 403)
+        XCTAssertNotNil(r.model.poolText)
+
+        // Limits lapse with the clock; a later good probe clears "rejected".
+        r.clock.advance(18001)
+        XCTAssertEqual(row(r.model, "c")?.state, .ready)
+        XCTAssertEqual(row(r.model, "d")?.state, .ready)
+        r.anthropic.set { $0.reject = [:] }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(row(r.model, "e")?.state, .ready)
+        XCTAssertEqual(row(r.model, "f")?.state, .unverified, "still no token: never healthy")
+    }
+
+    func testAgentPoolPaneUtilisationAndItsAge() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        XCTAssertEqual(row(r.model, "a")?.usageText, "no usage seen yet")
+        r.anthropic.set { $0.usage = ["tok-a": 0.5] }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(row(r.model, "a")?.usageText, "5h 50% · week 10% · fable 34% · just now")
+        r.clock.advance(180)
+        XCTAssertEqual(row(r.model, "a")?.usageText, "5h 50% · week 10% · fable 34% · 3 min ago")
+        r.clock.advance(2 * 3600)
+        XCTAssertTrue(row(r.model, "b")?.usageText.hasSuffix("2 h ago") ?? false)
+        XCTAssertEqual(AgentPoolPaneModel.ageText(3 * 86400 + 5), "3 d ago")
+
+        // Proxy traffic updates it too.
+        r.store.mutate { $0.current = "b" }
+        guard case .running(let port) = r.service.start() else { return XCTFail("\(r.service.status)") }
+        r.anthropic.set { $0.usage = ["tok-b": 0.25] }
+        XCTAssertEqual(AgentPoolTestClient.request(port: port)?.status, 200)
+        XCTAssertEqual(row(r.model, "b")?.usageText, "5h 25% · week 10% · fable 34% · just now")
+    }
+
+    func testAgentPoolPaneRenameSurvivesAReload() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b", "c"])
+        r.store.mutate { $0.current = "b" }
+        let idB = try XCTUnwrap(r.store.snapshot.accounts["b"]?.id)
+        r.store.recordUsage(id: idB, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.2"]).limits)
+        r.model.select("b")
+        XCTAssertEqual(r.model.renameDraft, "b")
+        r.model.rename("b", to: "  bee ")
+        XCTAssertEqual(r.model.selected, "bee")
+        XCTAssertEqual(r.model.rows.map(\.label), ["a", "bee", "c"], "#1838: alphabetical, never a hand order")
+        XCTAssertEqual(row(r.model, "bee")?.state, .active, "current follows the rename")
+        XCTAssertTrue(row(r.model, "bee")?.usageText.hasPrefix("5h 20%") ?? false, "the usage sample follows")
+
+        r.model.rename("a", to: "c")
+        XCTAssertEqual(r.model.notice, AgentPoolStoreError.duplicateLabel.description)
+        r.model.rename("a", to: "  ")
+        XCTAssertEqual(r.model.notice, AgentPoolStoreError.emptyLabel.description)
+        XCTAssertEqual(r.model.rows.map(\.label), ["a", "bee", "c"])
+
+        let reloaded = AgentPoolStore(directory: r.store.directory)
+        XCTAssertEqual(reloaded.snapshot.order, ["a", "bee", "c"], "the rename keeps its slot in the file")
+        XCTAssertEqual(reloaded.snapshot.current, "bee")
+        XCTAssertEqual(reloaded.snapshot.accounts["bee"]?.id, idB, "rename keeps the opaque Keychain id")
+        XCTAssertEqual(try r.secrets.token(id: idB), "tok-b", "and the secret is never rewritten")
+        XCTAssertNil(reloaded.snapshot.accounts["b"])
+    }
+
+    func testAgentPoolPaneHoldAndRelease() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.model.hold("a", hours: 2)
+        XCTAssertEqual(row(r.model, "a")?.state, .held(until: t0 + 7200))
+        XCTAssertEqual(row(r.model, "a")?.stateText, "held until Fri 10:00")
+        XCTAssertEqual(r.store.snapshot.accounts["a"]?.cooldown["five_hour"], t0 + 7200, "a five_hour bench, like the Python hold")
+        XCTAssertEqual(AgentPoolStore(directory: r.store.directory).snapshot.accounts["a"]?.held, t0 + 7200, "persisted")
+        r.model.customHours = "1.5"
+        r.model.holdCustom("b")
+        XCTAssertEqual(row(r.model, "b")?.state, .held(until: t0 + 5400))
+        for bad in ["", "abc", "0", "-2", "inf", "nan"] {
+            r.model.customHours = bad
+            r.model.holdCustom("a")
+            XCTAssertEqual(r.model.notice, "Hold for a number of hours above zero.", bad)
+        }
+        XCTAssertEqual(row(r.model, "a")?.state, .held(until: t0 + 7200), "a bad value changes nothing")
+        r.model.release("a")
+        XCTAssertEqual(row(r.model, "a")?.state, .ready)
+        XCTAssertEqual(r.store.snapshot.accounts["a"]?.cooldown, [:])
+        XCTAssertNil(r.store.snapshot.accounts["a"]?.held)
+        // A limit under the hold shows once the hold is released.
+        r.store.mutate { $0.bench("b", claim: "seven_day", until: t0 + 86400, now: Double(t0)) }
+        XCTAssertEqual(row(r.model, "b")?.state, .held(until: t0 + 5400))
+        r.store.mutate { $0.clear("b", claim: "five_hour") }
+        XCTAssertEqual(row(r.model, "b")?.state, .limited(until: t0 + 86400, claims: ["seven_day"]))
+        XCTAssertEqual(row(r.model, "b")?.stateText, "limited until Sat 08:00 (week)")
+    }
+
+    // B22: each fixed Hold preset of the pane (Hold 1 h, Hold 5 h) and a 24 h hold set the end to now + that span (#1576).
+    // The pane has no 24 h button: 24 h goes through the same hold(_:hours:) the buttons call.
+    func testAgentPoolPaneHoldPresetsEndAtNowPlusSpan() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b", "c"])
+        for (label, hours) in [("a", 1), ("b", 5), ("c", 24)] {
+            r.clock.advance(1000)   // "now" is read at the click, not at the rig's start
+            let now = Int(r.clock.now)
+            r.model.hold(label, hours: Double(hours))
+            XCTAssertEqual(row(r.model, label)?.state, .held(until: now + hours * 3600), "\(hours) h")
+            XCTAssertEqual(r.store.snapshot.accounts[label]?.held, now + hours * 3600, "\(hours) h persisted")
+            XCTAssertEqual(r.store.snapshot.accounts[label]?.cooldown["five_hour"], now + hours * 3600, "\(hours) h bench")
+        }
+    }
+
+    // B20: the usage probe goes straight to the configured upstream, never to ANTHROPIC_BASE_URL (#1576).
+    func testAgentPoolPaneProbeIgnoresAnthropicBaseURL() async throws {
+        let decoyHits = AgentPoolDecoyHits()
+        let decoy = try AgentPoolFakeServer { _, _ in decoyHits.bump(); return .respond(200, [], Data()) }
+        overrideProcessEnv("ANTHROPIC_BASE_URL", "http://127.0.0.1:\(decoy.port)")
+        addTeardownBlock { decoy.stop() }
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.anthropic.get { $0.seen }, ["Bearer tok-a", "Bearer tok-b"], "both probes hit the configured upstream")
+        XCTAssertEqual(decoyHits.count, 0, "nothing went to ANTHROPIC_BASE_URL")
+        // The add-time probe is direct too.
+        r.model.labelDraft = "c"
+        r.model.tokenDraft = "tok-c"
+        await r.model.addAccount().value
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 3)
+        XCTAssertEqual(decoyHits.count, 0)
+    }
+
+    // B20: no timer polls usage: a long stretch on the fake clock, nothing triggered, no probe.
+    func testAgentPoolPaneUsageIsNeverPolled() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.clock.advance(3 * 86400)
+        r.model.objectWillChange.send()
+        // Let the main run loop run: a Timer or a Task.sleep poll would fire here.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        r.clock.advance(3 * 86400)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(r.anthropic.get { $0.seen }, [], "no probe without a trigger")
+        XCTAssertFalse(r.model.refreshing)
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.anthropic.get { $0.seen }.count, 2, "a Refresh is the one trigger")
+    }
+
+    func testAgentPoolPaneAddValidatesByOneProbe() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        // 401 and 403: rejected, nothing stored.
+        for (token, status) in [("tok-bad", 401), ("tok-org", 403)] {
+            r.anthropic.set { $0.reject = [token: status] }
+            m.labelDraft = "x"
+            m.tokenDraft = token
+            let task = m.addAccount()
+            XCTAssertEqual(m.tokenDraft, "", "the buffer clears on commit, before the probe")
+            XCTAssertTrue(m.busy)
+            await task.value
+            XCTAssertEqual(m.notice, "Token rejected: x was not added.")
+            XCTAssertEqual(m.labelDraft, "x", "the label stays for a retry")
+            XCTAssertEqual(r.secrets.count, 0)
+            XCTAssertEqual(r.store.snapshot.order, [])
+        }
+        r.anthropic.set { $0.reject = [:] }
+        let probes = r.anthropic.get { $0.seen.count }
+        m.tokenDraft = "tok-good"
+        await m.addAccount().value
+        XCTAssertEqual(m.notice, "Added x.")
+        XCTAssertEqual(r.anthropic.get { $0.seen.count }, probes + 1, "one probe")
+        XCTAssertEqual(row(m, "x")?.state, .ready)
+        XCTAssertTrue(row(m, "x")?.usageText.hasPrefix("5h 42%") ?? false)
+        XCTAssertEqual(m.labelDraft, "")
+
+        // Duplicate, empty: refused before any probe.
+        for (label, token) in [("x", "tok-dup"), ("", "tok-e"), ("y", "  ")] {
+            m.labelDraft = label
+            m.tokenDraft = token
+            await m.addAccount().value
+            XCTAssertNotNil(m.notice)
+        }
+        XCTAssertEqual(r.anthropic.get { $0.seen.count }, probes + 1, "no probe for a refused add")
+        XCTAssertEqual(r.secrets.count, 1)
+    }
+
+    // #1907: the add-time probe records the reply's resets as a relayed reply does, by the new account's id. The rig's
+    // clock is the wall clock here: the fake upstream stamps its resets an hour and a day past the real time.
+    func testAgentPoolPaneAddRecordsTheProbesResets() async throws {
+        let r = try ccpoolPaneRig(t0: Date().timeIntervalSince1970)
+        r.model.labelDraft = "x"
+        r.model.tokenDraft = "tok-x"
+        await r.model.addAccount().value
+        XCTAssertEqual(r.model.notice, "Added x.")
+        let reset = r.store.snapshot.accounts["x"]?.reset ?? [:]
+        XCTAssertEqual(reset.keys.sorted(), ["five_hour", "seven_day"], "\(reset)")
+        XCTAssertTrue(Double(reset["five_hour"] ?? 0) > r.clock.now, "a future rollover")
+        XCTAssertEqual(r.store.usageSample("x")?.util["five_hour"], 0.42)
+    }
+
+    // A probe that cannot answer is "not verified", never healthy.
+    func testAgentPoolPaneUnknownProbeIsNotHealthy() async throws {
+        let r = try ccpoolPaneRig(probeBase: URL(string: "http://127.0.0.1:9")!)
+        r.model.labelDraft = "z"
+        r.model.tokenDraft = "tok-z"
+        await r.model.addAccount().value
+        XCTAssertEqual(r.model.notice, "Added z, not verified: the check could not reach Anthropic.")
+        XCTAssertEqual(row(r.model, "z")?.state, .unverified)
+        XCTAssertEqual(row(r.model, "z")?.stateText, "not verified")
+        XCTAssertEqual(r.secrets.count, 1)
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(row(r.model, "z")?.state, .unverified, "Refresh could not answer either")
+        XCTAssertNil(r.model.poolText, "no headroom from nothing")
+    }
+
+    func testAgentPoolPaneRemoveAsksFirst() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.store.mutate { $0.current = "a" }
+        XCTAssertEqual(r.model.currentText, "a")
+        XCTAssertNil(r.model.confirmRemove(), "no confirm pending: nothing happens")
+        r.model.select("a")
+        r.model.requestRemove("a")
+        XCTAssertEqual(r.model.confirmingRemove, "a")
+        XCTAssertEqual(r.store.snapshot.order, ["a", "b"], "asking removes nothing")
+        r.model.cancelRemove()
+        XCTAssertNil(r.model.confirmRemove())
+        XCTAssertEqual(r.secrets.count, 2)
+        r.model.requestRemove("a")
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, ["b"])
+        XCTAssertEqual(r.secrets.count, 1)
+        XCTAssertNil(r.model.selected)
+        XCTAssertEqual(r.model.notice, "Removed a.")
+        XCTAssertEqual(r.model.currentText, "none yet", "the proxy row names no removed account (P1 follow-up f)")
+    }
+
+    func testAgentPoolPaneProxyRowToggleAndTerminal() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertTrue(m.routeAgentSessions, "#1890: on by default")
+        XCTAssertNil(r.defaults.object(forKey: "poolRoute.claude"))
+        XCTAssertEqual(AgentPoolPaneModel.routeKey, "poolRoute.claude")
+        XCTAssertEqual(m.proxyText, "Stopped")
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        try r.add(["a"])
+        XCTAssertEqual(m.routeDisabledReason, "The proxy is not running.")
+        XCTAssertEqual(m.currentText, "none yet")
+
+        await m.startProxy().value
+        guard case .running(let port) = r.service.status else { return XCTFail("\(r.service.status)") }
+        XCTAssertFalse(m.proxyBusy)
+        XCTAssertEqual(m.proxyText, "Running on 127.0.0.1:\(port)")
+        XCTAssertNil(m.routeDisabledReason)
+        m.routeAgentSessions = true
+        XCTAssertTrue(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "written to the injected suite")
+        XCTAssertEqual(m.terminalCommand, "ANTHROPIC_BASE_URL=http://127.0.0.1:\(port) claude")
+        XCTAssertTrue(m.launcherText.contains("ccpool-launch"))
+
+        // Another ccpool on the configured port: named, with its pid, never touched.
+        var cfg = r.service.config
+        cfg.port = port
+        let second = AgentPoolService(config: cfg, store: r.store, secrets: r.secrets, logger: r.log)
+        let m2 = AgentPoolPaneModel(store: r.store, secrets: r.secrets, service: second, logger: r.log, defaults: r.defaults,
+                                 vaultURL: r.vault)
+        await m2.startProxy().value
+        XCTAssertEqual(second.status, .heldByAgentPool(pid: Int(getpid())))
+        XCTAssertTrue(m2.proxyText.contains("Another ccpool proxy (pid \(getpid())) holds port \(port)"), m2.proxyText)
+        XCTAssertEqual(m2.routeDisabledReason, "The proxy is not running.")
+
+        await m.restartProxy().value
+        guard case .running = r.service.status else { return XCTFail("restart: \(r.service.status)") }
+        r.service.stop()
+        XCTAssertEqual(m.proxyText, "Stopped")
+    }
+
+    func testAgentPoolPaneUnreachableKeysWarning() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a"])
+        XCTAssertNil(r.model.unreachableWarning)
+        r.store.mutate { $0.accounts["a"]?.cooldown["mystery_claim"] = t0 + 60 }
+        XCTAssertEqual(r.model.unreachableWarning,
+                       "Cooldowns on limits no model reads never skip an account: mystery_claim")
+    }
+
+    func testAgentPoolPaneImportFlow() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertFalse(m.importVisible, "no old vault: no import row")
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-new-a"}, "n": {"token": "tok-n"}}}"#.utf8).write(to: r.vault)
+        XCTAssertFalse(m.importVisible, "QA #739 INFO-8: checked on appearance and Refresh, not per render")
+        m.checkVault()
+        XCTAssertTrue(m.importVisible)
+        try r.add(["a"])
+        await m.beginImport().value
+        XCTAssertEqual(m.importPhase, .review(.init(labels: ["a", "n"], conflicts: ["a"])))
+        XCTAssertFalse(m.canRunImport, "a conflict needs a choice first")
+        XCTAssertNil(m.runImport())
+        m.importChoices["a"] = .skip
+        XCTAssertTrue(m.canRunImport)
+        await m.runImport()?.value
+        guard case .imported(let out) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(out.imported, ["n"])
+        XCTAssertEqual(out.skipped, ["a"])
+        XCTAssertEqual(AgentPoolPaneModel.summary(out), ["Imported: n", "Skipped: a"])
+        m.finishImport(trash: false)
+        XCTAssertEqual(r.trashed.urls, [], "Keep it moves nothing")
+        guard case .finished = m.importPhase else { return XCTFail() }
+
+        m.dismissImport()
+        await m.beginImport().value
+        m.importChoices["a"] = .replace
+        m.importChoices["n"] = .replace
+        let oldA = try XCTUnwrap(r.store.snapshot.accounts["a"]?.id)
+        guard case .running = r.service.start() else { return XCTFail() }
+        r.store.mutate { $0.current = "a" }
+        XCTAssertEqual(AgentPoolTestClient.request(port: r.model.port)?.status, 200)
+        XCTAssertTrue(r.service.upstream.hasSession(accountID: oldA))
+        await m.runImport()?.value
+        XCTAssertFalse(r.service.upstream.hasSession(accountID: oldA), "a replaced token's session is dropped")
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(r.trashed.urls, [r.vault], "the default moves the old vault to the Trash")
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+
+        // A vault that will not parse: says so, imports nothing.
+        m.dismissImport()
+        try Data("{".utf8).write(to: r.vault)
+        await m.beginImport().value
+        XCTAssertEqual(m.importPhase, .idle)
+        XCTAssertEqual(m.notice, AgentPoolVaultImport.ReadError.notJSON.description)
+    }
+
+    /// O2 (QA #751 INFO-3, #1570): while a disabled reason holds, the toggle's write still stores off but refuses on.
+    func testAgentPoolRouteToggleOffAlwaysWorksOnIsRefusedWhileDisabled() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a"])
+        XCTAssertEqual(m.routeDisabledReason, "The proxy is not running.")
+        // Stopped, stored true: switching off writes false.
+        m.routeAgentSessions = true
+        XCTAssertTrue(m.routeToggleShown, "S35: an account shows the stored choice")
+        m.setRouteAgentSessions(false)
+        XCTAssertFalse(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "off is written while stopped")
+        XCTAssertFalse(m.routeToggleShown)
+        // Stopped, stored false: switching on is refused.
+        m.setRouteAgentSessions(true)
+        XCTAssertFalse(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "on is refused while stopped")
+        XCTAssertFalse(m.routeToggleShown)
+        // Running: on is stored.
+        await m.startProxy().value
+        guard case .running = r.service.status else { return XCTFail("\(r.service.status)") }
+        XCTAssertTrue(m.routeDisabledReason == nil)
+        m.setRouteAgentSessions(true)
+        XCTAssertTrue(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "on is written while running")
+        XCTAssertTrue(m.routeToggleShown)
+        r.service.stop()
+    }
+
+    /// #1890 (mutant route-default-off): never set reads on; a stored false or true stands; removing it reads on again.
+    func testAgentPoolRouteIsOnByDefaultAndAStoredChoiceStands() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertTrue(r.defaults.object(forKey: AgentPoolPaneModel.routeKey) == nil, "nothing stored")
+        XCTAssertTrue(AgentPoolPaneModel.routeValue(in: r.defaults))
+        XCTAssertTrue(m.routeAgentSessions)
+        r.defaults.set(false, forKey: AgentPoolPaneModel.routeKey)
+        XCTAssertFalse(AgentPoolPaneModel.routeValue(in: r.defaults), "a stored false stays off")
+        XCTAssertFalse(m.routeAgentSessions)
+        r.defaults.set(true, forKey: AgentPoolPaneModel.routeKey)
+        XCTAssertTrue(m.routeAgentSessions, "a stored true stays on")
+        r.defaults.removeObject(forKey: AgentPoolPaneModel.routeKey)
+        XCTAssertTrue(m.routeAgentSessions)
+    }
+
+    /// #1890: the line under the toggle shows only while new sessions would keep a foreign ANTHROPIC_BASE_URL.
+    func testAgentPoolForeignBaseURLLineShowsAndHides() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertTrue(m.foreignBaseURL == nil, "no probe: no line")
+        m.inheritedBaseURL = { _ in "http://127.0.0.1:8787" }
+        XCTAssertEqual(m.foreignBaseURL, "http://127.0.0.1:8787")
+        let own = AgentPool.baseURL(port: m.port)
+        m.inheritedBaseURL = { _ in own }
+        XCTAssertTrue(m.foreignBaseURL == nil, "this pool's own URL: routed, no line")
+        m.inheritedBaseURL = { _ in "" }
+        XCTAssertTrue(m.foreignBaseURL == nil, "unset: no line")
+        m.ownBaseURL = { "http://127.0.0.1:8787" }
+        XCTAssertEqual(m.foreignBaseURL, "http://127.0.0.1:8787", "#1892: login unset, Prosper's own value foreign: the line shows")
+        m.ownBaseURL = { own }
+        XCTAssertTrue(m.foreignBaseURL == nil, "#1892: Prosper's own value is this pool's: no line")
+    }
+
+    /// O2: with no account, on is refused and the shown value stays off (S35); off is still written.
+    func testAgentPoolRouteToggleWithNoAccount() throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        m.setRouteAgentSessions(true)
+        XCTAssertNil(r.defaults.object(forKey: AgentPoolPaneModel.routeKey), "on is refused: nothing is written")
+        XCTAssertFalse(m.routeToggleShown)
+        m.routeAgentSessions = true
+        XCTAssertFalse(m.routeToggleShown, "shown off with no account whatever is stored")
+        m.setRouteAgentSessions(false)
+        XCTAssertFalse(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "off is written with no account")
+    }
+
+    // QA #739 F1 (follow-up A1): no account, no routing, whatever the stored choice; the toggle
+    // shows off and says why, and the stored choice comes back with an account.
+    func testAgentPoolRoutingNeedsAnAccount() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        guard case .running(let port) = r.service.start() else { return XCTFail("\(r.service.status)") }
+        let base = AgentPool.baseURL(port: port)
+        m.routeAgentSessions = true
+        for on in [true, false] {
+            XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: on).isEmpty, "zero accounts, on: \(on)")
+            XCTAssertTrue(r.service.sessionEnv(command: ["headroom"], on: on).isEmpty, "zero accounts, on: \(on)")
+        }
+        XCTAssertFalse(r.service.routable)
+        XCTAssertFalse(m.routeToggleShown, "shown off")
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        XCTAssertTrue(r.defaults.bool(forKey: AgentPoolPaneModel.routeKey), "the stored choice is not overwritten")
+
+        try r.add(["a"])
+        XCTAssertTrue(r.service.routable)
+        XCTAssertTrue(m.routeToggleShown, "an account restores the stored choice")
+        XCTAssertNil(m.routeDisabledReason)
+        XCTAssertEqual(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).set["ANTHROPIC_BASE_URL"], base)
+
+        // The last account removed: the next session is not routed.
+        m.requestRemove("a")
+        await m.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, [])
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).isEmpty, "the next session is not routed")
+        XCTAssertFalse(r.service.routable)
+        XCTAssertFalse(m.routeToggleShown)
+        XCTAssertEqual(m.routeDisabledReason, "Add an account first.")
+        XCTAssertTrue(m.routeAgentSessions, "the stored choice survives")
+
+        try r.add(["b"])
+        XCTAssertTrue(m.routeToggleShown)
+        XCTAssertEqual(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).set["ANTHROPIC_BASE_URL"], base)
+        m.routeAgentSessions = false
+        XCTAssertFalse(m.routeToggleShown)
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: m.routeAgentSessions).isEmpty, "off stays off")
+        r.service.stop()
+        XCTAssertTrue(r.service.sessionEnv(command: ["claude"], on: true).isEmpty, "stopped: never routed")
+        XCTAssertFalse(r.service.routable)
+    }
+
+    // QA #739 F2 (A2): a Replace import drops the old token's verdict and usage from its row.
+    func testAgentPoolReplaceImportDropsTheOldVerdictAndUsage() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a", "b", "c"])
+        r.anthropic.set {
+            $0.reject = ["tok-a": 401]
+            $0.usage = ["tok-b": 0.5]
+        }
+        try r.secrets.remove(id: try XCTUnwrap(r.store.snapshot.accounts["c"]?.id))
+        await m.refreshUsage()?.value
+        XCTAssertEqual(row(m, "a")?.state, .refused(since: t0))
+        XCTAssertTrue(row(m, "b")?.usageText.hasPrefix("5h 50%") ?? false, row(m, "b")?.usageText ?? "")
+        XCTAssertEqual(row(m, "c")?.state, .unverified)
+
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a2"}, "b": {"token": "tok-b2"}, "c": {"token": "tok-c2"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .replace, "b": .replace, "c": .replace]
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.replaced, ["a", "b", "c"])
+        XCTAssertEqual(row(m, "a")?.state, .ready, "the old token's rejection is gone")
+        XCTAssertEqual(row(m, "a")?.stateText, "ready")
+        XCTAssertEqual(row(m, "c")?.state, .ready, "the old token's \"not verified\" is gone")
+        XCTAssertNil(r.store.usageSample("b"), "the old token's usage is dropped at the replace")
+        XCTAssertEqual(row(m, "b")?.usageText, "no usage seen yet")
+    }
+
+    // Review carry 1 (A5): a Keychain delete that fails after the state was written names the account.
+    func testAgentPoolRemoveSaysWhenTheKeychainItemStays() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        r.secrets.refuseRemove = true
+        r.model.requestRemove("a")
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, ["b"], "the account is gone")
+        XCTAssertEqual(r.secrets.count, 2, "its item stayed")
+        XCTAssertEqual(r.model.notice, "Removed a, but its Keychain item could not be deleted; it stays in the Keychain, listed nowhere.")
+        XCTAssertTrue(r.log.lines.contains("a: removed; its Keychain item could not be deleted"), "\(r.log.lines)")
+        for t in [r.model.notice ?? ""] + r.log.lines { XCTAssertFalse(t.contains("tok-"), t) }
+        r.secrets.refuseRemove = false
+        r.model.requestRemove("b")
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.model.notice, "Removed b.")
+        XCTAssertEqual(r.secrets.count, 1, "only the orphan is left")
+    }
+
+    // QA #739 INFO-10 (B6): an open Remove confirm does nothing while the model is busy.
+    func testAgentPoolRemoveConfirmWaitsWhileBusy() async throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a"])
+        r.model.requestRemove("a")
+        r.model.labelDraft = "x"
+        r.model.tokenDraft = "tok-x"
+        let add = r.model.addAccount()
+        XCTAssertTrue(r.model.busy)
+        XCTAssertNil(r.model.confirmRemove(), "busy: nothing is removed")
+        XCTAssertEqual(r.model.confirmingRemove, "a", "the confirm stays open")
+        await add.value
+        await r.model.confirmRemove()?.value
+        XCTAssertEqual(r.store.snapshot.order, ["x"])
+    }
+
+    // QA #739 INFO-11 (B7): "not running" carries the service's fixed reason.
+    func testAgentPoolPaneSaysWhyTheProxyIsNotRunning() async throws {
+        let r = try ccpoolPaneRig()
+        var cfg = AgentPoolServiceConfig()
+        cfg.port = 0   // the production upstream: refused under XCTest, a fixed reason
+        let svc = AgentPoolService(config: cfg, store: r.store, secrets: r.secrets, logger: r.log)
+        let m = AgentPoolPaneModel(store: r.store, secrets: r.secrets, service: svc, logger: r.log, defaults: r.defaults,
+                                probeBase: r.base, vaultURL: r.vault)
+        await m.startProxy().value
+        XCTAssertEqual(m.proxyText, "Not running: ccpool: refusing the production upstream under XCTest")
+        guard case .running = r.service.start() else { return XCTFail("\(r.service.status)") }
+        r.service.listenerLost(.posix(.ENETDOWN))
+        XCTAssertEqual(r.model.proxyText, "Not running: " + AgentPoolService.reasonLost)
+        XCTAssertFalse(r.model.proxyText.contains("POSIX"), "no raw system error text")
+    }
+
+    // QA #739 INFO-3 (B1): a vault that is a link is never trashed; the pane names its target.
+    func testAgentPoolVaultLinkIsNeverTrashed() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        let target = tempDir().appendingPathComponent("elsewhere.json")
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8).write(to: target)
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: r.vault, withDestinationURL: target)
+        m.checkVault()
+        XCTAssertTrue(m.importVisible)
+        await m.beginImport().value
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.imported, ["a"])
+        XCTAssertTrue(o.allHeld)
+        XCTAssertEqual(o.vaultLink, target.path)
+        let why = "The old vault is a link to \(target.path). Prosper moves nothing: delete that file yourself once you no longer need it."
+        XCTAssertEqual(m.trashBlockedReason, why)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(r.trashed.urls, [], "neither the link nor its target goes to the Trash")
+        XCTAssertEqual(m.importPhase, .finished(why))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertNotNil(try? FileManager.default.destinationOfSymbolicLink(atPath: r.vault.path))
+    }
+
+    // QA #751 INFO-1 (mutant h11): a Refresh and an import never overlap, so a Refresh of the old
+    // token never puts its verdict on the token a Replace brings.
+    func testAgentPoolRefreshAndImportNeverOverlap() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a"])
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a2"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .replace]
+        let refresh = m.refreshUsage()   // probes the old token: 401
+        XCTAssertNotNil(refresh)
+        XCTAssertFalse(m.canRunImport, "the import waits for the Refresh")
+        XCTAssertNil(m.runImport())
+        await refresh?.value
+        XCTAssertEqual(row(m, "a")?.state, .refused(since: t0))
+        let run = m.runImport()
+        XCTAssertNotNil(run)
+        XCTAssertTrue(m.importRunning)
+        XCTAssertNil(m.refreshUsage(), "the Refresh waits for the import")
+        XCTAssertFalse(m.refreshing)
+        await run?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.replaced, ["a"])
+        XCTAssertEqual(row(m, "a")?.state, .ready, "the new token carries no old verdict")
+    }
+
+    // QA #751 INFO-6 (mutants h8, h12, h13): the Trash decides again at the click. A link, a second
+    // name, or an account the pool does not hold keeps the vault, with one fixed sentence.
+    func testAgentPoolTrashDecidesAgainAtTheClick() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        let fm = FileManager.default
+        let held = Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8)
+        try fm.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        func imported() async throws {
+            m.dismissImport()
+            try? fm.removeItem(at: r.vault)
+            try held.write(to: r.vault)
+            await m.beginImport().value
+            m.importChoices = ["a": .skip]
+            await m.runImport()?.value
+            XCTAssertNil(m.trashBlockedReason, "the import itself offers the Trash")
+        }
+        let changed = AgentPoolPaneModel.ImportPhase.finished(AgentPoolPaneModel.trashChangedReason)
+
+        try await imported()   // a link made after the import, to a file with the same accounts
+        let target = tempDir().appendingPathComponent("elsewhere.json")
+        try held.write(to: target)
+        try fm.removeItem(at: r.vault)
+        try fm.createSymbolicLink(at: r.vault, withDestinationURL: target)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a link")
+
+        try await imported()   // a second name for the same file
+        try fm.linkItem(at: r.vault, to: tempDir().appendingPathComponent("second.json"))
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a hard link")
+
+        try await imported()   // an account the pool does not hold (a CLI `add` in between)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "b": {"token": "tok-b"}}}"#.utf8).write(to: r.vault)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a new account")
+
+        try await imported()   // a new token under a held label
+        try Data(#"{"accounts": {"a": {"token": "tok-a-new"}}}"#.utf8).write(to: r.vault)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, changed, "a new token")
+        XCTAssertEqual(r.trashed.urls, [], "nothing went to the Trash")
+
+        try await imported()   // unchanged: trashed
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+        XCTAssertEqual(r.trashed.urls, [r.vault])
+    }
+
+    // #1190 (mutant v6): a second "Move to the Trash" click while the first Trash step runs does nothing.
+    func testAgentPoolSecondTrashClickWhileBusyDoesNothing() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        await m.runImport()?.value
+        XCTAssertNil(m.trashBlockedReason, "the import offers the Trash")
+        let first = m.finishImport(trash: true)
+        let second = m.finishImport(trash: true)   // same main-actor turn: the first Trash step is still running
+        XCTAssertTrue(first != nil)
+        XCTAssertTrue(second == nil, "the second click does nothing")
+        await first?.value
+        await second?.value
+        XCTAssertEqual(r.trashed.urls, [r.vault], "one Trash step")
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+    }
+
+    // QA #739 INFO-2 (B2): the Trash is offered only when every vault token is in the pool.
+    func testAgentPoolTrashOnlyWhenEveryTokenIsHeld() async throws {
+        let r = try ccpoolPaneRig()
+        let m = r.model
+        try r.add(["a", "b"])
+        try FileManager.default.createDirectory(at: r.vault.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "b": {"token": "tok-other"}, "n": {}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip, "b": .skip]
+        await m.runImport()?.value
+        guard case .imported(let o) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertEqual(o.skipped, ["a", "b"])
+        XCTAssertEqual(o.notHeld, ["b"], "b keeps another token; a holds the same one")
+        XCTAssertEqual(o.failures.map(\.label), ["n"])
+        XCTAssertFalse(o.allHeld)
+        let why = "Not every account in the old vault is in the pool, so it stays where it is."
+        XCTAssertEqual(m.trashBlockedReason, why)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(r.trashed.urls, [], "an import with failures keeps the vault")
+        XCTAssertEqual(m.importPhase, .finished(why))
+
+        // Failures only (every kept label holds the same token): still kept.
+        m.dismissImport()
+        try Data(#"{"accounts": {"a": {"token": "tok-a"}, "n": {}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip]
+        await m.runImport()?.value
+        XCTAssertEqual(m.trashBlockedReason, why)
+
+        // A different token left alone (no failure): still kept.
+        m.dismissImport()
+        try Data(#"{"accounts": {"b": {"token": "tok-other"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["b": .skip]
+        await m.runImport()?.value
+        XCTAssertEqual(m.trashBlockedReason, why)
+
+        // Same token skipped, the rest imported: offered, and the default trashes it.
+        m.dismissImport()
+        try Data(#"{"accounts": {"a": {"token": " tok-a\n"}, "c": {"token": "tok-c"}}}"#.utf8).write(to: r.vault)
+        await m.beginImport().value
+        m.importChoices = ["a": .skip]
+        await m.runImport()?.value
+        guard case .imported(let ok) = m.importPhase else { return XCTFail("\(m.importPhase)") }
+        XCTAssertTrue(ok.allHeld, "\(ok)")
+        XCTAssertNil(m.trashBlockedReason)
+        await m.finishImport(trash: true)?.value
+        XCTAssertEqual(r.trashed.urls, [r.vault])
+        XCTAssertEqual(m.importPhase, .finished("Moved the old vault to the Trash."))
+    }
+
+    // Errata C7 on real queues: an add (probe + Keychain + state), a proxy request and a refresh
+    // all finish while the main thread is blocked. Only the final `finish*` hop needs main.
+    func testAgentPoolPaneModelWorkRunsWithMainBlocked() async throws {
+        XCTAssertTrue(Thread.isMainThread)
+        let r = try ccpoolPaneRig()
+        try r.add(["one"])
+        guard case .running(let port) = r.service.start() else { return XCTFail("\(r.service.status)") }
+        r.log.forgetMain()
+
+        r.model.labelDraft = "two"
+        r.model.tokenDraft = "tok-two"
+        let add = r.model.addAccount()
+        XCTAssertTrue(blockMain(seconds: 10) { r.store.read { $0.accounts["two"] != nil } }, "the add finished with main blocked")
+
+        r.store.mutate { $0.current = "two" }
+        let resp = AgentPoolTestClient.request(port: port)   // blocks main for the whole request
+        XCTAssertEqual(resp?.status, 200)
+
+        let seen = r.anthropic.get { $0.seen.count }
+        let refresh = r.model.refreshUsage()
+        XCTAssertTrue(blockMain(seconds: 10) { r.anthropic.get { $0.seen.count } >= seen + 2 && r.store.usageSample("one") != nil },
+                      "the refresh probed every account with main blocked")
+        let log = r.log, service = r.service
+        let restarts = log.lines.filter { $0.contains("proxy restarted") }.count
+        let restart = r.model.restartProxy()
+        XCTAssertTrue(blockMain(seconds: 10) {
+            guard case .running = service.status else { return false }
+            return log.lines.filter { $0.contains("proxy restarted") }.count > restarts
+        }, "restart finished with main blocked")
+        await add.value
+        await refresh?.value
+        await restart.value
+        XCTAssertEqual(r.model.notice, "Added two.")
+        XCTAssertNotNil(r.model.report)
+        XCTAssertFalse(r.log.onMain, "no ccpool log line came from the main thread")
+        XCTAssertFalse(r.anthropic.get { $0.onMain })
+    }
+
+    /// Spins the main thread WITHOUT running its run loop or the main actor's queue.
+    private func blockMain(seconds: Double, until done: () -> Bool) -> Bool {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end {
+            if done() { return true }
+            usleep(20_000)
+        }
+        return done()
+    }
+}
+
+/// Runs `move` once, on the first probe that carries `token` (#1278 rename-during-probe row).
+private final class PaneMoveOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+}
+
+// #1278 step C: Settings says a token is out of routing, and Refresh marks (401) or clears (an answer with limits) it,
+// by Keychain id under the store lock; a 403 stays the pane's display-only "token rejected". Fakes only; the stub
+// upstream on an ephemeral loopback port; the store in tempDir(); the pane's time zone is UTC (Fri 08:00 = t0).
+extension AgentPoolPaneModelTests {
+    private var orgA: String { "Example Org A" }
+    private var orgB: String { "Example Org B" }
+    private var orgD: String { "Example Org D" }
+    private var markLine: String {
+        "Example Org A: token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token"
+    }
+
+    private func addAB(_ r: AgentPoolPaneRig) throws {
+        try r.store.addAccount(label: orgA, token: "tok-a", secrets: r.secrets)
+        try r.store.addAccount(label: orgB, token: "tok-b", secrets: r.secrets)
+        r.model.objectWillChange.send()
+    }
+
+    // C1: refused is first: before a hand hold, a limit and the pane's own "token rejected"; the time in the pane's zone.
+    func testC1RefusedTextComesFirst() throws {
+        let mon10 = t0 + 3 * 86400 + 2 * 3600   // Mon 10:00 UTC
+        var acct = AgentPoolState.Account(id: "id-example-a", refused: mon10)
+        let utc = TimeZone(identifier: "UTC")!
+        let alone = AgentPoolPaneModel.rowState(label: orgA, account: acct, current: orgA, now: Double(mon10),
+                                             rejected: [], unverified: [])
+        XCTAssertEqual(alone, .refused(since: mon10))
+        XCTAssertEqual(AgentPoolPaneModel.stateText(alone, timeZone: utc), "token rejected since Mon 10:00, not routed")
+        acct.held = mon10 + 3600
+        acct.cooldown = [AgentPoolCore.fiveHour: mon10 + 7200]
+        let all = AgentPoolPaneModel.rowState(label: orgA, account: acct, current: nil, now: Double(mon10),
+                                           rejected: [orgA], unverified: [orgA])
+        XCTAssertEqual(all, .refused(since: mon10), "held, limited and the pane's verdict all lose to refused")
+        XCTAssertEqual(AgentPoolPaneModel.stateText(all, timeZone: utc), "token rejected since Mon 10:00, not routed")
+    }
+
+    // C2: a Refresh 401 marks A (by id, under the lock) with the clock's epoch, logs once; a second 401 keeps the stamp.
+    func testC2Refresh401MarksTheAccount() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0)
+        XCTAssertTrue(r.store.snapshot.accounts[orgB]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgA)?.state, .refused(since: t0))
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected since Fri 08:00, not routed")
+        XCTAssertEqual(row(r.model, orgB)?.stateText, "ready")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [markLine])
+        r.clock.advance(600)
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0, "the first stamp is kept")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [markLine], "no second mark line")
+        for line in r.log.lines { XCTAssertFalse(line.contains("tok-"), "token in a log line: \(line)") }
+    }
+
+    // C3: a Refresh answered with rate-limit headers puts a refused A back in routing and says so.
+    func testC3RefreshWithAnAnswerClearsTheMark() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 - 60 }
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected since Fri 07:59, not routed")
+        await r.model.refreshUsage()?.value
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgA)?.state, .ready)
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "ready")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("back in routing") },
+                       ["Example Org A: token accepted again; back in routing"])
+    }
+
+    // C4: a Refresh 403 writes nothing to the store: an unmarked A stays routed with the pane's "token rejected", a
+    // marked A stays marked (a 403 neither sets nor clears).
+    func testC4Refresh403WritesNothing() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.anthropic.set { $0.reject = ["tok-a": 403] }
+        let before = r.store.snapshot
+        await r.model.refreshUsage()?.value
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil)
+        XCTAssertEqual(r.store.snapshot.accounts[orgA], before.accounts[orgA], "nothing written to A")
+        XCTAssertEqual(row(r.model, orgA)?.state, .rejected)
+        XCTAssertEqual(row(r.model, orgA)?.stateText, "token rejected")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") }, [])
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 - 60 }
+        await r.model.refreshUsage()?.value
+        XCTAssertEqual(r.store.snapshot.accounts[orgA]?.refused, t0 - 60, "a 403 does not clear either")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("back in routing") }, [])
+    }
+
+    // C5: a rename carries the mark (same token), a remove drops it, a new token under the same label starts clean.
+    func testC5RenameKeepsTheMarkRemoveDropsIt() async throws {
+        let r = try ccpoolPaneRig()
+        try addAB(r)
+        r.store.mutate { $0.accounts[orgA]?.refused = t0 }
+        try r.store.renameAccount(orgA, to: orgD)
+        XCTAssertEqual(r.store.snapshot.accounts[orgD]?.refused, t0)
+        XCTAssertEqual(row(r.model, orgD)?.stateText, "token rejected since Fri 08:00, not routed")
+        _ = try r.store.removeAccount(label: orgD, secrets: r.secrets)
+        XCTAssertTrue(r.store.snapshot.accounts[orgD] == nil)
+        try r.store.addAccount(label: orgD, token: "tok-d", secrets: r.secrets)
+        XCTAssertTrue(r.store.snapshot.accounts[orgD]?.refused == nil)
+        XCTAssertEqual(row(r.model, orgD)?.stateText, "ready")
+    }
+
+    // C6 (mutant refresh-by-label-not-id): A is renamed to D while its probe is in flight and a new A (tok-b) takes the
+    // label; the probe's 401 marks the account probed (D, by its Keychain id), never the new holder of the label.
+    func testC6Refresh401DuringARenameMarksTheAccountProbed() async throws {
+        let r = try ccpoolPaneRig()
+        try r.store.addAccount(label: orgA, token: "tok-a", secrets: r.secrets)
+        r.anthropic.set { $0.reject = ["tok-a": 401] }
+        let once = PaneMoveOnce()
+        let store = r.store, secrets = r.secrets, anthropic = r.anthropic, a = orgA, d = orgD
+        let up = try AgentPoolFakeServer { h, b in
+            if h.header("authorization")?.contains("tok-a") == true, once.first() {
+                try? store.renameAccount(a, to: d)
+                _ = try? store.addAccount(label: a, token: "tok-b", secrets: secrets)
+            }
+            return anthropic.reply(h, b)
+        }
+        defer { up.stop() }
+        XCTAssertNotEqual(up.port, 0)
+        let report = await AgentPoolUsage.refresh(store: store, secrets: secrets,
+                                               base: URL(string: "http://127.0.0.1:\(up.port)")!, logger: r.log)
+        XCTAssertFalse(once.first(), "the label moved while the probe was in flight")
+        XCTAssertEqual(report.rows.map(\.label), [orgD])
+        XCTAssertEqual(r.store.snapshot.accounts[orgD]?.refused, t0, "the account probed is marked")
+        XCTAssertTrue(r.store.snapshot.accounts[orgA]?.refused == nil, "the new holder of its label is not")
+        XCTAssertEqual(r.log.lines.filter { $0.contains("not routed until") },
+                       ["Example Org D: token rejected (401); not routed until a reply succeeds, Refresh, Release or a new token"])
+    }
+
+    // #1670: "Move off an account at".
+    func testExhaustedThresholdDefaultsToOne() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(r.model.exhaustedThreshold, 1.0)
+        XCTAssertEqual(r.service.config.exhaustedThreshold, 1.0)
+    }
+
+    func testExhaustedThresholdBadStoredValuesReadAsTheDefault() throws {
+        let r = try ccpoolPaneRig()
+        for bad in [0.2, 7, Double.nan, Double.infinity, -1] {
+            r.defaults.set(bad, forKey: AgentPoolPaneModel.exhaustedKey)
+            XCTAssertEqual(r.model.exhaustedThreshold, 1.0, "\(bad)")
+        }
+        r.defaults.set("0.9", forKey: AgentPoolPaneModel.exhaustedKey)
+        XCTAssertEqual(r.model.exhaustedThreshold, 1.0, "a string")
+        r.defaults.set(0.5, forKey: AgentPoolPaneModel.exhaustedKey)
+        XCTAssertEqual(r.model.exhaustedThreshold, 0.5)
+    }
+
+    func testExhaustedThresholdSetterWritesTheKeyAndTheLiveService() throws {
+        let r = try ccpoolPaneRig()
+        r.model.setExhaustedThreshold(0.9)
+        XCTAssertEqual(r.defaults.double(forKey: AgentPoolPaneModel.exhaustedKey), 0.9)
+        XCTAssertEqual(r.service.config.exhaustedThreshold, 0.9)
+        let limits = ["five_hour": AgentPoolLimit(status: "allowed", utilization: "0.92", reset: "1800003600")]
+        let copy = r.service.config   // a connection's copy sees the next change too
+        XCTAssertEqual(AgentPoolCore.exhaustedClaims(limits, now: 1_800_000_000, threshold: copy.exhaustedThreshold).keys.sorted(), ["five_hour"])
+        r.model.setExhaustedThreshold(7)   // refused value stores the default
+        XCTAssertEqual(r.defaults.double(forKey: AgentPoolPaneModel.exhaustedKey), 1.0)
+        XCTAssertEqual(copy.exhaustedThreshold, 1.0)
+        XCTAssertTrue(AgentPoolCore.exhaustedClaims(limits, now: 1_800_000_000, threshold: copy.exhaustedThreshold).isEmpty)
+    }
+
+    func testRuntimeStartReadsTheStoredThreshold() throws {
+        let dir = tempDir()
+        let defaults = scratchDefaults("ccpool-threshold-rt")
+        defaults.set(0.9, forKey: AgentPoolPaneModel.exhaustedKey)
+        var cfg = AgentPoolServiceConfig()
+        cfg.port = 0
+        let rt = AgentPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: AgentPoolMemorySecrets(), config: cfg,
+                               vaultURL: dir.appendingPathComponent("old"), defaults: defaults,
+                               probeBase: cfg.upstream, logger: AgentPoolCapturingLogger())
+        XCTAssertEqual(rt.service.config.exhaustedThreshold, 0.9)
+    }
+
+    // MARK: #1838 the spread model
+
+    /// Rows are alphabetical (Finder order), never a hand order; the proxy row counts sessions over accounts and names
+    /// the account other clients share; an account row shows its live sessions only when it has one.
+    func testRowsAreAlphabeticalAndTheProxyRowCountsSessions() throws {
+        let r = try ccpoolPaneRig()
+        XCTAssertEqual(r.model.proxySubtitle, "Starts when the first account is added.")
+        try r.add(["beta", "Alpha", "gamma 10", "gamma 9"])
+        XCTAssertEqual(r.model.rows.map(\.label), ["Alpha", "beta", "gamma 9", "gamma 10"])
+        XCTAssertEqual(r.store.snapshot.order, ["beta", "Alpha", "gamma 10", "gamma 9"], "the file keeps the add order")
+        XCTAssertEqual(r.model.proxySubtitle,
+                       "No sessions yet: each new session gets the account with the most room.\nOther clients: none yet")
+        let now = r.clock.now
+        r.store.mutate {
+            $0.current = "beta"
+            $0.pin("sess-a/", to: "Alpha", now: now)
+            $0.pin("sess-a/agent-1", to: "gamma 9", now: now)   // a subagent elsewhere: one session, two accounts
+            $0.pin("sess-b/", to: "Alpha", now: now)
+            $0.pin("sess-c/", to: "gamma 9", now: now - 3601)   // idle past the hour: not live
+        }
+        XCTAssertEqual(r.model.proxySubtitle, "2 sessions over 2 accounts\nOther clients: beta")
+        XCTAssertEqual(r.model.rows.map(\.sessions), [2, 0, 1, 0])
+        let alpha = try XCTUnwrap(r.model.rows.first)
+        XCTAssertEqual(AgentPoolPane.rowSubtitle(alpha), "ready · 2 sessions · no usage seen yet")
+        let beta = try XCTUnwrap(r.model.rows.first { $0.label == "beta" })
+        XCTAssertEqual(AgentPoolPane.rowSubtitle(beta), "active · no usage seen yet", "no session: no count")
+        XCTAssertEqual(AgentPoolPaneModel.spreadText(["x": ["s"]]), "1 session over 1 account")
+    }
+
+    /// The Payhawk-SP-style gap: a reply that only follows a pin changes no state, so before #1838 its usage sample
+    /// reached the pane only at the next 30 s tick. The store's change hook now runs when the shown text changes:
+    /// a first sample or a different whole percent; the same percents again run nothing (counted, not timed).
+    func testUsageSampleRepublishesOnlyWhenItsShownTextChanges() throws {
+        let r = try ccpoolPaneRig()
+        try r.add(["a", "b"])
+        let hits = AgentPoolDecoyHits()
+        r.store.onChange = { hits.bump() }
+        let id = try XCTUnwrap(r.store.snapshot.accounts["a"]?.id)
+        func limits(_ u: String) -> [String: AgentPoolLimit] {
+            AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": u]).limits
+        }
+        r.store.recordUsage(id: id, limits: limits("0.42"))
+        XCTAssertEqual(hits.count, 1, "the first sample")
+        XCTAssertTrue(r.model.rows.first?.usageText.hasPrefix("5h 42%") ?? false)
+        r.store.recordUsage(id: id, limits: limits("0.4204"))
+        XCTAssertEqual(hits.count, 1, "the same shown percent: no republish")
+        r.store.recordUsage(id: id, limits: limits("0.43"))
+        XCTAssertEqual(hits.count, 2, "a new percent")
+        r.store.recordUsage(id: "no-such-id", limits: limits("0.9"))
+        r.store.recordUsage(id: id, limits: [:])
+        XCTAssertEqual(hits.count, 2, "an unknown id or no numbers: nothing")
+        XCTAssertTrue(r.store.usageSample("b") == nil)
+    }
+}

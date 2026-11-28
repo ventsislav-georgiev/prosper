@@ -339,7 +339,7 @@ enum AgentNewSession {
     /// spec 3.6: "via ccpool" beside the command when the pool's routing applies to `argv` (the form's argv, as
     /// Start spawns it). Decided by the routing value the spawn env applies, so the hint and the env cannot
     /// disagree. nil routing (the ccpool runtime not built): no hint.
-    static func poolHint(_ argv: [String], routing: CCPool.Routing?) -> String? {
+    static func poolHint(_ argv: [String], routing: AgentPool.Routing?) -> String? {
         // #2009: or when the spawn would add the pool's Codex words (the same Routing value's codexWords).
         guard let routing, !routing.delta(argv).isEmpty || !routing.codexWords(argv).isEmpty else { return nil }
         return viaPoolHint
@@ -459,18 +459,18 @@ extension View {
 /// Isolation: @MainActor.
 @MainActor
 final class AgentNewSessionPoolWatch: ObservableObject {
-    private(set) var routing: CCPool.Routing?
+    private(set) var routing: AgentPool.Routing?
     private var changes: AnyCancellable?
     /// #1219 (R1205-2): held only while there is no runtime yet; the first one built attaches and this goes.
     private var arrival: AnyCancellable?
 
-    init(_ runtime: CCPoolRuntime?) {
+    init(_ runtime: AgentPoolRuntime?) {
         if let runtime { attach(runtime); return }
-        // The sink runs on main: CCPoolRuntime.push is @MainActor and sends there.
-        arrival = CCPoolRuntime.built.sink { [weak self] made in self?.attach(made) }
+        // The sink runs on main: AgentPoolRuntime.push is @MainActor and sends there.
+        arrival = AgentPoolRuntime.built.sink { [weak self] made in self?.attach(made) }
     }
 
-    private func attach(_ runtime: CCPoolRuntime) {
+    private func attach(_ runtime: AgentPoolRuntime) {
         guard routing == nil else { return }
         objectWillChange.send()
         routing = runtime.routing
@@ -490,7 +490,7 @@ struct AgentNewSessionView: View {
     let form: AgentNewSessionForm
     @FocusState private var focus: Field?
     /// #1205: redraws the hint when the toggle or the proxy changes while the form is open.
-    @StateObject private var pool = AgentNewSessionPoolWatch(CCPoolRuntime.shared)
+    @StateObject private var pool = AgentNewSessionPoolWatch(AgentPoolRuntime.shared)
 
     enum Field: Hashable { case folder, name, command }
 

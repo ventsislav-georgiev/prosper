@@ -1,6 +1,6 @@
 {
  "entry": 1573,
- "filter": "CCPoolScriptsTests/testStatuslineStripsInvisibleFormatCharactersFromTheLabel|CCPoolScriptsTests/testStatuslineWithAnInvisibleOnlyLabelPrintsJustCCPool|CCPoolScriptsTests/testStatuslineStripsControlCharactersFromTheLabel",
+ "filter": "AgentPoolScriptsTests/testStatuslineStripsInvisibleFormatCharactersFromTheLabel|AgentPoolScriptsTests/testStatuslineWithAnInvisibleOnlyLabelPrintsJustAgentPool|AgentPoolScriptsTests/testStatuslineStripsControlCharactersFromTheLabel",
  "mutants": [
   {
    "name": "strip-dropped",

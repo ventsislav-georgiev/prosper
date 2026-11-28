@@ -4,42 +4,42 @@
  "mutants": [
   {
    "name": "store_override_dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "[\"-c\", \"cli_auth_credentials_store=\\\"file\\\"\", \"login\", \"--device-auth\"]",
    "new": "[\"login\", \"--device-auth\"]",
    "expect": "killed"
   },
   {
    "name": "sweep_follows_symlinks",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "try? fm.removeItem(atPath: root.appendingPathComponent(name).path)",
    "new": "try? fm.removeItem(atPath: root.appendingPathComponent(name).resolvingSymlinksInPath().path)",
    "expect": "killed"
   },
   {
    "name": "sweep_root_link_guard_off",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "(try? fm.attributesOfItem(atPath: root.path))?[.type] as? FileAttributeType == .typeDirectory,",
    "new": "true,",
    "expect": "killed"
   },
   {
    "name": "before_login_sweep_removed",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "removeChildren(of: root)\n                guard let dir = makeScratch(root: root)",
    "new": "guard let dir = makeScratch(root: root)",
    "expect": "killed"
   },
   {
    "name": "terminate_skips_stop",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "s?()\n            if let dir",
    "new": "_ = s\n            if let dir",
    "expect": "killed"
   },
   {
    "name": "sweep_ignores_live_login",
-   "file": "app/Sources/ProsperApp/CCPool/CodexLogin.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/CodexLogin.swift",
    "old": "if Live.scratch == nil { removeChildren(of: root) }",
    "new": "removeChildren(of: root)",
    "expect": "killed"

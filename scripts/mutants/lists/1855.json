@@ -1,94 +1,94 @@
 {
  "entry": "1855",
- "filter": "CCPoolThrottleMoveTests|CCPoolPlacementTests",
+ "filter": "AgentPoolThrottleMoveTests|AgentPoolPlacementTests",
  "mutants": [
   {
    "name": "no-replace",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts,",
    "new": "if false, replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts,",
    "expect": "killed"
   },
   {
    "name": "replace-twice",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if replayable, quotaCheck, replacedFrom == nil, attempts < maxAttempts,",
    "new": "if replayable, quotaCheck, attempts < maxAttempts,",
    "expect": "killed"
   },
   {
    "name": "nowhere-all-benched",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if let first = replacedFrom { return answerThrottle(first) }",
    "new": "_ = replacedFrom",
    "expect": "killed"
   },
   {
    "name": "replace-moves-current",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "followedPin = followed || last != nil || replacedFrom != nil",
    "new": "followedPin = followed || last != nil",
    "expect": "killed"
   },
   {
    "name": "replace-last-resort",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "last == nil && replacedFrom == nil && !st.accounts.contains",
    "new": "last == nil && !st.accounts.contains",
    "expect": "killed"
   },
   {
    "name": "no-shun",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if routed == \"place\", ex.unified {",
    "new": "if false {",
    "expect": "killed"
   },
   {
    "name": "shun-on-pin",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if routed == \"place\", ex.unified {",
    "new": "if ex.unified {",
    "expect": "killed"
   },
   {
    "name": "place-ignores-shun",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "if a.shunned != b.shunned { return !a.shunned }",
    "new": "if false, a.shunned != b.shunned { return !a.shunned }",
    "expect": "killed"
   },
   {
    "name": "shun-window-inclusive",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "shunned: (state.shunned[$0] ?? 0) > now)",
    "new": "shunned: (state.shunned[$0] ?? 0) >= now)",
    "expect": "killed"
   },
   {
    "name": "shun-window-10",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "return (1...60).contains(wait) ? wait : 30",
    "new": "return (1...10).contains(wait) ? wait : 30",
    "expect": "killed"
   },
   {
    "name": "shun-shortens",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "shunned[label] = max(shunned[label] ?? 0, now + Double(seconds))",
    "new": "shunned[label] = now + Double(seconds)",
    "expect": "killed"
   },
   {
    "name": "shun-no-prune",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "shunned = shunned.filter { $0.value > now }",
    "new": "shunned = shunned.filter { _ in true }",
    "expect": "killed"
   },
   {
    "name": "shun-written",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "a.currents == b.currents && a.order == b.order && a.accounts == b.accounts",
    "new": "a.shunned == b.shunned && a.currents == b.currents && a.order == b.order && a.accounts == b.accounts",
    "expect": "killed"

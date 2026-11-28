@@ -1,10 +1,10 @@
 {
  "entry": 1904,
- "filter": "CCPoolCoreTests/testUsageTextShowsEachLimitsReset|CCPoolPaneModelTests",
+ "filter": "AgentPoolCoreTests/testUsageTextShowsEachLimitsReset|AgentPoolPaneModelTests",
  "mutants": [
   {
    "name": "drop-reset-parenthesis",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "(reset[claim].flatMap { Double($0) > now ?",
    "new": "(reset[claim].flatMap { Double($0) > Double.infinity ?",
    "expect": "killed",
@@ -12,7 +12,7 @@
   },
   {
    "name": "show-past-reset",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "Double($0) > now ? \" (resets",
    "new": "Double($0) > 0 ? \" (resets",
    "expect": "killed"

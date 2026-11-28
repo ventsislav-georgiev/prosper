@@ -19,7 +19,7 @@ final class CodexFakeAuth: @unchecked Sendable {
     var posts: [Data] { lock.withLock { _posts } }
     func set(_ f: (CodexFakeAuth) -> Void) { lock.withLock { f(self) } }
 
-    func reply(_ head: CCPoolRequestHead, _ data: Data) -> CCPoolFakeServer.Reply {
+    func reply(_ head: AgentPoolRequestHead, _ data: Data) -> AgentPoolFakeServer.Reply {
         let (s, b, d, l, dropped) = lock.withLock { () -> (Int, Data, TimeInterval, String?, Bool) in
             _posts.append(data)
             return (status, body, delay, location, drop)
@@ -42,7 +42,7 @@ final class CodexFakeUpstream: @unchecked Sendable {
     var storedAtUse: [Bool] { lock.withLock { _storedAtUse } }
     func set(_ f: (CodexFakeUpstream) -> Void) { lock.withLock { f(self) } }
 
-    func reply(_ head: CCPoolRequestHead, _ data: Data) -> CCPoolFakeServer.Reply {
+    func reply(_ head: AgentPoolRequestHead, _ data: Data) -> AgentPoolFakeServer.Reply {
         let bearer = String(head.header("authorization")?.dropFirst("Bearer ".count) ?? "")
         let item = lock.withLock { stored }()
         return lock.withLock {
@@ -77,18 +77,18 @@ final class CodexTokenKeeperTests: XCTestCase {
     static let freshAccess = jwt(exp: Date().timeIntervalSince1970 + 10 * 86400)
 
     struct Rig {
-        let service: CCPoolService
-        let store: CCPoolStore
-        let secrets: CCPoolMemorySecrets
-        let log: CCPoolCapturingLogger
+        let service: AgentPoolService
+        let store: AgentPoolStore
+        let secrets: AgentPoolMemorySecrets
+        let log: AgentPoolCapturingLogger
         let auth: CodexFakeAuth
         let upstream: CodexFakeUpstream
         var port: UInt16 {
             if case .running(let p) = service.status { return p }
             return 0
         }
-        func codex() -> CCPoolClientResponse? {
-            CCPoolTestClient.request(port: port, path: "/codex/responses", headers: [("content-type", "application/json")],
+        func codex() -> AgentPoolClientResponse? {
+            AgentPoolTestClient.request(port: port, path: "/codex/responses", headers: [("content-type", "application/json")],
                                      body: Data(#"{"model":"gpt-5-codex","stream":false}"#.utf8))
         }
         var storedItem: CodexCredential? {
@@ -98,8 +98,8 @@ final class CodexTokenKeeperTests: XCTestCase {
         var refused: Int? { store.snapshot.accounts["cx"]?.refused }
         var rowText: String? {
             guard let a = store.snapshot.accounts["cx"] else { return nil }
-            let s = CCPoolPaneModel.rowState(label: "cx", account: a, current: nil, now: store.now, rejected: [], unverified: [])
-            return CCPoolPaneModel.stateText(s, timeZone: TimeZone(identifier: "UTC")!)
+            let s = AgentPoolPaneModel.rowState(label: "cx", account: a, current: nil, now: store.now, rejected: [], unverified: [])
+            return AgentPoolPaneModel.stateText(s, timeZone: TimeZone(identifier: "UTC")!)
         }
     }
 
@@ -107,25 +107,25 @@ final class CodexTokenKeeperTests: XCTestCase {
     private func rig(item: String, accepted: Set<String>) throws -> Rig {
         let auth = CodexFakeAuth()
         auth.body = Data(#"{"access_token":"\#(Self.accessNew)","refresh_token":"\#(Self.refreshNew)","id_token":"\#(Self.idNew)"}"#.utf8)
-        let authServer = try CCPoolFakeServer { h, b in auth.reply(h, b) }
+        let authServer = try AgentPoolFakeServer { h, b in auth.reply(h, b) }
         let upstream = CodexFakeUpstream()
         upstream.accepted = accepted
-        let upServer = try CCPoolFakeServer { h, b in upstream.reply(h, b) }
+        let upServer = try AgentPoolFakeServer { h, b in upstream.reply(h, b) }
         XCTAssertNotEqual(authServer.port, 0)
         XCTAssertNotEqual(upServer.port, 0)
-        let store = CCPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
-        let secrets = CCPoolMemorySecrets()
+        let store = AgentPoolStore(directory: tempDir().appendingPathComponent("ccpool"))
+        let secrets = AgentPoolMemorySecrets()
         try store.addAccount(label: "cx", token: item, secrets: secrets)
-        store.mutate { $0.accounts["cx"]?.harness = CCPoolCodexHarness.id; $0.accounts["cx"]?.kind = CCPoolCodexHarness.chatgptKind }
+        store.mutate { $0.accounts["cx"]?.harness = AgentPoolCodexHarness.id; $0.accounts["cx"]?.kind = AgentPoolCodexHarness.chatgptKind }
         let id = store.snapshot.accounts["cx"]?.id ?? ""
         upstream.stored = { (try? secrets.token(id: id)) ?? nil }
-        let log = CCPoolCapturingLogger()
-        var cfg = CCPoolServiceConfig()
+        let log = AgentPoolCapturingLogger()
+        var cfg = AgentPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:\(upServer.port)")!
         cfg.codexUpstream = URL(string: "http://127.0.0.1:\(upServer.port)/backend-api/codex")!
         cfg.codexRefreshURL = URL(string: "http://127.0.0.1:\(authServer.port)/oauth/token")!
-        let service = CCPoolService(config: cfg, store: store, secrets: secrets, logger: log)
+        let service = AgentPoolService(config: cfg, store: store, secrets: secrets, logger: log)
         guard case .running(let p) = service.start(), p != 0 else {
             XCTFail("proxy did not start: \(service.status)")
             throw XCTSkip("no listener")
@@ -173,7 +173,7 @@ final class CodexTokenKeeperTests: XCTestCase {
         let old = "at-example-old-0003"
         let r = try rig(item: Self.item(access: old), accepted: [Self.accessNew])
         r.auth.set { $0.delay = 0.5 }
-        let statuses = CCPoolBetaBox()
+        let statuses = AgentPoolBetaBox()
         DispatchQueue.concurrentPerform(iterations: 4) { _ in statuses.add("\(r.codex()?.status ?? 0)") }
         XCTAssertEqual(statuses.values, ["200", "200", "200", "200"])
         XCTAssertEqual(r.auth.posts.count, 1, "one refresh for every concurrent 401")
@@ -334,9 +334,9 @@ final class CodexTokenKeeperTests: XCTestCase {
     // token would be re-POSTed to it), the refresh fails and the account is not signed out. Old: followed, refreshed.
     func testRedirectFromTheAuthHostIsNotFollowed() throws {
         let r = try rig(item: Self.item(access: "at-example-old-0007"), accepted: [])
-        let hits = CCPoolBetaBox()
+        let hits = AgentPoolBetaBox()
         let auth = r.auth
-        let other = try CCPoolFakeServer { h, _ in
+        let other = try AgentPoolFakeServer { h, _ in
             hits.add(h.path)
             return .respond(200, [("content-type", "application/json")], auth.body)
         }
@@ -396,7 +396,7 @@ final class CodexTokenKeeperTests: XCTestCase {
 
     // Under XCTest the keeper never dials the production auth host.
     func testProductionAuthHostIsRefusedUnderTest() {
-        XCTAssertTrue(CCPoolService.refusesUnderTest(CodexTokenKeeper.productionURL))
-        XCTAssertEqual(CCPoolServiceConfig().codexRefreshURL, CodexTokenKeeper.productionURL)
+        XCTAssertTrue(AgentPoolService.refusesUnderTest(CodexTokenKeeper.productionURL))
+        XCTAssertEqual(AgentPoolServiceConfig().codexRefreshURL, CodexTokenKeeper.productionURL)
     }
 }

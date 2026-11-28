@@ -1,66 +1,66 @@
 {
  "entry": "2010",
- "filter": "CCPoolCodexUsageParseTests|CCPoolCodexUsageProbeTests|CCPoolCodexUsagePaneTests",
+ "filter": "AgentPoolCodexUsageParseTests|AgentPoolCodexUsageProbeTests|AgentPoolCodexUsagePaneTests",
  "mutants": [
   {
    "name": "stub_back",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "        guard let login = CodexCredential.decode(item) else { return (nil, \"a login item that decodes\") }\n",
    "new": "        guard let login = CodexCredential.decode(item) else { return (nil, \"a login item that decodes\") }\n        if Bool(true) { return (nil, \"stub\") }\n",
    "expect": "killed"
   },
   {
    "name": "account_id_dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "        req.setValue(login.accountID, forHTTPHeaderField: \"ChatGPT-Account-Id\")\n",
    "new": "        _ = login.accountID\n",
    "expect": "killed"
   },
   {
    "name": "limit_reached_ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "            limits[fullest]?.status = \"rejected\"\n",
    "new": "            _ = fullest\n",
    "expect": "killed"
   },
   {
    "name": "reset_after_ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "            if let v = jsonNumber(w[\"reset_after_seconds\"]) { headers[p + \"reset-after-seconds\"] = \"\\(v)\" }\n",
    "new": "            _ = w\n",
    "expect": "killed"
   },
   {
    "name": "401_retry_removed",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "            case .refreshed(let fresh): (answer, missing) = await Self.usage(item: fresh, base: base, timeout: timeout)\n",
    "new": "            case .refreshed: break\n",
    "expect": "killed"
   },
   {
    "name": "noredirect_dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
-   "old": "        let session = CCPoolUpstream.probeSession()\n        defer { session.finishTasksAndInvalidate() }\n        guard let result = try? await session.bytes(for: req, delegate: CCPoolNoRedirect()),",
-   "new": "        let session = URLSession(configuration: CCPoolUpstream.configuration())\n        defer { session.finishTasksAndInvalidate() }\n        guard let result = try? await session.bytes(for: req),",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
+   "old": "        let session = AgentPoolUpstream.probeSession()\n        defer { session.finishTasksAndInvalidate() }\n        guard let result = try? await session.bytes(for: req, delegate: AgentPoolNoRedirect()),",
+   "new": "        let session = URLSession(configuration: AgentPoolUpstream.configuration())\n        defer { session.finishTasksAndInvalidate() }\n        guard let result = try? await session.bytes(for: req),",
    "expect": "killed"
   },
   {
    "name": "grouping_off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "        return groups.count > 1 ? groups : [RowGroup(title: nil, rows: rows)]\n",
    "new": "        return [RowGroup(title: nil, rows: rows)]\n",
    "expect": "killed"
   },
   {
    "name": "refresh_skips_codex",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "[(ClaudeHarness(), base), (codex, service.config.codexUpstream)]",
    "new": "[(ClaudeHarness(), base)]",
    "expect": "killed"
   },
   {
    "name": "failed_refresh_keeps_401",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolHarness+Codex.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolHarness+Codex.swift",
    "old": "            case .failed:   // an auth host blip says nothing about the login: no refused stamp (the proxy's 502 rule)\n                logger.note(label, \"refresh: the login refresh failed; no answer, the account is kept\")\n                return nil\n",
    "new": "            case .failed: break\n",
    "expect": "killed"

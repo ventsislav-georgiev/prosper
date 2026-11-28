@@ -21,10 +21,10 @@ final class OutsideTextTests: XCTestCase {
         XCTAssertEqual(OutsideText.shown(String(repeating: "a", count: 200)).count, 160)
     }
 
-    func testCCPoolForwardGivesTheSameString() {
+    func testAgentPoolForwardGivesTheSameString() {
         for s in ["../x\u{202E}y\u{7}z\u{200B}", "a\u{2800}b\u{3164}c", "plain \u{1F600}", String(repeating: "z", count: 300)] {
-            XCTAssertEqual(CCPoolStore.shown(s), OutsideText.shown(s))
-            XCTAssertEqual(CCPoolStore.shown(s, max: 5), OutsideText.shown(s, max: 5))
+            XCTAssertEqual(AgentPoolStore.shown(s), OutsideText.shown(s))
+            XCTAssertEqual(AgentPoolStore.shown(s, max: 5), OutsideText.shown(s, max: 5))
         }
     }
 
@@ -73,7 +73,7 @@ final class OutsideTextTests: XCTestCase {
         let whole = OutsideText.shown(long, max: .max)
         XCTAssertEqual(whole.count, 200)
         XCTAssertTrue(whole.allSatisfy { Self.scalars(String($0)) == Self.scalars("a\u{0323}\u{0323}\u{0323}") })
-        XCTAssertEqual(Self.scalars(CCPoolStore.shown(Self.stack("a", "\u{0323}"))), Self.scalars("a\u{0323}\u{0323}\u{0323}"), "the CCPool forward caps too")
+        XCTAssertEqual(Self.scalars(AgentPoolStore.shown(Self.stack("a", "\u{0323}"))), Self.scalars("a\u{0323}\u{0323}\u{0323}"), "the AgentPool forward caps too")
     }
 
     // MARK: B1251-2: the marks are counted per base, so ordinary conjuncts keep theirs

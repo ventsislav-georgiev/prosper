@@ -1272,15 +1272,15 @@ final class ExtensionHostAPITests: XCTestCase {
     /// #915 (spec 3.5): host.ccpool.status() through the host seam, for every tier (open read): the pool's
     /// label-level answer decoded into Lua, no key outside the literal set, and status is the table's only function
     /// (no token, add or remove). `until` is a Lua keyword: callers read it as a["until"].
-    func testCCPoolStatusIsReadOnlyAndLabelLevelForEveryTier() throws {
+    func testAgentPoolStatusIsReadOnlyAndLabelLevelForEveryTier() throws {
         let before = ExtensionPoolStatus.source
         defer { ExtensionPoolStatus.source = before }
-        var st = CCPoolState()
+        var st = AgentPoolState()
         st.order = ["alpha", "beta"]
         st.accounts = ["alpha": .init(id: "id-alpha"),
-                       "beta": .init(id: "id-beta", cooldown: [CCPoolCore.fiveHour: 1_700_003_600])]
+                       "beta": .init(id: "id-beta", cooldown: [AgentPoolCore.fiveHour: 1_700_003_600])]
         st.current = "alpha"
-        let json = CCPoolService.statusJSON(running: true, port: 4321, state: st, now: 1_700_000_000)
+        let json = AgentPoolService.statusJSON(running: true, port: 4321, state: st, now: 1_700_000_000)
         let script = """
         function probe()
             local st = host.ccpool.status()

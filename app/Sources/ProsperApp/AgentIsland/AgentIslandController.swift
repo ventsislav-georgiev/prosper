@@ -251,29 +251,29 @@ final class AgentIslandController {
     /// built by its extension's first live push). The pool's routing comes first (no runtime: none), then the
     /// kit PATH contributor: the validated live kits' bins (KitRuntimes.shared; none while it is unset, as under XCTest).
     var sessionEnvContributors: @MainActor () -> [SessionEnvContributor] = {
-        (CCPoolRuntime.shared.map { [$0.routing.contributor] } ?? [])
+        (AgentPoolRuntime.shared.map { [$0.routing.contributor] } ?? [])
             + [KitSessionEnv.contributor { [bins = KitRuntimes.shared?.liveBins() ?? []] in bins }]   // after the pool; #1423: read on main here, used off main
     }
     /// #1499: the pool's --revive --env/--unset flags for a record's command (dch 1.94.0), asked on main at each Resume
     /// and run on the runner's queue like a contributor. No runtime: none.
-    var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { CCPoolRuntime.shared?.routing.reviveFlags }
+    var reviveEnvFlags: @MainActor () -> ReviveEnvFlags? = { AgentPoolRuntime.shared?.routing.reviveFlags }
     /// #2031: Codex records' --revive/--restart words (dch 1.189.0), asked on main at each Resume or Restart and run on the
     /// runner's queue. No runtime: the same rule without pool words (a pool record: the drop; its own provider or plain: none).
     var reviveCodexFlags: @MainActor () -> CodexReviveFlags = { AgentIslandController.poolCodexFlags() }
     /// #2031: the pool's rule for the control server too (DchControlOps.codexFlags), so the pool runtime stays named here only (the pool guard test reads comments too).
-    static func poolCodexFlags() -> CodexReviveFlags { CCPoolRuntime.reviveCodexFlags }
+    static func poolCodexFlags() -> CodexReviveFlags { AgentPoolRuntime.reviveCodexFlags }
     /// #2009: the argv contributors of the next --spawn, asked on main at each spawn and run on the runner's queue (the
     /// pool's Codex routing; no runtime: none). --revive takes no argv: a Resume gets none.
-    var sessionArgvContributors: @MainActor () -> [SessionArgvContributor] = { CCPoolRuntime.shared.map { [$0.routing.argvContributor] } ?? [] }
+    var sessionArgvContributors: @MainActor () -> [SessionArgvContributor] = { AgentPoolRuntime.shared.map { [$0.routing.argvContributor] } ?? [] }
     /// #1684: the live kits' bins for a Resume's `--env PATH=`, read on main like the spawn's (none while KitRuntimes is unset, as under XCTest).
     var reviveKitBins: @MainActor () -> [String] = { KitRuntimes.shared?.liveBins() ?? [] }
     /// #1537 (OQ-95): the plan usage line's source, read on main when the island opens and on each shown tick. No runtime
     /// (the ccpool extension off, or under XCTest): none.
     /// #2011: `harness` is the focused session's (planHarness).
-    var planUsage: @MainActor (_ now: Double, _ harness: String) -> AgentPlanUsage? = { CCPoolRuntime.shared?.planUsage(now: $0, harness: $1) }
+    var planUsage: @MainActor (_ now: Double, _ harness: String) -> AgentPlanUsage? = { AgentPoolRuntime.shared?.planUsage(now: $0, harness: $1) }
     /// #1898: every pool account's limits for the line's popover, read on main when it opens and when the line's own value
     /// changes while it is open. No runtime: none.
-    var planLimits: @MainActor (_ now: Double) -> AgentPlanLimits? = { CCPoolRuntime.shared?.planLimits(now: $0) }
+    var planLimits: @MainActor (_ now: Double) -> AgentPlanLimits? = { AgentPoolRuntime.shared?.planLimits(now: $0) }
     /// #1898: the popover's link: Settings at the Account pool pane, through the host's opener (nil under XCTest: nothing).
     var openPoolSettings: @MainActor () -> Void = { LiveExtensionHostServices.shared.settingsOpener?(AgentPlanLimits.settingsPane) }
     /// #1898: how many times the popover's value was read (open, then one per change of the line while open).
@@ -281,7 +281,7 @@ final class AgentIslandController {
     /// #1899: the last hour's usage record samples per account and claim for the popover's pace; the runtime reads the files
     /// off main. Read once per open of the popover; no runtime: none.
     var planPace: @MainActor (_ now: Double) async -> [String: [String: [AgentPlanLimits.PaceSample]]] = {
-        await CCPoolRuntime.shared?.planPace(now: $0) ?? [:]
+        await AgentPoolRuntime.shared?.planPace(now: $0) ?? [:]
     }
     /// #1899: how many times the pace samples were read (once per open of the popover).
     private(set) var planPaceReads = 0

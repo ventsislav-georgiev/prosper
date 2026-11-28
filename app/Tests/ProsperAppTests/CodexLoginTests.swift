@@ -16,17 +16,17 @@ final class CodexLoginTests: XCTestCase {
     """.utf8)
 
     struct Rig: Sendable {
-        let store: CCPoolStore
-        let secrets: CCPoolMemorySecrets
-        let log: CCPoolCapturingLogger
+        let store: AgentPoolStore
+        let secrets: AgentPoolMemorySecrets
+        let log: AgentPoolCapturingLogger
         let root: URL
     }
 
     func rig() -> Rig {
-        let log = CCPoolCapturingLogger()
+        let log = AgentPoolCapturingLogger()
         let dir = tempDir()
-        let store = CCPoolStore(directory: dir.appendingPathComponent("ccpool"), logger: log)
-        return Rig(store: store, secrets: CCPoolMemorySecrets(), log: log,
+        let store = AgentPoolStore(directory: dir.appendingPathComponent("ccpool"), logger: log)
+        return Rig(store: store, secrets: AgentPoolMemorySecrets(), log: log,
                    root: store.directory.appendingPathComponent("codex-login", isDirectory: true))
     }
 
@@ -87,8 +87,8 @@ final class CodexLoginTests: XCTestCase {
         XCTAssertEqual(seen.mode, 0o700, "the scratch CODEX_HOME is 0700 while the login runs")
         XCTAssertEqual(scratchLeft(r), [], "the scratch folder is gone afterwards")
         let acct = try XCTUnwrap(r.store.snapshot.accounts["codex-1"])
-        XCTAssertEqual(acct.harness, CCPoolCodexHarness.id)
-        XCTAssertEqual(acct.kind, CCPoolCodexHarness.chatgptKind)
+        XCTAssertEqual(acct.harness, AgentPoolCodexHarness.id)
+        XCTAssertEqual(acct.kind, AgentPoolCodexHarness.chatgptKind)
         let item = try XCTUnwrap(try r.secrets.token(id: acct.id))
         XCTAssertFalse(item.contains("\"tokens\""), "flat, not Codex's nested auth.json")
         let cred = try XCTUnwrap(CodexCredential.decode(item))
@@ -143,8 +143,8 @@ final class CodexLoginTests: XCTestCase {
     }
 
     /// Memory secrets whose read returns another text: the read-back check must undo the item.
-    final class SkewedSecrets: CCPoolSecrets, @unchecked Sendable {
-        let inner = CCPoolMemorySecrets()
+    final class SkewedSecrets: AgentPoolSecrets, @unchecked Sendable {
+        let inner = AgentPoolMemorySecrets()
         func store(token: String, id: String, label: String) throws { try inner.store(token: token, id: id, label: label) }
         func token(id: String) throws -> String? { try inner.token(id: id).map { $0 + " " } }
         func remove(id: String) throws { try inner.remove(id: id) }
@@ -157,7 +157,7 @@ final class CodexLoginTests: XCTestCase {
                                               secrets: skewed, logger: r.log,
                                               runner: Self.fake(Seen(), auth: Self.authJSON, status: 0),
                                               handle: CodexLogin.Handle(), output: { _ in })
-        XCTAssertEqual(outcome, .failed(CCPoolStoreError.readBackMismatch.description))
+        XCTAssertEqual(outcome, .failed(AgentPoolStoreError.readBackMismatch.description))
         XCTAssertEqual(skewed.inner.count, 0, "the item written is removed again")
         XCTAssertTrue(r.store.snapshot.accounts.isEmpty)
         XCTAssertEqual(scratchLeft(r), [])
@@ -167,7 +167,7 @@ final class CodexLoginTests: XCTestCase {
         let r = rig(), seen = Seen()
         try r.store.addAccount(label: "work", token: "tok-work", secrets: r.secrets)
         let outcome = await Self.signIn(r, runner: Self.fake(seen, auth: Self.authJSON, status: 0), label: "work")
-        XCTAssertEqual(outcome, .failed(CCPoolStoreError.duplicateLabel.description))
+        XCTAssertEqual(outcome, .failed(AgentPoolStoreError.duplicateLabel.description))
         XCTAssertEqual(seen.argv, [], "no child for a taken label")
         XCTAssertEqual(scratchLeft(r), [])
     }
@@ -236,8 +236,8 @@ final class CodexLoginTests: XCTestCase {
         let deadline = Date().addingTimeInterval(10)
         while p.model.busy, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
         let acct = try XCTUnwrap(p.store.snapshot.accounts["codex-1"], "the default label")
-        XCTAssertEqual(acct.harness, CCPoolCodexHarness.id)
-        XCTAssertEqual(acct.kind, CCPoolCodexHarness.chatgptKind)
+        XCTAssertEqual(acct.harness, AgentPoolCodexHarness.id)
+        XCTAssertEqual(acct.kind, AgentPoolCodexHarness.chatgptKind)
         let item = try XCTUnwrap(try p.secrets.token(id: acct.id))
         XCTAssertFalse(item.contains("\"tokens\""))
         XCTAssertEqual(CodexCredential.decode(item)?.accessToken, Self.access)
@@ -310,7 +310,7 @@ final class CodexLoginTests: XCTestCase {
 
     // MARK: Downgrade guard (QA #2004 n1)
 
-    /// The pre-#2004 decoder of state.json's top level (09747714^ CCPoolCore.swift: `current` is a String).
+    /// The pre-#2004 decoder of state.json's top level (09747714^ AgentPoolCore.swift: `current` is a String).
     struct PreHarnessState: Decodable {
         var current: String?
         var order: [String]
@@ -338,17 +338,17 @@ final class CodexLoginTests: XCTestCase {
         let mixed = try Data(contentsOf: r.store.stateURL)
         XCTAssertThrowsError(try JSONDecoder().decode(PreHarnessState.self, from: mixed),
                              "an older build cannot decode it, so its store sets the file aside")
-        let back = try JSONDecoder().decode(CCPoolState.self, from: mixed)
+        let back = try JSONDecoder().decode(AgentPoolState.self, from: mixed)
         XCTAssertEqual(back.current, "work", "this build reads the map back")
-        XCTAssertEqual(back.accounts["codex-1"]?.harness, CCPoolCodexHarness.id)
-        let reopened = CCPoolStore(directory: r.store.directory, logger: r.log)
+        XCTAssertEqual(back.accounts["codex-1"]?.harness, AgentPoolCodexHarness.id)
+        let reopened = AgentPoolStore(directory: r.store.directory, logger: r.log)
         XCTAssertFalse(reopened.unreadable)
         XCTAssertEqual(reopened.snapshot, r.store.snapshot)
     }
 
     func testCurrentOfAnotherTypeStillFailsTheDecode() {
-        XCTAssertThrowsError(try JSONDecoder().decode(CCPoolState.self, from: Data(#"{"current": 3, "accounts": {}}"#.utf8)))
-        XCTAssertEqual(try JSONDecoder().decode(CCPoolState.self, from: Data(#"{"current": null}"#.utf8)).currents, [:])
+        XCTAssertThrowsError(try JSONDecoder().decode(AgentPoolState.self, from: Data(#"{"current": 3, "accounts": {}}"#.utf8)))
+        XCTAssertEqual(try JSONDecoder().decode(AgentPoolState.self, from: Data(#"{"current": null}"#.utf8)).currents, [:])
     }
 
     // MARK: #2039 sweep and quit

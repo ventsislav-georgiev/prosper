@@ -1,22 +1,22 @@
 {
  "entry": "1862",
- "filter": "ControlNavTests|ControlCCPoolHoldTests",
+ "filter": "ControlNavTests|ControlAgentPoolHoldTests",
  "mutants": [
   {
    "name": "hold-no-cap",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "hours > 0, hours <= maxHours else",
    "new": "hours > 0 else",
    "expect": "killed",
-   "filter": "ControlCCPoolHoldTests"
+   "filter": "ControlAgentPoolHoldTests"
   },
   {
    "name": "hold-no-undo",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "verb: \"held a pool account\", undo: undo(m, label, before, after: Bench(a)))",
    "new": "verb: \"held a pool account\")",
    "expect": "killed",
-   "filter": "ControlCCPoolHoldTests"
+   "filter": "ControlAgentPoolHoldTests"
   },
   {
    "name": "nav-no-form-guard",
@@ -52,19 +52,19 @@
   },
   {
    "name": "release-anything",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "guard before.refused != nil ||",
    "new": "guard true || before.refused != nil ||",
    "expect": "killed",
-   "filter": "ControlCCPoolHoldTests"
+   "filter": "ControlAgentPoolHoldTests"
   },
   {
    "name": "release-no-undo",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "verb: \"released a pool account\", undo: undo(m, label, before, after: after))",
    "new": "verb: \"released a pool account\")",
    "expect": "killed",
-   "filter": "ControlCCPoolHoldTests"
+   "filter": "ControlAgentPoolHoldTests"
   },
   {
    "name": "nav-jump-moves-keys",
@@ -96,14 +96,14 @@
   },
   {
    "name": "ccpool-undo-unchecked",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "guard let a = st.accounts[label], Bench(a) == after else { return }",
    "new": "guard st.accounts[label] != nil else { return }",
    "expect": "killed"
   },
   {
    "name": "hold-summary-asked",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolControlHold.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolControlHold.swift",
    "old": "for \\(applied) h\"",
    "new": "for \\(String(format: \"%.1f\", hours)) h\"",
    "expect": "killed"

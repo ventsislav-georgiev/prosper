@@ -1,73 +1,73 @@
 {
  "entry": 1660,
- "filter": "CCPoolTakeOverTests|CCPoolPaneTests/testCCPoolPaneMountedStatesFit|CCPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
+ "filter": "AgentPoolTakeOverTests|AgentPoolPaneTests/testAgentPoolPaneMountedStatesFit|AgentPoolGuardTests|PasteboardScratchTests|TOMLGuardTests|PreferencesScratchStoreTests|PerfSignpostTests|ThemeContrastTests/testNoSurfacePinsItsOwnAppearance|MenuBarTests/testSPUUpdaterIsOnlyBuiltBehindTheXCTestGate|FanReclaimRecoveryTests/testReclaimGenerationIsBumpedOnlyByWillSleep|ManagedConfigUnitTests/testCallSitesOutsideTheManagedConfigDirectoriesAreTheP2Ones|ManagedConfigUnitTests/testHomeIsReadOnlyInTheProductionDefault|MenuBarLiveBarGuardTests|IncreaseContrastCustomThemeTests/testFadedSitesAreTheKnownOnes",
  "mutants": [
   {
    "name": "no-reprobe",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "wanted == nil || pid == wanted else {",
    "new": "true else {",
    "expect": "killed"
   },
   {
    "name": "sigkill-escalation",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "_ = finishStart(.heldByCCPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
-   "new": "_ = config.signal(p, SIGKILL); _ = finishStart(.heldByCCPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
+   "old": "_ = finishStart(.heldByAgentPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
+   "new": "_ = config.signal(p, SIGKILL); _ = finishStart(.heldByAgentPool(pid: pid), note: \"the signalled ccpool proxy did not free the port\")",
    "expect": "killed"
   },
   {
    "name": "pid-guard-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "guard pid > 1, pid != Int(getpid()), let p = pid_t(exactly: pid)",
    "new": "guard let p = pid_t(exactly: pid)",
    "expect": "killed"
   },
   {
    "name": "owner-check-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "config.ownedByUser(p),\n",
    "new": "\n",
    "expect": "killed"
   },
   {
    "name": "model-offers-own-pid",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "pid > 1, pid != Int(getpid()), pid != stuckPid else { return nil }",
    "new": "pid != stuckPid else { return nil }",
    "expect": "killed"
   },
   {
    "name": "stuck-not-recorded",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "case .didNotStop(let pid), .refused(let pid): stuckPid = pid",
    "new": "case .didNotStop(let pid), .refused(let pid): _ = pid",
    "expect": "killed"
   },
   {
    "name": "pane-button-plain",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPane.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPane.swift",
    "old": "Button(model.proxyButtonTitle) { model.proxyButtonAction() }",
    "new": "Button(model.proxyRunning ? \"Restart proxy\" : \"Start proxy\") { model.proxyButtonAction() }",
    "expect": "killed"
   },
   {
    "name": "listen-check-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "config.listensOn(p, config.port) else {",
    "new": "true else {",
    "expect": "killed"
   },
   {
    "name": "listen-check-wrong-port",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "config.listensOn(p, config.port) else {",
    "new": "config.listensOn(p, config.port &+ 1) else {",
    "expect": "killed"
   },
   {
    "name": "n2-reprobe-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "        wait: while true {\n",
    "new": "        wait: while false {\n",
    "expect": "killed",
@@ -75,14 +75,14 @@
   },
   {
    "name": "libproc-port-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "UInt16(bigEndian: UInt16(truncatingIfNeeded: ini.insi_lport)) == port else",
    "new": "true else",
    "expect": "killed"
   },
   {
    "name": "libproc-state-ignored",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "guard tcp.tcpsi_state == TSI_S_LISTEN,",
    "new": "guard true,",
    "expect": "killed"

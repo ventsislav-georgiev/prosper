@@ -119,7 +119,7 @@ final class ExtensionSecretPathsTests: XCTestCase {
         XCTAssertEqual(Set(SecretPaths.listed), Set(fakes.map { f in f.listed }))
     }
 
-    func testCCPoolHomeSetAndAbsoluteIsRefused() throws {
+    func testAgentPoolHomeSetAndAbsoluteIsRefused() throws {
         let pool = tempDir("pool")
         try Data("fake:pool-vault".utf8).write(to: pool.appendingPathComponent("vault.json"))
         SecretPaths.environment = ["CCPOOL_HOME": pool.path]
@@ -130,7 +130,7 @@ final class ExtensionSecretPathsTests: XCTestCase {
     }
 
     /// With no working directory a relative CCPOOL_HOME adds no root; an empty one adds none either.
-    func testCCPoolHomeRelativeWithNoWorkingDirectoryOrEmptyAddsNothing() throws {
+    func testAgentPoolHomeRelativeWithNoWorkingDirectoryOrEmptyAddsNothing() throws {
         let savedCwd = SecretPaths.workingDirectory
         addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
         SecretPaths.workingDirectory = nil
@@ -145,7 +145,7 @@ final class ExtensionSecretPathsTests: XCTestCase {
 
     /// An empty CCPOOL_HOME is the same as unset: it adds no root, even with a working directory, and a
     /// plain file under that folder stays readable for the automation host.
-    func testCCPoolHomeEmptyAddsNoRootWithWorkingDirectory() throws {
+    func testAgentPoolHomeEmptyAddsNoRootWithWorkingDirectory() throws {
         let savedCwd = SecretPaths.workingDirectory
         addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
         SecretPaths.workingDirectory = path("work")
@@ -155,7 +155,7 @@ final class ExtensionSecretPathsTests: XCTestCase {
         XCTAssertEqual(try call(try host(system: false), "rd", path("work/plain.txt")), "plain:work")
     }
 
-    func testCCPoolHomeUnsetIsIgnored() throws {
+    func testAgentPoolHomeUnsetIsIgnored() throws {
         SecretPaths.environment = ["OTHER": "/Users/example/.ccpool-elsewhere"]
         XCTAssertEqual(SecretPaths.matcher().roots.count, SecretPaths.listed.count)
         try write("pool/vault.json", "plain:pool")
@@ -164,14 +164,14 @@ final class ExtensionSecretPathsTests: XCTestCase {
 
     /// The filter keeps its own copy of the pool's variable name, so it does not depend on the pool
     /// module; this row turns red when either name changes.
-    func testCCPoolHomeNameMatchesCCPool() {
-        XCTAssertEqual(SecretPaths.ccpoolHomeVariable, CCPoolMigration.homeVariable)
+    func testAgentPoolHomeNameMatchesAgentPool() {
+        XCTAssertEqual(SecretPaths.ccpoolHomeVariable, AgentPoolVaultImport.homeVariable)
     }
 
     /// #1201 (R921-4): CCPOOL_HOME protects the folder the pool would open for the same value: a relative
     /// value counts from the app's working directory, a leading "~" included; a "~" value is refused under
     /// the home as well. The working directory is a folder in the fake home, set through the seam.
-    func testCCPoolHomeRelativeAndTildeValuesAreRefused() throws {
+    func testAgentPoolHomeRelativeAndTildeValuesAreRefused() throws {
         let savedCwd = SecretPaths.workingDirectory
         addTeardownBlock { SecretPaths.workingDirectory = savedCwd }
         SecretPaths.workingDirectory = path("work")

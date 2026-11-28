@@ -25,11 +25,11 @@ One file per ledger entry, `lists/<entry>.json`:
 ```json
 {
  "entry": 1572,
- "filter": "CCPoolThrottleRetryTests/testPooledDrop|CCPoolUsageRecordTests",
+ "filter": "AgentPoolThrottleRetryTests/testPooledDrop|AgentPoolUsageRecordTests",
  "mutants": [
   {
    "name": "bad-path-row-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "            recordAnswer(400, acct: accountID)\n",
    "new": "",
    "expect": "killed"

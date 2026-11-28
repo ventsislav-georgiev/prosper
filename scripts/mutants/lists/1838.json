@@ -1,81 +1,81 @@
 {
  "entry": "1838",
- "filter": "CCPoolCoreTests|CCPoolPlacementTests|CCPoolPaneModelTests|CCPoolCapacityTests|CCPoolStatusTests",
+ "filter": "AgentPoolCoreTests|AgentPoolPlacementTests|AgentPoolPaneModelTests|AgentPoolCapacityTests|AgentPoolStatusTests",
  "mutants": [
   {
    "name": "m1_pick_tie_first_in_order",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "return ra != rb ? ra < rb : labelFirst(a, b)",
    "new": "return ra != rb ? ra < rb : false",
    "expect": "killed"
   },
   {
    "name": "m2_place_tie_first_in_order",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "return a.reset != b.reset ? a.reset < b.reset : labelFirst(a.name, b.name)",
    "new": "return a.reset != b.reset ? a.reset < b.reset : false",
    "expect": "killed"
   },
   {
    "name": "m3_labelFirst_case_sensitive",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "let c = a.localizedStandardCompare(b)",
    "new": "let c = a.compare(b)",
    "expect": "killed"
   },
   {
    "name": "m4_rows_in_order",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
-   "old": "return st.order.sorted(by: CCPoolCore.labelFirst).compactMap { label in",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
+   "old": "return st.order.sorted(by: AgentPoolCore.labelFirst).compactMap { label in",
    "new": "return st.order.compactMap { label in",
    "expect": "killed"
   },
   {
    "name": "m5_usage_hook_every_reply",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "return shown == Self.shownPercents(util) ? nil : _onChange",
    "new": "return _onChange",
    "expect": "killed"
   },
   {
    "name": "m6_usage_hook_never",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "return shown == Self.shownPercents(util) ? nil : _onChange",
    "new": "return nil",
    "expect": "killed"
   },
   {
    "name": "m7_spread_counts_pins",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "let n = sessions.values.reduce(into: Set<String>()) { $0.formUnion($1) }.count",
    "new": "let n = sessions.values.reduce(0) { $0 + $1.count }",
    "expect": "killed"
   },
   {
    "name": "m8_liveSessions_no_expiry",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCore.swift",
    "old": "        var live = self\n        live.expirePins(now: now)\n        var sessions: [String: Set<String>] = [:]",
    "new": "        let live = self\n        var sessions: [String: Set<String>] = [:]",
    "expect": "killed"
   },
   {
    "name": "m9_row_count_always",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPane.swift",
-   "old": "(row.sessions > 0 ? [CCPoolPaneModel.count(row.sessions, \"session\")] : [])",
-   "new": "[CCPoolPaneModel.count(row.sessions, \"session\")]",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPane.swift",
+   "old": "(row.sessions > 0 ? [AgentPoolPaneModel.count(row.sessions, \"session\")] : [])",
+   "new": "[AgentPoolPaneModel.count(row.sessions, \"session\")]",
    "expect": "killed"
   },
   {
    "name": "m10_median_lower",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCapacity.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCapacity.swift",
    "old": "return known.isEmpty ? 1.0 : known[known.count / 2]",
    "new": "return known.isEmpty ? 1.0 : known[(known.count - 1) / 2]",
    "expect": "killed"
   },
   {
    "name": "m11_status_in_order",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
-   "old": "(state?.order ?? []).sorted(by: CCPoolCore.labelFirst).compactMap",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
+   "old": "(state?.order ?? []).sorted(by: AgentPoolCore.labelFirst).compactMap",
    "new": "(state?.order ?? []).compactMap",
    "expect": "killed"
   }

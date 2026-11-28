@@ -1,39 +1,39 @@
 {
  "entry": 1571,
- "filter": "CCPoolLeftoverTests/testCCPoolRemoveThenAddSameLabelKeepsNoSampleOfTheRemovedAccount|CCPoolLeftoverTests/testCCPoolRemoveThatFailsToSaveKeepsTheSample|CCPoolLeftoverTests/testCCPoolSecondStartWhileRunningKeepsTheListenerAndPort|CCPoolLeftoverTests/testCCPoolRestartKeepsAHealthyListenerAndBindsOnlyWhenItIsGone|CCPoolUsageReaderTests/testUtilization|CCPoolLeftoverTests/testCCPoolRestartBindsAnewWhenThePublishedListenerStoppedListening",
+ "filter": "AgentPoolLeftoverTests/testAgentPoolRemoveThenAddSameLabelKeepsNoSampleOfTheRemovedAccount|AgentPoolLeftoverTests/testAgentPoolRemoveThatFailsToSaveKeepsTheSample|AgentPoolLeftoverTests/testAgentPoolSecondStartWhileRunningKeepsTheListenerAndPort|AgentPoolLeftoverTests/testAgentPoolRestartKeepsAHealthyListenerAndBindsOnlyWhenItIsGone|AgentPoolUsageReaderTests/testUtilization|AgentPoolLeftoverTests/testAgentPoolRestartBindsAnewWhenThePublishedListenerStoppedListening",
  "mutants": [
   {
    "name": "o8a",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
-   "old": "}, usage: { u in u.removeValue(forKey: label) })   // #1571 O8: under the save's lock; skipped when the save fails\n        guard removed else { throw CCPoolStoreError.noSuchAccount }\n        guard saved else { throw writeFailure }\n",
-   "new": "}, usage: nil)\n        guard removed else { throw CCPoolStoreError.noSuchAccount }\n        guard saved else { throw writeFailure }\n        lock.withLock { _ = usage.removeValue(forKey: label) }\n",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
+   "old": "}, usage: { u in u.removeValue(forKey: label) })   // #1571 O8: under the save's lock; skipped when the save fails\n        guard removed else { throw AgentPoolStoreError.noSuchAccount }\n        guard saved else { throw writeFailure }\n",
+   "new": "}, usage: nil)\n        guard removed else { throw AgentPoolStoreError.noSuchAccount }\n        guard saved else { throw writeFailure }\n        lock.withLock { _ = usage.removeValue(forKey: label) }\n",
    "expect": "killed"
   },
   {
    "name": "o8b",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "            guard persist(next) else {\n                logger.note(nil, \"state write failed; change undone\")",
    "new": "            moveUsage?(&usage)\n            guard persist(next) else {\n                logger.note(nil, \"state write failed; change undone\")",
    "expect": "killed"
   },
   {
    "name": "v8",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "        if case .running = status { return status }\n        if let why",
    "new": "        if let why",
    "expect": "killed"
   },
   {
    "name": "r10",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
-   "old": "CCPoolListener.isListeningTCP(l.fd) else { return nil }",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
+   "old": "AgentPoolListener.isListeningTCP(l.fd) else { return nil }",
    "new": "true else { return nil }",
    "expect": "killed",
-   "note": "#1672 re-anchor: killed by testCCPoolRestartBindsAnewWhenThePublishedListenerStoppedListening (#1678)"
+   "note": "#1672 re-anchor: killed by testAgentPoolRestartBindsAnewWhenThePublishedListenerStoppedListening (#1678)"
   },
   {
    "name": "u12",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolUsageReader.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolUsageReader.swift",
    "old": "                    state[key] = (r, u)\n",
    "new": "                    state[key] = (r, max(u, state[key]?.max ?? u))\n",
    "expect": "killed"

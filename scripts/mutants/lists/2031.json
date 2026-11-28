@@ -1,6 +1,6 @@
 {
  "entry": 2031,
- "filter": "CCPoolSessionRoutingTests|AgentIslandControlsTests/testRestartAll|DchControlFramesTests/testCodexRestart",
+ "filter": "AgentPoolSessionRoutingTests|AgentIslandControlsTests/testRestartAll|DchControlFramesTests/testCodexRestart",
  "mutants": [
   {
    "name": "gate-removed",
@@ -11,7 +11,7 @@
   },
   {
    "name": "drop-dropped-when-on",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "return [\"--codex-drop-provider\"] + stride",
    "new": "return (w.isEmpty ? [\"--codex-drop-provider\"] : []) + stride",
    "expect": "killed"
@@ -25,7 +25,7 @@
   },
   {
    "name": "pool-words-as-own",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "w == \"model_provider=\\\"\\(codexProvider)\\\"\" || w.hasPrefix",
    "new": "w.hasPrefix",
    "expect": "killed"
@@ -39,7 +39,7 @@
   },
   {
    "name": "own-provider-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "if own.contains(where: codexKeepsOwn) { return [] }",
    "new": "if own.contains(where: codexKeepsOwn) { return [\"--codex-drop-provider\"] }",
    "expect": "killed"

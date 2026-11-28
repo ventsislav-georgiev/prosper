@@ -25,7 +25,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     }
 
     func testFirstLaunchCarriesTheRecordKeysAndFolder() throws {
-        let d = scratchDefaults("agentpool-mig"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig"), support = tempDir(), log = AgentPoolCapturingLogger()
         try oldState(d, support)
         let before = files(support.appendingPathComponent("ccpool"))
         AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
@@ -38,9 +38,9 @@ final class AgentPoolMigrationTests: XCTestCase {
         for k in ["ccpoolRouteAgentSessions", "ccpoolRouteCodexSessions", "ccpoolExhaustedThreshold"] {
             XCTAssertTrue(d.object(forKey: k) == nil, k)
         }
-        XCTAssertFalse(CCPoolPaneModel.routeValue(in: d))
-        XCTAssertFalse(CCPoolPaneModel.codexRouteValue(in: d))
-        XCTAssertEqual(CCPoolPaneModel.exhaustedValue(in: d), 0.75, "the model reads the new keys")
+        XCTAssertFalse(AgentPoolPaneModel.routeValue(in: d))
+        XCTAssertFalse(AgentPoolPaneModel.codexRouteValue(in: d))
+        XCTAssertEqual(AgentPoolPaneModel.exhaustedValue(in: d), 0.75, "the model reads the new keys")
         XCTAssertFalse(FileManager.default.fileExists(atPath: support.appendingPathComponent("ccpool").path))
         XCTAssertEqual(files(support.appendingPathComponent("agentpool")), before, "the same files")
         XCTAssertEqual(before.count, 4)
@@ -52,7 +52,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     func testTheRegistryReadsTheCarriedRecordAsEnabled() throws {
         let d = scratchDefaults("agentpool-mig-reg"), root = tempDir()
         d.set([old], forKey: "enabledExtensionIDs")
-        AgentPoolMigration.migrateV1(defaults: d, support: root, logger: CCPoolCapturingLogger())
+        AgentPoolMigration.migrateV1(defaults: d, support: root, logger: AgentPoolCapturingLogger())
         let system = root.appendingPathComponent("system", isDirectory: true)
         try FileManager.default.createDirectory(at: system, withIntermediateDirectories: true)
         let bundled = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -67,23 +67,23 @@ final class AgentPoolMigrationTests: XCTestCase {
     func testAbsentKeysStayAbsent() {
         let d = scratchDefaults("agentpool-mig-absent")
         d.set(0.9, forKey: "ccpoolExhaustedThreshold")
-        AgentPoolMigration.migrateV1(defaults: d, support: tempDir(), logger: CCPoolCapturingLogger())
+        AgentPoolMigration.migrateV1(defaults: d, support: tempDir(), logger: AgentPoolCapturingLogger())
         XCTAssertTrue(d.object(forKey: "poolRoute.claude") == nil, "no default written")
         XCTAssertTrue(d.object(forKey: "poolRoute.codex") == nil)
         XCTAssertEqual(d.object(forKey: "poolExhaustedThreshold") as? Double, 0.9)
-        XCTAssertTrue(CCPoolPaneModel.routeValue(in: d), "absent reads on")
+        XCTAssertTrue(AgentPoolPaneModel.routeValue(in: d), "absent reads on")
     }
 
     /// Mutant m1 (marker check removed): an old key written again by an older build is not carried over a new choice.
     func testSecondRunIsANoOp() throws {
         let d = scratchDefaults("agentpool-mig-twice"), support = tempDir()
         try oldState(d, support)
-        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: CCPoolCapturingLogger())
+        AgentPoolMigration.migrateV1(defaults: d, support: support, logger: AgentPoolCapturingLogger())
         d.set(true, forKey: "poolRoute.claude")
         d.set(false, forKey: "ccpoolRouteAgentSessions")
         d.set([old], forKey: "trustedExtensionIDs")
         try FileManager.default.createDirectory(at: support.appendingPathComponent("ccpool"), withIntermediateDirectories: true)
-        let log = CCPoolCapturingLogger()
+        let log = AgentPoolCapturingLogger()
         AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
         XCTAssertEqual(d.object(forKey: "poolRoute.claude") as? Bool, true, "not overwritten")
         XCTAssertEqual(d.object(forKey: "ccpoolRouteAgentSessions") as? Bool, false, "left alone")
@@ -95,7 +95,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     /// Mutant m3 (no RENAME_EXCL): rename(2) would replace the target that holds the pool's state.
     /// Mutant state-check-inverted: the target with state.json would be set aside.
     func testAnExistingTargetMovesNothing() throws {
-        let d = scratchDefaults("agentpool-mig-target"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-target"), support = tempDir(), log = AgentPoolCapturingLogger()
         try oldState(d, support)
         let target = support.appendingPathComponent("agentpool", isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
@@ -110,7 +110,7 @@ final class AgentPoolMigrationTests: XCTestCase {
 
     /// QA R2012 n1. Mutant set-aside-skipped: the by-product stays, the move fails with EEXIST, ccpool is orphaned.
     func testAByProductTargetIsSetAsideThenTheFolderMoves() throws {
-        let d = scratchDefaults("agentpool-mig-byproduct"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-byproduct"), support = tempDir(), log = AgentPoolCapturingLogger()
         try oldState(d, support)
         let target = support.appendingPathComponent("agentpool", isDirectory: true)
         try FileManager.default.createDirectory(at: target.appendingPathComponent("codex-scratch"), withIntermediateDirectories: true)
@@ -127,7 +127,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     /// QA R2012b n1: a ccpool WITHOUT state.json (usage only) next to a by-product agentpool is not worth a set-aside:
     /// both are kept, nothing is renamed aside, the marker is set.
     func testAStatelessSourceDoesNotSetTheTargetAside() throws {
-        let d = scratchDefaults("agentpool-mig-stateless"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-stateless"), support = tempDir(), log = AgentPoolCapturingLogger()
         let fm = FileManager.default
         try fm.createDirectory(at: support.appendingPathComponent("ccpool/usage"), withIntermediateDirectories: true)
         try fm.createDirectory(at: support.appendingPathComponent("agentpool/codex-scratch"), withIntermediateDirectories: true)
@@ -142,7 +142,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     /// QA R2012c: the by-product cannot be set aside (UF_IMMUTABLE on it: the move gives EEXIST, the set-aside EPERM):
     /// no marker, both folders as they were, nothing set aside, so the next launch tries again.
     func testATargetThatCannotBeSetAsideLeavesTheMarkerUnset() throws {
-        let d = scratchDefaults("agentpool-mig-immutable"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-immutable"), support = tempDir(), log = AgentPoolCapturingLogger()
         try oldState(d, support)
         let target = support.appendingPathComponent("agentpool", isDirectory: true)
         try FileManager.default.createDirectory(at: target.appendingPathComponent("codex-scratch"), withIntermediateDirectories: true)
@@ -158,7 +158,7 @@ final class AgentPoolMigrationTests: XCTestCase {
 
     /// The other-errno branch, driven by a read-only parent (EACCES): the marker stays unset for the next launch.
     func testAnUnmovableFolderLeavesTheMarkerUnset() throws {
-        let d = scratchDefaults("agentpool-mig-eacces"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-eacces"), support = tempDir(), log = AgentPoolCapturingLogger()
         try oldState(d, support)
         XCTAssertEqual(chmod(support.path, 0o500), 0)
         defer { chmod(support.path, 0o700) }
@@ -169,7 +169,7 @@ final class AgentPoolMigrationTests: XCTestCase {
     }
 
     func testAFreshInstallOnlyWritesTheMarker() {
-        let d = scratchDefaults("agentpool-mig-fresh"), support = tempDir(), log = CCPoolCapturingLogger()
+        let d = scratchDefaults("agentpool-mig-fresh"), support = tempDir(), log = AgentPoolCapturingLogger()
         AgentPoolMigration.migrateV1(defaults: d, support: support, logger: log)
         for k in ["enabledExtensionIDs", "trustedExtensionIDs", "poolRoute.claude", "poolRoute.codex", "poolExhaustedThreshold",
                   AgentPoolMigration.selectedPaneKey] {
@@ -188,13 +188,13 @@ final class AgentPoolMigrationTests: XCTestCase {
         XCTAssertEqual(settingsHealedSelection("ext:com.prosper.ccpool|ccpool", groups: [("Agents", [tab])]), AgentPlanLimits.settingsPane)
         let d = scratchDefaults("agentpool-mig-pane")
         d.set("ext:com.prosper.ccpool|ccpool", forKey: AgentPoolMigration.selectedPaneKey)
-        AgentPoolMigration.migrateV1(defaults: d, support: tempDir(), logger: CCPoolCapturingLogger())
+        AgentPoolMigration.migrateV1(defaults: d, support: tempDir(), logger: AgentPoolCapturingLogger())
         XCTAssertEqual(d.string(forKey: AgentPoolMigration.selectedPaneKey), AgentPlanLimits.settingsPane)
     }
 
     /// The person-facing names (design 5): the island link and help, the manifest's titles.
     func testTheUserVisibleNames() throws {
         XCTAssertEqual(AgentPlanLimits.settingsLink, "Agent pool settings\u{2026}")
-        XCTAssertEqual(CCPoolPane.addClaudeTitle, "Add Claude account")
+        XCTAssertEqual(AgentPoolPane.addClaudeTitle, "Add Claude account")
     }
 }

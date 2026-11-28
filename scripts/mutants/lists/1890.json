@@ -1,10 +1,10 @@
 {
  "entry": "1890",
- "filter": "CCPoolPaneModelTests|CCPoolSessionEnvTests|CCPoolSessionRoutingTests",
+ "filter": "AgentPoolPaneModelTests|AgentPoolSessionEnvTests|AgentPoolSessionRoutingTests",
  "mutants": [
   {
    "name": "route-default-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "routeKey) == nil ||",
    "new": "routeKey) != nil &&",
    "expect": "killed",
@@ -12,7 +12,7 @@
   },
   {
    "name": "route-always-on",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "routeKey) == nil ||",
    "new": "routeKey) == nil || true ||",
    "expect": "killed",
@@ -20,42 +20,42 @@
   },
   {
    "name": "foreign-url-routed",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "guard on, healthy, hasAccounts, foreignBaseURL(inherited, base: base) == nil, let first",
    "new": "guard on, healthy, hasAccounts, let first",
    "expect": "killed"
   },
   {
    "name": "env-fallback-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "?? foreignBaseURL(env?[baseURLKey], base: base)",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "trailing-slash-foreign",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "return trim(inherited) == trim(base) ? nil : inherited",
    "new": "return inherited == base ? nil : inherited",
    "expect": "killed"
   },
   {
    "name": "probe-per-read",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "defer { started = true }",
    "new": "defer { started = false }",
    "expect": "killed"
   },
   {
    "name": "url-path-shown",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "return OutsideText.shown((c.scheme.map { \"\\($0)://\" } ?? \"\") + host + (c.port.map { \":\\($0)\" } ?? \"\"), max: 120)",
    "new": "return OutsideText.shown(url, max: 120)",
    "expect": "killed"
   },
   {
    "name": "login-hides-foreign-env",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "let foreign = foreignBaseURL(inherited(wait), base: base) ?? foreignBaseURL(env?[baseURLKey], base: base)",
    "new": "let foreign = foreignBaseURL(inherited(wait) ?? env?[baseURLKey], base: base)",
    "expect": "killed",
@@ -63,7 +63,7 @@
   },
   {
    "name": "start-runs-inline",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "if first { DispatchQueue.global(qos: .utility).async { [self] in if run() != nil { landed() } } }",
    "new": "if first { if run() != nil { landed() } }",
    "expect": "killed",
@@ -71,7 +71,7 @@
   },
   {
    "name": "init-start-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolRuntime.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolRuntime.swift",
    "old": "found?.start() // #1891: probe now, off main, so no spawn waits for the login shell",
    "new": "",
    "expect": "killed",
@@ -79,7 +79,7 @@
   },
   {
    "name": "hint-own-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "delta(argv, wait: false, env: own().map { [baseURLKey: $0] })",
    "new": "delta(argv, wait: false, env: nil)",
    "expect": "killed",
@@ -87,15 +87,15 @@
   },
   {
    "name": "pane-own-dropped",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
-   "old": " ?? CCPool.foreignBaseURL(ownBaseURL(), base: base)",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
+   "old": " ?? AgentPool.foreignBaseURL(ownBaseURL(), base: base)",
    "new": "",
    "expect": "killed",
    "note": "#1892: the pane line ignores Prosper's own value"
   },
   {
    "name": "revive-reads-own",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "delta(argv, wait: true, env: nil).reviveFlags",
    "new": "delta(argv, wait: true, env: own().map { [baseURLKey: $0] }).reviveFlags",
    "expect": "killed",
@@ -103,7 +103,7 @@
   },
   {
    "name": "process-url-gate-off",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "underXCTest ? nil : env[baseURLKey]",
    "new": "env[baseURLKey]",
    "expect": "killed"

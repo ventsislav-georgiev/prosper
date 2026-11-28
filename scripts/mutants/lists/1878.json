@@ -1,60 +1,60 @@
 {
  "entry": "1878",
- "filter": "CCPoolThrottleMoveTests|CCPoolThrottleLogTests|CCPoolPlacementTests",
+ "filter": "AgentPoolThrottleMoveTests|AgentPoolThrottleLogTests|AgentPoolPlacementTests",
  "mutants": [
   {
    "name": "replace-ignores-unified",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "head.flatMap({ harness.pinKey($0) }) != nil, ex.unified {",
    "new": "head.flatMap({ harness.pinKey($0) }) != nil {",
    "expect": "killed"
   },
   {
    "name": "shun-ignores-unified",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "if routed == \"place\", ex.unified {",
    "new": "if routed == \"place\" {",
    "expect": "killed"
   },
   {
    "name": "unified-always-true",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "ex.unified = unified",
    "new": "ex.unified = true",
    "expect": "killed"
   },
   {
    "name": "unified-always-false",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "ex.unified = unified",
    "new": "ex.unified = false",
    "expect": "killed"
   },
   {
    "name": "error-word-no-allowlist",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "return errorTypes.contains(word) ? word : \"other\"",
    "new": "return word",
    "expect": "killed"
   },
   {
    "name": "error-word-whole-snippet",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "String(decoding: snippet.prefix(CCPoolConnection.snippetCap), as: UTF8.self)",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "String(decoding: snippet.prefix(AgentPoolConnection.snippetCap), as: UTF8.self)",
    "new": "String(decoding: snippet, as: UTF8.self)",
    "expect": "killed"
   },
   {
    "name": "error-word-cap-65",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "([^\"\\\\]{0,64})",
    "new": "([^\"\\\\]{0,65})",
    "expect": "killed"
   },
   {
    "name": "error-not-logged",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
-   "old": "+ \"; error=\" + CCPoolThrottleShape.errorType(ex.snippet) + \"; attempt=",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
+   "old": "+ \"; error=\" + AgentPoolThrottleShape.errorType(ex.snippet) + \"; attempt=",
    "new": "+ \"; error=none; attempt=",
    "expect": "killed"
   }

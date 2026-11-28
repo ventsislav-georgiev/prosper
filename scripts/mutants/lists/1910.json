@@ -1,10 +1,10 @@
 {
  "entry": 1910,
- "filter": "CCPoolCapacityTests/testRowWithoutResetIsOnlyTheUnsampledZero",
+ "filter": "AgentPoolCapacityTests/testRowWithoutResetIsOnlyTheUnsampledZero",
  "mutants": [
   {
    "name": "learn-new-window-no-reset",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolCapacity.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolCapacity.swift",
    "old": "s.reset = reset; s.maxUtilization = utilization; s.pendingDollars = 0",
    "new": "s.reset = utilization > 0.5 ? nil : reset; s.maxUtilization = utilization; s.pendingDollars = 0",
    "expect": "killed"

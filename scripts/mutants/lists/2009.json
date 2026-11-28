@@ -1,157 +1,157 @@
 {
  "entry": "2009",
- "filter": "CCPoolCodexRoutingTests|CCPoolSessionEnvTests|CCPoolSessionRoutingTests|CCPoolCodexProxyTests",
+ "filter": "AgentPoolCodexRoutingTests|AgentPoolSessionEnvTests|AgentPoolSessionRoutingTests|AgentPoolCodexProxyTests",
  "mutants": [
   {
    "name": "program",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
-   "old": "guard let first = argv.first, programName(first) == CCPoolCodexHarness.id, codexOn(),",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
+   "old": "guard let first = argv.first, programName(first) == AgentPoolCodexHarness.id, codexOn(),",
    "new": "guard let first = argv.first, codexOn(),",
    "expect": "killed"
   },
   {
    "name": "toggle",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
-   "old": "programName(first) == CCPoolCodexHarness.id, codexOn(),",
-   "new": "programName(first) == CCPoolCodexHarness.id,",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
+   "old": "programName(first) == AgentPoolCodexHarness.id, codexOn(),",
+   "new": "programName(first) == AgentPoolCodexHarness.id,",
    "expect": "killed"
   },
   {
    "name": "status",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "case .running(let port) = status(), hasCodexAccounts()",
    "new": "let port = Optional<UInt16>(41234), hasCodexAccounts()",
    "expect": "killed"
   },
   {
    "name": "accounts",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "status(), hasCodexAccounts(), !codexKeepsOwn(argv)",
    "new": "status(), !codexKeepsOwn(argv)",
    "expect": "killed"
   },
   {
    "name": "keepsown",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "hasCodexAccounts(), !codexKeepsOwn(argv) else",
    "new": "hasCodexAccounts() else",
    "expect": "killed"
   },
   {
    "name": "profile",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "if w == \"--profile\" || w.hasPrefix(\"--profile=\") || w.hasPrefix(\"-p\") ||",
    "new": "if w.hasPrefix(\"--profile=\") || w.hasPrefix(\"-p\") ||",
    "expect": "killed"
   },
   {
    "name": "shortp",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": " || w.hasPrefix(\"-p\") || w == \"--oss\"",
    "new": " || w == \"--oss\"",
    "expect": "killed"
   },
   {
    "name": "oss",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": " || w == \"--oss\" || w == \"--remote\"",
    "new": " || w == \"--remote\"",
    "expect": "killed"
   },
   {
    "name": "remote",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": " || w == \"--remote\" || w.hasPrefix(\"--remote=\")",
    "new": " || w.hasPrefix(\"--remote=\")",
    "expect": "killed"
   },
   {
    "name": "provider",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "if value.hasPrefix(\"model_provider\") || value.hasPrefix(\"profile=\")",
    "new": "if value.hasPrefix(\"profile=\")",
    "expect": "killed"
   },
   {
    "name": "cvalue",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "let value = config ? w :",
    "new": "let value = false ? w :",
    "expect": "killed"
   },
   {
    "name": "daemongate",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "            }\n        }\n        return false\n    }",
    "new": "            }\n        }\n        return !words.contains(\"--no-daemon\")\n    }",
    "expect": "killed"
   },
   {
    "name": "remoteeq",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": " || w.hasPrefix(\"--remote=\") {",
    "new": " {",
    "expect": "killed"
   },
   {
    "name": "prompt",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "let words = argv.dropFirst().prefix { $0 != \"--\" }",
    "new": "let words = argv.dropFirst()",
    "expect": "killed"
   },
   {
    "name": "websockets",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "\"-c\", p + \"supports_websockets=false\",",
    "new": "\"-c\", p + \"supports_websockets=true\",",
    "expect": "killed"
   },
   {
    "name": "order",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "\"-c\", p + \"supports_websockets=false\",\n                \"-c\", \"model_provider=\\\"\\(codexProvider)\\\"\"]",
    "new": "\"-c\", \"model_provider=\\\"\\(codexProvider)\\\"\",\n                \"-c\", p + \"supports_websockets=false\"]",
    "expect": "killed"
   },
   {
    "name": "count",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "                reach?.routed()\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "threshold",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "waitingSince.map { t - $0 >= Self.silentAfter }",
    "new": "waitingSince.map { t - $0 > Self.silentAfter }",
    "expect": "killed"
   },
   {
    "name": "clears",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "                waitingSince = nil\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "firstwait",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolSessionEnv.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolSessionEnv.swift",
    "old": "if waitingSince == nil { waitingSince = t }",
    "new": "waitingSince = t",
    "expect": "killed"
   },
   {
    "name": "served",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolConnection.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolConnection.swift",
    "old": "                config.codexReach.served()   // #2009: once per request (the routed-but-silent detector)\n",
    "new": "",
    "expect": "killed"
   },
   {
    "name": "kind",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "$0.harness == codex.id && codex.accepts(kind: $0.kind)",
    "new": "$0.harness == codex.id",
    "expect": "killed"
@@ -172,42 +172,42 @@
   },
   {
    "name": "caption",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "var codexNotReaching: Bool { service.config.codexReach.silent }",
    "new": "var codexNotReaching: Bool { false }",
    "expect": "killed"
   },
   {
    "name": "claudegate",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "hasAccounts: { [self] in store.hasClaudeAccounts }",
    "new": "hasAccounts: { [self] in store.hasAccounts }",
    "expect": "killed"
   },
   {
    "name": "routable",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolService.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolService.swift",
    "old": "        return store.hasClaudeAccounts\n",
    "new": "        return store.hasAccounts\n",
    "expect": "killed"
   },
   {
    "name": "claudetoggle",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "var routeToggleShown: Bool { store.hasClaudeAccounts &&",
    "new": "var routeToggleShown: Bool { store.hasAccounts &&",
    "expect": "killed"
   },
   {
    "name": "claudereason",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolPaneModel.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolPaneModel.swift",
    "old": "if !store.hasClaudeAccounts { return \"Add an account first.\" }",
    "new": "if !store.hasAccounts { return \"Add an account first.\" }",
    "expect": "killed"
   },
   {
    "name": "claudeharness",
-   "file": "app/Sources/ProsperApp/CCPool/CCPoolStore.swift",
+   "file": "app/Sources/ProsperApp/AgentPool/AgentPoolStore.swift",
    "old": "$0.harness == claude.id && claude.accepts",
    "new": "claude.accepts",
    "expect": "killed"

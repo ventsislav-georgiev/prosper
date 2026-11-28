@@ -909,7 +909,7 @@ private struct SettingsRootView: View {
             })
         // ccpool (#871): the account pool pane as the FOOTER. The page exists only while the
         // extension is live, and going live built the owner (AppDelegate's onEnabledChanged).
-        case "com.prosper.agentpool": footer = CCPoolRuntime.shared.map { AnyView(CCPoolPane(model: $0.model)) }
+        case "com.prosper.agentpool": footer = AgentPoolRuntime.shared.map { AnyView(AgentPoolPane(model: $0.model)) }
         default: break
         }
         return ExtensionSettingsPane(registry: registry, record: record, section: section,

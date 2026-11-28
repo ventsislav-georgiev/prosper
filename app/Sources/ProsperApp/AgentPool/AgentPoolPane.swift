@@ -1,0 +1,388 @@
+import SwiftUI
+
+/// #871 P2a: the Agent Account Pool Settings pane (#2012; it was ccpool), mounted (P2b-1) as the footer of the bundled ccpool
+/// extension's Settings page on `AgentPoolRuntime.shared.model`. House Neon components and `sz()` throughout; rows that may not fit at a small UI scale
+/// fall back to a stacked layout through `ViewThatFits`. No NSAlert: Remove confirms inline.
+struct AgentPoolPane: View {
+    @ObservedObject var model: AgentPoolPaneModel
+
+    static let mintHint = "Get a Claude token by running claude setup-token in a terminal while signed in to that account."
+    /// Errata C6: the label is stored in the clear.
+    static let labelHint = "Labels are not secret: other programs on this Mac can see them (in the proxy's status reply, its state file "
+        + "and the Keychain item name). Tokens stay in the Keychain."
+    /// #2012: per harness, as each account's request goes to its own provider.
+    static let refreshHint = "Costs one tiny request per account, straight to Anthropic (Claude) or OpenAI (Codex)."
+    static let addClaudeTitle = "Add Claude account"
+    static let routeTitle = "Start new Claude sessions through the pool"
+    static let codexRouteTitle = "Start new Codex sessions through the pool"
+    /// #2009: the routed-but-silent detector's caption (AgentPool.CodexReach).
+    static let codexSilentLine = "Codex sessions are not reaching the pool"
+    /// P2b-2: what the toggle reaches, as built (spec 3.6; no global routing in v1). #1219 step 2: a single Resume is
+    /// routed as a new session; Resume interrupted (one --revive --all per folder) runs with the control environment only.
+    static let routeScope = "New sessions started from Prosper that run claude. "
+        + "Shells, headroom, other programs and sessions started in a terminal are not routed. Resume interrupted is not routed."
+    /// #1499: below dch 1.94.0 a resumed session takes dch's login-shell env, rc files' ANTHROPIC_* included; from it
+    /// Resume passes the routing with --env, which wins. Keys and tokens are kept (OQ-132), so only the base URL matters.
+    static let shellLimit = " A resumed session is not routed if your shell startup files set ANTHROPIC_BASE_URL."
+    /// #1890: under the toggle while new sessions would keep a foreign ANTHROPIC_BASE_URL; host and port only.
+    nonisolated static func foreignLine(_ url: String) -> String {
+        "Sessions keep their own ANTHROPIC_BASE_URL" + (AgentPool.shownBaseURL(url).map { " (\($0))" } ?? "") + ": not routed"
+    }
+    static func routeScope(dch: [Int]?) -> String {
+        dch.map { DchCommand.isAtLeast($0, AgentIsland.reviveEnvMinimum) } == true ? routeScope : routeScope + shellLimit
+    }
+    /// #1838: AgentPoolCore.route: a new session goes to AgentPoolCore.place's pick and stays there; keyless requests use pick.
+    static let accountsFooter = "Each new session gets the account with the most room for one more session and keeps it, "
+        + "so its prompt cache stays warm; other clients share one account until it runs out. Remove deletes the Keychain item too."
+
+    /// The account row's second line; the live session count only when there is one.
+    static func rowSubtitle(_ row: AgentPoolPaneModel.Row) -> String {
+        ([row.stateText] + (row.sessions > 0 ? [AgentPoolPaneModel.count(row.sessions, "session")] : []) + [row.usageText]
+            + (row.credits.map { [$0] } ?? []))
+            .joined(separator: " · ")
+    }
+
+    var body: some View {
+        // QA #739 INFO-9: a state change in the store (a limit, a hold, `current`) republishes the
+        // model at once (AgentPoolPaneModel.republisher); this tick only keeps the clock texts true
+        // ("limited until" lapsing, usage ages), which move on the minute.
+        TimelineView(.periodic(from: .now, by: 30)) { _ in sections }
+            .onAppear { model.checkVault() }
+    }
+
+    /// The pane without its clock (the tests read its strings from here).
+    var sections: some View {
+        VStack(alignment: .leading, spacing: sz(18)) {
+            proxySection
+            accountsSection
+            addSection
+            codexAddSection
+            usageSection
+            thresholdSection
+            AgentPoolUsageStatsSection(model: model.usageStats)
+            // Shown since the spawn path applies the env (P2b-2 flipped AgentPool.routingWired).
+            if AgentPool.routingWired { sessionsSection }
+            terminalSection
+            if model.importVisible { importSection }
+        }
+    }
+
+    // MARK: Proxy
+
+    private var proxySection: some View {
+        NeonSection("Proxy") {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                NeonRow(model.proxyText, subtitle: model.proxySubtitle) {
+                    Button(model.proxyButtonTitle) { model.proxyButtonAction() }
+                    .buttonStyle(.neon)
+                    .accessibilityLabel(model.proxyButtonTitle)
+                    .disabled(model.proxyBusy || !model.store.hasAccounts)
+                    .fixedSize()
+                }
+                if let warn = model.unreachableWarning {
+                    NeonDivider()
+                    caption(warn, color: Neon.magenta)
+                }
+            }
+        }
+    }
+
+    // MARK: Accounts
+
+    private var accountsSection: some View {
+        NeonSection("Accounts", footer: Self.accountsFooter) {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                if let problem = model.storeProblem { caption(problem, color: Neon.magenta) }
+                if let notice = model.notice { caption(notice, color: Neon.blueBright) }
+                let groups = model.rowGroups
+                if groups.allSatisfy(\.rows.isEmpty) { caption("No accounts yet.") }
+                // #2010: one group per harness under its name; a pool of one harness has one group and no header.
+                ForEach(Array(groups.enumerated()), id: \.element.id) { g, group in
+                    if let title = group.title {
+                        if g > 0 { NeonDivider() }
+                        Text(title).font(.system(size: sz(11), weight: .semibold)).foregroundStyle(Neon.textSecondary)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { i, row in
+                        if i > 0 { NeonDivider() }
+                        NeonRow(row.label, subtitle: Self.rowSubtitle(row)) {
+                            Button(model.selected == row.label ? "Done" : "Edit") { model.select(row.label) }
+                                .buttonStyle(.neon).fixedSize()
+                                .accessibilityLabel(model.selected == row.label ? "Close the actions for \(row.label)" : "Edit \(row.label)")
+                        }
+                        if model.selected == row.label { actions(row.label) }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actions(_ label: String) -> some View {
+        VStack(alignment: .leading, spacing: sz(8)) {
+            if model.confirmingRemove == label {
+                fitting {
+                    caption("Remove \(label) and its Keychain item?")
+                    Button("Remove") { model.confirmRemove() }.buttonStyle(.neonDestructive).fixedSize()
+                        .disabled(model.busy)
+                    Button("Cancel") { model.cancelRemove() }.buttonStyle(.neon).fixedSize()
+                }
+            }
+            fitting {
+                TextField("Label", text: $model.renameDraft).textFieldStyle(.roundedBorder).frame(maxWidth: sz(200))
+                Button("Rename") { model.rename(label, to: model.renameDraft) }.buttonStyle(.neon).fixedSize()
+                    .disabled(model.renameDraft.trimmingCharacters(in: .whitespaces).isEmpty || model.renameDraft == label)
+                    .accessibilityLabel("Rename \(label)")
+            }
+            fitting {
+                Button("Remove…") { model.requestRemove(label) }.buttonStyle(.neonDestructive).fixedSize()
+                    .disabled(model.busy || model.confirmingRemove == label)
+                    .accessibilityLabel("Remove \(label)")
+            }
+            fitting {
+                Button("Hold 1 h") { model.hold(label, hours: 1) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for 1 hour")
+                Button("Hold 5 h") { model.hold(label, hours: 5) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for 5 hours")
+                TextField("Hours", text: $model.customHours).textFieldStyle(.roundedBorder).frame(width: sz(64))
+                    .accessibilityLabel("Hours to hold \(label)")
+                Button("Hold") { model.holdCustom(label) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Hold \(label) for the hours entered")
+                Button("Release") { model.release(label) }.buttonStyle(.neon).fixedSize()
+                    .accessibilityLabel("Release \(label)")
+            }
+        }
+        .padding(.leading, sz(12))
+    }
+
+    // MARK: Add
+
+    private var addSection: some View {
+        NeonSection(Self.addClaudeTitle) {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                NeonRow("Label") {
+                    TextField("work, personal…", text: $model.labelDraft).textFieldStyle(.roundedBorder).frame(maxWidth: sz(260))
+                }
+                NeonRow("Token") {
+                    SecureField("sk-ant-oat…", text: $model.tokenDraft).textFieldStyle(.roundedBorder).frame(maxWidth: sz(260))
+                }
+                caption(Self.mintHint)
+                caption(Self.labelHint)
+                HStack {
+                    Spacer(minLength: 0)
+                    Button(model.busy ? "Checking…" : "Add") { model.addAccount() }
+                        .buttonStyle(.neon).fixedSize()
+                        .disabled(model.busy || model.labelDraft.trimmingCharacters(in: .whitespaces).isEmpty || model.tokenDraft.isEmpty)
+                }
+            }
+        }
+    }
+
+    // MARK: Add Codex (#2008)
+
+    static let codexLoginHint = "Signs in with Codex's device login in a folder Prosper owns, so no other Codex shares "
+        + "this login. Open the link below and enter the code it shows."
+
+    private var codexAddSection: some View {
+        NeonSection("Add Codex account") {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                NeonRow("Label") {
+                    TextField(model.codexDefaultLabel, text: $model.codexLabelDraft).textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: sz(260))
+                        .accessibilityLabel("Codex account label")
+                }
+                caption(Self.codexLoginHint)
+                ForEach(Array(model.codexLines.enumerated()), id: \.offset) { _, line in
+                    if let url = CodexLogin.link(in: line) {
+                        Link(line, destination: url).font(.system(size: sz(11))).textSelection(.enabled)
+                    } else {
+                        Text(line).font(.system(size: sz(11), design: .monospaced)).textSelection(.enabled)
+                    }
+                }
+                if model.codexImportWarning {
+                    caption(CodexLogin.importWarning, color: Neon.magenta)
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Cancel") { model.dismissCodexImport() }.buttonStyle(.neon).fixedSize()
+                        Button("Choose folder…") { model.continueCodexImport() }.buttonStyle(.neon).fixedSize()
+                    }
+                }
+                if let folder = model.codexImportedFolder {
+                    caption("Delete auth.json in \(AgentPoolStore.shown(folder.path)), so only the pool holds this login?")
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Keep it") { model.keepImportedAuth() }.buttonStyle(.neon).fixedSize()
+                        Button("Delete auth.json") { model.deleteImportedAuth() }.buttonStyle(.neon).fixedSize()
+                    }
+                }
+                HStack {
+                    Spacer(minLength: 0)
+                    Button("Import from a CODEX_HOME folder…") { model.requestCodexImport() }
+                        .buttonStyle(.neon).fixedSize()
+                        .disabled(model.busy || model.codexImportWarning)
+                    if model.codexLoginRunning {
+                        Button("Cancel") { model.cancelCodexLogin() }.buttonStyle(.neon).fixedSize()
+                            .accessibilityLabel("Cancel the Codex login")
+                    } else {
+                        Button("Add Codex account…") { model.addCodexAccount() }
+                            .buttonStyle(.neon).fixedSize()
+                            .disabled(model.busy)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Usage
+
+    private var usageSection: some View {
+        NeonSection("Usage") {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                NeonRow("Refresh usage", subtitle: Self.refreshHint) {
+                    Button(model.refreshing ? "Refreshing…" : "Refresh") { model.refreshUsage() }
+                        .buttonStyle(.neon).fixedSize()
+                        .disabled(model.refreshing || model.importRunning || model.rows.isEmpty)
+                }
+                if let pool = model.poolText {
+                    NeonDivider()
+                    caption("Free across all accounts: \(pool)")
+                }
+            }
+        }
+    }
+
+    // MARK: Agent Sessions
+
+    private var sessionsSection: some View {
+        let reason = model.routeDisabledReason
+        return NeonSection("Agent Sessions") {
+            VStack(alignment: .leading, spacing: sz(6)) {
+                NeonRow(Self.routeTitle, subtitle: reason ?? "Applies to sessions started after the change.") {
+                    // Shows off while there is no account; writes only the stored choice (QA #739 F1). Never disabled:
+                    // switching off always works, switching on is refused while `reason` holds (O2, QA #751 INFO-3).
+                    Toggle("", isOn: Binding(get: { model.routeToggleShown }, set: { model.setRouteAgentSessions($0) }))
+                        .labelsHidden()
+                        .accessibilityLabel(Self.routeTitle)
+                }
+                if model.hasCodexAccounts {
+                    NeonRow(Self.codexRouteTitle, subtitle: "Applies to sessions started after the change.") {
+                        Toggle("", isOn: Binding(get: { model.routeCodexSessions }, set: { model.routeCodexSessions = $0 }))
+                            .labelsHidden()
+                            .accessibilityLabel(Self.codexRouteTitle)
+                    }
+                }
+                if model.codexNotReaching { caption(Self.codexSilentLine) }
+                if let url = model.foreignBaseURL { caption(Self.foreignLine(url)) }
+                caption(Self.routeScope(dch: AgentIslandController.shared.store?.controlDch?.version))
+            }
+        }
+    }
+
+    /// #1677: the share is a soft preference for new sessions (AgentPoolCore.place); it never pauses an account.
+    static let thresholdCaption = "Below 100 %, new sessions start on an account under this share when one is; nothing is paused."
+    /// #1677 (n21): VoiceOver reads the value, not only the label.
+    static func thresholdValue(_ pct: Int) -> String { "\(pct) percent" }
+
+    private var thresholdSection: some View {
+        let pct = Int((model.exhaustedThreshold * 100).rounded())
+        return NeonSection("Account switching") {
+            VStack(alignment: .leading, spacing: sz(6)) {
+                NeonRow("Move off an account at") {
+                    HStack(spacing: sz(10)) {
+                        Text("\(pct) %")
+                            .font(Neon.font(13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Neon.textPrimary)
+                            .frame(minWidth: sz(44), alignment: .trailing)
+                        Stepper("", value: Binding(get: { pct }, set: { model.setExhaustedThreshold(Double($0) / 100) }),
+                                in: 50...100, step: 5)
+                            .labelsHidden()
+                            .accessibilityLabel("Move off an account at")
+                            .accessibilityValue(Self.thresholdValue(pct))
+                    }
+                }
+                caption(Self.thresholdCaption)
+            }
+        }
+    }
+
+    // MARK: Terminal use
+
+    private var terminalSection: some View {
+        NeonSection("Terminal use") {
+            VStack(alignment: .leading, spacing: sz(6)) {
+                Text(model.terminalCommand)
+                    .font(Neon.font(12, design: .monospaced))
+                    .foregroundStyle(Neon.textPrimary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                // #915: selectable, so the path can be copied by hand; no copy button (no pasteboard here).
+                caption(model.launcherText).textSelection(.enabled)
+            }
+        }
+    }
+
+    // MARK: Import
+
+    private var importSection: some View {
+        NeonSection("Import from ccpool") {
+            VStack(alignment: .leading, spacing: sz(10)) {
+                switch model.importPhase {
+                case .idle:
+                    NeonRow("Import from ccpool", subtitle: "Copies the Homebrew ccpool accounts into the Keychain.") {
+                        Button("Import…") { model.beginImport() }.buttonStyle(.neon).fixedSize().disabled(model.busy)
+                    }
+                case .review(let plan):
+                    caption("Accounts in the old vault: \(plan.labels.joined(separator: ", "))")
+                    ForEach(plan.conflicts, id: \.self) { label in
+                        fitting {
+                            caption("\(label) is already in the pool.")
+                            choiceButton(label, .replace, "Replace")
+                            choiceButton(label, .skip, "Skip")
+                        }
+                    }
+                    fitting {
+                        Button("Import") { model.runImport() }.buttonStyle(.neon).fixedSize().disabled(!model.canRunImport)
+                        Button("Cancel") { model.dismissImport() }.buttonStyle(.neon).fixedSize()
+                    }
+                case .imported(let outcome):
+                    ForEach(AgentPoolPaneModel.summary(outcome), id: \.self) { caption($0) }
+                    if let why = model.trashBlockedReason {
+                        caption(why, color: Neon.magenta)
+                        Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize().disabled(model.busy)
+                    } else {
+                        fitting {
+                            Button("Move the old vault to the Trash") { model.finishImport(trash: true) }.buttonStyle(.neon).fixedSize()
+                                .disabled(model.busy)
+                            Button("Keep it") { model.finishImport(trash: false) }.buttonStyle(.neon).fixedSize().disabled(model.busy)
+                        }
+                    }
+                case .finished(let text):
+                    NeonRow(text) {
+                        Button("Done") { model.dismissImport() }.buttonStyle(.neon).fixedSize()
+                    }
+                }
+            }
+        }
+    }
+
+    private func choiceButton(_ label: String, _ choice: AgentPoolVaultImport.Choice, _ title: String) -> some View {
+        Button(model.importChoices[label] == choice ? "✓ \(title)" : title) { model.importChoices[label] = choice }
+            .buttonStyle(.neon).fixedSize()
+    }
+
+    // MARK: Helpers
+
+    private func caption(_ text: String, color: Color = Neon.textSecondary) -> some View {
+        Text(text).font(Neon.font(.caption)).foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// One row when it fits, stacked when it does not.
+    private func fitting<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        let c = content()
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: sz(8)) { c }
+            VStack(alignment: .leading, spacing: sz(6)) { c }
+        }
+    }
+}

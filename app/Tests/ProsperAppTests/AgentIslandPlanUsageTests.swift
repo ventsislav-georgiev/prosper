@@ -162,22 +162,22 @@ final class AgentIslandPlanUsageTests: XCTestCase {
 
     @MainActor func testRuntimeReadsTheCurrentAccountsSampleAndResets() throws {
         let dir = tempDir()
-        var cfg = CCPoolServiceConfig()
+        var cfg = AgentPoolServiceConfig()
         cfg.port = 0
         cfg.upstream = URL(string: "http://127.0.0.1:9")!
         let defaults: UserDefaults = XCTestDefaults(suiteName: "prosper-plan-usage-\(UUID().uuidString)")!
         XCTAssertTrue(defaults is XCTestDefaults, "the scratch in-memory suite, never the app's")
-        let rt = CCPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: CCPoolMemorySecrets(), config: cfg,
+        let rt = AgentPoolRuntime(directory: dir.appendingPathComponent("ccpool"), secrets: AgentPoolMemorySecrets(), config: cfg,
                                vaultURL: dir.appendingPathComponent("old"), defaults: defaults, probeBase: cfg.upstream,
-                               logger: CCPoolCapturingLogger())
+                               logger: AgentPoolCapturingLogger())
         let t = Date().timeIntervalSince1970
         XCTAssertTrue(rt.planUsage(now: t) == nil, "no account")
         let idA = try rt.store.addAccount(label: "alpha", token: "example-token-a", secrets: rt.secrets)
         let idB = try rt.store.addAccount(label: "beta", token: "example-token-b", secrets: rt.secrets)
         rt.store.mutate { $0.current = "beta"; $0.accounts["beta"]?.reset = ["five_hour": Int(t) + 3600] }
-        rt.store.recordUsage(id: idA, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.9"]).limits)
+        rt.store.recordUsage(id: idA, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.9"]).limits)
         XCTAssertTrue(rt.planUsage(now: t) == nil, "only another account has a sample: not this plan's figure")
-        rt.store.recordUsage(id: idB, limits: CCPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.25",
+        rt.store.recordUsage(id: idB, limits: AgentPoolCore.parseLimits(["anthropic-ratelimit-unified-5h-utilization": "0.25",
                                                                       "anthropic-ratelimit-unified-7d-utilization": "0.5"]).limits)
         let u = try XCTUnwrap(rt.planUsage(now: t))
         XCTAssertEqual(u.session, 0.25)

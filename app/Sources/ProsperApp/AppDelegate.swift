@@ -178,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgentIslandController.shared.reload()
         // ccpool (#871): opt-in account pool; no store, no Keychain read and no listener until the
         // user enables it. Live with an account: the proxy starts off main.
-        CCPoolRuntime.setExtensionLive(ccpoolExtLive)
+        AgentPoolRuntime.setExtensionLive(ccpoolExtLive)
 
         // Per-app volume mixer: opt-in, so no status item and no audio taps
         // until the preference is on (the controller re-checks it on reload).
@@ -389,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CalendarBarController.shared.reload()
             AgentIslandController.shared.extLive = self.agentIslandExtLive
             AgentIslandController.shared.reload()
-            CCPoolRuntime.setExtensionLive(self.ccpoolExtLive)
+            AgentPoolRuntime.setExtensionLive(self.ccpoolExtLive)
             self.reconcileMouse()
         }
 
@@ -726,7 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "sleep": SleepControl.sleepNow()
             // #1665: prosper://agentpool/takeover, the pane's "Stop ccpool and start" without a window.
             // shortcut: #2012 keeps prosper://ccpool/… as an alias for one release; drop "ccpool" here after the next release.
-            case "agentpool", "ccpool": CCPoolRuntime.openLink(u)
+            case "agentpool", "ccpool": AgentPoolRuntime.openLink(u)
             default: break
             }
             return
@@ -1239,7 +1239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // #2039: an unfinished Codex sign-in does not outlive the app (no runtime may be built when the pool is off).
         CodexLogin.Live.terminate()
         // ccpool (#871): the loopback proxy stops with the app (spec 3.2).
-        CCPoolRuntime.shared?.quit()
+        AgentPoolRuntime.shared?.quit()
         // codex app-server and the command it runs: SIGTERM, SIGKILL after 1 s, inline (#361).
         CodexHarness.killLiveGroupsBlocking(grace: 1)
         // Release every extension's native resources (power assertions, pmset lid
